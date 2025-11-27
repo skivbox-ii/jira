@@ -1,5 +1,7 @@
 define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawer"], function($, EventsProvider, tableDrawer) {
     
+    var baseUrl = (typeof AJS !== 'undefined' && AJS.contextPath) ? AJS.contextPath() : '';
+    
     var utils = {
         parseDate: function(v) {
             if (!v) return null;
@@ -116,8 +118,8 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             var done = 0;
             
             batches.forEach(function(batch) {
-                API.request({
-                    url: '/rest/api/2/search',
+                $.ajax({
+                    url: baseUrl + '/rest/api/2/search',
                     type: 'POST',
                     contentType: 'application/json',
                     data: JSON.stringify({jql: 'key in (' + batch.join(',') + ')', fields: ['summary','sprint','customfield_10020'], maxResults: batch.length}),
@@ -149,8 +151,8 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             
             var done = 0;
             keys.forEach(function(key) {
-                API.request({
-                    url: '/rest/api/2/issue/' + key + '/worklog',
+                $.ajax({
+                    url: baseUrl + '/rest/api/2/issue/' + key + '/worklog',
                     type: 'GET',
                     success: function(r) {
                         worklogCache[key] = {};
