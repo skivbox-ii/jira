@@ -1,0 +1,29 @@
+.ujg-control-panel{padding:10px;margin-bottom:10px;background:#f4f5f7;border-radius:3px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.ujg-week-nav{display:flex;align-items:center;gap:5px}
+.ujg-week-label{margin:0 10px;font-weight:bold;color:#172b4d;min-width:200px;text-align:center}
+.ujg-control-checkbox{display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.ujg-control-checkbox input{margin:0}
+.ujg-fullscreen-btn{margin-left:auto}
+.ujg-extended-table{width:100%;border-collapse:collapse;font-size:13px}
+.ujg-extended-table th,.ujg-extended-table td{padding:8px;border:1px solid #dfe1e6;text-align:left;vertical-align:top}
+.ujg-extended-table th{background:#f4f5f7;font-weight:600;position:sticky;top:0;z-index:10}
+.ujg-extended-table tbody tr:hover{background:#ebecf0}
+.ujg-user-group{background:#deebff!important}
+.ujg-user-group td{font-weight:600}
+.ujg-user-avatar{width:24px;height:24px;border-radius:50%;margin-right:8px;vertical-align:middle}
+.ujg-sprint-badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:500}
+.ujg-sprint-badge.in-sprint{background:#00875a;color:#fff}
+.ujg-sprint-badge.no-sprint{background:#dfe1e6;color:#42526e}
+.ujg-issue-summary{color:#172b4d;max-width:300px}
+.ujg-issue-key{color:#0052cc;text-decoration:none;font-weight:500}
+.ujg-issue-key:hover{text-decoration:underline}
+.ujg-worklog-comment{font-style:italic;color:#6b778c;font-size:12px;max-width:250px;word-wrap:break-word}
+.ujg-time-cell{white-space:nowrap;font-family:monospace}
+.ujg-date-cell{white-space:nowrap}
+.ujg-total-row{background:#fffae6!important;font-weight:600}
+.ujg-total-row td{border-top:2px solid #0052cc}
+.ujg-message{padding:15px;border-radius:3px;margin:10px 0}
+.ujg-message-info{background:#deebff;color:#0747a6}
+.ujg-message-loading{background:#f4f5f7;color:#42526e}
+.ujg-fullscreen{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:9999!important;background:#fff!important;overflow:auto!important;padding:20px!important;box-sizing:border-box!important}
+
