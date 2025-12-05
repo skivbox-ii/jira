@@ -1,4 +1,8 @@
 .ujg-control-panel{padding:10px;margin-bottom:10px;background:#f4f5f7;border-radius:3px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.ujg-jql-filter{display:flex;align-items:center;gap:5px;width:100%;padding-bottom:8px;border-bottom:1px solid #dfe1e6;margin-bottom:5px}
+.ujg-jql-filter label{font-weight:500;color:#42526e;white-space:nowrap}
+.ujg-jql-input{flex:1;padding:6px 10px;border:1px solid #dfe1e6;border-radius:3px;font-size:13px;color:#172b4d;font-family:monospace}
+.ujg-jql-input:focus{border-color:#0052cc;outline:none;box-shadow:0 0 0 2px rgba(0,82,204,0.2)}
 .ujg-week-nav{display:flex;align-items:center;gap:5px}
 .ujg-week-label{margin:0 10px;font-weight:bold;color:#172b4d;min-width:200px;text-align:center}
 .ujg-sprint-filter{display:flex;align-items:center;gap:5px;padding:0 10px;border-right:1px solid #dfe1e6}

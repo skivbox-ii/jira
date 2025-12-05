@@ -5,7 +5,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
 
     var CONFIG = {
         // Версия виджета
-        version: "1.0.3",
+        version: "1.0.4",
         // Ограничение выборки: укажи JQL, например "project = SDKU" или фильтр доски
         // Оставь пустым для поиска по всем доступным проектам
         jqlFilter: "",
@@ -257,6 +257,24 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
 
         function initPanel() {
             var $p = $('<div class="ujg-control-panel"></div>');
+
+            // JQL фильтр (редактируемый)
+            var $jqlRow = $('<div class="ujg-jql-filter"></div>');
+            var $jqlInput = $('<input type="text" class="ujg-jql-input" placeholder="project = SDKU или оставьте пустым">');
+            $jqlInput.val(CONFIG.jqlFilter);
+            var $jqlBtn = $('<button class="aui-button">Применить JQL</button>');
+            $jqlBtn.on("click", function() {
+                CONFIG.jqlFilter = $jqlInput.val().trim();
+                log("JQL изменён: " + CONFIG.jqlFilter);
+                updateDebug();
+                if (state.mode === "sprint") {
+                    loadSprints();
+                } else if (state.rangeStart && state.rangeEnd) {
+                    loadRangeData(state.rangeStart, state.rangeEnd);
+                }
+            });
+            $jqlRow.append($('<label>JQL: </label>'), $jqlInput, $jqlBtn);
+            $p.append($jqlRow);
 
             // Переключатель режимов
             var $mode = $('<div class="ujg-mode-toggle"></div>');
