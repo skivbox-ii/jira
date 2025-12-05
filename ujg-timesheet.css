@@ -10,31 +10,38 @@
 .ujg-controls-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #dfe1e6}
 .ujg-user-filter{display:flex;align-items:center;gap:5px}
 .ujg-user-filter label{font-weight:500;color:#42526e;white-space:nowrap}
-.ujg-user-select{padding:4px 8px;border:1px solid #dfe1e6;border-radius:3px;background:#fff;min-width:200px;font-size:13px;color:#172b4d;cursor:pointer}
-.ujg-user-select:hover{border-color:#0052cc}
-.ujg-user-select:focus{border-color:#0052cc;outline:none;box-shadow:0 0 0 2px rgba(0,82,204,0.2)}
+.ujg-user-select{padding:4px 8px;border:1px solid #dfe1e6;border-radius:3px;background:#fff;min-width:150px;font-size:13px;color:#172b4d;cursor:pointer}
+.ujg-user-select:hover,.ujg-user-select:focus{border-color:#0052cc;outline:none}
 .ujg-control-checkbox{display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;padding:0 10px}
 .ujg-control-checkbox input{margin:0}
 .ujg-fullscreen-btn{margin-left:auto}
-.ujg-extended-table{width:100%;border-collapse:collapse;font-size:13px}
-.ujg-extended-table th,.ujg-extended-table td{padding:6px 8px;border:1px solid #dfe1e6;text-align:left;vertical-align:top}
-.ujg-extended-table th{background:#f4f5f7;font-weight:600;position:sticky;top:0;z-index:10;white-space:nowrap}
-.ujg-extended-table tbody tr:hover{background:#ebecf0}
-.ujg-user-group{background:#deebff!important}
-.ujg-user-group td{font-weight:600}
-.ujg-issue-cell{min-width:200px}
-.ujg-issue-summary{color:#6b778c;font-size:12px;margin-top:2px;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ujg-issue-key{color:#0052cc;text-decoration:none;font-weight:500}
-.ujg-issue-key:hover{text-decoration:underline}
-.ujg-worklog-comment{font-style:italic;color:#6b778c;font-size:11px;margin-top:2px;max-width:150px;word-wrap:break-word}
-.ujg-time-cell{white-space:nowrap;font-family:monospace;text-align:center}
-.ujg-date-cell{white-space:nowrap;text-align:center}
-.ujg-total-row{background:#fffae6!important;font-weight:600}
-.ujg-total-row td{border-top:2px solid #0052cc}
+.ujg-debug-box{width:100%;padding:4px 8px;background:#f8f9fb;border-radius:3px;font-size:11px;color:#6b778c;margin-top:5px}
+.ujg-debug-text{white-space:normal;word-break:break-word}
 .ujg-message{padding:15px;border-radius:3px;margin:10px 0}
 .ujg-message-info{background:#deebff;color:#0747a6}
 .ujg-message-loading{background:#f4f5f7;color:#42526e}
 .ujg-fullscreen{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:9999!important;background:#fff!important;overflow:auto!important;padding:20px!important;box-sizing:border-box!important}
-.ujg-debug-box{width:100%;padding:6px 10px;border:1px dashed #a5adba;border-radius:4px;background:#f8f9fb;font-size:12px;color:#42526e;margin-top:5px}
-.ujg-debug-title{font-weight:600;margin-bottom:2px;color:#172b4d}
-.ujg-debug-text{white-space:normal;word-break:break-word}
+
+/* Календарь */
+.ujg-calendar{display:flex;flex-direction:column;border:1px solid #dfe1e6;border-radius:4px;overflow:hidden}
+.ujg-calendar-header{display:grid;grid-template-columns:repeat(7,1fr);background:#f4f5f7;border-bottom:1px solid #dfe1e6}
+.ujg-calendar-header-cell{padding:8px 4px;text-align:center;font-weight:600;font-size:12px;color:#42526e}
+.ujg-calendar-header-cell.ujg-weekend{background:#fff4e5;color:#974f0c}
+.ujg-calendar-week{display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid #dfe1e6}
+.ujg-calendar-week:last-child{border-bottom:none}
+.ujg-calendar-cell{min-height:100px;border-right:1px solid #dfe1e6;padding:4px;background:#fff;vertical-align:top;overflow:hidden}
+.ujg-calendar-cell:last-child{border-right:none}
+.ujg-calendar-cell.ujg-weekend{background:#fffbf5}
+.ujg-calendar-cell.ujg-calendar-empty{background:#f9f9f9}
+.ujg-calendar-cell.ujg-has-data{background:#fff}
+.ujg-cell-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid #eee}
+.ujg-cell-date{font-weight:600;font-size:14px;color:#172b4d}
+.ujg-cell-total{font-size:11px;font-weight:600;color:#0052cc;background:#deebff;padding:2px 5px;border-radius:3px}
+.ujg-cell-issues{display:flex;flex-direction:column;gap:3px;max-height:180px;overflow-y:auto}
+.ujg-cell-issue{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px;padding:2px 4px;background:#f4f5f7;border-radius:3px;font-size:11px}
+.ujg-issue-link{color:#0052cc;text-decoration:none;font-weight:500}
+.ujg-issue-link:hover{text-decoration:underline}
+.ujg-issue-time{color:#172b4d;font-weight:600}
+.ujg-issue-est{color:#6b778c;font-size:10px}
+.ujg-issue-comment{width:100%;color:#6b778c;font-style:italic;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ujg-calendar-footer{padding:10px;background:#f4f5f7;text-align:right;font-size:13px;color:#172b4d}

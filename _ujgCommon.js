@@ -33,36 +33,17 @@ define("_ujgCommon", ["jquery"], function($) {
             if (!s || s <= 0) return "";
             var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
             if (h > 0 && m > 0) return h + "h " + m + "m";
-            return h > 0 ? h + "h" : (m > 0 ? m + "m" : "0m");
-        },
-        formatTimeShort: function(s) {
-            if (!s || s <= 0) return "";
-            var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-            if (h > 0) return h + "h";
-            return m + "m";
+            return h > 0 ? h + "h" : (m > 0 ? m + "m" : "");
         },
         escapeHtml: function(t) { if (!t) return ""; var d = document.createElement("div"); d.textContent = String(t); return d.innerHTML; },
-        unique: function(arr, key) {
-            var seen = {}, res = [];
-            if (!arr) return res;
-            arr.forEach(function(i) { var v = key ? i[key] : i; if (v && !seen[v]) { seen[v] = true; res.push(v); } });
-            return res;
-        },
-        getWeekKey: function(d) {
-            // Возвращает ключ недели в формате "2024-W01"
+        getDayKey: function(d) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
-            var dt = new Date(d);
-            dt.setHours(0, 0, 0, 0);
-            dt.setDate(dt.getDate() + 3 - (dt.getDay() + 6) % 7);
-            var week1 = new Date(dt.getFullYear(), 0, 4);
-            var weekNum = 1 + Math.round(((dt - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-            return dt.getFullYear() + "-W" + (weekNum < 10 ? "0" : "") + weekNum;
+            return d.toISOString().slice(0, 10);
         },
-        getWeekLabel: function(weekKey) {
-            // Из "2024-W01" делает "Нед 01"
-            if (!weekKey) return "";
-            var m = weekKey.match(/\d{4}-W(\d{2})/);
-            return m ? "Нед " + m[1] : weekKey;
+        getDayOfWeek: function(d) {
+            if (!d || !(d instanceof Date) || isNaN(d.getTime())) return 0;
+            var day = d.getDay();
+            return day === 0 ? 6 : day - 1; // Пн=0, Вс=6
         }
     };
 
@@ -108,7 +89,7 @@ define("_ujgCommon", ["jquery"], function($) {
         var end = options.end;
         var filter = options.jqlFilter;
         var d = $.Deferred();
-        if (!start || !end) { d.resolve({ days: [], users: [], totalSeconds: 0 }); return d.promise(); }
+        if (!start || !end) { d.resolve({ days: [], users: [], calendarData: {}, totalSeconds: 0 }); return d.promise(); }
         var jql = filter ? filter : "";
         $.ajax({
             url: baseUrl + "/rest/api/2/search",
@@ -141,72 +122,63 @@ define("_ujgCommon", ["jquery"], function($) {
                 var keys = issues.map(function(i) { return i.key; });
                 loadWorklogsForIssues(keys).then(function(worklogsByIssue) {
                     var days = daysBetween(start, end);
-                    var dayStart = days.length > 0 ? days[0].toISOString().slice(0,10) : null;
-                    var dayEnd = days.length > 0 ? days[days.length-1].toISOString().slice(0,10) : null;
+                    var dayStart = days.length > 0 ? utils.getDayKey(days[0]) : null;
+                    var dayEnd = days.length > 0 ? utils.getDayKey(days[days.length-1]) : null;
+                    
                     var usersMap = {};
                     var totalSeconds = 0;
+                    // calendarData[dayKey][issueKey] = { seconds, comments[], issueInfo }
+                    var calendarData = {};
+                    
+                    days.forEach(function(day) {
+                        calendarData[utils.getDayKey(day)] = {};
+                    });
                     
                     issues.forEach(function(issue) {
                         var wls = worklogsByIssue[issue.key] || [];
                         wls.forEach(function(w) {
                             var dt = utils.parseDate(w.started);
                             if (!dt || isNaN(dt.getTime())) return;
-                            var dKey = dt.toISOString().slice(0,10);
+                            var dKey = utils.getDayKey(dt);
                             if (dayStart && dayEnd && (dKey < dayStart || dKey > dayEnd)) return;
+                            
                             var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
                             var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
-                            if (!usersMap[uid]) usersMap[uid] = { id: uid, name: uname, issues: {}, totalSeconds: 0 };
-                            var u = usersMap[uid];
-                            if (!u.issues[issue.key]) {
+                            if (!usersMap[uid]) usersMap[uid] = { id: uid, name: uname, totalSeconds: 0 };
+                            
+                            // Calendar data
+                            if (!calendarData[dKey]) calendarData[dKey] = {};
+                            if (!calendarData[dKey][issue.key]) {
                                 var info = issueMap[issue.key] || {};
-                                u.issues[issue.key] = {
+                                calendarData[dKey][issue.key] = {
                                     key: issue.key,
                                     summary: info.summary || "",
                                     status: info.status || "",
                                     estimate: info.estimate || 0,
                                     dueDate: info.dueDate || null,
-                                    perDay: {},
-                                    perWeek: {},
-                                    totalSeconds: 0
+                                    seconds: 0,
+                                    comments: [],
+                                    authors: {}
                                 };
                             }
-                            var perIssue = u.issues[issue.key];
-                            // Per day
-                            if (!perIssue.perDay[dKey]) perIssue.perDay[dKey] = { seconds: 0, comments: [] };
-                            perIssue.perDay[dKey].seconds += w.timeSpentSeconds || 0;
-                            if (w.comment) perIssue.perDay[dKey].comments.push(w.comment);
-                            // Per week
-                            var wKey = utils.getWeekKey(dt);
-                            if (!perIssue.perWeek[wKey]) perIssue.perWeek[wKey] = { seconds: 0, comments: [] };
-                            perIssue.perWeek[wKey].seconds += w.timeSpentSeconds || 0;
-                            if (w.comment) perIssue.perWeek[wKey].comments.push(w.comment);
+                            calendarData[dKey][issue.key].seconds += w.timeSpentSeconds || 0;
+                            if (w.comment) calendarData[dKey][issue.key].comments.push(w.comment);
+                            calendarData[dKey][issue.key].authors[uid] = uname;
                             
-                            perIssue.totalSeconds += w.timeSpentSeconds || 0;
-                            u.totalSeconds += w.timeSpentSeconds || 0;
+                            usersMap[uid].totalSeconds += w.timeSpentSeconds || 0;
                             totalSeconds += w.timeSpentSeconds || 0;
                         });
                     });
                     
-                    // Собираем список недель
-                    var weeksMap = {};
-                    days.forEach(function(d) {
-                        var wk = utils.getWeekKey(d);
-                        if (!weeksMap[wk]) weeksMap[wk] = true;
-                    });
-                    var weeks = Object.keys(weeksMap).sort();
-                    
                     var users = Object.keys(usersMap).map(function(id) {
-                        var u = usersMap[id];
-                        u.issueList = Object.keys(u.issues).map(function(k) { return u.issues[k]; }).sort(function(a, b) {
-                            return (a.key || "").localeCompare(b.key || "");
-                        });
-                        return u;
+                        return usersMap[id];
                     }).sort(function(a, b) { return a.name.localeCompare(b.name); });
 
                     d.resolve({
                         days: days,
-                        weeks: weeks,
                         users: users,
+                        calendarData: calendarData,
+                        issueMap: issueMap,
                         totalSeconds: totalSeconds
                     });
                 }, d.reject);
