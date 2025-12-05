@@ -69,9 +69,10 @@ define("_ujgCommon", ["jquery"], function($) {
         // JQL для поиска задач с worklog за этот день
         var jql = 'worklogDate = "' + dayKey + '"';
         
-        // Фильтр по автору worklog в JQL
+        // Фильтр по автору worklog в JQL (используем in() чтобы работать и с accountId, и с key)
         if (userId) {
-            jql += ' AND worklogAuthor = "' + userId + '"';
+            var safeUser = String(userId).replace(/"/g, '\\"');
+            jql += ' AND worklogAuthor in ("' + safeUser + '")';
         }
         
         if (jqlFilter) jql += " AND (" + jqlFilter + ")";

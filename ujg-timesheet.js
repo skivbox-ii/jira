@@ -6,7 +6,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var STORAGE_KEY = "ujg_timesheet_settings";
     
     var CONFIG = {
-        version: "1.4.0",
+        version: "1.4.1",
         jqlFilter: "",
         debug: true
     };
@@ -553,6 +553,6 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         initPanel();
         startLoading();
     }
-
+    
     return MyGadget;
 });
