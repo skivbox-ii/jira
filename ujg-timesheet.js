@@ -3,14 +3,42 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var utils = Common.utils;
     var baseUrl = Common.baseUrl;
 
+    var STORAGE_KEY = "ujg_timesheet_settings";
+    
     var CONFIG = {
-        version: "1.2.1",
+        version: "1.2.2",
         jqlFilter: "",
         debug: true
     };
 
     var WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
     var DONE_STATUSES = ["done", "closed", "resolved", "готово", "закрыт", "закрыта", "завершен", "завершена", "выполнено"];
+    
+    // Загрузка/сохранение настроек в localStorage
+    function loadSettings() {
+        try {
+            var saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) return JSON.parse(saved);
+        } catch(e) {}
+        return {};
+    }
+    
+    function saveSettings(settings) {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+        } catch(e) {}
+    }
+    
+    function getDefaultDates() {
+        // Текущий месяц
+        var now = new Date();
+        var start = new Date(now.getFullYear(), now.getMonth(), 1);
+        var end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        return {
+            start: start.toISOString().slice(0, 10),
+            end: end.toISOString().slice(0, 10)
+        };
+    }
 
     function MyGadget(API) {
         var state = {
@@ -250,6 +278,11 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
 
         function initPanel() {
             var $p = $('<div class="ujg-control-panel"></div>');
+            
+            // Загружаем сохранённые настройки
+            var saved = loadSettings();
+            if (saved.jql) CONFIG.jqlFilter = saved.jql;
+            var defaultDates = getDefaultDates();
 
             // JQL
             var $jqlRow = $('<div class="ujg-jql-filter"></div>');
@@ -258,16 +291,22 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var $jqlBtn = $('<button class="aui-button">Применить</button>');
             $jqlBtn.on("click", function() {
                 CONFIG.jqlFilter = $jqlInput.val().trim();
+                saveSettings({ jql: CONFIG.jqlFilter });
                 updateDebug();
                 if (state.rangeStart && state.rangeEnd) loadRangeData(state.rangeStart, state.rangeEnd);
             });
             $jqlRow.append($('<label>JQL: </label>'), $jqlInput, $jqlBtn);
             $p.append($jqlRow);
 
-            // Даты
+            // Даты - автоматически текущий месяц
             var $rangeRow = $('<div class="ujg-range-filter"></div>');
             $rangeStart = $('<input type="date" class="ujg-range-input">');
             $rangeEnd = $('<input type="date" class="ujg-range-input">');
+            $rangeStart.val(defaultDates.start);
+            $rangeEnd.val(defaultDates.end);
+            state.rangeStart = defaultDates.start;
+            state.rangeEnd = defaultDates.end;
+            
             var $rangeBtn = $('<button class="aui-button aui-button-primary">Загрузить</button>');
             $rangeBtn.on("click", function() {
                 state.rangeStart = $rangeStart.val();
@@ -317,7 +356,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         initPanel();
-        $cont.html('<div class="ujg-message ujg-message-info">Укажите диапазон дат и нажмите "Загрузить"</div>');
+        // Автоматически загружаем данные за текущий месяц
+        loadRangeData(state.rangeStart, state.rangeEnd);
     }
 
     return MyGadget;
