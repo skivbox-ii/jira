@@ -248,11 +248,83 @@ define("_ujgCommon", ["jquery"], function($) {
         return d.promise();
     }
 
+    function buildRangeData(options) {
+        var start = options.start;
+        var end = options.end;
+        var filter = options.jqlFilter;
+        var d = $.Deferred();
+        if (!start || !end) { d.resolve({ sprint: { id: null, name: "" }, days: [], users: [], totalSeconds: 0 }); return d.promise(); }
+        var jql = filter ? filter : "";
+        $.ajax({
+            url: baseUrl + "/rest/api/2/search",
+            type: "POST",
+            contentType: "application/json",
+            data: JSON.stringify({ jql: jql, fields: ["summary", "status"], maxResults: 1000 }),
+            success: function(r) {
+                var issues = (r && r.issues) ? r.issues : [];
+                var keys = issues.map(function(i) { return i.key; });
+                loadWorklogsForIssues(keys).then(function(worklogsByIssue) {
+                    var days = daysBetween(start, end);
+                    var dayStart = days.length > 0 ? days[0].toISOString().slice(0,10) : null;
+                    var dayEnd = days.length > 0 ? days[days.length-1].toISOString().slice(0,10) : null;
+                    var usersMap = {};
+                    var totalSeconds = 0;
+                    issues.forEach(function(issue) {
+                        var wls = worklogsByIssue[issue.key] || [];
+                        wls.forEach(function(w) {
+                            var dt = utils.parseDate(w.started);
+                            if (!dt || isNaN(dt.getTime())) return;
+                            var dKey = dt.toISOString().slice(0,10);
+                            if (dayStart && dayEnd && (dKey < dayStart || dKey > dayEnd)) return;
+                            var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
+                            var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
+                            if (!usersMap[uid]) usersMap[uid] = { id: uid, name: uname, issues: {}, totalSeconds: 0 };
+                            var u = usersMap[uid];
+                            if (!u.issues[issue.key]) {
+                                u.issues[issue.key] = {
+                                    key: issue.key,
+                                    summary: issue.fields && issue.fields.summary || "",
+                                    status: issue.fields && issue.fields.status && issue.fields.status.name || "",
+                                    perDay: {},
+                                    totalSeconds: 0
+                                };
+                            }
+                            var perIssue = u.issues[issue.key];
+                            if (!perIssue.perDay[dKey]) perIssue.perDay[dKey] = { seconds: 0, comments: [] };
+                            perIssue.perDay[dKey].seconds += w.timeSpentSeconds || 0;
+                            if (w.comment) perIssue.perDay[dKey].comments.push(w.comment);
+                            perIssue.totalSeconds += w.timeSpentSeconds || 0;
+                            u.totalSeconds += w.timeSpentSeconds || 0;
+                            totalSeconds += w.timeSpentSeconds || 0;
+                        });
+                    });
+                    var users = Object.keys(usersMap).map(function(id) {
+                        var u = usersMap[id];
+                        u.issueList = Object.keys(u.issues).map(function(k) { return u.issues[k]; }).sort(function(a, b) {
+                            return (a.key || "").localeCompare(b.key || "");
+                        });
+                        return u;
+                    }).sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+                    d.resolve({
+                        sprint: { id: null, name: "Диапазон дат" },
+                        days: days,
+                        users: users,
+                        totalSeconds: totalSeconds
+                    });
+                }, d.reject);
+            },
+            error: function(e) { d.reject(e); }
+        });
+        return d.promise();
+    }
+
     return {
         baseUrl: baseUrl,
         utils: utils,
         listActiveSprints: listActiveSprints,
-        buildSprintData: buildSprintData
+        buildSprintData: buildSprintData,
+        buildRangeData: buildRangeData
     };
 });
 
