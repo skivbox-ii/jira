@@ -19,6 +19,11 @@ define("_ujgCommon", ["jquery"], function($) {
             try { return d.toLocaleDateString(loc || "ru-RU", { day: "numeric", month: "short", year: "numeric" }); }
             catch (e) { return d.getDate() + "." + (d.getMonth() + 1) + "." + d.getFullYear(); }
         },
+        formatDateShort: function(d) {
+            if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
+            var dd = d.getDate(), mm = d.getMonth() + 1;
+            return (dd < 10 ? "0" : "") + dd + "." + (mm < 10 ? "0" : "") + mm;
+        },
         formatDayShort: function(d, loc) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
             try { return d.toLocaleDateString(loc || "en-GB", { day: "2-digit", month: "short" }); }
@@ -30,95 +35,44 @@ define("_ujgCommon", ["jquery"], function($) {
             if (h > 0 && m > 0) return h + "h " + m + "m";
             return h > 0 ? h + "h" : (m > 0 ? m + "m" : "0m");
         },
+        formatTimeShort: function(s) {
+            if (!s || s <= 0) return "";
+            var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+            if (h > 0) return h + "h";
+            return m + "m";
+        },
         escapeHtml: function(t) { if (!t) return ""; var d = document.createElement("div"); d.textContent = String(t); return d.innerHTML; },
         unique: function(arr, key) {
             var seen = {}, res = [];
             if (!arr) return res;
             arr.forEach(function(i) { var v = key ? i[key] : i; if (v && !seen[v]) { seen[v] = true; res.push(v); } });
             return res;
+        },
+        getWeekKey: function(d) {
+            // Возвращает ключ недели в формате "2024-W01"
+            if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
+            var dt = new Date(d);
+            dt.setHours(0, 0, 0, 0);
+            dt.setDate(dt.getDate() + 3 - (dt.getDay() + 6) % 7);
+            var week1 = new Date(dt.getFullYear(), 0, 4);
+            var weekNum = 1 + Math.round(((dt - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+            return dt.getFullYear() + "-W" + (weekNum < 10 ? "0" : "") + weekNum;
+        },
+        getWeekLabel: function(weekKey) {
+            // Из "2024-W01" делает "Нед 01"
+            if (!weekKey) return "";
+            var m = weekKey.match(/\d{4}-W(\d{2})/);
+            return m ? "Нед " + m[1] : weekKey;
         }
     };
 
-    function parseSprint(raw) {
-        if (!raw) return null;
-        if (typeof raw === "object") {
-            return {
-                id: raw.id || raw.sprintId || null,
-                name: raw.name || "",
-                start: utils.parseDate(raw.startDate),
-                end: utils.parseDate(raw.endDate),
-                state: raw.state || ""
-            };
-        }
-        if (typeof raw === "string") {
-            var id = null, name = "", state = "", start = null, end = null;
-            var mId = raw.match(/id=(\d+)/); if (mId) id = mId[1];
-            var mName = raw.match(/name=([^,\]]+)/); if (mName) name = mName[1];
-            var mState = raw.match(/state=([^,\]]+)/); if (mState) state = mState[1];
-            var mStart = raw.match(/startDate=([^\],]+)/); if (mStart) start = utils.parseDate(mStart[1]);
-            var mEnd = raw.match(/endDate=([^\],]+)/); if (mEnd) end = utils.parseDate(mEnd[1]);
-            return { id: id, name: name, start: start, end: end, state: state };
-        }
-        return null;
-    }
-
-    function extractSprintsFromIssue(issue) {
-        var result = [];
-        if (!issue || !issue.fields) return result;
-        var sf = issue.fields.sprint || issue.fields.customfield_10020;
-        if (Array.isArray(sf)) {
-            sf.forEach(function(s) { var parsed = parseSprint(s); if (parsed) result.push(parsed); });
-        } else if (sf) {
-            var parsed = parseSprint(sf);
-            if (parsed) result.push(parsed);
-        }
-        return result;
-    }
-
-    function listActiveSprints(opts) {
-        var options = opts || {};
-        var jql = "sprint in openSprints()";
-        if (options.jqlFilter) jql += " AND (" + options.jqlFilter + ")";
-        var d = $.Deferred();
-        $.ajax({
-            url: baseUrl + "/rest/api/2/search",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify({ jql: jql, fields: ["sprint", "customfield_10020"], maxResults: 500 }),
-            success: function(r) {
-                var map = {};
-                if (r && r.issues) {
-                    r.issues.forEach(function(iss) {
-                        extractSprintsFromIssue(iss).forEach(function(s) {
-                            if (s.id && !map[s.id]) map[s.id] = s;
-                        });
-                    });
-                }
-                var list = Object.keys(map).map(function(id) { return map[id]; }).sort(function(a, b) {
-                    if (a.start && b.start) return a.start - b.start;
-                    return (a.name || "").localeCompare(b.name || "");
-                });
-                d.resolve(list);
-            },
-            error: function(e) { d.reject(e); }
-        });
-        return d.promise();
-    }
-
-    function getSprintIssues(sprintId, opts) {
-        var options = opts || {};
-        var jql = "sprint = " + sprintId;
-        if (options.jqlFilter) jql += " AND (" + options.jqlFilter + ")";
-        var d = $.Deferred();
-        $.ajax({
-            url: baseUrl + "/rest/api/2/search",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify({ jql: jql, fields: ["summary", "status", "assignee", "sprint", "customfield_10020"], maxResults: 1000 }),
-            success: function(r) { d.resolve((r && r.issues) ? r.issues : []); },
-            error: function(e) { d.reject(e); }
-        });
-        return d.promise();
+    function daysBetween(start, end) {
+        var res = [];
+        if (!start || !end) return res;
+        var cur = new Date(start); cur.setHours(0,0,0,0);
+        var ed = new Date(end); ed.setHours(0,0,0,0);
+        while (cur <= ed) { res.push(new Date(cur)); cur.setDate(cur.getDate() + 1); }
+        return res;
     }
 
     function fetchWorklogsForIssue(issueKey) {
@@ -136,7 +90,7 @@ define("_ujgCommon", ["jquery"], function($) {
         var d = $.Deferred();
         if (!keys || keys.length === 0) { d.resolve({}); return d.promise(); }
         var res = {};
-        var done = 0, total = keys.length, failed = false;
+        var done = 0, total = keys.length;
         keys.forEach(function(k) {
             fetchWorklogsForIssue(k).then(function(wl) {
                 res[k] = wl;
@@ -149,119 +103,41 @@ define("_ujgCommon", ["jquery"], function($) {
         return d.promise();
     }
 
-    function daysBetween(start, end) {
-        var res = [];
-        if (!start || !end) return res;
-        var cur = new Date(start); cur.setHours(0,0,0,0);
-        var ed = new Date(end); ed.setHours(0,0,0,0);
-        while (cur <= ed) { res.push(new Date(cur)); cur.setDate(cur.getDate() + 1); }
-        return res;
-    }
-
-    function buildSprintData(options) {
-        var sprintId = options.sprintId;
-        var filter = options.jqlFilter;
-        var d = $.Deferred();
-        getSprintIssues(sprintId, { jqlFilter: filter }).then(function(issues) {
-            var keys = issues.map(function(i) { return i.key; });
-            loadWorklogsForIssues(keys).then(function(worklogsByIssue) {
-                var sprintInfo = null;
-                // попытка взять данные спринта из первого подходящего поля
-                for (var i = 0; i < issues.length; i++) {
-                    var spArr = extractSprintsFromIssue(issues[i]).filter(function(s) { return s.id == sprintId; });
-                    if (spArr.length > 0) { sprintInfo = spArr[0]; break; }
-                }
-                var start = sprintInfo && sprintInfo.start;
-                var end = sprintInfo && sprintInfo.end;
-                // fallback: вычислить по датам ворклогов
-                if (!start || !end) {
-                    var minDt = null, maxDt = null;
-                    Object.keys(worklogsByIssue).forEach(function(k) {
-                        worklogsByIssue[k].forEach(function(w) {
-                            var dt = utils.parseDate(w.started);
-                            if (!dt || isNaN(dt.getTime())) return;
-                            if (!minDt || dt < minDt) minDt = dt;
-                            if (!maxDt || dt > maxDt) maxDt = dt;
-                        });
-                    });
-                    if (minDt && maxDt) {
-                        start = new Date(minDt); start.setHours(0,0,0,0);
-                        end = new Date(maxDt); end.setHours(0,0,0,0);
-                    }
-                }
-                if (!start || !end) {
-                    d.resolve({ sprint: { id: sprintId, name: "" }, days: [], users: [], totalSeconds: 0 });
-                    return;
-                }
-                var days = daysBetween(start, end);
-                var usersMap = {};
-                var totalSeconds = 0;
-
-                issues.forEach(function(issue) {
-                    var wls = worklogsByIssue[issue.key] || [];
-                    wls.forEach(function(w) {
-                        var dt = utils.parseDate(w.started);
-                        if (!dt || isNaN(dt.getTime())) return;
-                        var dKey = dt.toISOString().slice(0,10);
-                        var sprintStartKey = days.length > 0 ? days[0].toISOString().slice(0,10) : null;
-                        var sprintEndKey = days.length > 0 ? days[days.length - 1].toISOString().slice(0,10) : null;
-                        if (sprintStartKey && sprintEndKey && (dKey < sprintStartKey || dKey > sprintEndKey)) return;
-                        var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
-                        var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
-                        if (!usersMap[uid]) usersMap[uid] = { id: uid, name: uname, issues: {}, totalSeconds: 0 };
-                        var u = usersMap[uid];
-                        if (!u.issues[issue.key]) {
-                            u.issues[issue.key] = {
-                                key: issue.key,
-                                summary: issue.fields && issue.fields.summary || "",
-                                status: issue.fields && issue.fields.status && issue.fields.status.name || "",
-                                perDay: {},
-                                totalSeconds: 0
-                            };
-                        }
-                        var perIssue = u.issues[issue.key];
-                        if (!perIssue.perDay[dKey]) perIssue.perDay[dKey] = { seconds: 0, comments: [] };
-                        perIssue.perDay[dKey].seconds += w.timeSpentSeconds || 0;
-                        if (w.comment) perIssue.perDay[dKey].comments.push(w.comment);
-                        perIssue.totalSeconds += w.timeSpentSeconds || 0;
-                        u.totalSeconds += w.timeSpentSeconds || 0;
-                        totalSeconds += w.timeSpentSeconds || 0;
-                    });
-                });
-
-                var users = Object.keys(usersMap).map(function(id) {
-                    var u = usersMap[id];
-                    u.issueList = Object.keys(u.issues).map(function(k) { return u.issues[k]; }).sort(function(a, b) {
-                        return (a.key || "").localeCompare(b.key || "");
-                    });
-                    return u;
-                }).sort(function(a, b) { return a.name.localeCompare(b.name); });
-
-                d.resolve({
-                    sprint: sprintInfo || { id: sprintId, name: "" },
-                    days: days,
-                    users: users,
-                    totalSeconds: totalSeconds
-                });
-            }, d.reject);
-        }, d.reject);
-        return d.promise();
-    }
-
     function buildRangeData(options) {
         var start = options.start;
         var end = options.end;
         var filter = options.jqlFilter;
         var d = $.Deferred();
-        if (!start || !end) { d.resolve({ sprint: { id: null, name: "" }, days: [], users: [], totalSeconds: 0 }); return d.promise(); }
+        if (!start || !end) { d.resolve({ days: [], users: [], totalSeconds: 0 }); return d.promise(); }
         var jql = filter ? filter : "";
         $.ajax({
             url: baseUrl + "/rest/api/2/search",
             type: "POST",
             contentType: "application/json",
-            data: JSON.stringify({ jql: jql, fields: ["summary", "status"], maxResults: 1000 }),
+            data: JSON.stringify({ 
+                jql: jql, 
+                fields: ["summary", "status", "timetracking", "timeoriginalestimate", "duedate", "assignee"], 
+                maxResults: 1000 
+            }),
             success: function(r) {
                 var issues = (r && r.issues) ? r.issues : [];
+                var issueMap = {};
+                issues.forEach(function(iss) {
+                    var tt = iss.fields && iss.fields.timetracking;
+                    var estimate = 0;
+                    if (tt && tt.originalEstimateSeconds) {
+                        estimate = tt.originalEstimateSeconds;
+                    } else if (iss.fields && iss.fields.timeoriginalestimate) {
+                        estimate = iss.fields.timeoriginalestimate;
+                    }
+                    issueMap[iss.key] = {
+                        key: iss.key,
+                        summary: iss.fields && iss.fields.summary || "",
+                        status: iss.fields && iss.fields.status && iss.fields.status.name || "",
+                        estimate: estimate,
+                        dueDate: iss.fields && iss.fields.duedate ? utils.parseDate(iss.fields.duedate) : null
+                    };
+                });
                 var keys = issues.map(function(i) { return i.key; });
                 loadWorklogsForIssues(keys).then(function(worklogsByIssue) {
                     var days = daysBetween(start, end);
@@ -269,6 +145,7 @@ define("_ujgCommon", ["jquery"], function($) {
                     var dayEnd = days.length > 0 ? days[days.length-1].toISOString().slice(0,10) : null;
                     var usersMap = {};
                     var totalSeconds = 0;
+                    
                     issues.forEach(function(issue) {
                         var wls = worklogsByIssue[issue.key] || [];
                         wls.forEach(function(w) {
@@ -281,23 +158,43 @@ define("_ujgCommon", ["jquery"], function($) {
                             if (!usersMap[uid]) usersMap[uid] = { id: uid, name: uname, issues: {}, totalSeconds: 0 };
                             var u = usersMap[uid];
                             if (!u.issues[issue.key]) {
+                                var info = issueMap[issue.key] || {};
                                 u.issues[issue.key] = {
                                     key: issue.key,
-                                    summary: issue.fields && issue.fields.summary || "",
-                                    status: issue.fields && issue.fields.status && issue.fields.status.name || "",
+                                    summary: info.summary || "",
+                                    status: info.status || "",
+                                    estimate: info.estimate || 0,
+                                    dueDate: info.dueDate || null,
                                     perDay: {},
+                                    perWeek: {},
                                     totalSeconds: 0
                                 };
                             }
                             var perIssue = u.issues[issue.key];
+                            // Per day
                             if (!perIssue.perDay[dKey]) perIssue.perDay[dKey] = { seconds: 0, comments: [] };
                             perIssue.perDay[dKey].seconds += w.timeSpentSeconds || 0;
                             if (w.comment) perIssue.perDay[dKey].comments.push(w.comment);
+                            // Per week
+                            var wKey = utils.getWeekKey(dt);
+                            if (!perIssue.perWeek[wKey]) perIssue.perWeek[wKey] = { seconds: 0, comments: [] };
+                            perIssue.perWeek[wKey].seconds += w.timeSpentSeconds || 0;
+                            if (w.comment) perIssue.perWeek[wKey].comments.push(w.comment);
+                            
                             perIssue.totalSeconds += w.timeSpentSeconds || 0;
                             u.totalSeconds += w.timeSpentSeconds || 0;
                             totalSeconds += w.timeSpentSeconds || 0;
                         });
                     });
+                    
+                    // Собираем список недель
+                    var weeksMap = {};
+                    days.forEach(function(d) {
+                        var wk = utils.getWeekKey(d);
+                        if (!weeksMap[wk]) weeksMap[wk] = true;
+                    });
+                    var weeks = Object.keys(weeksMap).sort();
+                    
                     var users = Object.keys(usersMap).map(function(id) {
                         var u = usersMap[id];
                         u.issueList = Object.keys(u.issues).map(function(k) { return u.issues[k]; }).sort(function(a, b) {
@@ -307,8 +204,8 @@ define("_ujgCommon", ["jquery"], function($) {
                     }).sort(function(a, b) { return a.name.localeCompare(b.name); });
 
                     d.resolve({
-                        sprint: { id: null, name: "Диапазон дат" },
                         days: days,
+                        weeks: weeks,
                         users: users,
                         totalSeconds: totalSeconds
                     });
@@ -322,9 +219,6 @@ define("_ujgCommon", ["jquery"], function($) {
     return {
         baseUrl: baseUrl,
         utils: utils,
-        listActiveSprints: listActiveSprints,
-        buildSprintData: buildSprintData,
         buildRangeData: buildRangeData
     };
 });
-
