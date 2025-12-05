@@ -8,6 +8,7 @@
 .ujg-range-input{padding:6px 8px;border:1px solid #dfe1e6;border-radius:3px;font-size:13px;color:#172b4d}
 .ujg-range-input:focus{border-color:#0052cc;outline:none;box-shadow:0 0 0 2px rgba(0,82,204,0.2)}
 .ujg-progress{font-size:12px;color:#0052cc;font-weight:500;margin-left:10px;padding:4px 10px;background:#deebff;border-radius:3px}
+.ujg-copy-link{margin-left:5px;padding:4px 8px;font-size:14px;cursor:pointer}
 .ujg-controls-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #dfe1e6}
 .ujg-user-filter{display:flex;align-items:center;gap:5px}
 .ujg-user-filter label{font-weight:500;color:#42526e;white-space:nowrap}

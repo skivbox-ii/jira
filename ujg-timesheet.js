@@ -6,7 +6,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var STORAGE_KEY = "ujg_timesheet_settings";
     
     var CONFIG = {
-        version: "1.3.0",
+        version: "1.3.1",
         jqlFilter: "",
         debug: true
     };
@@ -25,6 +25,39 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     function saveSettings(settings) {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+        } catch(e) {}
+    }
+    
+    // URL hash params
+    function getUrlParams() {
+        var params = {};
+        try {
+            var hash = window.location.hash.replace(/^#/, "");
+            if (!hash) return params;
+            hash.split("&").forEach(function(part) {
+                var kv = part.split("=");
+                if (kv.length === 2) {
+                    params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1]);
+                }
+            });
+        } catch(e) {}
+        return params;
+    }
+    
+    function setUrlParams(params) {
+        try {
+            var parts = [];
+            Object.keys(params).forEach(function(k) {
+                if (params[k] !== undefined && params[k] !== "") {
+                    parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
+                }
+            });
+            var newHash = parts.length > 0 ? "#" + parts.join("&") : "";
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState(null, "", window.location.pathname + window.location.search + newHash);
+            } else {
+                window.location.hash = newHash;
+            }
         } catch(e) {}
     }
     
@@ -83,7 +116,6 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         function updateUserList() {
-            var currentVal = $userSelect.val();
             var userList = Object.keys(state.users).map(function(id) {
                 return { id: id, name: state.users[id] };
             }).sort(function(a, b) { return a.name.localeCompare(b.name); });
@@ -93,10 +125,12 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             userList.forEach(function(u) {
                 $userSelect.append('<option value="' + utils.escapeHtml(u.id) + '">' + utils.escapeHtml(u.name) + '</option>');
             });
-            if (currentVal && state.users[currentVal]) {
-                $userSelect.val(currentVal);
+            // Восстанавливаем выбранного пользователя
+            if (state.selectedUser && state.users[state.selectedUser]) {
+                $userSelect.val(state.selectedUser);
+            } else if (state.selectedUser) {
+                // Пользователь из URL еще не загружен - оставляем state
             } else {
-                state.selectedUser = "";
                 $userSelect.val("");
             }
         }
@@ -345,13 +379,35 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             if (state.lastError) parts.push("<span style='color:red'>" + state.lastError + "</span>");
             $debugText.html(parts.join(" | "));
         }
+        
+        function updateUrlState() {
+            setUrlParams({
+                jql: CONFIG.jqlFilter,
+                from: state.rangeStart,
+                to: state.rangeEnd,
+                user: state.selectedUser
+            });
+        }
 
         function initPanel() {
             var $p = $('<div class="ujg-control-panel"></div>');
             
+            // Приоритет: URL > localStorage > defaults
+            var urlParams = getUrlParams();
             var saved = loadSettings();
-            if (saved.jql) CONFIG.jqlFilter = saved.jql;
             var defaultDates = getDefaultDates();
+            
+            // JQL: URL > localStorage
+            if (urlParams.jql) {
+                CONFIG.jqlFilter = urlParams.jql;
+            } else if (saved.jql) {
+                CONFIG.jqlFilter = saved.jql;
+            }
+            
+            // Даты: URL > defaults
+            var initStart = urlParams.from || defaultDates.start;
+            var initEnd = urlParams.to || defaultDates.end;
+            var initUser = urlParams.user || "";
 
             // JQL
             var $jqlRow = $('<div class="ujg-jql-filter"></div>');
@@ -361,6 +417,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $jqlBtn.on("click", function() {
                 CONFIG.jqlFilter = $jqlInput.val().trim();
                 saveSettings({ jql: CONFIG.jqlFilter });
+                updateUrlState();
                 updateDebug();
             });
             $jqlRow.append($('<label>JQL: </label>'), $jqlInput, $jqlBtn);
@@ -370,21 +427,38 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var $rangeRow = $('<div class="ujg-range-filter"></div>');
             $rangeStart = $('<input type="date" class="ujg-range-input">');
             $rangeEnd = $('<input type="date" class="ujg-range-input">');
-            $rangeStart.val(defaultDates.start);
-            $rangeEnd.val(defaultDates.end);
-            state.rangeStart = defaultDates.start;
-            state.rangeEnd = defaultDates.end;
+            $rangeStart.val(initStart);
+            $rangeEnd.val(initEnd);
+            state.rangeStart = initStart;
+            state.rangeEnd = initEnd;
+            state.selectedUser = initUser;
             
             var $rangeBtn = $('<button class="aui-button aui-button-primary">Загрузить</button>');
             $rangeBtn.on("click", function() {
                 if (state.loading) return;
                 state.rangeStart = $rangeStart.val();
                 state.rangeEnd = $rangeEnd.val();
+                updateUrlState();
                 startLoading();
             });
             
+            // Кнопка "Копировать ссылку"
+            var $copyBtn = $('<button class="aui-button ujg-copy-link" title="Копировать ссылку с фильтрами">🔗</button>');
+            $copyBtn.on("click", function() {
+                updateUrlState();
+                var url = window.location.href;
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(url).then(function() {
+                        $copyBtn.text("✓");
+                        setTimeout(function() { $copyBtn.text("🔗"); }, 1500);
+                    });
+                } else {
+                    prompt("Скопируйте ссылку:", url);
+                }
+            });
+            
             $progress = $('<span class="ujg-progress"></span>').hide();
-            $rangeRow.append($('<label>С: </label>'), $rangeStart, $('<label> По: </label>'), $rangeEnd, $rangeBtn, $progress);
+            $rangeRow.append($('<label>С: </label>'), $rangeStart, $('<label> По: </label>'), $rangeEnd, $rangeBtn, $copyBtn, $progress);
             $p.append($rangeRow);
 
             // Контролы
@@ -394,6 +468,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $userSelect = $('<select class="ujg-user-select"><option value="">Все</option></select>');
             $userSelect.on("change", function() {
                 state.selectedUser = $(this).val();
+                updateUrlState();
                 renderCalendar();
                 updateDebug();
             });
