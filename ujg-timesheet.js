@@ -4,7 +4,10 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var baseUrl = Common.baseUrl;
 
     var CONFIG = {
+        // Версия виджета
+        version: "1.0.3",
         // Ограничение выборки: укажи JQL, например "project = SDKU" или фильтр доски
+        // Оставь пустым для поиска по всем доступным проектам
         jqlFilter: "",
         // Включить отладочный блок
         debug: true
@@ -21,7 +24,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             mode: "sprint", // "sprint" | "range"
             rangeStart: "",
             rangeEnd: "",
-            lastError: ""
+            lastError: "",
+            lastJql: "",
+            lastIssuesCount: 0
         };
 
         var $content = API.getGadgetContentEl();
@@ -31,7 +36,13 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $content.append($cont);
         }
 
-        var $fsBtn, $userSelect, $sprintSelect, $modeSprint, $modeRange, $rangeStart, $rangeEnd, $debugBox, $debugText;
+        var $fsBtn, $userSelect, $sprintSelect, $sprintFilter, $rangeFilter, $rangeStart, $rangeEnd, $debugBox, $debugText;
+
+        function log(msg) {
+            if (CONFIG.debug) {
+                console.log("[UJG-Timesheet]", msg);
+            }
+        }
 
         function toggleFs() {
             var $el = $content.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
@@ -46,6 +57,16 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 $fsBtn.text("Fullscreen");
             }
             API.resize();
+        }
+
+        function updateModeUI() {
+            if (state.mode === "sprint") {
+                $sprintFilter.show();
+                $rangeFilter.hide();
+            } else {
+                $sprintFilter.hide();
+                $rangeFilter.show();
+            }
         }
 
         function updateUserList(users) {
@@ -66,7 +87,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         function renderMatrix(data) {
             $cont.empty();
             if (!data || !data.days || data.days.length === 0) {
-                $cont.html('<div class="ujg-message ujg-message-info">Нет данных по выбранному спринту</div>');
+                $cont.html('<div class="ujg-message ujg-message-info">Нет данных (дни не определены)</div>');
                 API.resize();
                 return;
             }
@@ -113,7 +134,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 });
             });
 
-            html += '<tr class="ujg-total-row"><td colspan="' + (2 + dayKeys.length) + '"><strong>ИТОГО</strong></td><td class="ujg-time-cell"><strong>' + (utils.formatTime(totalAll) || "0m") + '</strong></td></tr>';
+            html += '<tr class="ujg-total-row"><td colspan="2"><strong>ИТОГО</strong></td><td class="ujg-time-cell"><strong>' + (utils.formatTime(totalAll) || "0m") + '</strong></td>';
+            for (var i = 0; i < dayKeys.length; i++) html += '<td></td>';
+            html += '</tr>';
             html += '</tbody></table>';
 
             $cont.html(html);
@@ -122,13 +145,21 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
 
         function loadSprintData(sprintId) {
             state.selectedSprintId = sprintId;
+            state.lastError = "";
+            log("Загрузка данных спринта: " + sprintId);
             $cont.html('<div class="ujg-message ujg-message-loading">Загрузка спринта...</div>');
+            updateDebug();
+            
             Common.buildSprintData({ sprintId: sprintId, jqlFilter: CONFIG.jqlFilter }).then(function(data) {
+                log("Данные спринта получены. Пользователей: " + (data.users ? data.users.length : 0) + ", дней: " + (data.days ? data.days.length : 0));
                 state.sprintData = data;
+                state.lastIssuesCount = data.users ? data.users.reduce(function(acc, u) { return acc + (u.issueList ? u.issueList.length : 0); }, 0) : 0;
+                updateDebug();
                 updateUserList(data.users || []);
                 renderMatrix(data);
-            }, function() {
-                state.lastError = "Ошибка загрузки данных спринта";
+            }, function(err) {
+                state.lastError = "Ошибка загрузки данных спринта: " + (err && err.statusText ? err.statusText : JSON.stringify(err));
+                log(state.lastError);
                 updateDebug();
                 $cont.html('<div class="ujg-message ujg-message-info">Не удалось загрузить данные спринта</div>');
                 API.resize();
@@ -143,13 +174,22 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 return;
             }
             if (s > e) { var t = s; s = e; e = t; }
+            state.lastError = "";
+            state.lastJql = CONFIG.jqlFilter || "(все задачи)";
+            log("Загрузка диапазона: " + startStr + " - " + endStr + ", JQL: " + state.lastJql);
             $cont.html('<div class="ujg-message ujg-message-loading">Загрузка диапазона...</div>');
+            updateDebug();
+            
             Common.buildRangeData({ start: s, end: e, jqlFilter: CONFIG.jqlFilter }).then(function(data) {
+                log("Данные диапазона получены. Пользователей: " + (data.users ? data.users.length : 0) + ", дней: " + (data.days ? data.days.length : 0));
                 state.sprintData = data;
+                state.lastIssuesCount = data.users ? data.users.reduce(function(acc, u) { return acc + (u.issueList ? u.issueList.length : 0); }, 0) : 0;
+                updateDebug();
                 updateUserList(data.users || []);
                 renderMatrix(data);
             }, function(err) {
-                state.lastError = "Ошибка загрузки диапазона: " + (err && err.statusText ? err.statusText : "");
+                state.lastError = "Ошибка загрузки диапазона: " + (err && err.statusText ? err.statusText : JSON.stringify(err));
+                log(state.lastError);
                 updateDebug();
                 $cont.html('<div class="ujg-message ujg-message-info">Не удалось загрузить данные по диапазону</div>');
                 API.resize();
@@ -161,9 +201,10 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $sprintSelect.empty();
             if (state.sprintList.length === 0) {
                 $sprintSelect.append('<option value="">Нет активных спринтов</option>');
-                state.lastError = "Спринты не найдены. Проверь CONFIG.jqlFilter.";
+                state.lastError = "Спринты не найдены. JQL: sprint in openSprints()" + (CONFIG.jqlFilter ? " AND (" + CONFIG.jqlFilter + ")" : "");
+                log(state.lastError);
                 updateDebug();
-                $cont.html('<div class="ujg-message ujg-message-info">Нет активных спринтов</div>');
+                $cont.html('<div class="ujg-message ujg-message-info">Нет активных спринтов. Попробуйте режим "Диапазон дат".</div>');
                 API.resize();
                 return;
             }
@@ -179,13 +220,20 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         function loadSprints() {
+            state.lastError = "";
+            state.lastJql = "sprint in openSprints()" + (CONFIG.jqlFilter ? " AND (" + CONFIG.jqlFilter + ")" : "");
+            log("Загрузка списка спринтов. JQL: " + state.lastJql);
             $cont.html('<div class="ujg-message ujg-message-loading">Загрузка активных спринтов...</div>');
+            updateDebug();
+            
             Common.listActiveSprints({ jqlFilter: CONFIG.jqlFilter }).then(function(list) {
+                log("Спринтов найдено: " + list.length);
                 populateSprints(list);
             }, function(err) {
-                state.lastError = "Ошибка загрузки спринтов: " + (err && err.statusText ? err.statusText : "");
+                state.lastError = "Ошибка загрузки спринтов: " + (err && err.statusText ? err.statusText : JSON.stringify(err));
+                log(state.lastError);
                 updateDebug();
-                $cont.html('<div class="ujg-message ujg-message-info">Не удалось загрузить список активных спринтов</div>');
+                $cont.html('<div class="ujg-message ujg-message-info">Не удалось загрузить список активных спринтов. Попробуйте режим "Диапазон дат".</div>');
                 API.resize();
             });
         }
@@ -193,54 +241,69 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         function updateDebug() {
             if (!CONFIG.debug || !$debugText) return;
             var parts = [];
-            if (CONFIG.jqlFilter) parts.push("JQL: " + CONFIG.jqlFilter);
+            parts.push("<b>Версия: " + CONFIG.version + "</b>");
+            parts.push("JQL filter: " + (CONFIG.jqlFilter || "(пусто - все проекты)"));
+            parts.push("Режим: " + (state.mode === "sprint" ? "спринт" : "диапазон"));
             if (state.mode === "sprint") {
-                parts.push("Режим: спринт");
-                parts.push("Спринтов найдено: " + (state.sprintList ? state.sprintList.length : 0));
-                if (state.selectedSprintId) parts.push("Выбран спринт: " + state.selectedSprintId);
+                parts.push("Спринтов: " + (state.sprintList ? state.sprintList.length : 0));
+                if (state.selectedSprintId) parts.push("Выбран: " + state.selectedSprintId);
             } else {
-                parts.push("Режим: диапазон");
-                parts.push("Диапазон: " + state.rangeStart + " - " + state.rangeEnd);
+                parts.push("Диапазон: " + (state.rangeStart || "?") + " - " + (state.rangeEnd || "?"));
             }
-            if (state.lastError) parts.push("Ошибка: " + state.lastError);
-            $debugText.text(parts.join(" | "));
+            if (state.lastIssuesCount) parts.push("Задач с worklogs: " + state.lastIssuesCount);
+            if (state.lastError) parts.push("ОШИБКА: " + state.lastError);
+            $debugText.html(parts.join("<br>"));
         }
 
         function initPanel() {
             var $p = $('<div class="ujg-control-panel"></div>');
 
+            // Переключатель режимов
             var $mode = $('<div class="ujg-mode-toggle"></div>');
-            $modeSprint = $('<label class="ujg-control-checkbox"><input type="radio" name="ujg-mode" value="sprint" checked><span>Спринт</span></label>');
-            $modeRange = $('<label class="ujg-control-checkbox"><input type="radio" name="ujg-mode" value="range"><span>Диапазон дат</span></label>');
-            $mode.find("input").on("change", function() {
+            var $modeSprint = $('<label class="ujg-control-checkbox"><input type="radio" name="ujg-mode" value="sprint" checked><span>Спринт</span></label>');
+            var $modeRange = $('<label class="ujg-control-checkbox"><input type="radio" name="ujg-mode" value="range"><span>Диапазон дат</span></label>');
+            $mode.append($modeSprint, $modeRange);
+            
+            // Сначала добавляем в DOM, потом вешаем обработчик
+            $p.append($mode);
+            
+            // Теперь вешаем обработчик
+            $mode.on("change", "input[name='ujg-mode']", function() {
                 state.mode = $(this).val();
+                log("Переключение режима: " + state.mode);
+                updateModeUI();
                 if (state.mode === "sprint") {
                     loadSprints();
                 } else {
-                    $cont.html('<div class="ujg-message ujg-message-info">Укажите даты и нажмите Загрузить</div>');
+                    $cont.html('<div class="ujg-message ujg-message-info">Укажите даты и нажмите "Загрузить"</div>');
                     API.resize();
                 }
                 updateDebug();
             });
-            $mode.append($modeSprint, $modeRange);
 
-            var $sprintFilter = $('<div class="ujg-sprint-filter"><label>Спринт: </label></div>');
+            // Фильтр спринта
+            $sprintFilter = $('<div class="ujg-sprint-filter"><label>Спринт: </label></div>');
             $sprintSelect = $('<select class="ujg-sprint-select"></select>');
             $sprintSelect.on("change", function() { var v = $(this).val(); if (v) loadSprintData(v); });
             $sprintFilter.append($sprintSelect);
+            $p.append($sprintFilter);
 
-            var $rangeFilter = $('<div class="ujg-range-filter"><label>Диапазон: </label></div>');
+            // Фильтр диапазона дат
+            $rangeFilter = $('<div class="ujg-range-filter"><label>С: </label></div>');
             $rangeStart = $('<input type="date" class="ujg-range-input">');
             $rangeEnd = $('<input type="date" class="ujg-range-input">');
             var $rangeBtn = $('<button class="aui-button">Загрузить</button>');
             $rangeBtn.on("click", function() {
                 state.rangeStart = $rangeStart.val();
                 state.rangeEnd = $rangeEnd.val();
+                log("Нажата кнопка Загрузить: " + state.rangeStart + " - " + state.rangeEnd);
                 updateDebug();
                 loadRangeData(state.rangeStart, state.rangeEnd);
             });
-            $rangeFilter.append($rangeStart, $rangeEnd, $rangeBtn);
+            $rangeFilter.append($rangeStart, $('<label> По: </label>'), $rangeEnd, $rangeBtn);
+            $p.append($rangeFilter);
 
+            // Фильтр пользователя
             var $userFilter = $('<div class="ujg-user-filter"><label>Пользователь: </label></div>');
             $userSelect = $('<select class="ujg-user-select"><option value="">Все</option></select>');
             $userSelect.on("change", function() {
@@ -248,20 +311,32 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 if (state.sprintData) renderMatrix(state.sprintData);
             });
             $userFilter.append($userSelect);
+            $p.append($userFilter);
 
+            // Чекбокс комментариев
             var $cmt = $('<label class="ujg-control-checkbox"><input type="checkbox" ' + (state.showComments ? "checked" : "") + '><span>Комментарии</span></label>');
             $cmt.find("input").on("change", function() { state.showComments = $(this).is(":checked"); if (state.sprintData) renderMatrix(state.sprintData); });
+            $p.append($cmt);
 
+            // Fullscreen
             $fsBtn = $('<button class="aui-button ujg-fullscreen-btn">Fullscreen</button>');
             $fsBtn.on("click", function() { toggleFs(); });
+            $p.append($fsBtn);
 
-            $debugBox = $('<div class="ujg-debug-box" style="display:' + (CONFIG.debug ? 'block' : 'none') + ';"><div class="ujg-debug-title">Debug</div><div class="ujg-debug-text"></div></div>');
-            $debugText = $debugBox.find(".ujg-debug-text");
+            // Debug box
+            $debugBox = $('<div class="ujg-debug-box"></div>');
+            $debugBox.append('<div class="ujg-debug-title">Debug Info</div>');
+            $debugText = $('<div class="ujg-debug-text"></div>');
+            $debugBox.append($debugText);
+            if (!CONFIG.debug) $debugBox.hide();
+            $p.append($debugBox);
 
-            $p.append($mode, $sprintFilter, $rangeFilter, $userFilter, $cmt, $fsBtn, $debugBox);
             $cont.before($p);
 
             $(document).on("keydown.ujgTs", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFs(); });
+            
+            // Инициализация UI
+            updateModeUI();
             updateDebug();
         }
 
