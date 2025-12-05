@@ -6,7 +6,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var STORAGE_KEY = "ujg_timesheet_settings";
     
     var CONFIG = {
-        version: "1.3.2",
+        version: "1.4.0",
         jqlFilter: "",
         debug: true
     };
@@ -174,19 +174,13 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 weeks.push(currentWeek);
             }
             
-            // Считаем суммы по дням недели
+            // Считаем суммы по дням недели (данные уже отфильтрованы по user в JQL)
             days.forEach(function(day) {
                 var dayKey = utils.getDayKey(day);
                 var dayData = calendarData[dayKey] || [];
                 var dow = utils.getDayOfWeek(day);
                 
-                var filteredData = dayData;
-                if (selectedUser) {
-                    filteredData = dayData.filter(function(item) {
-                        return item.authors && item.authors[selectedUser];
-                    });
-                }
-                filteredData.forEach(function(item) {
+                dayData.forEach(function(item) {
                     weekdayTotals[dow] += item.seconds || 0;
                 });
             });
@@ -222,21 +216,14 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     var dayKey = utils.getDayKey(day);
                     var dayData = calendarData[dayKey] || [];
                     
-                    // Фильтруем по пользователю
-                    var filteredData = dayData;
-                    if (selectedUser) {
-                        filteredData = dayData.filter(function(item) {
-                            return item.authors && item.authors[selectedUser];
-                        });
-                    }
-                    
+                    // Данные уже отфильтрованы по user в JQL
                     var dayTotal = 0;
-                    filteredData.forEach(function(item) { dayTotal += item.seconds || 0; });
+                    dayData.forEach(function(item) { dayTotal += item.seconds || 0; });
                     totalAll += dayTotal;
                     
                     var cellClass = "ujg-calendar-cell";
                     if (isWeekend) cellClass += " ujg-weekend";
-                    if (filteredData.length > 0) cellClass += " ujg-has-data";
+                    if (dayData.length > 0) cellClass += " ujg-has-data";
                     
                     html += '<div class="' + cellClass + '" data-day="' + dayKey + '">';
                     html += '<div class="ujg-cell-header">';
@@ -246,9 +233,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     }
                     html += '</div>';
                     
-                    if (filteredData.length > 0) {
+                    if (dayData.length > 0) {
                         html += '<div class="ujg-cell-issues">';
-                        filteredData.forEach(function(item) {
+                        dayData.forEach(function(item) {
                             var isDone = item.status && DONE_STATUSES.indexOf(item.status.toLowerCase()) >= 0;
                             html += '<div class="ujg-cell-issue' + (isDone ? " ujg-issue-done" : "") + '">';
                             html += '<div class="ujg-issue-header">';
@@ -288,15 +275,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var dayData = state.calendarData[dayKey] || [];
             var selectedUser = state.selectedUser;
             
-            var filteredData = dayData;
-            if (selectedUser) {
-                filteredData = dayData.filter(function(item) {
-                    return item.authors && item.authors[selectedUser];
-                });
-            }
-            
+            // Данные уже отфильтрованы по user в JQL
             var dayTotal = 0;
-            filteredData.forEach(function(item) { dayTotal += item.seconds || 0; });
+            dayData.forEach(function(item) { dayTotal += item.seconds || 0; });
             
             // Обновляем header
             var $header = $cell.find('.ujg-cell-header');
@@ -309,9 +290,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             
             // Обновляем issues
             $cell.find('.ujg-cell-issues').remove();
-            if (filteredData.length > 0) {
+            if (dayData.length > 0) {
                 var html = '<div class="ujg-cell-issues">';
-                filteredData.forEach(function(item) {
+                dayData.forEach(function(item) {
                     var isDone = item.status && DONE_STATUSES.indexOf(item.status.toLowerCase()) >= 0;
                     html += '<div class="ujg-cell-issue' + (isDone ? " ujg-issue-done" : "") + '">';
                     html += '<div class="ujg-issue-header">';
@@ -335,22 +316,16 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         }
         
         function updateHeaderTotals() {
-            var selectedUser = state.selectedUser;
             var weekdayTotals = [0, 0, 0, 0, 0, 0, 0];
             var totalAll = 0;
             
+            // Данные уже отфильтрованы по user в JQL
             state.days.forEach(function(day) {
                 var dayKey = utils.getDayKey(day);
                 var dayData = state.calendarData[dayKey] || [];
                 var dow = utils.getDayOfWeek(day);
                 
-                var filteredData = dayData;
-                if (selectedUser) {
-                    filteredData = dayData.filter(function(item) {
-                        return item.authors && item.authors[selectedUser];
-                    });
-                }
-                filteredData.forEach(function(item) {
+                dayData.forEach(function(item) {
                     var sec = item.seconds || 0;
                     weekdayTotals[dow] += sec;
                     totalAll += sec;
@@ -392,7 +367,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $progress.text("Загрузка: " + state.loadedDays + "/" + state.totalDays);
             updateDebug();
             
-            Common.loadDayData(day, CONFIG.jqlFilter).then(function(result) {
+            Common.loadDayData(day, CONFIG.jqlFilter, state.selectedUser).then(function(result) {
                 if (result.issues && result.issues.length > 0) {
                     state.calendarData[dayKey] = result.issues;
                     // Собираем пользователей
@@ -541,8 +516,11 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $userSelect.on("change", function() {
                 state.selectedUser = $(this).val();
                 updateUrlState();
-                renderCalendar();
                 updateDebug();
+                // Перезагружаем данные с новым фильтром по пользователю
+                if (!state.loading && state.rangeStart && state.rangeEnd) {
+                    startLoading();
+                }
             });
             $userFilter.append($userSelect);
             $row2.append($userFilter);

@@ -36,13 +36,18 @@ define("_ujgCommon", ["jquery"], function($) {
             return h > 0 ? h + "h" : (m > 0 ? m + "m" : "");
         },
         escapeHtml: function(t) { if (!t) return ""; var d = document.createElement("div"); d.textContent = String(t); return d.innerHTML; },
+        // Локальная дата YYYY-MM-DD (не UTC!)
         getDayKey: function(d) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
-            return d.toISOString().slice(0, 10);
+            var yyyy = d.getFullYear();
+            var mm = d.getMonth() + 1;
+            var dd = d.getDate();
+            return yyyy + "-" + (mm < 10 ? "0" : "") + mm + "-" + (dd < 10 ? "0" : "") + dd;
         },
         getDayOfWeek: function(d) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return 0;
             var day = d.getDay();
+            // JS: 0=Вс, 1=Пн... -> Наш: 0=Пн, 1=Вт... 6=Вс
             return day === 0 ? 6 : day - 1;
         }
     };
@@ -56,16 +61,19 @@ define("_ujgCommon", ["jquery"], function($) {
         return res;
     }
 
-    // Загрузка данных за один день
-    function loadDayData(day, jqlFilter) {
+    // Загрузка данных за один день с фильтрацией по пользователю в JQL
+    function loadDayData(day, jqlFilter, userId) {
         var d = $.Deferred();
         var dayKey = utils.getDayKey(day);
-        var nextDay = new Date(day);
-        nextDay.setDate(nextDay.getDate() + 1);
-        var nextDayKey = utils.getDayKey(nextDay);
         
         // JQL для поиска задач с worklog за этот день
-        var jql = 'worklogDate >= "' + dayKey + '" AND worklogDate < "' + nextDayKey + '"';
+        var jql = 'worklogDate = "' + dayKey + '"';
+        
+        // Фильтр по автору worklog в JQL
+        if (userId) {
+            jql += ' AND worklogAuthor = "' + userId + '"';
+        }
+        
         if (jqlFilter) jql += " AND (" + jqlFilter + ")";
         
         $.ajax({
@@ -84,7 +92,6 @@ define("_ujgCommon", ["jquery"], function($) {
                     return;
                 }
                 
-                // Загружаем worklogs для найденных задач
                 var keys = issues.map(function(i) { return i.key; });
                 var issueMap = {};
                 issues.forEach(function(iss) {
@@ -100,8 +107,7 @@ define("_ujgCommon", ["jquery"], function($) {
                     };
                 });
                 
-                loadWorklogsForDay(keys, dayKey).then(function(dayIssues) {
-                    // Добавляем инфу из issueMap
+                loadWorklogsForDay(keys, dayKey, userId).then(function(dayIssues) {
                     dayIssues.forEach(function(di) {
                         var info = issueMap[di.key] || {};
                         di.summary = info.summary || "";
@@ -118,7 +124,8 @@ define("_ujgCommon", ["jquery"], function($) {
         return d.promise();
     }
     
-    function loadWorklogsForDay(keys, dayKey) {
+    // Загрузка worklogs с фильтрацией по пользователю
+    function loadWorklogsForDay(keys, dayKey, userId) {
         var d = $.Deferred();
         if (!keys || keys.length === 0) { d.resolve([]); return d.promise(); }
         
@@ -131,23 +138,49 @@ define("_ujgCommon", ["jquery"], function($) {
                 type: "GET",
                 success: function(r) {
                     var wls = (r && r.worklogs) ? r.worklogs : [];
+                    
+                    // Фильтруем по дню и по пользователю
                     var dayWls = wls.filter(function(w) {
                         var dt = utils.parseDate(w.started);
-                        return dt && utils.getDayKey(dt) === dayKey;
+                        if (!dt || utils.getDayKey(dt) !== dayKey) return false;
+                        
+                        // Фильтр по пользователю
+                        if (userId) {
+                            var wuid = w.author && (w.author.accountId || w.author.key || w.author.name);
+                            if (wuid !== userId) return false;
+                        }
+                        return true;
                     });
                     
                     if (dayWls.length > 0) {
-                        var seconds = 0;
-                        var comments = [];
-                        var authors = {};
+                        // Группируем по автору, чтобы показать отдельно для каждого
+                        var byAuthor = {};
                         dayWls.forEach(function(w) {
-                            seconds += w.timeSpentSeconds || 0;
-                            if (w.comment) comments.push(w.comment);
                             var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
                             var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
-                            authors[uid] = uname;
+                            if (!byAuthor[uid]) {
+                                byAuthor[uid] = { seconds: 0, comments: [], name: uname };
+                            }
+                            byAuthor[uid].seconds += w.timeSpentSeconds || 0;
+                            if (w.comment) byAuthor[uid].comments.push(w.comment);
                         });
-                        result.push({ key: key, seconds: seconds, comments: comments, authors: authors });
+                        
+                        // Создаем запись для задачи с инфой по авторам
+                        var totalSeconds = 0;
+                        var allComments = [];
+                        var authors = {};
+                        Object.keys(byAuthor).forEach(function(uid) {
+                            totalSeconds += byAuthor[uid].seconds;
+                            allComments = allComments.concat(byAuthor[uid].comments);
+                            authors[uid] = byAuthor[uid].name;
+                        });
+                        
+                        result.push({ 
+                            key: key, 
+                            seconds: totalSeconds, 
+                            comments: allComments, 
+                            authors: authors 
+                        });
                     }
                     done++;
                     if (done === keys.length) d.resolve(result);
