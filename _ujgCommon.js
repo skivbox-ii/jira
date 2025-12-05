@@ -43,7 +43,7 @@ define("_ujgCommon", ["jquery"], function($) {
         getDayOfWeek: function(d) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return 0;
             var day = d.getDay();
-            return day === 0 ? 6 : day - 1; // Пн=0, Вс=6
+            return day === 0 ? 6 : day - 1;
         }
     };
 
@@ -56,134 +56,107 @@ define("_ujgCommon", ["jquery"], function($) {
         return res;
     }
 
-    function fetchWorklogsForIssue(issueKey) {
+    // Загрузка данных за один день
+    function loadDayData(day, jqlFilter) {
         var d = $.Deferred();
-        $.ajax({
-            url: baseUrl + "/rest/api/2/issue/" + issueKey + "/worklog",
-            type: "GET",
-            success: function(r) { d.resolve(r && r.worklogs ? r.worklogs : []); },
-            error: function(e) { d.reject(e); }
-        });
-        return d.promise();
-    }
-
-    function loadWorklogsForIssues(keys) {
-        var d = $.Deferred();
-        if (!keys || keys.length === 0) { d.resolve({}); return d.promise(); }
-        var res = {};
-        var done = 0, total = keys.length;
-        keys.forEach(function(k) {
-            fetchWorklogsForIssue(k).then(function(wl) {
-                res[k] = wl;
-                done++; if (done === total) d.resolve(res);
-            }, function() {
-                res[k] = [];
-                done++; if (done === total) d.resolve(res);
-            });
-        });
-        return d.promise();
-    }
-
-    function buildRangeData(options) {
-        var start = options.start;
-        var end = options.end;
-        var filter = options.jqlFilter;
-        var d = $.Deferred();
-        if (!start || !end) { d.resolve({ days: [], users: [], calendarData: {}, totalSeconds: 0 }); return d.promise(); }
-        var jql = filter ? filter : "";
+        var dayKey = utils.getDayKey(day);
+        var nextDay = new Date(day);
+        nextDay.setDate(nextDay.getDate() + 1);
+        var nextDayKey = utils.getDayKey(nextDay);
+        
+        // JQL для поиска задач с worklog за этот день
+        var jql = 'worklogDate >= "' + dayKey + '" AND worklogDate < "' + nextDayKey + '"';
+        if (jqlFilter) jql += " AND (" + jqlFilter + ")";
+        
         $.ajax({
             url: baseUrl + "/rest/api/2/search",
             type: "POST",
             contentType: "application/json",
             data: JSON.stringify({ 
                 jql: jql, 
-                fields: ["summary", "status", "timetracking", "timeoriginalestimate", "duedate", "assignee"], 
-                maxResults: 1000 
+                fields: ["summary", "status", "timetracking", "timeoriginalestimate", "duedate"], 
+                maxResults: 500 
             }),
             success: function(r) {
                 var issues = (r && r.issues) ? r.issues : [];
+                if (issues.length === 0) {
+                    d.resolve({ dayKey: dayKey, issues: [] });
+                    return;
+                }
+                
+                // Загружаем worklogs для найденных задач
+                var keys = issues.map(function(i) { return i.key; });
                 var issueMap = {};
                 issues.forEach(function(iss) {
                     var tt = iss.fields && iss.fields.timetracking;
                     var estimate = 0;
-                    if (tt && tt.originalEstimateSeconds) {
-                        estimate = tt.originalEstimateSeconds;
-                    } else if (iss.fields && iss.fields.timeoriginalestimate) {
-                        estimate = iss.fields.timeoriginalestimate;
-                    }
+                    if (tt && tt.originalEstimateSeconds) estimate = tt.originalEstimateSeconds;
+                    else if (iss.fields && iss.fields.timeoriginalestimate) estimate = iss.fields.timeoriginalestimate;
                     issueMap[iss.key] = {
                         key: iss.key,
                         summary: iss.fields && iss.fields.summary || "",
                         status: iss.fields && iss.fields.status && iss.fields.status.name || "",
-                        estimate: estimate,
-                        dueDate: iss.fields && iss.fields.duedate ? utils.parseDate(iss.fields.duedate) : null
+                        estimate: estimate
                     };
                 });
-                var keys = issues.map(function(i) { return i.key; });
-                loadWorklogsForIssues(keys).then(function(worklogsByIssue) {
-                    var days = daysBetween(start, end);
-                    var dayStart = days.length > 0 ? utils.getDayKey(days[0]) : null;
-                    var dayEnd = days.length > 0 ? utils.getDayKey(days[days.length-1]) : null;
-                    
-                    var usersMap = {};
-                    var totalSeconds = 0;
-                    // calendarData[dayKey][issueKey] = { seconds, comments[], issueInfo }
-                    var calendarData = {};
-                    
-                    days.forEach(function(day) {
-                        calendarData[utils.getDayKey(day)] = {};
+                
+                loadWorklogsForDay(keys, dayKey).then(function(dayIssues) {
+                    // Добавляем инфу из issueMap
+                    dayIssues.forEach(function(di) {
+                        var info = issueMap[di.key] || {};
+                        di.summary = info.summary || "";
+                        di.status = info.status || "";
+                        di.estimate = info.estimate || 0;
+                    });
+                    d.resolve({ dayKey: dayKey, issues: dayIssues });
+                }, function() {
+                    d.resolve({ dayKey: dayKey, issues: [] });
+                });
+            },
+            error: function() { d.resolve({ dayKey: dayKey, issues: [] }); }
+        });
+        return d.promise();
+    }
+    
+    function loadWorklogsForDay(keys, dayKey) {
+        var d = $.Deferred();
+        if (!keys || keys.length === 0) { d.resolve([]); return d.promise(); }
+        
+        var result = [];
+        var done = 0;
+        
+        keys.forEach(function(key) {
+            $.ajax({
+                url: baseUrl + "/rest/api/2/issue/" + key + "/worklog",
+                type: "GET",
+                success: function(r) {
+                    var wls = (r && r.worklogs) ? r.worklogs : [];
+                    var dayWls = wls.filter(function(w) {
+                        var dt = utils.parseDate(w.started);
+                        return dt && utils.getDayKey(dt) === dayKey;
                     });
                     
-                    issues.forEach(function(issue) {
-                        var wls = worklogsByIssue[issue.key] || [];
-                        wls.forEach(function(w) {
-                            var dt = utils.parseDate(w.started);
-                            if (!dt || isNaN(dt.getTime())) return;
-                            var dKey = utils.getDayKey(dt);
-                            if (dayStart && dayEnd && (dKey < dayStart || dKey > dayEnd)) return;
-                            
+                    if (dayWls.length > 0) {
+                        var seconds = 0;
+                        var comments = [];
+                        var authors = {};
+                        dayWls.forEach(function(w) {
+                            seconds += w.timeSpentSeconds || 0;
+                            if (w.comment) comments.push(w.comment);
                             var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
                             var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
-                            if (!usersMap[uid]) usersMap[uid] = { id: uid, name: uname, totalSeconds: 0 };
-                            
-                            // Calendar data
-                            if (!calendarData[dKey]) calendarData[dKey] = {};
-                            if (!calendarData[dKey][issue.key]) {
-                                var info = issueMap[issue.key] || {};
-                                calendarData[dKey][issue.key] = {
-                                    key: issue.key,
-                                    summary: info.summary || "",
-                                    status: info.status || "",
-                                    estimate: info.estimate || 0,
-                                    dueDate: info.dueDate || null,
-                                    seconds: 0,
-                                    comments: [],
-                                    authors: {}
-                                };
-                            }
-                            calendarData[dKey][issue.key].seconds += w.timeSpentSeconds || 0;
-                            if (w.comment) calendarData[dKey][issue.key].comments.push(w.comment);
-                            calendarData[dKey][issue.key].authors[uid] = uname;
-                            
-                            usersMap[uid].totalSeconds += w.timeSpentSeconds || 0;
-                            totalSeconds += w.timeSpentSeconds || 0;
+                            authors[uid] = uname;
                         });
-                    });
-                    
-                    var users = Object.keys(usersMap).map(function(id) {
-                        return usersMap[id];
-                    }).sort(function(a, b) { return a.name.localeCompare(b.name); });
-
-                    d.resolve({
-                        days: days,
-                        users: users,
-                        calendarData: calendarData,
-                        issueMap: issueMap,
-                        totalSeconds: totalSeconds
-                    });
-                }, d.reject);
-            },
-            error: function(e) { d.reject(e); }
+                        result.push({ key: key, seconds: seconds, comments: comments, authors: authors });
+                    }
+                    done++;
+                    if (done === keys.length) d.resolve(result);
+                },
+                error: function() {
+                    done++;
+                    if (done === keys.length) d.resolve(result);
+                }
+            });
         });
         return d.promise();
     }
@@ -191,6 +164,7 @@ define("_ujgCommon", ["jquery"], function($) {
     return {
         baseUrl: baseUrl,
         utils: utils,
-        buildRangeData: buildRangeData
+        daysBetween: daysBetween,
+        loadDayData: loadDayData
     };
 });
