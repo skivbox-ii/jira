@@ -4,12 +4,13 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var baseUrl = Common.baseUrl;
 
     var CONFIG = {
-        version: "1.2.0",
+        version: "1.2.1",
         jqlFilter: "",
         debug: true
     };
 
     var WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    var DONE_STATUSES = ["done", "closed", "resolved", "готово", "закрыт", "закрыта", "завершен", "завершена", "выполнено"];
 
     function MyGadget(API) {
         var state = {
@@ -158,14 +159,33 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                         html += '<div class="ujg-cell-issues">';
                         issueKeys.forEach(function(issueKey) {
                             var item = dayData[issueKey];
-                            html += '<div class="ujg-cell-issue">';
+                            var isDone = item.status && DONE_STATUSES.indexOf(item.status.toLowerCase()) >= 0;
+                            var issueClass = "ujg-cell-issue" + (isDone ? " ujg-issue-done" : "");
+                            
+                            html += '<div class="' + issueClass + '">';
+                            html += '<div class="ujg-issue-header">';
                             html += '<a href="' + baseUrl + '/browse/' + issueKey + '" target="_blank" class="ujg-issue-link">' + issueKey + '</a>';
                             html += '<span class="ujg-issue-time">' + (utils.formatTime(item.seconds) || "") + '</span>';
                             if (item.estimate) {
                                 html += '<span class="ujg-issue-est" title="Estimate">[' + utils.formatTime(item.estimate) + ']</span>';
                             }
+                            html += '</div>';
+                            
+                            // Summary задачи
+                            if (item.summary) {
+                                html += '<div class="ujg-issue-summary">' + utils.escapeHtml(item.summary) + '</div>';
+                            }
+                            
+                            // Имя пользователя если не выбран конкретный
+                            if (!selectedUser && item.authors) {
+                                var authorNames = Object.keys(item.authors).map(function(k) { return item.authors[k]; });
+                                if (authorNames.length > 0) {
+                                    html += '<div class="ujg-issue-author">' + utils.escapeHtml(authorNames.join(", ")) + '</div>';
+                                }
+                            }
+                            
                             if (state.showComments && item.comments && item.comments.length > 0) {
-                                html += '<div class="ujg-issue-comment">' + utils.escapeHtml(item.comments[0].substring(0, 50)) + (item.comments[0].length > 50 ? "..." : "") + '</div>';
+                                html += '<div class="ujg-issue-comment">' + utils.escapeHtml(item.comments[0].substring(0, 80)) + (item.comments[0].length > 80 ? "..." : "") + '</div>';
                             }
                             html += '</div>';
                         });

@@ -29,7 +29,7 @@
 .ujg-calendar-header-cell.ujg-weekend{background:#fff4e5;color:#974f0c}
 .ujg-calendar-week{display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid #dfe1e6}
 .ujg-calendar-week:last-child{border-bottom:none}
-.ujg-calendar-cell{min-height:100px;border-right:1px solid #dfe1e6;padding:4px;background:#fff;vertical-align:top;overflow:hidden}
+.ujg-calendar-cell{min-height:150px;border-right:1px solid #dfe1e6;padding:6px;background:#fff;vertical-align:top;overflow:hidden}
 .ujg-calendar-cell:last-child{border-right:none}
 .ujg-calendar-cell.ujg-weekend{background:#fffbf5}
 .ujg-calendar-cell.ujg-calendar-empty{background:#f9f9f9}
@@ -37,11 +37,16 @@
 .ujg-cell-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid #eee}
 .ujg-cell-date{font-weight:600;font-size:14px;color:#172b4d}
 .ujg-cell-total{font-size:11px;font-weight:600;color:#0052cc;background:#deebff;padding:2px 5px;border-radius:3px}
-.ujg-cell-issues{display:flex;flex-direction:column;gap:3px;max-height:180px;overflow-y:auto}
-.ujg-cell-issue{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px;padding:2px 4px;background:#f4f5f7;border-radius:3px;font-size:11px}
-.ujg-issue-link{color:#0052cc;text-decoration:none;font-weight:500}
+.ujg-cell-issues{display:flex;flex-direction:column;gap:4px;max-height:300px;overflow-y:auto}
+.ujg-cell-issue{padding:4px 6px;background:#f4f5f7;border-radius:4px;font-size:11px;border-left:3px solid #0052cc}
+.ujg-cell-issue.ujg-issue-done{opacity:0.7;border-left-color:#6b778c}
+.ujg-cell-issue.ujg-issue-done .ujg-issue-link,.ujg-cell-issue.ujg-issue-done .ujg-issue-summary{text-decoration:line-through;color:#6b778c}
+.ujg-issue-header{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ujg-issue-link{color:#0052cc;text-decoration:none;font-weight:600;font-size:12px}
 .ujg-issue-link:hover{text-decoration:underline}
-.ujg-issue-time{color:#172b4d;font-weight:600}
+.ujg-issue-time{color:#172b4d;font-weight:700;font-size:12px}
 .ujg-issue-est{color:#6b778c;font-size:10px}
-.ujg-issue-comment{width:100%;color:#6b778c;font-style:italic;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ujg-issue-summary{color:#172b4d;font-size:12px;margin-top:2px;line-height:1.3}
+.ujg-issue-author{color:#0052cc;font-size:10px;margin-top:2px;font-weight:500}
+.ujg-issue-comment{color:#6b778c;font-style:italic;font-size:10px;margin-top:3px;line-height:1.2}
 .ujg-calendar-footer{padding:10px;background:#f4f5f7;text-align:right;font-size:13px;color:#172b4d}
