@@ -1,448 +1,194 @@
-define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawer"], function($, EventsProvider, tableDrawer) {
-    
-    var baseUrl = (typeof AJS !== 'undefined' && AJS.contextPath) ? AJS.contextPath() : '';
-    
-    var utils = {
-        parseDate: function(v) {
-            if (!v) return null;
-            if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-            if (typeof v === 'number') { var d = new Date(v); return isNaN(d.getTime()) ? null : d; }
-            if (typeof v === 'string') {
-                var d = new Date(v);
-                if (!isNaN(d.getTime())) return d;
-                var m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})([+-])(\d{2})(\d{2})$/);
-                if (m) { d = new Date(m[1]+'-'+m[2]+'-'+m[3]+'T'+m[4]+':'+m[5]+':'+m[6]+'.'+m[7]+m[8]+m[9]+':'+m[10]); if (!isNaN(d.getTime())) return d; }
-            }
-            return null;
-        },
-        formatDate: function(d, loc) {
-            if (!d || !(d instanceof Date) || isNaN(d.getTime())) return '';
-            try { return d.toLocaleDateString(loc || 'ru-RU', {day:'numeric',month:'short',year:'numeric'}); }
-            catch(e) { return d.getDate()+'.'+(d.getMonth()+1)+'.'+d.getFullYear(); }
-        },
-        formatTime: function(s) {
-            if (!s || s <= 0) return '0m';
-            var h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
-            if (h > 0 && m > 0) return h+'h '+m+'m';
-            return h > 0 ? h+'h' : m+'m';
-        },
-        escapeHtml: function(t) { if (!t) return ''; var d = document.createElement('div'); d.textContent = String(t); return d.innerHTML; },
-        unique: function(arr, key) {
-            var seen = {}, res = [];
-            if (!arr) return res;
-            arr.forEach(function(i) { var v = key ? i[key] : i; if (v && !seen[v]) { seen[v] = true; res.push(v); } });
-            return res;
-        }
+define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
+
+    var utils = Common.utils;
+    var baseUrl = Common.baseUrl;
+
+    var CONFIG = {
+        // Укажи здесь фильтр проекта/борда, чтобы ограничить поиск спринтов и задач
+        // пример: "project = SDKU"
+        jqlFilter: ""
     };
 
     function MyGadget(API) {
-        var self = this;
-<<<<<<< HEAD
-        this.API = API;
-        this.weekOffset = 0;
-        this.showComments = false;
-        this.groupByUser = true;
-        this.isFullscreen = false;
-        this.periodDays = 7;
-        this.selectedUser = ''; // '' = все пользователи
-        this.allUsers = []; // список всех пользователей
-        this.eventsProvider = new EventsProvider(API);
-        this.issueCache = {};
-        this.worklogCache = {};
-=======
         var state = {
-            weekOffset: 0,
             showComments: false,
-            groupByUser: true,
             isFullscreen: false,
-            periodDays: 7
+            selectedUser: "",
+            selectedSprintId: "",
+            sprintList: [],
+            sprintData: null
         };
-        var issueCache = {};
-        var worklogCache = {};
-        var eventsProvider = new EventsProvider(API);
->>>>>>> cd58ec4e7f7d52e7455be6cba0e08cbb0d602c44
-        
+
         var $content = API.getGadgetContentEl();
         var $cont = $content.find(".ujg-timesheet");
         if ($cont.length === 0) {
             $cont = $('<div class="ujg-timesheet"></div>');
             $content.append($cont);
         }
-        
-<<<<<<< HEAD
-        this._initPanel();
-        this._refresh();
-    };
 
-    MyGadget.prototype = {
-        _initPanel: function() {
-            var self = this;
-            var $p = $('<div class="ujg-control-panel"></div>');
-            var $nav = $('<div class="ujg-week-nav"></div>');
-            
-            this.$prevBtn = $('<button class="aui-button">&#9664; Prev</button>');
-            this.$todayBtn = $('<button class="aui-button">Today</button>');
-            this.$nextBtn = $('<button class="aui-button">Next &#9654;</button>');
-            this.$weekLabel = $('<span class="ujg-week-label"></span>');
-            
-            this.$prevBtn.on('click', function() { self.weekOffset--; self._refresh(); });
-            this.$todayBtn.on('click', function() { self.weekOffset = 0; self._refresh(); });
-            this.$nextBtn.on('click', function() { self.weekOffset++; self._refresh(); });
-            
-            $nav.append(this.$prevBtn, this.$weekLabel, this.$todayBtn, this.$nextBtn);
-            
-            // Фильтр по пользователю
-            var $userFilter = $('<div class="ujg-user-filter"><label>Пользователь: </label></div>');
-            this.$userSelect = $('<select class="ujg-user-select"><option value="">Все пользователи</option></select>');
-            this.$userSelect.on('change', function() { 
-                self.selectedUser = $(this).val(); 
-                self._redraw(); 
-            });
-            $userFilter.append(this.$userSelect);
-            
-            var $grp = $('<label class="ujg-control-checkbox"><input type="checkbox" '+(this.groupByUser?'checked':'')+'><span>Group by user</span></label>');
-            $grp.find('input').on('change', function() { self.groupByUser = $(this).is(':checked'); self._redraw(); });
-            
-            var $cmt = $('<label class="ujg-control-checkbox"><input type="checkbox" '+(this.showComments?'checked':'')+'><span>Show comments</span></label>');
-            $cmt.find('input').on('change', function() { self.showComments = $(this).is(':checked'); self._refresh(); });
-            
-            this.$fsBtn = $('<button class="aui-button ujg-fullscreen-btn">Fullscreen</button>');
-            this.$fsBtn.on('click', function() { self._toggleFs(); });
-            
-            $p.append($nav, $userFilter, $grp, $cmt, this.$fsBtn);
-            this.$cont.before($p);
-            
-            $(document).on('keydown.ujgTs', function(e) { if (e.key === 'Escape' && self.isFullscreen) self._toggleFs(); });
-        },
-=======
-        var $weekLabel, $fsBtn;
->>>>>>> cd58ec4e7f7d52e7455be6cba0e08cbb0d602c44
-        
-        function calcRange() {
-            var now = new Date();
-            var end = new Date(now);
-            end.setDate(end.getDate() + 1);
-            end.setHours(0, 0, 0, 0);
-            end.setDate(end.getDate() + state.weekOffset * 7);
-            var start = new Date(end);
-            start.setDate(start.getDate() - state.periodDays);
-            return { start: start, end: end };
-        }
-        
-        function updateLabel(s, e) {
-            var ed = new Date(e);
-            ed.setDate(ed.getDate() - 1);
-            $weekLabel.text(utils.formatDate(s) + ' - ' + utils.formatDate(ed));
-        }
-        
+        var $fsBtn, $userSelect, $sprintSelect;
+
         function toggleFs() {
-            var $el = $content.closest('.dashboard-item-content, .gadget, .ujg-gadget-wrapper');
+            var $el = $content.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
             if ($el.length === 0) $el = $content;
             state.isFullscreen = !state.isFullscreen;
             if (state.isFullscreen) {
-                $el.data('ujg-style', $el.attr('style') || '');
-                $el.addClass('ujg-fullscreen');
-                $fsBtn.text('Exit Fullscreen');
+                $el.data("ujg-style", $el.attr("style") || "");
+                $el.addClass("ujg-fullscreen");
+                $fsBtn.text("Exit Fullscreen");
             } else {
-                $el.removeClass('ujg-fullscreen').attr('style', $el.data('ujg-style'));
-                $fsBtn.text('Fullscreen');
+                $el.removeClass("ujg-fullscreen").attr("style", $el.data("ujg-style"));
+                $fsBtn.text("Fullscreen");
             }
             API.resize();
         }
-        
-<<<<<<< HEAD
-        _calcRange: function() {
-            var now = new Date(), end = new Date(now);
-            end.setDate(end.getDate() + 1); end.setHours(0,0,0,0);
-            end.setDate(end.getDate() + this.weekOffset * 7);
-            var start = new Date(end); start.setDate(start.getDate() - this.periodDays);
-            return {start: start, end: end};
-        },
-        
-        _updateLabel: function(s, e) {
-            var ed = new Date(e); ed.setDate(ed.getDate() - 1);
-            this.$weekLabel.text(utils.formatDate(s) + ' - ' + utils.formatDate(ed));
-        },
-        
-        _refresh: function() {
-            var self = this, range = this._calcRange();
-            this._updateLabel(range.start, range.end);
-            this.$cont.html('<div class="ujg-message ujg-message-loading">Loading...</div>');
-            
-            this.eventsProvider.getEvents({start: range.start, end: range.end, allUsers: true}, function(events) {
-                self._enrichIssues(events, function(ev) {
-                    self._cachedEvents = ev; // Кэшируем события для фильтрации
-                    self._updateUserList(ev);
-                    if (self.showComments) {
-                        self._fetchComments(ev, function(ev2) { 
-                            self._cachedEvents = ev2;
-                            self._draw(ev2); 
-                        });
-                    } else {
-                        self._draw(ev);
-                    }
-                });
-=======
-        function applyIssueCache(events) {
-            events.forEach(function(e) {
-                if (e.issueKey && issueCache[e.issueKey]) {
-                    var c = issueCache[e.issueKey];
-                    e.issueSummary = c.summary;
-                    e.inSprint = c.inSprint;
-                    e.sprintName = c.sprintName;
-                }
->>>>>>> cd58ec4e7f7d52e7455be6cba0e08cbb0d602c44
+
+        function updateUserList(users) {
+            var currentVal = $userSelect.val();
+            $userSelect.empty();
+            $userSelect.append('<option value="">Все (' + users.length + ')</option>');
+            users.forEach(function(u) {
+                $userSelect.append('<option value="' + utils.escapeHtml(u.id) + '">' + utils.escapeHtml(u.name) + '</option>');
             });
-        }
-        
-<<<<<<< HEAD
-        _updateUserList: function(events) {
-            var self = this;
-            var users = {};
-            events.forEach(function(e) {
-                var uid = e.authorAccountId || e.authorKey || e.authorName || 'unknown';
-                var uname = e.authorDisplayName || e.authorName || uid;
-                if (!users[uid]) users[uid] = uname;
-            });
-            
-            this.allUsers = Object.keys(users).map(function(uid) {
-                return {id: uid, name: users[uid]};
-            }).sort(function(a, b) {
-                return a.name.localeCompare(b.name);
-            });
-            
-            // Обновляем select
-            var currentVal = this.$userSelect.val();
-            this.$userSelect.empty();
-            this.$userSelect.append('<option value="">Все пользователи (' + this.allUsers.length + ')</option>');
-            this.allUsers.forEach(function(u) {
-                self.$userSelect.append('<option value="'+utils.escapeHtml(u.id)+'">'+utils.escapeHtml(u.name)+'</option>');
-            });
-            
-            // Восстанавливаем выбор, если пользователь еще есть в списке
-            if (currentVal && this.allUsers.some(function(u) { return u.id === currentVal; })) {
-                this.$userSelect.val(currentVal);
+            if (currentVal && users.some(function(u) { return u.id === currentVal; })) {
+                $userSelect.val(currentVal);
             } else {
-                this.selectedUser = '';
-                this.$userSelect.val('');
+                state.selectedUser = "";
+                $userSelect.val("");
             }
-        },
-        
-        _redraw: function() {
-            // Перерисовка без перезагрузки данных
-            if (this._cachedEvents) {
-                this._draw(this._cachedEvents);
-            }
-        },
-        
-        _enrichIssues: function(events, cb) {
-            var self = this;
-=======
-        function applyWlCache(events) {
-            events.forEach(function(e) {
-                if (e.issueKey && e.worklogId && worklogCache[e.issueKey]) {
-                    e.worklogComment = worklogCache[e.issueKey][e.worklogId] || '';
-                }
-            });
         }
-        
-        function enrichIssues(events, cb) {
->>>>>>> cd58ec4e7f7d52e7455be6cba0e08cbb0d602c44
-            if (!events || events.length === 0) { cb(events || []); return; }
-            var keys = utils.unique(events, 'issueKey').filter(function(k) { return k && !issueCache[k]; });
-            if (keys.length === 0) { applyIssueCache(events); cb(events); return; }
-            
-            var batches = [], bs = 50;
-            for (var i = 0; i < keys.length; i += bs) batches.push(keys.slice(i, i + bs));
-            var done = 0;
-            
-            batches.forEach(function(batch) {
-                $.ajax({
-                    url: baseUrl + '/rest/api/2/search',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify({jql: 'key in (' + batch.join(',') + ')', fields: ['summary','sprint','customfield_10020'], maxResults: batch.length}),
-                    success: function(r) {
-                        if (r && r.issues) r.issues.forEach(function(iss) {
-                            var sp = iss.fields.sprint || iss.fields.customfield_10020;
-                            var inSp = false, spName = '';
-                            if (sp) {
-                                if (Array.isArray(sp) && sp.length > 0) {
-                                    var last = sp[sp.length - 1];
-                                    if (typeof last === 'object') { inSp = true; spName = last.name || ''; }
-                                    else if (typeof last === 'string') { var nm = last.match(/name=([^,\]]+)/); if (nm) spName = nm[1]; inSp = last.indexOf('state=ACTIVE') > -1 || last.indexOf('state=CLOSED') > -1; }
-                                } else if (typeof sp === 'object') { inSp = true; spName = sp.name || ''; }
-                            }
-                            issueCache[iss.key] = { summary: iss.fields.summary, inSprint: inSp, sprintName: spName };
-                        });
-                        done++;
-                        if (done === batches.length) { applyIssueCache(events); cb(events); }
-                    },
-                    error: function() { done++; if (done === batches.length) { applyIssueCache(events); cb(events); } }
-                });
-            });
-        }
-        
-        function fetchComments(events, cb) {
-            if (!events || events.length === 0) { cb(events || []); return; }
-            var keys = utils.unique(events, 'issueKey').filter(function(k) { return k && !worklogCache[k]; });
-            if (keys.length === 0) { applyWlCache(events); cb(events); return; }
-            
-            var done = 0;
-            keys.forEach(function(key) {
-                $.ajax({
-                    url: baseUrl + '/rest/api/2/issue/' + key + '/worklog',
-                    type: 'GET',
-                    success: function(r) {
-                        worklogCache[key] = {};
-                        if (r && r.worklogs) r.worklogs.forEach(function(w) { worklogCache[key][w.id] = w.comment || ''; });
-                        done++;
-                        if (done === keys.length) { applyWlCache(events); cb(events); }
-                    },
-                    error: function() { worklogCache[key] = {}; done++; if (done === keys.length) { applyWlCache(events); cb(events); } }
-                });
-            });
-        }
-        
-        function eventRow(e) {
-            var key = e.issueKey || '', sum = e.issueSummary || '', inSp = e.inSprint === true, spName = e.sprintName || '';
-            var dt = utils.parseDate(e.started), dtStr = utils.formatDate(dt);
-            var spBadge = inSp ? '<span class="ujg-sprint-badge in-sprint" title="' + utils.escapeHtml(spName) + '">In Sprint</span>' : '<span class="ujg-sprint-badge no-sprint">No Sprint</span>';
-            
-            var html = '<tr><td><a href="/browse/' + key + '" class="ujg-issue-key" target="_blank">' + utils.escapeHtml(key) + '</a></td>';
-            html += '<td class="ujg-issue-summary">' + utils.escapeHtml(sum) + '</td>';
-            html += '<td>' + spBadge + '</td>';
-            html += '<td class="ujg-date-cell">' + dtStr + '</td>';
-            html += '<td class="ujg-time-cell">' + utils.formatTime(e.timeSpentSeconds || 0) + '</td>';
-            if (state.showComments) html += '<td><div class="ujg-worklog-comment">' + utils.escapeHtml(e.worklogComment || '') + '</div></td>';
-            html += '</tr>';
-            return html;
-        }
-        
-        function draw(events) {
+
+        function renderMatrix(data) {
             $cont.empty();
-            if (!events || events.length === 0) {
-<<<<<<< HEAD
-                this.$cont.html('<div class="ujg-message ujg-message-info">Нет данных за выбранный период</div>');
-                this.API.resize();
-                return;
-            }
-            
-            // Фильтрация по выбранному пользователю
-            var filteredEvents = events;
-            if (this.selectedUser) {
-                filteredEvents = events.filter(function(e) {
-                    var uid = e.authorAccountId || e.authorKey || e.authorName || 'unknown';
-                    return uid === self.selectedUser;
-                });
-            }
-            
-            if (filteredEvents.length === 0) {
-                this.$cont.html('<div class="ujg-message ujg-message-info">Нет данных для выбранного пользователя</div>');
-                this.API.resize();
-=======
-                $cont.html('<div class="ujg-message ujg-message-info">No data for selected period</div>');
+            if (!data || !data.days || data.days.length === 0) {
+                $cont.html('<div class="ujg-message ujg-message-info">Нет данных по выбранному спринту</div>');
                 API.resize();
->>>>>>> cd58ec4e7f7d52e7455be6cba0e08cbb0d602c44
                 return;
             }
-            
-            var cols = state.groupByUser ? ['User / Issue', 'Summary', 'Sprint', 'Date', 'Time'] : ['Issue', 'Summary', 'Sprint', 'Date', 'Time'];
-            if (state.showComments) cols.push('Comment');
-            
+
+            var users = data.users || [];
+            if (state.selectedUser) {
+                users = users.filter(function(u) { return u.id === state.selectedUser; });
+            }
+            if (users.length === 0) {
+                $cont.html('<div class="ujg-message ujg-message-info">Нет данных для выбранного пользователя</div>');
+                API.resize();
+                return;
+            }
+
+            var dayKeys = data.days.map(function(d) { return d.toISOString().slice(0,10); });
             var html = '<table class="ujg-extended-table"><thead><tr>';
-            cols.forEach(function(c) { html += '<th>' + c + '</th>'; });
+            html += '<th>Задача</th><th>Статус</th><th>Итого</th>';
+            data.days.forEach(function(d) { html += '<th class="ujg-date-cell">' + utils.formatDayShort(d) + '</th>'; });
             html += '</tr></thead><tbody>';
-            
-            var total = 0;
-            
-            if (state.groupByUser) {
-                var groups = {};
-                filteredEvents.forEach(function(e) {
-                    var uid = e.authorAccountId || e.authorKey || e.authorName || 'unknown';
-                    var uname = e.authorDisplayName || e.authorName || uid;
-                    if (!groups[uid]) groups[uid] = { name: uname, events: [], time: 0 };
-                    groups[uid].events.push(e);
-                    groups[uid].time += e.timeSpentSeconds || 0;
-                });
-                
-                Object.keys(groups).forEach(function(uid) {
-                    var g = groups[uid];
-                    total += g.time;
-                    html += '<tr class="ujg-user-group"><td colspan="' + (state.showComments ? 5 : 4) + '"><strong>' + utils.escapeHtml(g.name) + '</strong></td><td class="ujg-time-cell">' + utils.formatTime(g.time) + '</td>';
-                    if (state.showComments) html += '<td></td>';
+
+            var totalAll = 0;
+
+            users.forEach(function(u) {
+                html += '<tr class="ujg-user-group"><td colspan="' + (3 + dayKeys.length) + '"><strong>' + utils.escapeHtml(u.name) + '</strong> · ' + (utils.formatTime(u.totalSeconds) || '0m') + '</td></tr>';
+                u.issueList.forEach(function(issue) {
+                    totalAll += issue.totalSeconds || 0;
+                    html += '<tr>';
+                    html += '<td class="ujg-issue-cell"><a href="' + baseUrl + '/browse/' + issue.key + '" class="ujg-issue-key" target="_blank">' + utils.escapeHtml(issue.key) + '</a><div class="ujg-issue-summary">' + utils.escapeHtml(issue.summary) + '</div></td>';
+                    html += '<td>' + utils.escapeHtml(issue.status || "") + '</td>';
+                    html += '<td class="ujg-time-cell">' + (utils.formatTime(issue.totalSeconds) || "0m") + '</td>';
+                    dayKeys.forEach(function(dk) {
+                        var cell = issue.perDay[dk];
+                        if (cell) {
+                            var txt = utils.formatTime(cell.seconds) || "0m";
+                            if (state.showComments && cell.comments && cell.comments.length > 0) {
+                                txt += '<div class="ujg-worklog-comment">' + utils.escapeHtml(cell.comments.join(" | ")) + '</div>';
+                            }
+                            html += '<td>' + txt + '</td>';
+                        } else {
+                            html += '<td>&nbsp;</td>';
+                        }
+                    });
                     html += '</tr>';
-                    g.events.forEach(function(e) { html += eventRow(e); });
                 });
-            } else {
-<<<<<<< HEAD
-                filteredEvents.forEach(function(e) { total += e.timeSpentSeconds || 0; html += self._eventRow(e); });
-            }
-            
-            html += '<tr class="ujg-total-row"><td colspan="'+(this.showComments?5:4)+'"><strong>ИТОГО</strong></td><td class="ujg-time-cell"><strong>' + utils.formatTime(total) + '</strong></td>';
-            if (this.showComments) html += '<td></td>';
-=======
-                events.forEach(function(e) { total += e.timeSpentSeconds || 0; html += eventRow(e); });
-            }
-            
-            html += '<tr class="ujg-total-row"><td colspan="' + (state.showComments ? 5 : 4) + '"><strong>TOTAL</strong></td><td class="ujg-time-cell"><strong>' + utils.formatTime(total) + '</strong></td>';
-            if (state.showComments) html += '<td></td>';
->>>>>>> cd58ec4e7f7d52e7455be6cba0e08cbb0d602c44
-            html += '</tr></tbody></table>';
-            
+            });
+
+            html += '<tr class="ujg-total-row"><td colspan="' + (2 + dayKeys.length) + '"><strong>ИТОГО</strong></td><td class="ujg-time-cell"><strong>' + (utils.formatTime(totalAll) || "0m") + '</strong></td></tr>';
+            html += '</tbody></table>';
+
             $cont.html(html);
             API.resize();
         }
-        
-        function refresh() {
-            var range = calcRange();
-            updateLabel(range.start, range.end);
-            $cont.html('<div class="ujg-message ujg-message-loading">Loading...</div>');
-            
-            eventsProvider.getEvents({ start: range.start, end: range.end, allUsers: true }, function(events) {
-                enrichIssues(events, function(ev) {
-                    if (state.showComments) {
-                        fetchComments(ev, function(ev2) { draw(ev2); });
-                    } else {
-                        draw(ev);
-                    }
-                });
+
+        function loadSprintData(sprintId) {
+            state.selectedSprintId = sprintId;
+            $cont.html('<div class="ujg-message ujg-message-loading">Загрузка спринта...</div>');
+            Common.buildSprintData({ sprintId: sprintId, jqlFilter: CONFIG.jqlFilter }).then(function(data) {
+                state.sprintData = data;
+                updateUserList(data.users || []);
+                renderMatrix(data);
+            }, function() {
+                $cont.html('<div class="ujg-message ujg-message-info">Не удалось загрузить данные спринта</div>');
+                API.resize();
             });
         }
-        
+
+        function populateSprints(list) {
+            state.sprintList = list || [];
+            $sprintSelect.empty();
+            if (state.sprintList.length === 0) {
+                $sprintSelect.append('<option value="">Нет активных спринтов</option>');
+                $cont.html('<div class="ujg-message ujg-message-info">Нет активных спринтов</div>');
+                API.resize();
+                return;
+            }
+            state.sprintList.forEach(function(s) {
+                var lbl = (s.name || ("Sprint " + s.id));
+                if (s.start) lbl += " (" + utils.formatDayShort(s.start) + (s.end ? " - " + utils.formatDayShort(s.end) : "") + ")";
+                $sprintSelect.append('<option value="' + s.id + '">' + utils.escapeHtml(lbl) + '</option>');
+            });
+            var initial = state.selectedSprintId && state.sprintList.some(function(s) { return String(s.id) === String(state.selectedSprintId); }) ? state.selectedSprintId : state.sprintList[state.sprintList.length - 1].id;
+            state.selectedSprintId = initial;
+            $sprintSelect.val(initial);
+            loadSprintData(initial);
+        }
+
+        function loadSprints() {
+            $cont.html('<div class="ujg-message ujg-message-loading">Загрузка активных спринтов...</div>');
+            Common.listActiveSprints({ jqlFilter: CONFIG.jqlFilter }).then(function(list) {
+                populateSprints(list);
+            }, function() {
+                $cont.html('<div class="ujg-message ujg-message-info">Не удалось загрузить список активных спринтов</div>');
+                API.resize();
+            });
+        }
+
         function initPanel() {
             var $p = $('<div class="ujg-control-panel"></div>');
-            var $nav = $('<div class="ujg-week-nav"></div>');
-            
-            var $prevBtn = $('<button class="aui-button">&#9664; Prev</button>');
-            var $todayBtn = $('<button class="aui-button">Today</button>');
-            var $nextBtn = $('<button class="aui-button">Next &#9654;</button>');
-            $weekLabel = $('<span class="ujg-week-label"></span>');
-            
-            $prevBtn.on('click', function() { state.weekOffset--; refresh(); });
-            $todayBtn.on('click', function() { state.weekOffset = 0; refresh(); });
-            $nextBtn.on('click', function() { state.weekOffset++; refresh(); });
-            
-            $nav.append($prevBtn, $weekLabel, $todayBtn, $nextBtn);
-            
-            var $grp = $('<label class="ujg-control-checkbox"><input type="checkbox" ' + (state.groupByUser ? 'checked' : '') + '><span>Group by user</span></label>');
-            $grp.find('input').on('change', function() { state.groupByUser = $(this).is(':checked'); refresh(); });
-            
-            var $cmt = $('<label class="ujg-control-checkbox"><input type="checkbox" ' + (state.showComments ? 'checked' : '') + '><span>Show comments</span></label>');
-            $cmt.find('input').on('change', function() { state.showComments = $(this).is(':checked'); refresh(); });
-            
+
+            var $sprintFilter = $('<div class="ujg-sprint-filter"><label>Спринт: </label></div>');
+            $sprintSelect = $('<select class="ujg-sprint-select"></select>');
+            $sprintSelect.on("change", function() { var v = $(this).val(); if (v) loadSprintData(v); });
+            $sprintFilter.append($sprintSelect);
+
+            var $userFilter = $('<div class="ujg-user-filter"><label>Пользователь: </label></div>');
+            $userSelect = $('<select class="ujg-user-select"><option value="">Все</option></select>');
+            $userSelect.on("change", function() {
+                state.selectedUser = $(this).val();
+                if (state.sprintData) renderMatrix(state.sprintData);
+            });
+            $userFilter.append($userSelect);
+
+            var $cmt = $('<label class="ujg-control-checkbox"><input type="checkbox" ' + (state.showComments ? "checked" : "") + '><span>Комментарии</span></label>');
+            $cmt.find("input").on("change", function() { state.showComments = $(this).is(":checked"); if (state.sprintData) renderMatrix(state.sprintData); });
+
             $fsBtn = $('<button class="aui-button ujg-fullscreen-btn">Fullscreen</button>');
-            $fsBtn.on('click', function() { toggleFs(); });
-            
-            $p.append($nav, $grp, $cmt, $fsBtn);
+            $fsBtn.on("click", function() { toggleFs(); });
+
+            $p.append($sprintFilter, $userFilter, $cmt, $fsBtn);
             $cont.before($p);
-            
-            $(document).on('keydown.ujgTs', function(e) { if (e.key === 'Escape' && state.isFullscreen) toggleFs(); });
+
+            $(document).on("keydown.ujgTs", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFs(); });
         }
-        
+
         initPanel();
-        refresh();
+        loadSprints();
     }
-    
+
     return MyGadget;
 });
