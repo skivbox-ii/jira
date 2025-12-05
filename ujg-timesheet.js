@@ -40,6 +40,8 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
         this.groupByUser = true;
         this.isFullscreen = false;
         this.periodDays = 7;
+        this.selectedUser = ''; // '' = все пользователи
+        this.allUsers = []; // список всех пользователей
         this.eventsProvider = new EventsProvider(API);
         this.issueCache = {};
         this.worklogCache = {};
@@ -72,8 +74,17 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             
             $nav.append(this.$prevBtn, this.$weekLabel, this.$todayBtn, this.$nextBtn);
             
+            // Фильтр по пользователю
+            var $userFilter = $('<div class="ujg-user-filter"><label>Пользователь: </label></div>');
+            this.$userSelect = $('<select class="ujg-user-select"><option value="">Все пользователи</option></select>');
+            this.$userSelect.on('change', function() { 
+                self.selectedUser = $(this).val(); 
+                self._redraw(); 
+            });
+            $userFilter.append(this.$userSelect);
+            
             var $grp = $('<label class="ujg-control-checkbox"><input type="checkbox" '+(this.groupByUser?'checked':'')+'><span>Group by user</span></label>');
-            $grp.find('input').on('change', function() { self.groupByUser = $(this).is(':checked'); self._refresh(); });
+            $grp.find('input').on('change', function() { self.groupByUser = $(this).is(':checked'); self._redraw(); });
             
             var $cmt = $('<label class="ujg-control-checkbox"><input type="checkbox" '+(this.showComments?'checked':'')+'><span>Show comments</span></label>');
             $cmt.find('input').on('change', function() { self.showComments = $(this).is(':checked'); self._refresh(); });
@@ -81,7 +92,7 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             this.$fsBtn = $('<button class="aui-button ujg-fullscreen-btn">Fullscreen</button>');
             this.$fsBtn.on('click', function() { self._toggleFs(); });
             
-            $p.append($nav, $grp, $cmt, this.$fsBtn);
+            $p.append($nav, $userFilter, $grp, $cmt, this.$fsBtn);
             this.$cont.before($p);
             
             $(document).on('keydown.ujgTs', function(e) { if (e.key === 'Escape' && self.isFullscreen) self._toggleFs(); });
@@ -122,13 +133,57 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             
             this.eventsProvider.getEvents({start: range.start, end: range.end, allUsers: true}, function(events) {
                 self._enrichIssues(events, function(ev) {
+                    self._cachedEvents = ev; // Кэшируем события для фильтрации
+                    self._updateUserList(ev);
                     if (self.showComments) {
-                        self._fetchComments(ev, function(ev2) { self._draw(ev2); });
+                        self._fetchComments(ev, function(ev2) { 
+                            self._cachedEvents = ev2;
+                            self._draw(ev2); 
+                        });
                     } else {
                         self._draw(ev);
                     }
                 });
             });
+        },
+        
+        _updateUserList: function(events) {
+            var self = this;
+            var users = {};
+            events.forEach(function(e) {
+                var uid = e.authorAccountId || e.authorKey || e.authorName || 'unknown';
+                var uname = e.authorDisplayName || e.authorName || uid;
+                if (!users[uid]) users[uid] = uname;
+            });
+            
+            this.allUsers = Object.keys(users).map(function(uid) {
+                return {id: uid, name: users[uid]};
+            }).sort(function(a, b) {
+                return a.name.localeCompare(b.name);
+            });
+            
+            // Обновляем select
+            var currentVal = this.$userSelect.val();
+            this.$userSelect.empty();
+            this.$userSelect.append('<option value="">Все пользователи (' + this.allUsers.length + ')</option>');
+            this.allUsers.forEach(function(u) {
+                self.$userSelect.append('<option value="'+utils.escapeHtml(u.id)+'">'+utils.escapeHtml(u.name)+'</option>');
+            });
+            
+            // Восстанавливаем выбор, если пользователь еще есть в списке
+            if (currentVal && this.allUsers.some(function(u) { return u.id === currentVal; })) {
+                this.$userSelect.val(currentVal);
+            } else {
+                this.selectedUser = '';
+                this.$userSelect.val('');
+            }
+        },
+        
+        _redraw: function() {
+            // Перерисовка без перезагрузки данных
+            if (this._cachedEvents) {
+                this._draw(this._cachedEvents);
+            }
         },
         
         _enrichIssues: function(events, cb) {
@@ -213,7 +268,22 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             var self = this;
             this.$cont.empty();
             if (!events || events.length === 0) {
-                this.$cont.html('<div class="ujg-message ujg-message-info">No data for selected period</div>');
+                this.$cont.html('<div class="ujg-message ujg-message-info">Нет данных за выбранный период</div>');
+                this.API.resize();
+                return;
+            }
+            
+            // Фильтрация по выбранному пользователю
+            var filteredEvents = events;
+            if (this.selectedUser) {
+                filteredEvents = events.filter(function(e) {
+                    var uid = e.authorAccountId || e.authorKey || e.authorName || 'unknown';
+                    return uid === self.selectedUser;
+                });
+            }
+            
+            if (filteredEvents.length === 0) {
+                this.$cont.html('<div class="ujg-message ujg-message-info">Нет данных для выбранного пользователя</div>');
                 this.API.resize();
                 return;
             }
@@ -229,7 +299,7 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
             
             if (this.groupByUser) {
                 var groups = {};
-                events.forEach(function(e) {
+                filteredEvents.forEach(function(e) {
                     var uid = e.authorAccountId || e.authorKey || e.authorName || 'unknown';
                     var uname = e.authorDisplayName || e.authorName || uid;
                     if (!groups[uid]) groups[uid] = {name: uname, events: [], time: 0};
@@ -246,10 +316,10 @@ define("_ujgTimesheet", ["jquery", "_ujgTimeEventsProvider", "_ujgTimeTableDrawe
                     g.events.forEach(function(e) { html += self._eventRow(e); });
                 });
             } else {
-                events.forEach(function(e) { total += e.timeSpentSeconds || 0; html += self._eventRow(e); });
+                filteredEvents.forEach(function(e) { total += e.timeSpentSeconds || 0; html += self._eventRow(e); });
             }
             
-            html += '<tr class="ujg-total-row"><td colspan="'+(this.showComments?5:4)+'"><strong>TOTAL</strong></td><td class="ujg-time-cell"><strong>' + utils.formatTime(total) + '</strong></td>';
+            html += '<tr class="ujg-total-row"><td colspan="'+(this.showComments?5:4)+'"><strong>ИТОГО</strong></td><td class="ujg-time-cell"><strong>' + utils.formatTime(total) + '</strong></td>';
             if (this.showComments) html += '<td></td>';
             html += '</tr></tbody></table>';
             
