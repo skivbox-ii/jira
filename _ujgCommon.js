@@ -61,20 +61,13 @@ define("_ujgCommon", ["jquery"], function($) {
         return res;
     }
 
-    // Загрузка данных за один день с фильтрацией по пользователю в JQL
+    // Загрузка данных за один день (фильтрация по пользователю только на уровне worklogs)
     function loadDayData(day, jqlFilter, userId) {
         var d = $.Deferred();
         var dayKey = utils.getDayKey(day);
         
-        // JQL для поиска задач с worklog за этот день
+        // JQL для поиска задач с worklog за этот день (без фильтра по пользователю!)
         var jql = 'worklogDate = "' + dayKey + '"';
-        
-        // Фильтр по автору worklog в JQL (используем in() чтобы работать и с accountId, и с key)
-        if (userId) {
-            var safeUser = String(userId).replace(/"/g, '\\"');
-            jql += ' AND worklogAuthor in ("' + safeUser + '")';
-        }
-        
         if (jqlFilter) jql += " AND (" + jqlFilter + ")";
         
         $.ajax({
