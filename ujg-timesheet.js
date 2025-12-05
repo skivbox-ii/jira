@@ -6,7 +6,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var STORAGE_KEY = "ujg_timesheet_settings";
     
     var CONFIG = {
-        version: "1.3.1",
+        version: "1.3.2",
         jqlFilter: "",
         debug: true
     };
@@ -146,6 +146,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var calendarData = state.calendarData;
             var selectedUser = state.selectedUser;
             
+            // Суммы по дням недели (Пн-Вс)
+            var weekdayTotals = [0, 0, 0, 0, 0, 0, 0];
+            
             // Группируем дни по неделям
             var weeks = [];
             var currentWeek = null;
@@ -170,13 +173,37 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 while (currentWeek.length < 7) currentWeek.push(null);
                 weeks.push(currentWeek);
             }
+            
+            // Считаем суммы по дням недели
+            days.forEach(function(day) {
+                var dayKey = utils.getDayKey(day);
+                var dayData = calendarData[dayKey] || [];
+                var dow = utils.getDayOfWeek(day);
+                
+                var filteredData = dayData;
+                if (selectedUser) {
+                    filteredData = dayData.filter(function(item) {
+                        return item.authors && item.authors[selectedUser];
+                    });
+                }
+                filteredData.forEach(function(item) {
+                    weekdayTotals[dow] += item.seconds || 0;
+                });
+            });
 
             var html = '<div class="ujg-calendar">';
             
-            // Заголовок
+            // Заголовок с суммами
             html += '<div class="ujg-calendar-header">';
             WEEKDAYS.forEach(function(wd, idx) {
-                html += '<div class="ujg-calendar-header-cell ' + (idx >= 5 ? "ujg-weekend" : "") + '">' + wd + '</div>';
+                var wdTotal = weekdayTotals[idx];
+                var cls = idx >= 5 ? "ujg-weekend" : "";
+                html += '<div class="ujg-calendar-header-cell ' + cls + '" data-weekday="' + idx + '">';
+                html += '<div class="ujg-header-day">' + wd + '</div>';
+                if (wdTotal > 0) {
+                    html += '<div class="ujg-header-total">' + utils.formatTime(wdTotal) + '</div>';
+                }
+                html += '</div>';
             });
             html += '</div>';
             
@@ -302,6 +329,51 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 html += '</div>';
                 $cell.append(html);
             }
+            
+            // Обновляем сумму в заголовке для этого дня недели
+            updateHeaderTotals();
+        }
+        
+        function updateHeaderTotals() {
+            var selectedUser = state.selectedUser;
+            var weekdayTotals = [0, 0, 0, 0, 0, 0, 0];
+            var totalAll = 0;
+            
+            state.days.forEach(function(day) {
+                var dayKey = utils.getDayKey(day);
+                var dayData = state.calendarData[dayKey] || [];
+                var dow = utils.getDayOfWeek(day);
+                
+                var filteredData = dayData;
+                if (selectedUser) {
+                    filteredData = dayData.filter(function(item) {
+                        return item.authors && item.authors[selectedUser];
+                    });
+                }
+                filteredData.forEach(function(item) {
+                    var sec = item.seconds || 0;
+                    weekdayTotals[dow] += sec;
+                    totalAll += sec;
+                });
+            });
+            
+            // Обновляем заголовки
+            for (var i = 0; i < 7; i++) {
+                var $headerCell = $cont.find('.ujg-calendar-header-cell[data-weekday="' + i + '"]');
+                var $total = $headerCell.find('.ujg-header-total');
+                if (weekdayTotals[i] > 0) {
+                    if ($total.length === 0) {
+                        $headerCell.append('<div class="ujg-header-total">' + utils.formatTime(weekdayTotals[i]) + '</div>');
+                    } else {
+                        $total.text(utils.formatTime(weekdayTotals[i]));
+                    }
+                } else {
+                    $total.remove();
+                }
+            }
+            
+            // Обновляем footer
+            $cont.find('.ujg-calendar-footer strong').text(utils.formatTime(totalAll) || "0");
         }
 
         function loadDaySequentially(index) {
