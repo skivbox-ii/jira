@@ -281,8 +281,8 @@
         <div class="toolbar">
             <button class="btn btn-primary" onclick="exportToCSV()">📥 Экспорт в CSV (Excel)</button>
             <button class="btn btn-primary" onclick="exportToMarkdown()">📥 Экспорт в Markdown</button>
-            <button class="btn btn-primary" onclick="document.getElementById('csvFileInput').click()">📤 Импорт из CSV</button>
-            <input type="file" id="csvFileInput" accept=".csv" onchange="importFromCSV(event)">
+            <button class="btn btn-primary" onclick="document.getElementById('csvFileInput').click()">📤 Импорт (CSV/TXT)</button>
+            <input type="file" id="csvFileInput" accept=".csv,.txt,.tsv" onchange="importFromCSV(event)">
             <button class="btn" onclick="addExperiment()">➕ Добавить опыт</button>
             <button class="btn" onclick="addService()">➕ Добавить сервис</button>
             <button class="btn btn-danger" onclick="clearLocalStorage()">🗑️ Очистить кэш</button>
@@ -1096,6 +1096,30 @@
             return md;
         }
         
+        // Автоопределение разделителя по содержимому файла
+        function detectDelimiter(text) {
+            const lines = text.split(/\r?\n/).filter(l => l.trim());
+            if (lines.length === 0) return ';';
+            
+            // Проверяем первые 2 строки для определения разделителя
+            const testLines = lines.slice(0, Math.min(2, lines.length)).join('\n');
+            
+            // Считаем количество разделителей
+            const tabCount = (testLines.match(/\t/g) || []).length;
+            const semiCount = (testLines.match(/;/g) || []).length;
+            const commaCount = (testLines.match(/,/g) || []).length;
+            
+            // Табуляция имеет приоритет (копирование из Excel/таблиц)
+            if (tabCount >= 2) return '\t';
+            // Точка с запятой (стандарт для русской локали CSV)
+            if (semiCount >= 2) return ';';
+            // Запятая (международный CSV)
+            if (commaCount >= 2) return ',';
+            
+            // По умолчанию - точка с запятой
+            return ';';
+        }
+        
         function importFromCSV(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -1107,22 +1131,31 @@
                     const lines = text.split(/\r?\n/).filter(l => l.trim());
                     
                     if (lines.length < 2) {
-                        alert('Файл CSV пустой или неправильного формата');
+                        alert('Файл пустой или неправильного формата');
                         return;
                     }
+                    
+                    // Автоопределение разделителя
+                    const delimiter = detectDelimiter(text);
+                    console.log('📊 Определен разделитель:', delimiter === '\t' ? 'TAB' : delimiter);
                     
                     let startLine = 0;
                     
                     // Проверяем, есть ли строка с характеристиками системы
-                    if (lines[0].startsWith('Характеристики системы:')) {
-                        const systemLine = lines[0].split(';').map(cleanCSVCell);
+                    if (lines[0].startsWith('Характеристики системы:') || lines[0].includes('CPU=')) {
+                        const systemLine = lines[0].split(delimiter).map(cleanCSVCell);
                         // Парсим CPU и RAM
                         systemLine.forEach(part => {
-                            if (part.startsWith('CPU=')) {
-                                const cpu = parseLocaleNumber(part.replace('CPU=', ''));
+                            // Ищем CPU= и RAM= в любом месте части
+                            const cpuMatch = part.match(/CPU\s*=\s*(\d+(?:[.,]\d+)?)/i);
+                            const ramMatch = part.match(/RAM\s*=\s*(\d+(?:[.,]\d+)?)/i);
+                            
+                            if (cpuMatch) {
+                                const cpu = parseLocaleNumber(cpuMatch[1]);
                                 if (cpu !== null) systemParams.cpu = cpu;
-                            } else if (part.startsWith('RAM=')) {
-                                const ram = parseLocaleNumber(part.replace('RAM=', ''));
+                            }
+                            if (ramMatch) {
+                                const ram = parseLocaleNumber(ramMatch[1]);
                                 if (ram !== null) systemParams.ram = ram;
                             }
                         });
@@ -1131,21 +1164,29 @@
                     }
                     
                     // Парсинг заголовка
-                    const header = lines[startLine].split(';');
-                    experiments = header.slice(1).map(h => cleanCSVCell(h) || '-');
+                    const header = lines[startLine].split(delimiter);
+                    experiments = header.slice(1).map(h => cleanCSVCell(h) || '-').filter(h => h && h !== '-');
+                    
+                    if (experiments.length === 0) {
+                        alert('Не найдены названия опытов в заголовке');
+                        return;
+                    }
                     
                     // Парсинг данных
                     tableData = {};
                     for (let i = startLine + 1; i < lines.length; i++) {
-                        const cols = lines[i].split(';');
+                        const cols = lines[i].split(delimiter);
                         const rowName = cleanCSVCell(cols[0]);
                         if (!rowName) continue;
                         
-                        if (cols.length === 1) {
-                            // Секция
+                        // Пропускаем пустые строки или строки только с разделителями
+                        const hasData = cols.slice(1).some(c => cleanCSVCell(c));
+                        
+                        if (cols.length === 1 || !hasData) {
+                            // Секция (строка без данных)
                             tableData[rowName] = { type: 'section' };
                         } else {
-                            const rawValues = cols.slice(1);
+                            const rawValues = cols.slice(1, experiments.length + 1); // Берем только нужное кол-во столбцов
                             tableData[rowName] = rawValues.map((c, idx) => normalizeImportedValue(c, rowName, idx, rawValues));
                         }
                     }
@@ -1157,12 +1198,23 @@
                     
                     renderTable();
                     saveToLocalStorage(); // Сохраняем импортированные данные
-                    alert('Данные успешно импортированы!');
+                    
+                    const delimName = delimiter === '\t' ? 'TAB' : (delimiter === ';' ? 'точка с запятой' : 'запятая');
+                    alert(`Данные успешно импортированы!\nФормат: ${delimName}\nОпытов: ${experiments.length}`);
                 } catch (error) {
                     alert('Ошибка при импорте: ' + error.message);
+                    console.error('Import error:', error);
                 }
             };
-            reader.readAsText(file, 'windows-1251');
+            
+            // Пробуем сначала UTF-8, если не сработает - windows-1251
+            reader.onerror = function() {
+                const reader2 = new FileReader();
+                reader2.onload = reader.onload;
+                reader2.readAsText(file, 'windows-1251');
+            };
+            reader.readAsText(file, 'UTF-8');
+            
             // Сбросить input для возможности повторного импорта того же файла
             event.target.value = '';
         }
