@@ -1207,13 +1207,8 @@
                 }
             };
             
-            // Пробуем сначала UTF-8, если не сработает - windows-1251
-            reader.onerror = function() {
-                const reader2 = new FileReader();
-                reader2.onload = reader.onload;
-                reader2.readAsText(file, 'windows-1251');
-            };
-            reader.readAsText(file, 'UTF-8');
+            // Читаем в windows-1251 (стандарт для русской Windows/Excel)
+            reader.readAsText(file, 'windows-1251');
             
             // Сбросить input для возможности повторного импорта того же файла
             event.target.value = '';
