@@ -7,7 +7,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var STORAGE_KEY_GROUPS = "ujg_timesheet_groups";
     
     var CONFIG = {
-        version: "1.5.0",
+        version: "1.5.1",
         jqlFilter: "",
         debug: true
     };
@@ -204,6 +204,14 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             return weeks;
         }
         
+        // Сокращает статус до 5 символов
+        function shortStatus(status) {
+            if (!status) return "";
+            var s = status.trim();
+            if (s.length <= 5) return s;
+            return s.substring(0, 5);
+        }
+        
         // Рендер одного календаря (userId = null для всех)
         function renderSingleCalendar(userId, calendarId) {
             var days = state.days;
@@ -222,8 +230,11 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     weekdayTotals[dow] += item.seconds || 0;
                 });
             });
+            
+            // Проверяем, есть ли данные за выходные (Сб=5, Вс=6)
+            var hasWeekendData = weekdayTotals[5] > 0 || weekdayTotals[6] > 0;
 
-            var html = '<div class="ujg-calendar" data-calendar-id="' + calendarId + '">';
+            var html = '<div class="ujg-calendar' + (hasWeekendData ? '' : ' ujg-hide-weekends') + '" data-calendar-id="' + calendarId + '">';
             
             // Заголовок календаря (имя пользователя)
             if (userId) {
@@ -234,7 +245,10 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             html += '<div class="ujg-calendar-header">';
             WEEKDAYS.forEach(function(wd, idx) {
                 var wdTotal = weekdayTotals[idx];
-                var cls = idx >= 5 ? "ujg-weekend" : "";
+                var isWeekend = idx >= 5;
+                var cls = isWeekend ? "ujg-weekend" : "";
+                // Скрываем выходные без данных
+                if (isWeekend && !hasWeekendData) cls += " ujg-hidden";
                 html += '<div class="ujg-calendar-header-cell ' + cls + '" data-weekday="' + idx + '">';
                 html += '<div class="ujg-header-day">' + wd + '</div>';
                 if (wdTotal > 0) {
@@ -251,8 +265,12 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 html += '<div class="ujg-calendar-week">';
                 week.forEach(function(day, idx) {
                     var isWeekend = idx >= 5;
+                    
+                    // Скрываем выходные без данных
+                    var hiddenClass = (isWeekend && !hasWeekendData) ? " ujg-hidden" : "";
+                    
                     if (!day) {
-                        html += '<div class="ujg-calendar-cell ujg-calendar-empty ' + (isWeekend ? "ujg-weekend" : "") + '"></div>';
+                        html += '<div class="ujg-calendar-cell ujg-calendar-empty ' + (isWeekend ? "ujg-weekend" : "") + hiddenClass + '"></div>';
                         return;
                     }
                     
@@ -266,6 +284,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     var cellClass = "ujg-calendar-cell";
                     if (isWeekend) cellClass += " ujg-weekend";
                     if (dayData.length > 0) cellClass += " ujg-has-data";
+                    cellClass += hiddenClass;
                     
                     html += '<div class="' + cellClass + '" data-day="' + dayKey + '">';
                     html += '<div class="ujg-cell-header">';
@@ -279,12 +298,19 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                         html += '<div class="ujg-cell-issues">';
                         dayData.forEach(function(item) {
                             var isDone = item.status && DONE_STATUSES.indexOf(item.status.toLowerCase()) >= 0;
-                            html += '<div class="ujg-cell-issue' + (isDone ? " ujg-issue-done" : "") + '">';
+                            html += '<div class="ujg-cell-issue">';
                             html += '<div class="ujg-issue-header">';
-                            html += '<a href="' + baseUrl + '/browse/' + item.key + '" target="_blank" class="ujg-issue-link">' + item.key + '</a>';
+                            // Только ключ перечёркиваем и делаем серым если задача закрыта
+                            html += '<a href="' + baseUrl + '/browse/' + item.key + '" target="_blank" class="ujg-issue-link' + (isDone ? ' ujg-link-done' : '') + '">' + item.key + '</a>';
                             html += '<span class="ujg-issue-time">' + (utils.formatTime(item.seconds) || "") + '</span>';
+                            // Статус в овале (max 5 символов)
+                            if (item.status) {
+                                var statusClass = isDone ? "ujg-status-done" : "ujg-status-open";
+                                html += '<span class="ujg-issue-status ' + statusClass + '">' + utils.escapeHtml(shortStatus(item.status)) + '</span>';
+                            }
                             if (item.estimate) html += '<span class="ujg-issue-est">[' + utils.formatTime(item.estimate) + ']</span>';
                             html += '</div>';
+                            // Summary и comment НЕ перечёркиваем
                             if (item.summary) html += '<div class="ujg-issue-summary">' + utils.escapeHtml(item.summary) + '</div>';
                             if (showAuthors && item.authors) {
                                 var names = Object.keys(item.authors).map(function(k) { return item.authors[k]; });
