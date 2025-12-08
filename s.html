@@ -1191,9 +1191,16 @@
                         }
                     }
 
-                    // Пересчитываем итоги после нормализации значений (проценты → числа)
-                    for (let col = 0; col < experiments.length; col++) {
-                        recalculateTotals(col);
+                    // Пересчитываем итоги только если их нет в импортированных данных
+                    // Если ИТОГО было импортировано (в т.ч. из процентов) - оставляем как есть
+                    const hasImportedTotals = tableData['ИТОГО ЯДРА'] && tableData['ИТОГО ПАМЯТЬ'] &&
+                        tableData['ИТОГО ЯДРА'].some(v => v && v !== '-') &&
+                        tableData['ИТОГО ПАМЯТЬ'].some(v => v && v !== '-');
+                    
+                    if (!hasImportedTotals) {
+                        for (let col = 0; col < experiments.length; col++) {
+                            recalculateTotals(col);
+                        }
                     }
                     
                     renderTable();
