@@ -73,7 +73,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         getSprintIssues: function(id) {
             return $.ajax({
                 url: baseUrl + "/rest/agile/1.0/sprint/" + id + "/issue",
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,updated,description,resolutiondate,customfield_10020", maxResults: 500 }
+                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,updated,description,resolutiondate,customfield_10020", expand: "changelog", maxResults: 500 }
             });
         },
         getIssue: function(key) {
@@ -284,57 +284,120 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function calculateBurnup() {
             var sp = state.sprint;
             if (!sp || !sp.startDate || !sp.endDate) { state.burnupData = []; return; }
-            
-            var start = utils.parseDate(sp.startDate), end = utils.parseDate(sp.endDate);
+            var start = utils.startOfDay(utils.parseDate(sp.startDate));
+            var end = utils.startOfDay(utils.parseDate(sp.endDate));
+            if (!start || !end) { state.burnupData = []; return; }
             var days = utils.daysBetween(start, end);
-            var now = new Date();
+            var now = utils.startOfDay(new Date());
+            var sprintId = sp.id;
             
-            var data = [], scopeByDay = {}, doneByDay = {};
-            var totalTasks = state.metrics.total, totalHours = state.metrics.totalHours;
-            
-            // Собираем данные по дням
-            state.issues.forEach(function(iss) {
+            // Подготовка данных по задачам
+            var issuesInfo = state.issues.map(function(iss) {
                 var f = iss.fields || {};
-                var created = utils.parseDate(f.created);
-                var resolved = utils.parseDate(f.resolutiondate);
-                var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var estSec = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var resolved = utils.startOfDay(utils.parseDate(f.resolutiondate));
+                var isDone = isIssueDone(f.status);
                 
-                days.forEach(function(day) {
-                    var dk = utils.getDayKey(day);
-                    if (!scopeByDay[dk]) scopeByDay[dk] = { tasks: 0, hours: 0 };
-                    if (!doneByDay[dk]) doneByDay[dk] = { tasks: 0, hours: 0 };
-                    
-                    // Scope: задача создана до этого дня или в этот день
-                    if (created && created <= day) {
-                        scopeByDay[dk].tasks++;
-                        scopeByDay[dk].hours += est;
-                    }
-                    
-                    // Done: задача закрыта до этого дня или в этот день
-                    if (resolved && resolved <= day && isIssueDone(f.status)) {
-                        doneByDay[dk].tasks++;
-                        doneByDay[dk].hours += est;
-                    }
+                // Дата входа/выхода в спринт по changelog (по полю Sprint)
+                var addDate = start, removeDate = null;
+                var ch = iss.changelog || iss._changelog || {};
+                (ch.histories || []).forEach(function(h) {
+                    var hd = utils.startOfDay(utils.parseDate(h.created));
+                    (h.items || []).forEach(function(it) {
+                        if ((it.field || "").toLowerCase() === "sprint") {
+                            var fromHas = it.from && it.from.indexOf && it.from.indexOf(sprintId) >= 0;
+                            var toHas = it.to && it.to.indexOf && it.to.indexOf(sprintId) >= 0;
+                            // Jira cloud often stores ids in to/from as string with sprint ids like "123,456"
+                            var fromStr = it.fromString || "";
+                            var toStr = it.toString || "";
+                            if (!fromHas && !toHas) {
+                                fromHas = fromStr.indexOf(String(sprintId)) >= 0;
+                                toHas = toStr.indexOf(String(sprintId)) >= 0;
+                            }
+                            if (toHas && !fromHas) { addDate = hd || addDate; }
+                            if (fromHas && !toHas) { removeDate = hd || removeDate; }
+                        }
+                    });
                 });
+                if (addDate < start) addDate = start;
+                if (removeDate && removeDate < addDate) removeDate = null;
+                
+                // Worklog по дням (в секундах)
+                var wlByDay = {};
+                if (iss._worklog && Array.isArray(iss._worklog)) {
+                    iss._worklog.forEach(function(wl) {
+                        var wd = utils.startOfDay(utils.parseDate(wl.started));
+                        if (!wd) return;
+                        if (wd < start || wd > end) return;
+                        var dk = utils.getDayKey(wd);
+                        wlByDay[dk] = (wlByDay[dk] || 0) + (wl.timeSpentSeconds || 0);
+                    });
+                }
+                
+                return {
+                    key: iss.key,
+                    estSec: estSec,
+                    resolved: resolved,
+                    isDone: isDone,
+                    addDate: addDate,
+                    removeDate: removeDate,
+                    wlByDay: wlByDay
+                };
             });
+            
+            var data = [];
+            var finalScopeTasks = 0, finalScopeHours = 0;
+            var cumLoggedCache = {}; // key -> {dk:cumSec}
             
             days.forEach(function(day, idx) {
                 var dk = utils.getDayKey(day);
-                var isPast = day <= now;
-                var idealTasks = Math.round(totalTasks * (idx + 1) / days.length);
-                var idealHours = Math.round(totalHours * (idx + 1) / days.length);
+                var scopeTasks = 0, scopeHours = 0;
+                var doneTasks = 0, doneHoursSec = 0;
+                
+                issuesInfo.forEach(function(info) {
+                    var inScope = day >= info.addDate && (!info.removeDate || day <= info.removeDate);
+                    if (!inScope) return;
+                    
+                    scopeTasks += 1;
+                    scopeHours += info.estSec / 3600; // в часах
+                    
+                    // logged cumulative до дня включительно
+                    if (!cumLoggedCache[info.key]) cumLoggedCache[info.key] = {};
+                    var cumLog = cumLoggedCache[info.key][dk];
+                    if (cumLog === undefined) {
+                        var keys = Object.keys(info.wlByDay).sort();
+                        var sum = 0;
+                        keys.forEach(function(k) {
+                            if (k <= dk) sum += info.wlByDay[k];
+                        });
+                        cumLog = sum;
+                        cumLoggedCache[info.key][dk] = cumLog;
+                    }
+                    doneHoursSec += cumLog;
+                    
+                    if (info.isDone && info.resolved && info.resolved <= day) {
+                        doneTasks += 1;
+                    }
+                });
+                
+                if (scopeTasks > finalScopeTasks) finalScopeTasks = scopeTasks;
+                if (scopeHours > finalScopeHours) finalScopeHours = scopeHours;
                 
                 data.push({
                     date: day,
                     label: utils.formatDateShort(day),
-                    scopeTasks: isPast ? (scopeByDay[dk] ? scopeByDay[dk].tasks : totalTasks) : null,
-                    scopeHours: isPast ? (scopeByDay[dk] ? scopeByDay[dk].hours : totalHours) : null,
-                    doneTasks: isPast ? (doneByDay[dk] ? doneByDay[dk].tasks : 0) : null,
-                    doneHours: isPast ? (doneByDay[dk] ? doneByDay[dk].hours : 0) : null,
-                    idealTasks: idealTasks,
-                    idealHours: idealHours,
+                    scopeTasks: scopeTasks,
+                    scopeHours: scopeHours,
+                    doneTasks: doneTasks,
+                    doneHours: doneHoursSec / 3600,
                     isToday: utils.getDayKey(day) === utils.getDayKey(now)
                 });
+            });
+            
+            // Идеальные линии
+            data.forEach(function(d, idx) {
+                d.idealTasks = Math.round(finalScopeTasks * (idx + 1) / data.length);
+                d.idealHours = Math.round(finalScopeHours * (idx + 1) / data.length);
             });
             
             state.burnupData = data;
@@ -485,7 +548,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             var isHours = state.chartMode === "hours";
             var maxScope = Math.max.apply(null, data.map(function(d) { return isHours ? (d.scopeHours || 0) : (d.scopeTasks || 0); }));
-            var maxVal = Math.max(maxScope, isHours ? state.metrics.totalHours : state.metrics.total) || 1;
+            var maxDone = Math.max.apply(null, data.map(function(d) { return isHours ? (d.doneHours || 0) : (d.doneTasks || 0); }));
+            var maxIdeal = Math.max.apply(null, data.map(function(d) { return isHours ? (d.idealHours || 0) : (d.idealTasks || 0); }));
+            var maxVal = Math.max(maxScope, maxDone, maxIdeal, 1);
             
             var h = 180, padding = 40;
             
