@@ -1,18 +1,17 @@
 /**
  * UJG Sprint Health — Виджет оценки качества планирования спринта
- * Версия: 1.0.0
+ * Версия: 1.1.0
  * Автономный модуль без внешних зависимостей (кроме jQuery)
  */
 define("_ujgSprintHealth", ["jquery"], function($) {
     "use strict";
 
-    // ==================== КОНФИГУРАЦИЯ ====================
     var CONFIG = {
-        version: "1.0.0",
+        version: "1.1.0",
         debug: true,
-        maxHours: 16,           // Порог "слишком большой задачи" (часы)
-        capacityPerPerson: 40,  // Часов на человека в спринте по умолчанию
-        workHoursPerDay: 8      // Рабочих часов в день
+        maxHours: 16,
+        capacityPerPerson: 40,
+        workHoursPerDay: 8
     };
 
     var STORAGE_KEY = "ujg_sprint_health_settings";
@@ -26,80 +25,52 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             d.textContent = String(t);
             return d.innerHTML;
         },
-        
         formatHours: function(seconds) {
             if (!seconds || seconds <= 0) return "—";
             var h = Math.floor(seconds / 3600);
             var m = Math.floor((seconds % 3600) / 60);
-            if (h > 0 && m > 0) return h + "ч " + m + "м";
+            if (h > 0 && m > 0) return h + "ч" + m + "м";
             return h > 0 ? h + "ч" : (m > 0 ? m + "м" : "—");
         },
-        
         formatHoursShort: function(seconds) {
             if (!seconds || seconds <= 0) return "0";
             return Math.round(seconds / 3600) + "ч";
         },
-        
         parseDate: function(v) {
             if (!v) return null;
             if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-            if (typeof v === "number") {
-                var d = new Date(v);
-                return isNaN(d.getTime()) ? null : d;
-            }
-            if (typeof v === "string") {
-                var d = new Date(v);
-                if (!isNaN(d.getTime())) return d;
-            }
+            if (typeof v === "number") { var d = new Date(v); return isNaN(d.getTime()) ? null : d; }
+            if (typeof v === "string") { var d = new Date(v); if (!isNaN(d.getTime())) return d; }
             return null;
         },
-        
         formatDateShort: function(d) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "—";
             var dd = d.getDate(), mm = d.getMonth() + 1;
             return (dd < 10 ? "0" : "") + dd + "." + (mm < 10 ? "0" : "") + mm;
         },
-        
         getDayKey: function(d) {
             if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
-            var yyyy = d.getFullYear();
-            var mm = d.getMonth() + 1;
-            var dd = d.getDate();
+            var yyyy = d.getFullYear(), mm = d.getMonth() + 1, dd = d.getDate();
             return yyyy + "-" + (mm < 10 ? "0" : "") + mm + "-" + (dd < 10 ? "0" : "") + dd;
         },
-        
         daysBetween: function(start, end) {
             var res = [];
             if (!start || !end) return res;
-            var cur = new Date(start);
-            cur.setHours(0, 0, 0, 0);
-            var ed = new Date(end);
-            ed.setHours(0, 0, 0, 0);
+            var cur = new Date(start); cur.setHours(0, 0, 0, 0);
+            var ed = new Date(end); ed.setHours(0, 0, 0, 0);
             while (cur <= ed) {
-                // Пропускаем выходные
                 var dow = cur.getDay();
-                if (dow !== 0 && dow !== 6) {
-                    res.push(new Date(cur));
-                }
+                if (dow !== 0 && dow !== 6) res.push(new Date(cur));
                 cur.setDate(cur.getDate() + 1);
             }
             return res;
         },
-        
-        isWeekend: function(d) {
-            if (!d) return false;
-            var dow = d.getDay();
-            return dow === 0 || dow === 6;
-        },
-        
-        // Цвет по проценту
         getHealthColor: function(percent) {
-            if (percent >= 90) return "#36b37e"; // зелёный
-            if (percent >= 70) return "#ffab00"; // жёлтый
-            if (percent >= 50) return "#ff8b00"; // оранжевый
-            return "#de350b"; // красный
+            if (percent >= 90) return "#36b37e";
+            if (percent >= 70) return "#ffab00";
+            if (percent >= 50) return "#ff8b00";
+            return "#de350b";
         },
-        
         getHealthLabel: function(percent) {
             if (percent >= 90) return "Отлично";
             if (percent >= 70) return "Хорошо";
@@ -108,110 +79,52 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         }
     };
 
-    // ==================== ЛОКАЛЬНОЕ ХРАНИЛИЩЕ ====================
     function loadSettings() {
-        try {
-            var saved = localStorage.getItem(STORAGE_KEY);
-            if (saved) return JSON.parse(saved);
-        } catch (e) {}
+        try { var s = localStorage.getItem(STORAGE_KEY); if (s) return JSON.parse(s); } catch (e) {}
         return {};
     }
-
     function saveSettings(settings) {
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-        } catch (e) {}
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (e) {}
     }
 
-    // ==================== API JIRA ====================
+    // ==================== API ====================
     var api = {
-        // Получить все доски
         getBoards: function() {
-            return $.ajax({
-                url: baseUrl + "/rest/agile/1.0/board",
-                type: "GET",
-                data: { maxResults: 100 }
-            });
+            return $.ajax({ url: baseUrl + "/rest/agile/1.0/board", type: "GET", data: { maxResults: 100 } });
         },
-        
-        // Получить спринты доски
         getSprints: function(boardId) {
-            return $.ajax({
-                url: baseUrl + "/rest/agile/1.0/board/" + boardId + "/sprint",
-                type: "GET",
-                data: { state: "active,future,closed", maxResults: 50 }
-            });
+            return $.ajax({ url: baseUrl + "/rest/agile/1.0/board/" + boardId + "/sprint", type: "GET", data: { state: "active,future,closed", maxResults: 100 } });
         },
-        
-        // Получить информацию о спринте
         getSprint: function(sprintId) {
-            return $.ajax({
-                url: baseUrl + "/rest/agile/1.0/sprint/" + sprintId,
-                type: "GET"
-            });
+            return $.ajax({ url: baseUrl + "/rest/agile/1.0/sprint/" + sprintId, type: "GET" });
         },
-        
-        // Получить задачи спринта
         getSprintIssues: function(sprintId) {
             return $.ajax({
                 url: baseUrl + "/rest/agile/1.0/sprint/" + sprintId + "/issue",
                 type: "GET",
-                data: {
-                    fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,description,resolutiondate",
-                    maxResults: 500
-                }
+                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,description,resolutiondate", maxResults: 500 }
             });
         }
     };
 
-    // ==================== ОСНОВНОЙ ВИДЖЕТ ====================
+    // ==================== ВИДЖЕТ ====================
     function SprintHealthGadget(API) {
-        var self = this;
-        
-        // Состояние
         var state = {
-            boards: [],
-            sprints: [],
-            selectedBoardId: null,
-            selectedSprintId: null,
-            sprint: null,
-            issues: [],
-            loading: false,
-            isFullscreen: false,
-            burndownMode: "hours", // "hours" или "tasks"
-            // Вычисленные метрики
-            metrics: {
-                totalIssues: 0,
-                totalHours: 0,
-                estimatedCount: 0,
-                estimatedPercent: 0,
-                withDatesCount: 0,
-                withDatesPercent: 0,
-                assignedCount: 0,
-                assignedPercent: 0,
-                overallHealth: 0
-            },
-            // Данные для графиков
-            burndownData: [],
-            burnupData: [],
-            // Группировка по исполнителям
-            byAssignee: {}
+            boards: [], sprints: [], filteredSprints: [],
+            selectedBoardId: null, selectedSprintId: null,
+            sprint: null, issues: [], loading: false, isFullscreen: false,
+            burndownMode: "hours",
+            metrics: { totalIssues: 0, totalHours: 0, estimatedCount: 0, estimatedPercent: 0, withDatesCount: 0, withDatesPercent: 0, assignedCount: 0, assignedPercent: 0, overallHealth: 0 },
+            burndownData: [], burnupData: [], byAssignee: {}
         };
 
         var $content = API.getGadgetContentEl();
         var $cont = $content.find(".ujg-sprint-health");
-        if ($cont.length === 0) {
-            $cont = $('<div class="ujg-sprint-health"></div>');
-            $content.append($cont);
-        }
+        if ($cont.length === 0) { $cont = $('<div class="ujg-sprint-health"></div>'); $content.append($cont); }
 
-        // UI элементы
-        var $boardSelect, $sprintSelect, $refreshBtn, $fsBtn;
-        var $metricsPanel, $chartsPanel, $issuesPanel, $problemsPanel;
+        var $boardSelect, $sprintInput, $sprintDropdown, $refreshBtn, $fsBtn;
 
-        function log(msg) {
-            if (CONFIG.debug) console.log("[UJG-SprintHealth]", msg);
-        }
+        function log(msg) { if (CONFIG.debug) console.log("[UJG-SprintHealth]", msg); }
 
         // ==================== FULLSCREEN ====================
         function toggleFullscreen() {
@@ -221,22 +134,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (state.isFullscreen) {
                 $el.data("ujg-style", $el.attr("style") || "");
                 $el.addClass("ujg-fullscreen");
-                $fsBtn.text("✕ Выйти");
+                $fsBtn.text("✕");
             } else {
                 $el.removeClass("ujg-fullscreen").attr("style", $el.data("ujg-style"));
-                $fsBtn.text("⛶ На весь экран");
+                $fsBtn.text("⛶");
             }
             API.resize();
         }
 
-        // ==================== ЗАГРУЗКА ДАННЫХ ====================
+        // ==================== ЗАГРУЗКА ====================
         function loadBoards() {
-            log("Загрузка досок...");
             api.getBoards().then(function(data) {
                 state.boards = (data && data.values) || [];
                 updateBoardSelect();
-                
-                // Восстанавливаем выбранную доску
                 var saved = loadSettings();
                 if (saved.boardId && state.boards.some(function(b) { return b.id == saved.boardId; })) {
                     $boardSelect.val(saved.boardId);
@@ -244,288 +154,167 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     loadSprints(saved.boardId);
                 }
             }, function(err) {
-                log("Ошибка загрузки досок: " + (err.statusText || err));
-                $cont.html('<div class="ujg-message ujg-error">Ошибка загрузки досок. Проверьте права доступа.</div>');
+                $cont.html('<div class="ujg-msg ujg-error">Ошибка загрузки досок</div>');
             });
         }
 
         function loadSprints(boardId) {
             if (!boardId) return;
-            log("Загрузка спринтов для доски " + boardId);
             state.selectedBoardId = boardId;
-            
             api.getSprints(boardId).then(function(data) {
                 state.sprints = (data && data.values) || [];
-                // Сортируем: активные первыми, потом future, потом closed
-                state.sprints.sort(function(a, b) {
-                    var order = { active: 0, future: 1, closed: 2 };
-                    return (order[a.state] || 3) - (order[b.state] || 3);
-                });
-                updateSprintSelect();
+                // Сортировка по ID убывание (новые сверху)
+                state.sprints.sort(function(a, b) { return b.id - a.id; });
+                state.filteredSprints = state.sprints.slice();
+                updateSprintDropdown();
                 
-                // Восстанавливаем или выбираем активный спринт
                 var saved = loadSettings();
                 var activeSprint = state.sprints.find(function(s) { return s.state === "active"; });
                 
                 if (saved.sprintId && state.sprints.some(function(s) { return s.id == saved.sprintId; })) {
-                    $sprintSelect.val(saved.sprintId);
-                    loadSprintData(saved.sprintId);
+                    selectSprint(saved.sprintId);
                 } else if (activeSprint) {
-                    $sprintSelect.val(activeSprint.id);
-                    loadSprintData(activeSprint.id);
+                    selectSprint(activeSprint.id);
+                } else if (state.sprints.length > 0) {
+                    selectSprint(state.sprints[0].id);
                 }
-            }, function(err) {
-                log("Ошибка загрузки спринтов: " + (err.statusText || err));
             });
+        }
+
+        function selectSprint(sprintId) {
+            var sprint = state.sprints.find(function(s) { return s.id == sprintId; });
+            if (!sprint) return;
+            state.selectedSprintId = sprintId;
+            $sprintInput.val(sprint.name);
+            hideSprintDropdown();
+            loadSprintData(sprintId);
         }
 
         function loadSprintData(sprintId) {
             if (!sprintId) return;
             state.selectedSprintId = sprintId;
             state.loading = true;
-            
-            saveSettings({
-                boardId: state.selectedBoardId,
-                sprintId: sprintId
-            });
-            
-            log("Загрузка данных спринта " + sprintId);
+            saveSettings({ boardId: state.selectedBoardId, sprintId: sprintId });
             showLoading();
             
-            // Загружаем информацию о спринте и задачи параллельно
-            $.when(
-                api.getSprint(sprintId),
-                api.getSprintIssues(sprintId)
-            ).then(function(sprintResp, issuesResp) {
+            $.when(api.getSprint(sprintId), api.getSprintIssues(sprintId)).then(function(sprintResp, issuesResp) {
                 state.sprint = sprintResp[0] || sprintResp;
                 var issuesData = issuesResp[0] || issuesResp;
                 state.issues = (issuesData && issuesData.issues) || [];
-                
-                log("Загружено задач: " + state.issues.length);
-                
                 calculateMetrics();
                 calculateBurndown();
                 groupByAssignee();
                 render();
-                
                 state.loading = false;
-            }, function(err) {
-                log("Ошибка загрузки спринта: " + (err.statusText || err));
+            }, function() {
                 state.loading = false;
-                $cont.html('<div class="ujg-message ujg-error">Ошибка загрузки данных спринта</div>');
+                $cont.html('<div class="ujg-msg ujg-error">Ошибка загрузки спринта</div>');
             });
         }
 
-        // ==================== ВЫЧИСЛЕНИЕ МЕТРИК ====================
+        // ==================== МЕТРИКИ ====================
         function calculateMetrics() {
-            var issues = state.issues;
-            var m = state.metrics;
-            
+            var issues = state.issues, m = state.metrics;
             m.totalIssues = issues.length;
-            m.totalHours = 0;
-            m.estimatedCount = 0;
-            m.withDatesCount = 0;
-            m.assignedCount = 0;
-            m.withDescriptionCount = 0;
-            m.doneCount = 0;
-            m.bigTasksCount = 0;
-            m.overdueCount = 0;
-            
+            m.totalHours = m.estimatedCount = m.withDatesCount = m.assignedCount = m.withDescriptionCount = m.doneCount = m.bigTasksCount = m.overdueCount = 0;
             var now = new Date();
             
             issues.forEach(function(issue) {
                 var f = issue.fields || {};
-                
-                // Оценка в часах
-                var estimate = 0;
-                if (f.timetracking && f.timetracking.originalEstimateSeconds) {
-                    estimate = f.timetracking.originalEstimateSeconds;
-                } else if (f.timeoriginalestimate) {
-                    estimate = f.timeoriginalestimate;
-                }
-                
+                var estimate = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
                 if (estimate > 0) {
                     m.estimatedCount++;
                     m.totalHours += estimate;
-                    
-                    // Проверка на "слишком большую" задачу
-                    if (estimate > CONFIG.maxHours * 3600) {
-                        m.bigTasksCount++;
-                    }
+                    if (estimate > CONFIG.maxHours * 3600) m.bigTasksCount++;
                 }
-                
-                // Даты
                 if (f.duedate) {
                     m.withDatesCount++;
-                    
-                    // Проверка просрочки
                     var dueDate = utils.parseDate(f.duedate);
-                    if (dueDate && dueDate < now && !isIssueDone(f.status)) {
-                        m.overdueCount++;
-                    }
+                    if (dueDate && dueDate < now && !isIssueDone(f.status)) m.overdueCount++;
                 }
-                
-                // Исполнитель
-                if (f.assignee) {
-                    m.assignedCount++;
-                }
-                
-                // Описание
-                if (f.description && f.description.trim()) {
-                    m.withDescriptionCount++;
-                }
-                
-                // Статус Done
-                if (isIssueDone(f.status)) {
-                    m.doneCount++;
-                }
+                if (f.assignee) m.assignedCount++;
+                if (f.description && f.description.trim()) m.withDescriptionCount++;
+                if (isIssueDone(f.status)) m.doneCount++;
             });
             
-            // Проценты
             m.estimatedPercent = m.totalIssues > 0 ? Math.round((m.estimatedCount / m.totalIssues) * 100) : 0;
             m.withDatesPercent = m.totalIssues > 0 ? Math.round((m.withDatesCount / m.totalIssues) * 100) : 0;
             m.assignedPercent = m.totalIssues > 0 ? Math.round((m.assignedCount / m.totalIssues) * 100) : 0;
             m.withDescriptionPercent = m.totalIssues > 0 ? Math.round((m.withDescriptionCount / m.totalIssues) * 100) : 0;
             m.donePercent = m.totalIssues > 0 ? Math.round((m.doneCount / m.totalIssues) * 100) : 0;
-            
-            // Общая оценка здоровья спринта (среднее)
             m.overallHealth = Math.round((m.estimatedPercent + m.withDatesPercent + m.assignedPercent + m.withDescriptionPercent) / 4);
-            
-            log("Метрики рассчитаны: " + JSON.stringify(m));
         }
         
         function isIssueDone(status) {
             if (!status) return false;
             var name = (status.name || "").toLowerCase();
-            var doneStatuses = ["done", "closed", "resolved", "готово", "закрыт", "закрыта", "завершён", "выполнено"];
-            return doneStatuses.some(function(s) { return name.indexOf(s) >= 0; });
+            return ["done", "closed", "resolved", "готово", "закрыт", "завершён", "выполнено"].some(function(s) { return name.indexOf(s) >= 0; });
         }
 
-        // ==================== BURNDOWN / BURNUP ====================
+        // ==================== BURNDOWN ====================
         function calculateBurndown() {
             var sprint = state.sprint;
-            if (!sprint || !sprint.startDate || !sprint.endDate) {
-                state.burndownData = [];
-                state.burnupData = [];
-                return;
-            }
+            if (!sprint || !sprint.startDate || !sprint.endDate) { state.burndownData = []; state.burnupData = []; return; }
             
-            var startDate = utils.parseDate(sprint.startDate);
-            var endDate = utils.parseDate(sprint.endDate);
+            var startDate = utils.parseDate(sprint.startDate), endDate = utils.parseDate(sprint.endDate);
             if (!startDate || !endDate) return;
             
             var days = utils.daysBetween(startDate, endDate);
-            var totalHours = state.metrics.totalHours;
-            var totalTasks = state.metrics.totalIssues;
-            
-            // Идеальная линия
-            var hoursPerDay = totalHours / days.length;
-            var tasksPerDay = totalTasks / days.length;
-            
-            var burndownData = [];
-            var burnupData = [];
-            var now = new Date();
+            var totalHours = state.metrics.totalHours, totalTasks = state.metrics.totalIssues;
+            var hoursPerDay = totalHours / (days.length || 1), tasksPerDay = totalTasks / (days.length || 1);
+            var burndownData = [], burnupData = [], now = new Date();
             
             days.forEach(function(day, idx) {
-                var dayKey = utils.getDayKey(day);
-                var isPast = day <= now;
-                
-                // Идеальные значения
+                var dayKey = utils.getDayKey(day), isPast = day <= now;
                 var idealHoursRemaining = totalHours - (hoursPerDay * (idx + 1));
                 var idealTasksRemaining = totalTasks - (tasksPerDay * (idx + 1));
-                
-                // Фактические значения (считаем по resolutiondate)
-                var actualHoursDone = 0;
-                var actualTasksDone = 0;
+                var actualHoursDone = 0, actualTasksDone = 0;
                 
                 if (isPast) {
                     state.issues.forEach(function(issue) {
                         var f = issue.fields || {};
                         var resDate = utils.parseDate(f.resolutiondate);
-                        
                         if (resDate && resDate <= day && isIssueDone(f.status)) {
                             actualTasksDone++;
-                            
-                            var est = 0;
-                            if (f.timetracking && f.timetracking.originalEstimateSeconds) {
-                                est = f.timetracking.originalEstimateSeconds;
-                            } else if (f.timeoriginalestimate) {
-                                est = f.timeoriginalestimate;
-                            }
-                            actualHoursDone += est;
+                            actualHoursDone += (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
                         }
                     });
                 }
                 
-                var actualHoursRemaining = isPast ? (totalHours - actualHoursDone) : null;
-                var actualTasksRemaining = isPast ? (totalTasks - actualTasksDone) : null;
-                
                 burndownData.push({
-                    date: day,
-                    dayKey: dayKey,
-                    label: utils.formatDateShort(day),
-                    idealHours: Math.max(0, idealHoursRemaining),
-                    idealTasks: Math.max(0, Math.round(idealTasksRemaining)),
-                    actualHours: actualHoursRemaining,
-                    actualTasks: actualTasksRemaining
+                    date: day, label: utils.formatDateShort(day),
+                    idealHours: Math.max(0, idealHoursRemaining), idealTasks: Math.max(0, Math.round(idealTasksRemaining)),
+                    actualHours: isPast ? (totalHours - actualHoursDone) : null, actualTasks: isPast ? (totalTasks - actualTasksDone) : null
                 });
-                
                 burnupData.push({
-                    date: day,
-                    dayKey: dayKey,
-                    label: utils.formatDateShort(day),
-                    scope: totalHours,
-                    scopeTasks: totalTasks,
-                    doneHours: isPast ? actualHoursDone : null,
-                    doneTasks: isPast ? actualTasksDone : null
+                    date: day, label: utils.formatDateShort(day),
+                    scope: totalHours, scopeTasks: totalTasks,
+                    doneHours: isPast ? actualHoursDone : null, doneTasks: isPast ? actualTasksDone : null
                 });
             });
-            
             state.burndownData = burndownData;
             state.burnupData = burnupData;
         }
 
-        // ==================== ГРУППИРОВКА ПО ИСПОЛНИТЕЛЯМ ====================
+        // ==================== ГРУППИРОВКА ====================
         function groupByAssignee() {
             var byAssignee = {};
             var unassigned = { id: "__unassigned__", name: "Не назначено", issues: [], totalHours: 0 };
             
             state.issues.forEach(function(issue) {
                 var f = issue.fields || {};
-                var assignee = f.assignee;
-                
-                var estimate = 0;
-                if (f.timetracking && f.timetracking.originalEstimateSeconds) {
-                    estimate = f.timetracking.originalEstimateSeconds;
-                } else if (f.timeoriginalestimate) {
-                    estimate = f.timeoriginalestimate;
-                }
-                
+                var estimate = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
                 var issueData = {
-                    key: issue.key,
-                    summary: f.summary || "",
-                    status: f.status ? f.status.name : "",
+                    key: issue.key, summary: f.summary || "", status: f.status ? f.status.name : "",
                     statusCategory: f.status && f.status.statusCategory ? f.status.statusCategory.key : "",
-                    priority: f.priority ? f.priority.name : "",
-                    type: f.issuetype ? f.issuetype.name : "",
-                    estimate: estimate,
-                    dueDate: utils.parseDate(f.duedate),
-                    startDate: null, // TODO: customfield для start date
-                    created: utils.parseDate(f.created),
+                    priority: f.priority ? f.priority.name : "", type: f.issuetype ? f.issuetype.name : "",
+                    estimate: estimate, dueDate: utils.parseDate(f.duedate), startDate: null, created: utils.parseDate(f.created),
                     isDone: isIssueDone(f.status)
                 };
                 
-                if (assignee) {
-                    var aid = assignee.accountId || assignee.key || assignee.name;
-                    if (!byAssignee[aid]) {
-                        byAssignee[aid] = {
-                            id: aid,
-                            name: assignee.displayName || assignee.name || aid,
-                            avatar: assignee.avatarUrls ? assignee.avatarUrls["24x24"] : null,
-                            issues: [],
-                            totalHours: 0
-                        };
-                    }
+                if (f.assignee) {
+                    var aid = f.assignee.accountId || f.assignee.key || f.assignee.name;
+                    if (!byAssignee[aid]) byAssignee[aid] = { id: aid, name: f.assignee.displayName || f.assignee.name || aid, issues: [], totalHours: 0 };
                     byAssignee[aid].issues.push(issueData);
                     byAssignee[aid].totalHours += estimate;
                 } else {
@@ -534,562 +323,291 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 }
             });
             
-            // Сортируем по имени
-            var sorted = Object.values(byAssignee).sort(function(a, b) {
-                return a.name.localeCompare(b.name);
-            });
-            
-            // Добавляем неназначенные в конец
-            if (unassigned.issues.length > 0) {
-                sorted.push(unassigned);
-            }
-            
+            var sorted = Object.values(byAssignee).sort(function(a, b) { return a.name.localeCompare(b.name); });
+            if (unassigned.issues.length > 0) sorted.push(unassigned);
             state.byAssignee = sorted;
         }
 
         // ==================== РЕНДЕРИНГ ====================
-        function showLoading() {
-            $cont.html('<div class="ujg-message ujg-loading">⏳ Загрузка данных спринта...</div>');
-        }
-
+        function showLoading() { $cont.html('<div class="ujg-msg">⏳ Загрузка...</div>'); }
+        
         function updateBoardSelect() {
-            $boardSelect.empty();
-            $boardSelect.append('<option value="">— Выберите доску —</option>');
-            state.boards.forEach(function(board) {
-                $boardSelect.append('<option value="' + board.id + '">' + utils.escapeHtml(board.name) + '</option>');
-            });
+            $boardSelect.empty().append('<option value="">— Доска —</option>');
+            state.boards.forEach(function(b) { $boardSelect.append('<option value="' + b.id + '">' + utils.escapeHtml(b.name) + '</option>'); });
         }
 
-        function updateSprintSelect() {
-            $sprintSelect.empty();
-            $sprintSelect.append('<option value="">— Выберите спринт —</option>');
-            state.sprints.forEach(function(sprint) {
-                var label = sprint.name;
-                if (sprint.state === "active") label = "● " + label;
-                else if (sprint.state === "future") label = "○ " + label;
-                else label = "✓ " + label;
-                $sprintSelect.append('<option value="' + sprint.id + '">' + utils.escapeHtml(label) + '</option>');
+        function updateSprintDropdown() {
+            var html = '';
+            state.filteredSprints.forEach(function(s) {
+                var icon = s.state === "active" ? "●" : (s.state === "future" ? "○" : "✓");
+                var cls = s.state === "active" ? "ujg-sprint-active" : "";
+                html += '<div class="ujg-sprint-option ' + cls + '" data-id="' + s.id + '">' + icon + ' ' + utils.escapeHtml(s.name) + '</div>';
             });
+            $sprintDropdown.html(html || '<div class="ujg-sprint-empty">Спринты не найдены</div>');
         }
+
+        function filterSprints(query) {
+            var q = query.toLowerCase();
+            state.filteredSprints = state.sprints.filter(function(s) {
+                return s.name.toLowerCase().indexOf(q) >= 0;
+            });
+            updateSprintDropdown();
+        }
+
+        function showSprintDropdown() { $sprintDropdown.addClass("ujg-show"); }
+        function hideSprintDropdown() { $sprintDropdown.removeClass("ujg-show"); }
 
         function render() {
             if (state.issues.length === 0) {
-                $cont.html('<div class="ujg-message ujg-info">В спринте нет задач или спринт не выбран</div>');
+                $cont.html('<div class="ujg-msg">В спринте нет задач</div>');
                 API.resize();
                 return;
             }
-            
-            var html = '';
-            
-            // Общая оценка здоровья
-            html += renderHealthScore();
-            
-            // Метрики (карточки)
-            html += renderMetricsCards();
-            
-            // Графики
-            html += renderCharts();
-            
-            // Проблемы
-            html += renderProblems();
-            
-            // Распределение по исполнителям
-            html += renderAssigneeDistribution();
-            
-            // Таблица задач с Gantt
-            html += renderIssuesTable();
-            
+            var html = renderHealthScore() + renderMetrics() + renderCharts() + renderProblems() + renderAssignees() + renderTable();
             $cont.html(html);
-            
-            // Привязываем события после рендера
-            bindChartEvents();
-            bindTableEvents();
-            
+            bindEvents();
             API.resize();
         }
 
         function renderHealthScore() {
+            var m = state.metrics, color = utils.getHealthColor(m.overallHealth);
+            return '<div class="ujg-health"><div class="ujg-health-bar"><div class="ujg-health-fill" style="width:' + m.overallHealth + '%;background:' + color + '"></div></div>' +
+                '<span class="ujg-health-pct" style="color:' + color + '">' + m.overallHealth + '%</span><span class="ujg-health-lbl">' + utils.getHealthLabel(m.overallHealth) + '</span></div>';
+        }
+
+        function renderMetrics() {
             var m = state.metrics;
-            var color = utils.getHealthColor(m.overallHealth);
-            var label = utils.getHealthLabel(m.overallHealth);
-            
-            return '<div class="ujg-health-score">' +
-                '<div class="ujg-health-bar">' +
-                    '<div class="ujg-health-fill" style="width:' + m.overallHealth + '%;background:' + color + '"></div>' +
-                '</div>' +
-                '<div class="ujg-health-info">' +
-                    '<span class="ujg-health-percent" style="color:' + color + '">' + m.overallHealth + '%</span>' +
-                    '<span class="ujg-health-label">' + label + '</span>' +
-                '</div>' +
+            return '<div class="ujg-metrics">' +
+                renderMetricCard("📊", "Объём", utils.formatHours(m.totalHours), m.totalIssues + " зад.", null) +
+                renderMetricCard("📝", "Оценки", m.estimatedPercent + "%", m.estimatedCount + "/" + m.totalIssues, utils.getHealthColor(m.estimatedPercent)) +
+                renderMetricCard("📅", "Сроки", m.withDatesPercent + "%", m.withDatesCount + "/" + m.totalIssues, utils.getHealthColor(m.withDatesPercent)) +
+                renderMetricCard("👤", "Исполн.", m.assignedPercent + "%", m.assignedCount + "/" + m.totalIssues, utils.getHealthColor(m.assignedPercent)) +
+                renderMetricCard("✅", "Готово", m.donePercent + "%", m.doneCount + "/" + m.totalIssues, utils.getHealthColor(m.donePercent)) +
             '</div>';
         }
 
-        function renderMetricsCards() {
-            var m = state.metrics;
-            var sprint = state.sprint || {};
-            
-            var html = '<div class="ujg-metrics-grid">';
-            
-            // Capacity
-            html += renderMetricCard("📊", "Объём", 
-                utils.formatHours(m.totalHours), 
-                m.totalIssues + " задач",
-                null);
-            
-            // Оценки
-            html += renderMetricCard("📝", "Оценки",
-                m.estimatedPercent + "%",
-                m.estimatedCount + " из " + m.totalIssues,
-                utils.getHealthColor(m.estimatedPercent));
-            
-            // Сроки
-            html += renderMetricCard("📅", "Сроки",
-                m.withDatesPercent + "%",
-                m.withDatesCount + " из " + m.totalIssues,
-                utils.getHealthColor(m.withDatesPercent));
-            
-            // Исполнители
-            html += renderMetricCard("👤", "Исполнители",
-                m.assignedPercent + "%",
-                m.assignedCount + " из " + m.totalIssues,
-                utils.getHealthColor(m.assignedPercent));
-            
-            // Прогресс
-            html += renderMetricCard("✅", "Выполнено",
-                m.donePercent + "%",
-                m.doneCount + " из " + m.totalIssues,
-                utils.getHealthColor(m.donePercent));
-            
-            html += '</div>';
-            return html;
-        }
-
-        function renderMetricCard(icon, title, value, subtitle, color) {
-            var borderColor = color || "#dfe1e6";
-            return '<div class="ujg-metric-card" style="border-left-color:' + borderColor + '">' +
+        function renderMetricCard(icon, title, value, sub, color) {
+            return '<div class="ujg-metric" style="border-color:' + (color || "#dfe1e6") + '">' +
                 '<div class="ujg-metric-icon">' + icon + '</div>' +
-                '<div class="ujg-metric-content">' +
-                    '<div class="ujg-metric-title">' + title + '</div>' +
-                    '<div class="ujg-metric-value">' + value + '</div>' +
-                    '<div class="ujg-metric-subtitle">' + subtitle + '</div>' +
-                '</div>' +
-            '</div>';
+                '<div class="ujg-metric-body"><div class="ujg-metric-title">' + title + '</div>' +
+                '<div class="ujg-metric-val">' + value + '</div><div class="ujg-metric-sub">' + sub + '</div></div></div>';
         }
 
         function renderCharts() {
-            var html = '<div class="ujg-charts-section">';
-            
-            // Burndown Chart
-            html += '<div class="ujg-chart-container">';
-            html += '<div class="ujg-chart-header">';
-            html += '<span class="ujg-chart-title">Burndown Chart</span>';
-            html += '<div class="ujg-chart-toggle">';
-            html += '<label class="ujg-toggle-option ' + (state.burndownMode === "hours" ? "active" : "") + '" data-mode="hours">Часы</label>';
-            html += '<label class="ujg-toggle-option ' + (state.burndownMode === "tasks" ? "active" : "") + '" data-mode="tasks">Задачи</label>';
-            html += '</div>';
-            html += '</div>';
-            html += renderBurndownChart();
-            html += '</div>';
-            
-            // Burnup Chart
-            html += '<div class="ujg-chart-container">';
-            html += '<div class="ujg-chart-header">';
-            html += '<span class="ujg-chart-title">Burnup Chart</span>';
-            html += '</div>';
-            html += renderBurnupChart();
-            html += '</div>';
-            
-            html += '</div>';
-            return html;
-        }
-
-        function renderBurndownChart() {
-            var data = state.burndownData;
-            if (!data || data.length === 0) {
-                return '<div class="ujg-chart-empty">Нет данных для графика</div>';
-            }
+            var bd = state.burndownData, bu = state.burnupData;
+            if (!bd || bd.length === 0) return '';
             
             var isHours = state.burndownMode === "hours";
-            var maxValue = isHours ? state.metrics.totalHours : state.metrics.totalIssues;
-            var height = 200;
-            var width = Math.max(data.length * 50, 400);
+            var maxVal = isHours ? state.metrics.totalHours : state.metrics.totalIssues;
+            var h = 120, w = Math.max(bd.length * 35, 300);
             
-            var html = '<div class="ujg-chart-canvas" style="height:' + height + 'px;width:100%;overflow-x:auto">';
-            html += '<svg width="' + width + '" height="' + height + '" class="ujg-burndown-svg">';
+            var html = '<div class="ujg-charts">';
             
-            // Оси
-            html += '<line x1="40" y1="10" x2="40" y2="' + (height - 30) + '" stroke="#dfe1e6" />';
-            html += '<line x1="40" y1="' + (height - 30) + '" x2="' + (width - 10) + '" y2="' + (height - 30) + '" stroke="#dfe1e6" />';
+            // Burndown
+            html += '<div class="ujg-chart"><div class="ujg-chart-hdr"><span>Burndown</span><div class="ujg-toggle">' +
+                '<span class="ujg-tog ' + (isHours ? "on" : "") + '" data-mode="hours">Ч</span>' +
+                '<span class="ujg-tog ' + (!isHours ? "on" : "") + '" data-mode="tasks">З</span></div></div>';
+            html += '<div class="ujg-chart-body"><svg width="' + w + '" height="' + h + '">';
             
-            // Масштаб
-            var chartWidth = width - 60;
-            var chartHeight = height - 50;
-            var stepX = chartWidth / (data.length - 1 || 1);
-            
-            // Идеальная линия
-            var idealPoints = [];
-            var actualPoints = [];
-            
-            data.forEach(function(d, i) {
-                var x = 50 + i * stepX;
-                var idealVal = isHours ? d.idealHours : d.idealTasks;
-                var actualVal = isHours ? d.actualHours : d.actualTasks;
-                
-                var yIdeal = 15 + chartHeight * (1 - idealVal / maxValue);
-                idealPoints.push(x + "," + yIdeal);
-                
-                if (actualVal !== null) {
-                    var yActual = 15 + chartHeight * (1 - actualVal / maxValue);
-                    actualPoints.push(x + "," + yActual);
+            var cw = w - 30, ch = h - 25, sx = 25;
+            var idealPts = [], actualPts = [];
+            bd.forEach(function(d, i) {
+                var x = sx + i * (cw / (bd.length - 1 || 1));
+                var idealV = isHours ? d.idealHours : d.idealTasks;
+                var actualV = isHours ? d.actualHours : d.actualTasks;
+                var yI = 5 + ch * (1 - idealV / maxVal);
+                idealPts.push(x + "," + yI);
+                if (actualV !== null) {
+                    var yA = 5 + ch * (1 - actualV / maxVal);
+                    actualPts.push(x + "," + yA);
                 }
             });
-            
-            // Идеальная линия (пунктир)
-            html += '<polyline points="' + idealPoints.join(" ") + '" fill="none" stroke="#8993a4" stroke-width="2" stroke-dasharray="5,5" />';
-            
-            // Фактическая линия
-            if (actualPoints.length > 0) {
-                html += '<polyline points="' + actualPoints.join(" ") + '" fill="none" stroke="#0052cc" stroke-width="2" />';
-                
-                // Точки
-                actualPoints.forEach(function(p) {
-                    var coords = p.split(",");
-                    html += '<circle cx="' + coords[0] + '" cy="' + coords[1] + '" r="4" fill="#0052cc" />';
-                });
+            html += '<polyline points="' + idealPts.join(" ") + '" fill="none" stroke="#8993a4" stroke-width="1.5" stroke-dasharray="4,3"/>';
+            if (actualPts.length > 0) {
+                html += '<polyline points="' + actualPts.join(" ") + '" fill="none" stroke="#0052cc" stroke-width="2"/>';
+                actualPts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="3" fill="#0052cc"/>'; });
             }
-            
-            // Подписи дней
-            data.forEach(function(d, i) {
-                var x = 50 + i * stepX;
-                html += '<text x="' + x + '" y="' + (height - 10) + '" text-anchor="middle" font-size="10" fill="#6b778c">' + d.label + '</text>';
-            });
-            
-            // Легенда
-            html += '<text x="50" y="' + (height - 5) + '" font-size="9" fill="#8993a4">─ ─ идеал</text>';
-            html += '<text x="120" y="' + (height - 5) + '" font-size="9" fill="#0052cc">── факт</text>';
-            
-            html += '</svg></div>';
-            return html;
-        }
-
-        function renderBurnupChart() {
-            var data = state.burnupData;
-            if (!data || data.length === 0) {
-                return '<div class="ujg-chart-empty">Нет данных для графика</div>';
-            }
-            
-            var isHours = state.burndownMode === "hours";
-            var maxValue = isHours ? state.metrics.totalHours : state.metrics.totalIssues;
-            var height = 200;
-            var width = Math.max(data.length * 50, 400);
-            
-            var html = '<div class="ujg-chart-canvas" style="height:' + height + 'px;width:100%;overflow-x:auto">';
-            html += '<svg width="' + width + '" height="' + height + '" class="ujg-burnup-svg">';
-            
-            // Оси
-            html += '<line x1="40" y1="10" x2="40" y2="' + (height - 30) + '" stroke="#dfe1e6" />';
-            html += '<line x1="40" y1="' + (height - 30) + '" x2="' + (width - 10) + '" y2="' + (height - 30) + '" stroke="#dfe1e6" />';
-            
-            var chartWidth = width - 60;
-            var chartHeight = height - 50;
-            var stepX = chartWidth / (data.length - 1 || 1);
-            
-            // Scope линия (верхняя)
-            var scopeY = 15;
-            html += '<line x1="50" y1="' + scopeY + '" x2="' + (width - 20) + '" y2="' + scopeY + '" stroke="#36b37e" stroke-width="2" />';
-            
-            // Done линия
-            var donePoints = [];
-            data.forEach(function(d, i) {
-                var x = 50 + i * stepX;
-                var doneVal = isHours ? d.doneHours : d.doneTasks;
-                
-                if (doneVal !== null) {
-                    var yDone = 15 + chartHeight * (1 - doneVal / maxValue);
-                    donePoints.push(x + "," + yDone);
+            bd.forEach(function(d, i) {
+                if (i % 2 === 0 || bd.length < 8) {
+                    var x = sx + i * (cw / (bd.length - 1 || 1));
+                    html += '<text x="' + x + '" y="' + (h - 3) + '" text-anchor="middle" font-size="9" fill="#6b778c">' + d.label + '</text>';
                 }
             });
+            html += '</svg></div></div>';
             
-            if (donePoints.length > 0) {
-                html += '<polyline points="' + donePoints.join(" ") + '" fill="none" stroke="#0052cc" stroke-width="2" />';
-                
-                donePoints.forEach(function(p) {
-                    var coords = p.split(",");
-                    html += '<circle cx="' + coords[0] + '" cy="' + coords[1] + '" r="4" fill="#0052cc" />';
-                });
-            }
-            
-            // Подписи дней
-            data.forEach(function(d, i) {
-                var x = 50 + i * stepX;
-                html += '<text x="' + x + '" y="' + (height - 10) + '" text-anchor="middle" font-size="10" fill="#6b778c">' + d.label + '</text>';
+            // Burnup
+            html += '<div class="ujg-chart"><div class="ujg-chart-hdr"><span>Burnup</span></div>';
+            html += '<div class="ujg-chart-body"><svg width="' + w + '" height="' + h + '">';
+            html += '<line x1="' + sx + '" y1="5" x2="' + (w - 5) + '" y2="5" stroke="#36b37e" stroke-width="2"/>';
+            var donePts = [];
+            bu.forEach(function(d, i) {
+                var x = sx + i * (cw / (bu.length - 1 || 1));
+                var doneV = isHours ? d.doneHours : d.doneTasks;
+                if (doneV !== null) {
+                    var y = 5 + ch * (1 - doneV / maxVal);
+                    donePts.push(x + "," + y);
+                }
             });
+            if (donePts.length > 0) {
+                html += '<polyline points="' + donePts.join(" ") + '" fill="none" stroke="#0052cc" stroke-width="2"/>';
+                donePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="3" fill="#0052cc"/>'; });
+            }
+            bu.forEach(function(d, i) {
+                if (i % 2 === 0 || bu.length < 8) {
+                    var x = sx + i * (cw / (bu.length - 1 || 1));
+                    html += '<text x="' + x + '" y="' + (h - 3) + '" text-anchor="middle" font-size="9" fill="#6b778c">' + d.label + '</text>';
+                }
+            });
+            html += '</svg></div></div>';
             
-            // Легенда
-            html += '<text x="50" y="' + (height - 5) + '" font-size="9" fill="#36b37e">── scope</text>';
-            html += '<text x="110" y="' + (height - 5) + '" font-size="9" fill="#0052cc">── done</text>';
-            
-            html += '</svg></div>';
+            html += '</div>';
             return html;
         }
 
         function renderProblems() {
-            var problems = [];
-            var m = state.metrics;
+            var problems = [], m = state.metrics;
             
-            // Задачи без оценки
-            if (m.totalIssues - m.estimatedCount > 0) {
-                var noEstimate = state.issues.filter(function(i) {
-                    var f = i.fields || {};
-                    var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate;
-                    return !est || est <= 0;
-                });
-                noEstimate.slice(0, 5).forEach(function(i) {
-                    problems.push({ type: "warning", text: i.key + ": Нет оценки", key: i.key });
-                });
-            }
-            
-            // Задачи без исполнителя
-            var noAssignee = state.issues.filter(function(i) {
-                return !(i.fields && i.fields.assignee);
-            });
-            noAssignee.slice(0, 5).forEach(function(i) {
-                problems.push({ type: "warning", text: i.key + ": Нет исполнителя", key: i.key });
-            });
-            
-            // Слишком большие задачи
-            var bigTasks = state.issues.filter(function(i) {
+            state.issues.forEach(function(i) {
                 var f = i.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
-                return est > CONFIG.maxHours * 3600;
-            });
-            bigTasks.forEach(function(i) {
-                var f = i.fields || {};
-                var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
-                problems.push({ type: "error", text: i.key + ": Слишком большая задача (" + utils.formatHours(est) + ")", key: i.key });
-            });
-            
-            // Просроченные
-            if (m.overdueCount > 0) {
-                var now = new Date();
-                state.issues.filter(function(i) {
-                    var f = i.fields || {};
+                if (!est) problems.push({ t: "w", txt: i.key + ": нет оценки", k: i.key });
+                if (!f.assignee) problems.push({ t: "w", txt: i.key + ": нет исполнителя", k: i.key });
+                if (est > CONFIG.maxHours * 3600) problems.push({ t: "e", txt: i.key + ": " + utils.formatHours(est) + " (большая)", k: i.key });
+                if (f.duedate) {
                     var due = utils.parseDate(f.duedate);
-                    return due && due < now && !isIssueDone(f.status);
-                }).slice(0, 5).forEach(function(i) {
-                    problems.push({ type: "error", text: i.key + ": Просрочено (" + utils.formatDateShort(utils.parseDate(i.fields.duedate)) + ")", key: i.key });
-                });
-            }
-            
-            if (problems.length === 0) {
-                return '<div class="ujg-problems-section"><div class="ujg-no-problems">✅ Проблем не обнаружено</div></div>';
-            }
-            
-            var html = '<div class="ujg-problems-section">';
-            html += '<div class="ujg-section-title">⚠️ Проблемы (' + problems.length + ')</div>';
-            html += '<div class="ujg-problems-list">';
-            
-            problems.forEach(function(p) {
-                var cls = p.type === "error" ? "ujg-problem-error" : "ujg-problem-warning";
-                html += '<div class="ujg-problem-item ' + cls + '">';
-                html += '<a href="' + baseUrl + '/browse/' + p.key + '" target="_blank">' + utils.escapeHtml(p.text) + '</a>';
-                html += '</div>';
+                    if (due && due < new Date() && !isIssueDone(f.status)) problems.push({ t: "e", txt: i.key + ": просрочено", k: i.key });
+                }
             });
             
-            html += '</div></div>';
-            return html;
+            if (problems.length === 0) return '<div class="ujg-ok">✅ Проблем нет</div>';
+            
+            var html = '<div class="ujg-problems"><div class="ujg-section-title">⚠️ Проблемы (' + Math.min(problems.length, 10) + ')</div>';
+            problems.slice(0, 10).forEach(function(p) {
+                html += '<a href="' + baseUrl + '/browse/' + p.k + '" target="_blank" class="ujg-prob ujg-prob-' + p.t + '">' + utils.escapeHtml(p.txt) + '</a>';
+            });
+            return html + '</div>';
         }
 
-        function renderAssigneeDistribution() {
+        function renderAssignees() {
             var data = state.byAssignee;
             if (!data || data.length === 0) return '';
+            var maxH = Math.max.apply(null, data.map(function(a) { return a.totalHours; })) || 1;
             
-            var maxHours = Math.max.apply(null, data.map(function(a) { return a.totalHours; })) || 1;
+            var html = '<div class="ujg-assignees"><div class="ujg-section-title">👥 Распределение</div>';
+            data.forEach(function(a) {
+                var pct = Math.round((a.totalHours / maxH) * 100);
+                var over = a.totalHours > CONFIG.capacityPerPerson * 3600;
+                html += '<div class="ujg-asgn-row"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
+                    '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill' + (over ? " ujg-over" : "") + '" style="width:' + pct + '%"></div></div>' +
+                    '<span class="ujg-asgn-val">' + utils.formatHours(a.totalHours) + '</span></div>';
+            });
+            return html + '</div>';
+        }
+
+        function renderTable() {
+            var data = state.byAssignee;
+            if (!data || data.length === 0) return '';
+            var sprint = state.sprint || {};
+            var days = sprint.startDate && sprint.endDate ? utils.daysBetween(utils.parseDate(sprint.startDate), utils.parseDate(sprint.endDate)) : [];
             
-            var html = '<div class="ujg-assignee-section">';
-            html += '<div class="ujg-section-title">👥 Распределение по исполнителям</div>';
-            html += '<div class="ujg-assignee-list">';
+            var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr>' +
+                '<th>Ключ</th><th>Задача</th><th>Ч</th><th>Срок</th><th>Статус</th><th>Gantt</th></tr></thead><tbody>';
             
             data.forEach(function(a) {
-                var percent = Math.round((a.totalHours / maxHours) * 100);
-                var isOverload = a.totalHours > CONFIG.capacityPerPerson * 3600;
-                
-                html += '<div class="ujg-assignee-row">';
-                html += '<div class="ujg-assignee-name">' + utils.escapeHtml(a.name) + '</div>';
-                html += '<div class="ujg-assignee-bar">';
-                html += '<div class="ujg-assignee-fill' + (isOverload ? ' ujg-overload' : '') + '" style="width:' + percent + '%"></div>';
-                html += '</div>';
-                html += '<div class="ujg-assignee-value">' + utils.formatHours(a.totalHours) + ' (' + a.issues.length + ')</div>';
-                if (isOverload) html += '<span class="ujg-overload-badge">⚠️</span>';
-                html += '</div>';
-            });
-            
-            html += '</div></div>';
-            return html;
-        }
-
-        function renderIssuesTable() {
-            var data = state.byAssignee;
-            if (!data || data.length === 0) return '';
-            
-            var sprint = state.sprint || {};
-            var startDate = utils.parseDate(sprint.startDate);
-            var endDate = utils.parseDate(sprint.endDate);
-            var sprintDays = startDate && endDate ? utils.daysBetween(startDate, endDate) : [];
-            
-            var html = '<div class="ujg-issues-section">';
-            html += '<div class="ujg-section-title">📋 Все задачи спринта (' + state.issues.length + ')</div>';
-            html += '<div class="ujg-issues-table-wrapper">';
-            html += '<table class="ujg-issues-table">';
-            
-            // Заголовок
-            html += '<thead><tr>';
-            html += '<th class="ujg-col-key">Ключ</th>';
-            html += '<th class="ujg-col-summary">Задача</th>';
-            html += '<th class="ujg-col-hours">Часы</th>';
-            html += '<th class="ujg-col-start">Начало</th>';
-            html += '<th class="ujg-col-end">Конец</th>';
-            html += '<th class="ujg-col-status">Статус</th>';
-            html += '<th class="ujg-col-gantt">Gantt</th>';
-            html += '</tr></thead>';
-            
-            html += '<tbody>';
-            
-            data.forEach(function(assignee) {
-                // Заголовок группы (исполнитель)
-                html += '<tr class="ujg-assignee-header" data-assignee="' + assignee.id + '">';
-                html += '<td colspan="7">';
-                html += '<span class="ujg-collapse-icon">▼</span> ';
-                html += '<strong>' + utils.escapeHtml(assignee.name) + '</strong>';
-                html += ' <span class="ujg-assignee-summary">(' + utils.formatHours(assignee.totalHours) + ', ' + assignee.issues.length + ' задач)</span>';
-                html += '</td></tr>';
-                
-                // Задачи исполнителя
-                assignee.issues.forEach(function(issue) {
-                    html += '<tr class="ujg-issue-row" data-assignee="' + assignee.id + '">';
-                    html += '<td class="ujg-col-key"><a href="' + baseUrl + '/browse/' + issue.key + '" target="_blank" class="' + (issue.isDone ? 'ujg-done' : '') + '">' + issue.key + '</a></td>';
-                    html += '<td class="ujg-col-summary" title="' + utils.escapeHtml(issue.summary) + '">' + utils.escapeHtml(issue.summary.substring(0, 50)) + (issue.summary.length > 50 ? '...' : '') + '</td>';
-                    html += '<td class="ujg-col-hours">' + (issue.estimate > 0 ? utils.formatHoursShort(issue.estimate) : '—') + '</td>';
-                    html += '<td class="ujg-col-start">' + (issue.startDate ? utils.formatDateShort(issue.startDate) : '—') + '</td>';
-                    html += '<td class="ujg-col-end">' + (issue.dueDate ? utils.formatDateShort(issue.dueDate) : '—') + '</td>';
-                    html += '<td class="ujg-col-status"><span class="ujg-status-badge ujg-status-' + issue.statusCategory + '">' + utils.escapeHtml(issue.status.substring(0, 10)) + '</span></td>';
-                    html += '<td class="ujg-col-gantt">' + renderGanttBar(issue, sprintDays) + '</td>';
+                html += '<tr class="ujg-tbl-grp" data-aid="' + a.id + '"><td colspan="6"><b>' + utils.escapeHtml(a.name) + '</b> <span class="ujg-tbl-grp-info">(' + utils.formatHours(a.totalHours) + ', ' + a.issues.length + ')</span></td></tr>';
+                a.issues.forEach(function(iss) {
+                    html += '<tr class="ujg-tbl-row" data-aid="' + a.id + '">';
+                    html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
+                    html += '<td title="' + utils.escapeHtml(iss.summary) + '">' + utils.escapeHtml(iss.summary.substring(0, 40)) + (iss.summary.length > 40 ? "…" : "") + '</td>';
+                    html += '<td>' + (iss.estimate > 0 ? utils.formatHoursShort(iss.estimate) : "—") + '</td>';
+                    html += '<td>' + (iss.dueDate ? utils.formatDateShort(iss.dueDate) : "—") + '</td>';
+                    html += '<td><span class="ujg-st ujg-st-' + iss.statusCategory + '">' + utils.escapeHtml(iss.status.substring(0, 8)) + '</span></td>';
+                    html += '<td>' + renderGantt(iss, days) + '</td>';
                     html += '</tr>';
                 });
             });
-            
-            html += '</tbody></table></div></div>';
-            return html;
+            return html + '</tbody></table></div>';
         }
 
-        function renderGanttBar(issue, sprintDays) {
-            if (sprintDays.length === 0) return '';
-            
-            var html = '<div class="ujg-gantt-row">';
-            
-            var startDate = issue.startDate || issue.created;
-            var endDate = issue.dueDate;
-            
-            sprintDays.forEach(function(day) {
-                var dayKey = utils.getDayKey(day);
+        function renderGantt(issue, days) {
+            if (days.length === 0) return '';
+            var html = '<div class="ujg-gantt">';
+            var start = issue.startDate || issue.created, end = issue.dueDate;
+            days.forEach(function(d) {
                 var inRange = false;
-                
-                if (startDate && endDate) {
-                    inRange = day >= startDate && day <= endDate;
-                } else if (startDate && !endDate) {
-                    inRange = day >= startDate;
-                } else if (!startDate && endDate) {
-                    inRange = day <= endDate;
-                }
-                
-                var cls = "ujg-gantt-cell";
+                if (start && end) inRange = d >= start && d <= end;
+                else if (start) inRange = d >= start;
+                else if (end) inRange = d <= end;
+                var cls = "ujg-g-cell";
                 if (inRange) {
-                    if (issue.isDone) cls += " ujg-gantt-done";
-                    else if (issue.statusCategory === "indeterminate") cls += " ujg-gantt-inprogress";
-                    else cls += " ujg-gantt-todo";
+                    if (issue.isDone) cls += " ujg-g-done";
+                    else if (issue.statusCategory === "indeterminate") cls += " ujg-g-prog";
+                    else cls += " ujg-g-todo";
                 }
-                
-                html += '<div class="' + cls + '" data-day="' + dayKey + '"></div>';
+                html += '<div class="' + cls + '"></div>';
             });
-            
-            html += '</div>';
-            return html;
+            return html + '</div>';
         }
 
-        // ==================== СОБЫТИЯ ====================
-        function bindChartEvents() {
-            $cont.find(".ujg-toggle-option").on("click", function() {
+        function bindEvents() {
+            $cont.find(".ujg-tog").on("click", function() {
                 var mode = $(this).data("mode");
-                if (mode !== state.burndownMode) {
-                    state.burndownMode = mode;
-                    render();
-                }
+                if (mode !== state.burndownMode) { state.burndownMode = mode; render(); }
             });
-        }
-
-        function bindTableEvents() {
-            $cont.find(".ujg-assignee-header").on("click", function() {
-                var assigneeId = $(this).data("assignee");
-                var $rows = $cont.find('.ujg-issue-row[data-assignee="' + assigneeId + '"]');
-                var $icon = $(this).find(".ujg-collapse-icon");
-                
-                $rows.toggle();
-                $icon.text($rows.is(":visible") ? "▼" : "▶");
+            $cont.find(".ujg-tbl-grp").on("click", function() {
+                var aid = $(this).data("aid");
+                $cont.find('.ujg-tbl-row[data-aid="' + aid + '"]').toggle();
             });
         }
 
         // ==================== ИНИЦИАЛИЗАЦИЯ ====================
         function initPanel() {
-            var $panel = $('<div class="ujg-control-panel"></div>');
+            var $panel = $('<div class="ujg-panel"></div>');
             
-            // Первый ряд: выбор доски и спринта
-            var $row1 = $('<div class="ujg-panel-row"></div>');
+            $boardSelect = $('<select class="ujg-sel"><option value="">Доска</option></select>');
+            $boardSelect.on("change", function() { var id = $(this).val(); if (id) loadSprints(id); });
             
-            $boardSelect = $('<select class="ujg-select ujg-board-select"><option value="">— Доска —</option></select>');
-            $boardSelect.on("change", function() {
-                var boardId = $(this).val();
-                if (boardId) loadSprints(boardId);
-            });
+            var $sprintWrap = $('<div class="ujg-sprint-wrap"></div>');
+            $sprintInput = $('<input type="text" class="ujg-sprint-input" placeholder="Поиск спринта...">');
+            $sprintDropdown = $('<div class="ujg-sprint-dd"></div>');
             
-            $sprintSelect = $('<select class="ujg-select ujg-sprint-select"><option value="">— Спринт —</option></select>');
-            $sprintSelect.on("change", function() {
-                var sprintId = $(this).val();
-                if (sprintId) loadSprintData(sprintId);
-            });
-            
-            $refreshBtn = $('<button class="ujg-btn ujg-btn-primary">🔄 Обновить</button>');
-            $refreshBtn.on("click", function() {
-                if (state.selectedSprintId) {
-                    loadSprintData(state.selectedSprintId);
+            $sprintInput.on("focus", function() { showSprintDropdown(); });
+            $sprintInput.on("input", function() { filterSprints($(this).val()); showSprintDropdown(); });
+            $sprintInput.on("keydown", function(e) {
+                if (e.key === "Escape") { hideSprintDropdown(); $(this).blur(); }
+                if (e.key === "Enter") {
+                    var first = state.filteredSprints[0];
+                    if (first) selectSprint(first.id);
                 }
             });
             
-            $fsBtn = $('<button class="ujg-btn ujg-btn-fs">⛶ На весь экран</button>');
-            $fsBtn.on("click", toggleFullscreen);
-            
-            $row1.append(
-                $('<label class="ujg-label">Доска:</label>'), $boardSelect,
-                $('<label class="ujg-label">Спринт:</label>'), $sprintSelect,
-                $refreshBtn,
-                $fsBtn
-            );
-            
-            $panel.append($row1);
-            $cont.before($panel);
-            
-            // Esc для выхода из fullscreen
-            $(document).on("keydown.ujgSh", function(e) {
-                if (e.key === "Escape" && state.isFullscreen) toggleFullscreen();
+            $sprintDropdown.on("click", ".ujg-sprint-option", function() {
+                var id = $(this).data("id");
+                selectSprint(id);
             });
             
-            // Загружаем доски
+            $(document).on("click", function(e) {
+                if (!$(e.target).closest(".ujg-sprint-wrap").length) hideSprintDropdown();
+            });
+            
+            $sprintWrap.append($sprintInput, $sprintDropdown);
+            
+            $refreshBtn = $('<button class="ujg-btn">🔄</button>');
+            $refreshBtn.on("click", function() { if (state.selectedSprintId) loadSprintData(state.selectedSprintId); });
+            
+            $fsBtn = $('<button class="ujg-btn ujg-btn-fs">⛶</button>');
+            $fsBtn.on("click", toggleFullscreen);
+            
+            $panel.append($boardSelect, $sprintWrap, $refreshBtn, $fsBtn);
+            $cont.before($panel);
+            
+            $(document).on("keydown.ujgSh", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFullscreen(); });
+            
             loadBoards();
         }
 
-        // Запуск
         initPanel();
     }
 
     return SprintHealthGadget;
 });
-
