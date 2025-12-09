@@ -420,7 +420,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         }
 
         function groupByAssignee() {
-            var map = {}, issueMap = {}, unassigned = { id: "__none__", name: "Не назначено", issues: [], hours: 0 };
+            var map = {}, issueMap = {}, outside = { id: "__outside__", name: "Вне команды", issues: [], hours: 0 };
             var sprintStart = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null;
             var sprintEnd = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.endDate)) : null;
             var teamMembers = state.teamMembers || [];
@@ -450,6 +450,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     workAuthors = Object.values(wlMap).sort(function(a, b) { return b.seconds - a.seconds; });
                 }
                 // История ассайнов в пределах спринта
+                var historyAssignees = [];
                 if (iss._changelog && Array.isArray(iss._changelog.histories)) {
                     var seen = {};
                     iss._changelog.histories.forEach(function(h) {
@@ -459,14 +460,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         }
                         (h.items || []).forEach(function(it) {
                             if (it.field && it.field.toLowerCase() === "assignee") {
-                                if (it.fromString && !seen[it.fromString]) { pastAssignees.push(it.fromString); seen[it.fromString] = true; }
-                                if (it.toString && !seen[it.toString]) { pastAssignees.push(it.toString); seen[it.toString] = true; }
+                                if (it.from && !seen[it.from]) { historyAssignees.push(it.from); seen[it.from] = true; }
+                                if (it.to && !seen[it.to]) { historyAssignees.push(it.to); seen[it.to] = true; }
                             }
                         });
                     });
-                    // убрать текущего
-                    var curName = f.assignee ? f.assignee.displayName : null;
-                    if (curName) pastAssignees = pastAssignees.filter(function(n) { return n !== curName; });
                 }
                 var item = {
                     key: iss.key,
@@ -487,26 +485,31 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var assigneeId = f.assignee ? (f.assignee.accountId || f.assignee.key) : null;
                 var assigneeName = f.assignee ? (f.assignee.displayName || assigneeId) : null;
                 var displayUser = null;
+                // 1) текущий ассайн в команде
                 if (assigneeId && teamMembers.indexOf(assigneeId) >= 0) {
                     displayUser = { id: assigneeId, name: assigneeName };
-                } else {
+                }
+                // 2) worklog автор из команды
+                if (!displayUser) {
                     var teamAuthor = workAuthors.find(function(w) { return w.id && teamMembers.indexOf(w.id) >= 0; });
                     if (teamAuthor) displayUser = { id: teamAuthor.id, name: teamAuthor.name };
                 }
-                if (!displayUser && assigneeId) displayUser = { id: assigneeId, name: assigneeName };
-                if (!displayUser && workAuthors.length > 0) displayUser = { id: workAuthors[0].id, name: workAuthors[0].name };
-                
+                // 3) assignee из истории в команде
+                if (!displayUser && historyAssignees.length > 0) {
+                    var histMember = historyAssignees.find(function(hid) { return teamMembers.indexOf(hid) >= 0; });
+                    if (histMember) displayUser = { id: histMember, name: histMember };
+                }
                 if (displayUser && displayUser.id) {
                     if (!map[displayUser.id]) map[displayUser.id] = { id: displayUser.id, name: displayUser.name || displayUser.id, issues: [], hours: 0 };
                     map[displayUser.id].issues.push(item);
                     map[displayUser.id].hours += est;
                 } else {
-                    unassigned.issues.push(item);
-                    unassigned.hours += est;
+                    outside.issues.push(item);
+                    outside.hours += est;
                 }
             });
             var arr = Object.values(map).sort(function(a, b) { return a.name.localeCompare(b.name); });
-            if (unassigned.issues.length > 0) arr.push(unassigned);
+            if (outside.issues.length > 0) arr.push(outside);
             state.byAssignee = arr;
             state.issueMap = issueMap;
         }
@@ -719,9 +722,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Start</th><th>End</th><th>Статус</th><th class="ujg-th-gantt">Gantt ' + gHead + '</th></tr></thead><tbody>';
             
             data.forEach(function(a) {
-                var inTeam = state.teamMembers && state.teamMembers.indexOf(a.id) >= 0;
-                var tog = '<span class="ujg-tm-toggle ' + (inTeam ? 'on' : '') + '" data-uid="' + utils.escapeHtml(a.id) + '" data-uname="' + utils.escapeHtml(a.name) + '" title="' + (inTeam ? 'В команде' : 'Добавить в команду') + '">◎</span>';
-                html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + utils.escapeHtml(a.name) + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
+                var isOutside = a.id === "__outside__";
+                var inTeam = !isOutside && state.teamMembers && state.teamMembers.indexOf(a.id) >= 0;
+                var tog = isOutside ? '' : '<span class="ujg-tm-toggle ' + (inTeam ? 'on' : '') + '" data-uid="' + utils.escapeHtml(a.id) + '" data-uname="' + utils.escapeHtml(a.name) + '" title="' + (inTeam ? 'В команде' : 'Добавить в команду') + '">◎</span>';
+                var title = isOutside ? 'Вне команды' : utils.escapeHtml(a.name);
+                html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
                 a.issues.forEach(function(iss) {
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
