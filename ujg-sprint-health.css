@@ -1,6 +1,6 @@
 /* UJG Sprint Health v1.2 */
 .ujg-sprint-health { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #172b4d; width: 100%; max-width: none; }
-.ujg-wide-container { width: 100% !important; max-width: none !important; }
+.ujg-wide-container, .dashboard-item-content .ujg-sprint-health, .dashboard-item-content .ujg-wide-container, .aui-page-panel .ujg-sprint-health { width: 100% !important; max-width: none !important; flex: 1 1 auto !important; }
 
 /* Панель */
 .ujg-panel { display: flex; align-items: center; gap: 8px; padding: 8px; background: #f4f5f7; border-radius: 4px; margin-bottom: 8px; }

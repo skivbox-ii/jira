@@ -111,9 +111,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function ensureFullWidth() {
             var $wrap = $content.closest(".dashboard-item-content, .gadget, .ajs-gadget, .aui-page-panel, .dashboard-item");
+            var $targets = $wrap.add($content).add($cont);
+            $targets.css({ width: "100%", maxWidth: "none", flex: "1 1 auto" });
             if ($wrap.length) $wrap.addClass("ujg-wide-container");
-            $content.css({ width: "100%" });
-            $cont.css({ width: "100%" });
         }
 
         function toggleFullscreen() {
