@@ -5,7 +5,7 @@
 define("_ujgSprintHealth", ["jquery"], function($) {
     "use strict";
 
-    var CONFIG = { version: "1.3.0", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: false };
+    var CONFIG = { version: "1.3.0", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: true };
     var STORAGE_KEY = "ujg_sprint_health_settings";
     var baseUrl = (typeof AJS !== "undefined" && AJS.contextPath) ? AJS.contextPath() : "";
 
@@ -17,6 +17,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         formatDateShort: function(d) { if (!d) return "—"; return (d.getDate() < 10 ? "0" : "") + d.getDate() + "." + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1); },
         formatDateFull: function(d) { if (!d) return "—"; return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }); },
         getDayKey: function(d) { if (!d) return ""; return d.getFullYear() + "-" + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1) + "-" + (d.getDate() < 10 ? "0" : "") + d.getDate(); },
+        formatDateJira: function(d) { if (!d) return ""; var dd = utils.startOfDay(d); return dd ? utils.getDayKey(dd) : ""; },
         daysBetween: function(start, end) {
             var res = [], cur = new Date(start); cur.setHours(0,0,0,0);
             var ed = new Date(end); ed.setHours(0,0,0,0);
@@ -80,6 +81,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 url: baseUrl + "/rest/api/2/issue/" + key,
                 data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,customfield_10020," + CONFIG.startDateField, expand: "changelog" }
             });
+        },
+        updateIssueDue: function(key, dueDateStr) {
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/issue/" + key,
+                type: "PUT",
+                contentType: "application/json",
+                data: JSON.stringify({ fields: { duedate: dueDateStr } })
+            });
         }
     };
 
@@ -89,7 +98,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             selectedBoardId: null, selectedSprintId: null,
             sprint: null, issues: [], loading: false, isFullscreen: false,
             chartMode: "tasks", // tasks или hours
-            metrics: {}, burnupData: [], byAssignee: [], problems: []
+            metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {}
         };
 
         var $content = API.getGadgetContentEl();
@@ -296,7 +305,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         }
 
         function groupByAssignee() {
-            var map = {}, unassigned = { id: "__none__", name: "Не назначено", issues: [], hours: 0 };
+            var map = {}, issueMap = {}, unassigned = { id: "__none__", name: "Не назначено", issues: [], hours: 0 };
             state.issues.forEach(function(iss) {
                 var f = iss.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
@@ -317,6 +326,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     hasDates: !!f.duedate,
                     isDone: isIssueDone(f.status)
                 };
+                issueMap[item.key] = item;
                 
                 if (f.assignee) {
                     var aid = f.assignee.accountId || f.assignee.key;
@@ -331,6 +341,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var arr = Object.values(map).sort(function(a, b) { return a.name.localeCompare(b.name); });
             if (unassigned.issues.length > 0) arr.push(unassigned);
             state.byAssignee = arr;
+            state.issueMap = issueMap;
         }
 
         function updateBoardSelect() {
@@ -568,6 +579,42 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html + '</div>';
         }
 
+        function clearGanttPreview() { $cont.find(".ujg-gc").removeClass("ujg-gc-preview"); }
+
+        function previewIssueRange(key, dueDayStr) {
+            if (!key || !dueDayStr) return;
+            var item = state.issueMap[key];
+            if (!item) return;
+            var due = utils.startOfDay(utils.parseDate(dueDayStr));
+            if (!due) return;
+            var duration = utils.getWorkDurationDays(item.est, CONFIG.hoursPerDay);
+            var start = utils.shiftWorkDays(due, -(duration - 1));
+            clearGanttPreview();
+            $cont.find('.ujg-gc[data-key="' + key + '"]').each(function() {
+                var cellDay = utils.startOfDay(utils.parseDate($(this).data("day")));
+                if (cellDay && cellDay >= start && cellDay <= due) $(this).addClass("ujg-gc-preview");
+            });
+        }
+
+        function saveIssueDue(key, dayStr) {
+            var dueDate = utils.startOfDay(utils.parseDate(dayStr));
+            if (!key || !dueDate) return;
+            var newVal = utils.formatDateJira(dueDate);
+            var current = state.issueMap[key] && state.issueMap[key].due ? utils.formatDateJira(state.issueMap[key].due) : null;
+            if (current === newVal) return;
+            $cont.addClass("ujg-busy");
+            return api.updateIssueDue(key, newVal).then(function() {
+                log("Due updated for " + key + ": " + newVal);
+                loadSprintData(state.selectedSprintId);
+            }, function(err) {
+                console.error(err);
+                alert("Не удалось сохранить срок: " + (err && err.statusText ? err.statusText : "ошибка сети"));
+            }).always(function() {
+                $cont.removeClass("ujg-busy");
+                clearGanttPreview();
+            });
+        }
+
         function showTooltip($row, issueKey) {
             var $tip = $("#ujgTooltip");
             $tip.html("Загрузка...").addClass("ujg-show");
@@ -611,14 +658,45 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 hideTooltip();
             });
 
-            // Inline Gantt edit (start/end to be implemented when allowed)
-            $cont.find(".ujg-gc").on("click", function() {
+            var dragCtx = null;
+            $(document).off(".ujgDrag");
+            $cont.find(".ujg-gc").off(".ujgDrag");
+
+            $cont.find(".ujg-gc").on("mousedown.ujgDrag", function(e) {
+                if (!CONFIG.allowEditDates || e.button !== 0) return;
+                var key = $(this).data("key");
+                var day = $(this).data("day");
+                if (!key || !day) return;
+                dragCtx = { key: key, candidate: day };
+                previewIssueRange(key, day);
+                $cont.addClass("ujg-dragging");
+                e.preventDefault();
+            }).on("mouseenter.ujgDrag", function() {
+                if (!dragCtx) return;
+                var day = $(this).data("day");
+                dragCtx.candidate = day;
+                previewIssueRange(dragCtx.key, day);
+            }).on("dblclick.ujgDrag", function(e) {
                 if (!CONFIG.allowEditDates) return;
                 var key = $(this).data("key");
                 var day = $(this).data("day");
                 if (!key || !day) return;
-                // Placeholder for future date edit logic
-                console.log("[UJG] click gantt cell", key, day);
+                var item = state.issueMap[key];
+                if (item && item.due) return; // ставим только если срока нет
+                saveIssueDue(key, day);
+                e.preventDefault();
+            });
+
+            $(document).on("mouseup.ujgDrag", function() {
+                if (!dragCtx) return;
+                var ctx = dragCtx;
+                dragCtx = null;
+                $cont.removeClass("ujg-dragging");
+                if (ctx.candidate) {
+                    saveIssueDue(ctx.key, ctx.candidate);
+                } else {
+                    clearGanttPreview();
+                }
             });
         }
 

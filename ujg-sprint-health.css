@@ -114,12 +114,15 @@
 .ujg-tbl a.ujg-done { text-decoration: line-through; color: #6b778c; }
 
 /* Gantt */
-.ujg-gantt { display: flex; gap: 1px; height: 12px; cursor: pointer; }
-.ujg-gc { flex: 1; min-width: 6px; height: 100%; background: #f4f5f7; border-radius: 1px; }
+.ujg-gantt { position: relative; display: flex; gap: 0; height: 14px; cursor: pointer; background: #fff; border: 1px solid #dfe1e6; border-radius: 2px; overflow: hidden; }
+.ujg-gc { flex: 1; min-width: 6px; height: 100%; background: #f4f5f7; border-right: 1px solid #ebecf0; box-sizing: border-box; }
+.ujg-gc:last-child { border-right: none; }
 .ujg-gt { background: #dfe1e6; }
 .ujg-gp { background: #4c9aff; }
 .ujg-gd { background: #57d9a3; }
 .ujg-gx { background: repeating-linear-gradient(45deg, #dfe1e6, #dfe1e6 2px, #f4f5f7 2px, #f4f5f7 4px); }
+.ujg-gc-preview { outline: 1px dashed #0052cc; background: #deebff; }
+.ujg-dragging .ujg-gc { cursor: ew-resize; }
 
 /* Fullscreen */
 .ujg-fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999 !important; background: #f4f5f7 !important; overflow: auto !important; padding: 15px !important; box-sizing: border-box !important; }
