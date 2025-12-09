@@ -109,6 +109,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function log(msg) { if (CONFIG.debug) console.log("[UJG]", msg); }
 
+        function ensureFullWidth() {
+            var $wrap = $content.closest(".dashboard-item-content, .gadget, .ajs-gadget, .aui-page-panel, .dashboard-item");
+            if ($wrap.length) $wrap.addClass("ujg-wide-container");
+            $content.css({ width: "100%" });
+            $cont.css({ width: "100%" });
+        }
+
         function toggleFullscreen() {
             var $el = $content.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
             if ($el.length === 0) $el = $content;
@@ -381,6 +388,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             html += renderTable();
             
             $cont.html(html);
+            ensureFullWidth();
             bindEvents();
             API.resize();
         }
@@ -544,8 +552,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var sprintStart = state.sprint ? utils.parseDate(state.sprint.startDate) : null;
             var sprintEnd = state.sprint ? utils.parseDate(state.sprint.endDate) : null;
             var days = sprintStart && sprintEnd ? utils.daysBetween(sprintStart, sprintEnd) : [];
+            var gHead = renderGanttHeader(days);
             
-            var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Start</th><th>End</th><th>Статус</th><th>Gantt</th></tr></thead><tbody>';
+            var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Start</th><th>End</th><th>Статус</th><th class="ujg-th-gantt">Gantt ' + gHead + '</th></tr></thead><tbody>';
             
             data.forEach(function(a) {
                 html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + utils.escapeHtml(a.name) + '</b> <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
@@ -567,6 +576,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (!days.length) return '';
             var start = iss.start || sprintStart || (iss.created || days[0]);
             var end = iss.due || sprintEnd || days[days.length - 1];
+            var todayKey = utils.getDayKey(utils.startOfDay(new Date()));
             var html = '<div class="ujg-gantt" title="Start: ' + utils.formatDateFull(start) + ' | End: ' + utils.formatDateFull(end) + '">';
             days.forEach(function(d) {
                 var cls = "ujg-gc";
@@ -574,7 +584,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (!iss.due && !iss.start) cls += " ujg-gx"; // пунктир если нет дат
                     cls += iss.isDone ? " ujg-gd" : (iss.statusCat === "indeterminate" ? " ujg-gp" : " ujg-gt");
                 }
+                if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
                 html += '<div class="' + cls + '" data-day="' + utils.getDayKey(d) + '" data-key="' + iss.key + '"></div>';
+            });
+            return html + '</div>';
+        }
+
+        function renderGanttHeader(days) {
+            if (!days.length) return '';
+            var todayKey = utils.getDayKey(utils.startOfDay(new Date()));
+            var html = '<div class="ujg-ghead">';
+            days.forEach(function(d) {
+                var dk = utils.getDayKey(d);
+                var cls = "ujg-gh-cell" + (dk === todayKey ? " ujg-gh-today" : "");
+                html += '<div class="' + cls + '" data-day="' + dk + '"><span>' + utils.formatDateShort(d) + '</span></div>';
             });
             return html + '</div>';
         }

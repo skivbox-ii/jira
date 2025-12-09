@@ -1,5 +1,6 @@
 /* UJG Sprint Health v1.2 */
-.ujg-sprint-health { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #172b4d; }
+.ujg-sprint-health { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #172b4d; width: 100%; max-width: none; }
+.ujg-wide-container { width: 100% !important; max-width: none !important; }
 
 /* Панель */
 .ujg-panel { display: flex; align-items: center; gap: 8px; padding: 8px; background: #f4f5f7; border-radius: 4px; margin-bottom: 8px; }
@@ -115,7 +116,7 @@
 
 /* Gantt */
 .ujg-gantt { position: relative; display: flex; gap: 0; height: 14px; cursor: pointer; background: #fff; border: 1px solid #dfe1e6; border-radius: 2px; overflow: hidden; }
-.ujg-gc { flex: 1; min-width: 6px; height: 100%; background: #f4f5f7; border-right: 1px solid #ebecf0; box-sizing: border-box; }
+.ujg-gc { position: relative; flex: 1; min-width: 6px; height: 100%; background: #f4f5f7; border-right: 1px solid #4a4a4a; box-sizing: border-box; }
 .ujg-gc:last-child { border-right: none; }
 .ujg-gt { background: #dfe1e6; }
 .ujg-gp { background: #4c9aff; }
@@ -123,6 +124,13 @@
 .ujg-gx { background: repeating-linear-gradient(45deg, #dfe1e6, #dfe1e6 2px, #f4f5f7 2px, #f4f5f7 4px); }
 .ujg-gc-preview { outline: 1px dashed #0052cc; background: #deebff; }
 .ujg-dragging .ujg-gc { cursor: ew-resize; }
+.ujg-gc-today:after, .ujg-gh-today:after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #de350b; pointer-events: none; }
+
+.ujg-th-gantt { min-width: 240px; }
+.ujg-ghead { display: flex; align-items: stretch; justify-content: stretch; height: 42px; border: 1px solid #ebecf0; border-radius: 2px; overflow: hidden; background: #fff; }
+.ujg-gh-cell { position: relative; flex: 1; border-right: 1px solid #ebecf0; box-sizing: border-box; display: flex; align-items: flex-end; justify-content: center; }
+.ujg-gh-cell:last-child { border-right: none; }
+.ujg-gh-cell span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 9px; color: #6b778c; line-height: 1; padding: 2px 1px; }
 
 /* Fullscreen */
 .ujg-fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999 !important; background: #f4f5f7 !important; overflow: auto !important; padding: 15px !important; box-sizing: border-box !important; }
