@@ -79,7 +79,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         getIssue: function(key) {
             return $.ajax({
                 url: baseUrl + "/rest/api/2/issue/" + key,
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,customfield_10020," + CONFIG.startDateField, expand: "changelog" }
+                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,worklog,customfield_10020," + CONFIG.startDateField, expand: "changelog" }
+            });
+        },
+        getIssueChangelog: function(key) {
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/issue/" + key,
+                data: { fields: "assignee", expand: "changelog" }
+            });
+        },
+        getIssueWorklog: function(key) {
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/issue/" + key + "/worklog",
+                data: { maxResults: 1000, startAt: 0 }
             });
         },
         updateIssueDue: function(key, dueDateStr) {
@@ -179,10 +191,27 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             $.when(api.getSprint(id), api.getSprintIssues(id)).then(function(sprintResp, issuesResp) {
                 state.sprint = sprintResp[0] || sprintResp;
                 state.issues = (issuesResp[0] || issuesResp).issues || [];
-                calculate();
-                render();
-                state.loading = false;
+                enrichIssues(state.issues).always(function() {
+                    calculate();
+                    render();
+                    state.loading = false;
+                });
             });
+        }
+
+        function enrichIssues(issues) {
+            if (!issues || issues.length === 0) return $.Deferred().resolve().promise();
+            var tasks = [];
+            issues.forEach(function(iss) {
+                var w = api.getIssueWorklog(iss.key).then(function(res) {
+                    iss._worklog = res && res.worklogs ? res.worklogs : [];
+                }, function() { iss._worklog = []; });
+                var c = api.getIssueChangelog(iss.key).then(function(res) {
+                    iss._changelog = res && res.changelog ? res.changelog : {};
+                }, function() { iss._changelog = {}; });
+                tasks.push($.when(w, c));
+            });
+            return $.when.apply($, tasks);
         }
 
         function calculate() {
@@ -313,6 +342,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function groupByAssignee() {
             var map = {}, issueMap = {}, unassigned = { id: "__none__", name: "Не назначено", issues: [], hours: 0 };
+            var sprintStart = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null;
+            var sprintEnd = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.endDate)) : null;
             state.issues.forEach(function(iss) {
                 var f = iss.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
@@ -321,6 +352,42 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var start = due ? utils.shiftWorkDays(due, -(durationDays - 1)) :
                     (state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null) ||
                     utils.startOfDay(utils.parseDate(f.created));
+                var workAuthors = [];
+                var pastAssignees = [];
+                // Worklogs за период спринта
+                if (iss._worklog && Array.isArray(iss._worklog)) {
+                    var wlMap = {};
+                    iss._worklog.forEach(function(wl) {
+                        var wd = utils.startOfDay(utils.parseDate(wl.started));
+                        if (sprintStart && sprintEnd) {
+                            if (!wd || wd < sprintStart || wd > sprintEnd) return;
+                        }
+                        var author = wl.author || {};
+                        var aid = author.accountId || author.key || (author.displayName || "unknown");
+                        if (!wlMap[aid]) wlMap[aid] = { id: aid, name: author.displayName || aid, seconds: 0 };
+                        wlMap[aid].seconds += wl.timeSpentSeconds || 0;
+                    });
+                    workAuthors = Object.values(wlMap).sort(function(a, b) { return b.seconds - a.seconds; });
+                }
+                // История ассайнов в пределах спринта
+                if (iss._changelog && Array.isArray(iss._changelog.histories)) {
+                    var seen = {};
+                    iss._changelog.histories.forEach(function(h) {
+                        var hd = utils.startOfDay(utils.parseDate(h.created));
+                        if (sprintStart && sprintEnd) {
+                            if (!hd || hd < sprintStart || hd > sprintEnd) return;
+                        }
+                        (h.items || []).forEach(function(it) {
+                            if (it.field && it.field.toLowerCase() === "assignee") {
+                                if (it.fromString && !seen[it.fromString]) { pastAssignees.push(it.fromString); seen[it.fromString] = true; }
+                                if (it.toString && !seen[it.toString]) { pastAssignees.push(it.toString); seen[it.toString] = true; }
+                            }
+                        });
+                    });
+                    // убрать текущего
+                    var curName = f.assignee ? f.assignee.displayName : null;
+                    if (curName) pastAssignees = pastAssignees.filter(function(n) { return n !== curName; });
+                }
                 var item = {
                     key: iss.key,
                     summary: f.summary,
@@ -331,7 +398,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     due: due,
                     created: utils.parseDate(f.created),
                     hasDates: !!f.duedate,
-                    isDone: isIssueDone(f.status)
+                    isDone: isIssueDone(f.status),
+                    workAuthors: workAuthors,
+                    pastAssignees: pastAssignees
                 };
                 issueMap[item.key] = item;
                 
@@ -567,6 +636,23 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
                     html += '<td><span class="ujg-st ujg-st-' + iss.statusCat + '">' + utils.escapeHtml((iss.status || "").substring(0, 8)) + '</span></td>';
                     html += '<td>' + renderGantt(iss, days, sprintStart, sprintEnd) + '</td></tr>';
+                    // Подстроки по worklog авторам
+                    var usedNames = {};
+                    iss.workAuthors.forEach(function(wa) {
+                        usedNames[wa.name] = true;
+                        html += '<tr class="ujg-row ujg-sub" data-aid="' + a.id + '">';
+                        html += '<td></td>';
+                        html += '<td class="ujg-sub-name" title="Worklog автора">' + utils.escapeHtml(wa.name) + '</td>';
+                        html += '<td>' + (wa.seconds > 0 ? utils.formatHours(wa.seconds) : "—") + '</td>';
+                        html += '<td></td><td></td><td></td><td></td></tr>';
+                    });
+                    // Прошлые ассайны без worklog
+                    iss.pastAssignees.filter(function(n) { return !usedNames[n]; }).forEach(function(n) {
+                        html += '<tr class="ujg-row ujg-sub ujg-sub-old" data-aid="' + a.id + '">';
+                        html += '<td></td>';
+                        html += '<td class="ujg-sub-name ujg-sub-strike" title="Прошлый ассайн в спринте">' + utils.escapeHtml(n) + '</td>';
+                        html += '<td>—</td><td></td><td></td><td></td><td></td></tr>';
+                    });
                 });
             });
             return html + '</tbody></table></div>';
