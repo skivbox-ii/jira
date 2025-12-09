@@ -478,13 +478,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     hasDates: !!f.duedate,
                     isDone: isIssueDone(f.status),
                     workAuthors: workAuthors,
-                    pastAssignees: pastAssignees
+                    pastAssignees: pastAssignees,
+                    assignee: assigneeId ? { id: assigneeId, name: assigneeName } : null,
+                    outsideUser: null
                 };
                 issueMap[item.key] = item;
                 
                 var assigneeId = f.assignee ? (f.assignee.accountId || f.assignee.key) : null;
                 var assigneeName = f.assignee ? (f.assignee.displayName || assigneeId) : null;
                 var displayUser = null;
+                var fallbackUser = assigneeId ? { id: assigneeId, name: assigneeName } : (workAuthors[0] ? { id: workAuthors[0].id, name: workAuthors[0].name } : null);
                 // 1) текущий ассайн в команде
                 if (assigneeId && teamMembers.indexOf(assigneeId) >= 0) {
                     displayUser = { id: assigneeId, name: assigneeName };
@@ -499,6 +502,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     var histMember = historyAssignees.find(function(hid) { return teamMembers.indexOf(hid) >= 0; });
                     if (histMember) displayUser = { id: histMember, name: histMember };
                 }
+                item.outsideUser = fallbackUser;
                 if (displayUser && displayUser.id) {
                     if (!map[displayUser.id]) map[displayUser.id] = { id: displayUser.id, name: displayUser.name || displayUser.id, issues: [], hours: 0 };
                     map[displayUser.id].issues.push(item);
@@ -583,7 +587,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var maxIdeal = Math.max.apply(null, data.map(function(d) { return isHours ? (d.idealHours || 0) : (d.idealTasks || 0); }));
             var maxVal = Math.max(maxScope, maxDone, maxIdeal, 1);
             
-            var h = 180, padding = 40;
+            var h = 300, padding = 50;
             
             var html = '<div class="ujg-chart-wrap">';
             html += '<div class="ujg-chart-hdr">';
@@ -599,17 +603,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             html += '<svg class="ujg-svg" viewBox="0 0 100 ' + h + '" preserveAspectRatio="none">';
             
             // Сетка
-            for (var i = 0; i <= 4; i++) {
-                var y = padding + (h - padding * 2) * i / 4;
-                html += '<line x1="0" y1="' + y + '" x2="100" y2="' + y + '" stroke="#e0e0e0" stroke-width="0.2"/>';
+            for (var i = 0; i <= 5; i++) {
+                var y = padding + (h - padding * 2) * i / 5;
+                html += '<line x1="0" y1="' + y + '" x2="100" y2="' + y + '" stroke="#e0e0e0" stroke-width="0.3"/>';
             }
             
             // Находим индекс "сегодня"
             var todayIdx = data.findIndex(function(d) { return d.isToday; });
             if (todayIdx >= 0) {
                 var todayX = (todayIdx + 0.5) / data.length * 100;
-                html += '<line x1="' + todayX + '" y1="' + padding + '" x2="' + todayX + '" y2="' + (h - padding) + '" stroke="#9e9e9e" stroke-width="0.3" stroke-dasharray="1,1"/>';
-                html += '<text x="' + todayX + '" y="' + (padding - 5) + '" text-anchor="middle" font-size="3" fill="#666">Сегодня</text>';
+                html += '<line x1="' + todayX + '" y1="' + padding + '" x2="' + todayX + '" y2="' + (h - padding) + '" stroke="#9e9e9e" stroke-width="0.6" stroke-dasharray="1.2,1.2"/>';
+                html += '<text x="' + todayX + '" y="' + (padding - 6) + '" text-anchor="middle" font-size="3.5" fill="#666">Сегодня</text>';
             }
             
             var scopePts = [], donePts = [], idealPts = [];
@@ -633,18 +637,18 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             });
             
             // Идеальная линия (серая)
-            html += '<polyline points="' + idealPts.join(" ") + '" fill="none" stroke="#bdbdbd" stroke-width="0.5"/>';
+            html += '<polyline points="' + idealPts.join(" ") + '" fill="none" stroke="#bdbdbd" stroke-width="0.8"/>';
             
             // Scope (красная)
             if (scopePts.length > 0) {
-                html += '<polyline points="' + scopePts.join(" ") + '" fill="none" stroke="#ef5350" stroke-width="0.7"/>';
-                scopePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="0.8" fill="#ef5350"/>'; });
+                html += '<polyline points="' + scopePts.join(" ") + '" fill="none" stroke="#ef5350" stroke-width="1.4"/>';
+                scopePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="1.2" fill="#ef5350"/>'; });
             }
             
             // Done (зелёная)
             if (donePts.length > 0) {
-                html += '<polyline points="' + donePts.join(" ") + '" fill="none" stroke="#66bb6a" stroke-width="0.7"/>';
-                donePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="0.8" fill="#66bb6a"/>'; });
+                html += '<polyline points="' + donePts.join(" ") + '" fill="none" stroke="#66bb6a" stroke-width="1.4"/>';
+                donePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="1.2" fill="#66bb6a"/>'; });
             }
             
             html += '</svg>';
@@ -660,9 +664,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             // Ось Y
             html += '<div class="ujg-yaxis">';
-            for (var i = 0; i <= 4; i++) {
-                var val = Math.round(maxVal * (4 - i) / 4);
-                html += '<span style="top:' + (i * 25) + '%">' + (isHours ? utils.formatHoursShort(val * 3600) : val) + '</span>';
+            for (var i = 0; i <= 5; i++) {
+                var val = Math.round(maxVal * (5 - i) / 5);
+                html += '<span style="top:' + (i * 20) + '%">' + (isHours ? utils.formatHoursShort(val * 3600) : val) + '</span>';
             }
             html += '</div>';
             
@@ -736,6 +740,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
                     html += '<td><span class="ujg-st ujg-st-' + iss.statusCat + '">' + utils.escapeHtml((iss.status || "").substring(0, 8)) + '</span></td>';
                     html += '<td>' + renderGantt(iss, days, sprintStart, sprintEnd) + '</td></tr>';
+                    // Для вне команды: показать назначение/кандидата с тогглом
+                    if (isOutside && iss.outsideUser) {
+                        var ou = iss.outsideUser;
+                        var inTeamFlag = state.teamMembers && state.teamMembers.indexOf(ou.id) >= 0;
+                        var togOu = ou.id ? '<span class="ujg-tm-toggle ' + (inTeamFlag ? 'on' : '') + '" data-uid="' + utils.escapeHtml(ou.id) + '" data-uname="' + utils.escapeHtml(ou.name) + '" title="' + (inTeamFlag ? 'В команде' : 'Добавить в команду') + '">◎</span>' : '';
+                        html += '<tr class="ujg-row ujg-sub" data-aid="' + a.id + '">';
+                        html += '<td></td>';
+                        html += '<td class="ujg-sub-name" title="Назначено/кандидат">' + utils.escapeHtml(ou.name || "—") + ' ' + togOu + '</td>';
+                        html += '<td></td><td></td><td></td><td></td><td></td></tr>';
+                    }
                     // Подстроки по worklog авторам
                     var usedNames = {};
                     iss.workAuthors.forEach(function(wa) {
