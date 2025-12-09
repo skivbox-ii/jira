@@ -5,7 +5,7 @@
 define("_ujgSprintHealth", ["jquery"], function($) {
     "use strict";
 
-    var CONFIG = { version: "1.2.0", debug: true, maxHours: 16, capacityPerPerson: 40 };
+    var CONFIG = { version: "1.3.0", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: false };
     var STORAGE_KEY = "ujg_sprint_health_settings";
     var baseUrl = (typeof AJS !== "undefined" && AJS.contextPath) ? AJS.contextPath() : "";
 
@@ -24,6 +24,23 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return res;
         },
         daysDiff: function(d1, d2) { if (!d1 || !d2) return 0; return Math.floor((d2 - d1) / (1000 * 60 * 60 * 24)); },
+        startOfDay: function(d) { if (!d) return null; var nd = new Date(d); nd.setHours(0,0,0,0); return nd; },
+        shiftWorkDays: function(date, delta) {
+            if (!date) return null;
+            var d = utils.startOfDay(date);
+            var step = delta >= 0 ? 1 : -1;
+            var remain = Math.abs(delta);
+            while (remain > 0) {
+                d.setDate(d.getDate() + step);
+                if (d.getDay() !== 0 && d.getDay() !== 6) remain--;
+            }
+            return d;
+        },
+        getWorkDurationDays: function(seconds, hoursPerDay) {
+            if (!seconds || seconds <= 0) return 1;
+            var hpd = hoursPerDay && hoursPerDay > 0 ? hoursPerDay : 8;
+            return Math.max(1, Math.ceil(seconds / (hpd * 3600)));
+        },
         getHealthColor: function(p) { return p >= 90 ? "#36b37e" : p >= 70 ? "#ffab00" : p >= 50 ? "#ff8b00" : "#de350b"; },
         getHealthLabel: function(p) { return p >= 90 ? "Отлично" : p >= 70 ? "Хорошо" : p >= 50 ? "Внимание" : "Критично"; }
     };
@@ -61,7 +78,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         getIssue: function(key) {
             return $.ajax({
                 url: baseUrl + "/rest/api/2/issue/" + key,
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,customfield_10020", expand: "changelog" }
+                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,customfield_10020," + CONFIG.startDateField, expand: "changelog" }
             });
         }
     };
@@ -283,7 +300,23 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             state.issues.forEach(function(iss) {
                 var f = iss.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
-                var item = { key: iss.key, summary: f.summary, status: f.status ? f.status.name : "", statusCat: f.status && f.status.statusCategory ? f.status.statusCategory.key : "", est: est, due: utils.parseDate(f.duedate), isDone: isIssueDone(f.status) };
+                var due = utils.startOfDay(utils.parseDate(f.duedate) || (state.sprint ? utils.parseDate(state.sprint.endDate) : null));
+                var durationDays = utils.getWorkDurationDays(est, CONFIG.hoursPerDay);
+                var start = due ? utils.shiftWorkDays(due, -(durationDays - 1)) :
+                    (state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null) ||
+                    utils.startOfDay(utils.parseDate(f.created));
+                var item = {
+                    key: iss.key,
+                    summary: f.summary,
+                    status: f.status ? f.status.name : "",
+                    statusCat: f.status && f.status.statusCategory ? f.status.statusCategory.key : "",
+                    est: est,
+                    start: start,
+                    due: due,
+                    created: utils.parseDate(f.created),
+                    hasDates: !!f.duedate,
+                    isDone: isIssueDone(f.status)
+                };
                 
                 if (f.assignee) {
                     var aid = f.assignee.accountId || f.assignee.key;
@@ -497,34 +530,40 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function renderTable() {
             var data = state.byAssignee;
             if (!data || data.length === 0) return '';
-            var days = state.sprint ? utils.daysBetween(utils.parseDate(state.sprint.startDate), utils.parseDate(state.sprint.endDate)) : [];
+            var sprintStart = state.sprint ? utils.parseDate(state.sprint.startDate) : null;
+            var sprintEnd = state.sprint ? utils.parseDate(state.sprint.endDate) : null;
+            var days = sprintStart && sprintEnd ? utils.daysBetween(sprintStart, sprintEnd) : [];
             
-            var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Срок</th><th>Статус</th><th>Gantt</th></tr></thead><tbody>';
+            var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Start</th><th>End</th><th>Статус</th><th>Gantt</th></tr></thead><tbody>';
             
             data.forEach(function(a) {
-                html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="6"><b>' + utils.escapeHtml(a.name) + '</b> <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
+                html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + utils.escapeHtml(a.name) + '</b> <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
                 a.issues.forEach(function(iss) {
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
                     html += '<td title="' + utils.escapeHtml(iss.summary) + '">' + utils.escapeHtml((iss.summary || "").substring(0, 35)) + '</td>';
                     html += '<td>' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
+                    html += '<td>' + utils.formatDateShort(iss.start) + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
                     html += '<td><span class="ujg-st ujg-st-' + iss.statusCat + '">' + utils.escapeHtml((iss.status || "").substring(0, 8)) + '</span></td>';
-                    html += '<td>' + renderGantt(iss, days) + '</td></tr>';
+                    html += '<td>' + renderGantt(iss, days, sprintStart, sprintEnd) + '</td></tr>';
                 });
             });
             return html + '</tbody></table></div>';
         }
 
-        function renderGantt(iss, days) {
+        function renderGantt(iss, days, sprintStart, sprintEnd) {
             if (!days.length) return '';
-            var html = '<div class="ujg-gantt">';
+            var start = iss.start || sprintStart || (iss.created || days[0]);
+            var end = iss.due || sprintEnd || days[days.length - 1];
+            var html = '<div class="ujg-gantt" title="Start: ' + utils.formatDateFull(start) + ' | End: ' + utils.formatDateFull(end) + '">';
             days.forEach(function(d) {
                 var cls = "ujg-gc";
-                if (iss.due && d <= iss.due) {
+                if (d >= start && d <= end) {
+                    if (!iss.due && !iss.start) cls += " ujg-gx"; // пунктир если нет дат
                     cls += iss.isDone ? " ujg-gd" : (iss.statusCat === "indeterminate" ? " ujg-gp" : " ujg-gt");
                 }
-                html += '<div class="' + cls + '"></div>';
+                html += '<div class="' + cls + '" data-day="' + utils.getDayKey(d) + '" data-key="' + iss.key + '"></div>';
             });
             return html + '</div>';
         }
@@ -570,6 +609,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             }).on("mouseleave", function() {
                 clearTimeout(hoverTimer);
                 hideTooltip();
+            });
+
+            // Inline Gantt edit (start/end to be implemented when allowed)
+            $cont.find(".ujg-gc").on("click", function() {
+                if (!CONFIG.allowEditDates) return;
+                var key = $(this).data("key");
+                var day = $(this).data("day");
+                if (!key || !day) return;
+                // Placeholder for future date edit logic
+                console.log("[UJG] click gantt cell", key, day);
             });
         }
 
