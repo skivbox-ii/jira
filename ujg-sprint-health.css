@@ -116,6 +116,9 @@
 .ujg-sub { background: #f9fafb; }
 .ujg-sub-name { padding-left: 14px; font-size: 11px; color: #42526e; }
 .ujg-sub-strike { text-decoration: line-through; color: #8c8c8c; }
+.ujg-tm-toggle { display: inline-block; margin-left: 6px; font-size: 11px; cursor: pointer; color: #6b778c; }
+.ujg-tm-toggle.on { color: #0052cc; font-weight: 700; }
+.ujg-tm-toggle:hover { color: #172b4d; }
 
 /* Gantt */
 .ujg-gantt { position: relative; display: flex; gap: 0; height: 14px; cursor: pointer; background: #fff; border: 1px solid #dfe1e6; border-radius: 2px; overflow: hidden; }
