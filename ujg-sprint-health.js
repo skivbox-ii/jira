@@ -434,6 +434,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     utils.startOfDay(utils.parseDate(f.created));
                 var workAuthors = [];
                 var pastAssignees = [];
+                var wlByDay = {};
                 // Worklogs за период спринта
                 if (iss._worklog && Array.isArray(iss._worklog)) {
                     var wlMap = {};
@@ -446,6 +447,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         var aid = author.accountId || author.key || (author.displayName || "unknown");
                         if (!wlMap[aid]) wlMap[aid] = { id: aid, name: author.displayName || aid, seconds: 0 };
                         wlMap[aid].seconds += wl.timeSpentSeconds || 0;
+                        var dk = utils.getDayKey(wd);
+                        if (!wlByDay[dk]) wlByDay[dk] = { sec: 0, comments: [] };
+                        wlByDay[dk].sec += wl.timeSpentSeconds || 0;
+                        if (wl.comment) wlByDay[dk].comments.push(String(wl.comment));
                     });
                     workAuthors = Object.values(wlMap).sort(function(a, b) { return b.seconds - a.seconds; });
                 }
@@ -480,6 +485,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     workAuthors: workAuthors,
                     pastAssignees: pastAssignees,
                     assignee: assigneeId ? { id: assigneeId, name: assigneeName } : null,
+                    worklogs: wlByDay,
                     outsideUser: null
                 };
                 issueMap[item.key] = item;
@@ -779,15 +785,26 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var start = iss.start || sprintStart || (iss.created || days[0]);
             var end = iss.due || sprintEnd || days[days.length - 1];
             var todayKey = utils.getDayKey(utils.startOfDay(new Date()));
+            var wlMap = iss.worklogs || {};
             var html = '<div class="ujg-gantt" title="Start: ' + utils.formatDateFull(start) + ' | End: ' + utils.formatDateFull(end) + '">';
             days.forEach(function(d) {
                 var cls = "ujg-gc";
+                var dk = utils.getDayKey(d);
+                var wl = wlMap[dk] || null;
+                var loggedSec = wl && wl.sec ? wl.sec : 0;
+                var comments = wl && wl.comments ? wl.comments : [];
                 if (d >= start && d <= end) {
                     if (!iss.due && !iss.start) cls += " ujg-gx"; // пунктир если нет дат
                     cls += iss.isDone ? " ujg-gd" : (iss.statusCat === "indeterminate" ? " ujg-gp" : " ujg-gt");
                 }
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
-                html += '<div class="' + cls + '" data-day="' + utils.getDayKey(d) + '" data-key="' + iss.key + '"></div>';
+                if (loggedSec > 0) cls += " ujg-gc-log";
+                var title = [];
+                if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
+                if (comments.length > 0) title.push(comments.join(" | "));
+                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">';
+                if (loggedSec > 0) html += '<span class="ujg-wl">' + utils.formatHoursShort(loggedSec) + '</span>';
+                html += '</div>';
             });
             return html + '</div>';
         }
