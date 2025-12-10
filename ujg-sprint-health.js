@@ -518,6 +518,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         });
                     });
                 }
+                var assigneeId = f.assignee ? (f.assignee.accountId || f.assignee.key) : null;
+                var assigneeName = f.assignee ? (f.assignee.displayName || assigneeId) : null;
+                var assigneeLogin = f.assignee ? (f.assignee.name || f.assignee.key || f.assignee.accountId) : null;
+
                 var item = {
                     key: iss.key,
                     summary: f.summary,
@@ -531,34 +535,32 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     isDone: isIssueDone(f.status),
                     workAuthors: workAuthors,
                     pastAssignees: pastAssignees,
-                    assignee: assigneeId ? { id: assigneeId, name: assigneeName } : null,
+                    assignee: assigneeId ? { id: assigneeId, name: assigneeName, login: assigneeLogin } : null,
                     worklogs: wlByDay,
                     worklogsByAuthor: wlByAuthor,
                     outsideUser: null
                 };
                 issueMap[item.key] = item;
                 
-                var assigneeId = f.assignee ? (f.assignee.accountId || f.assignee.key) : null;
-                var assigneeName = f.assignee ? (f.assignee.displayName || assigneeId) : null;
                 var displayUser = null;
                 var fallbackUser = assigneeId ? { id: assigneeId, name: assigneeName } : (workAuthors[0] ? { id: workAuthors[0].id, name: workAuthors[0].name } : null);
                 // 1) текущий ассайн в команде
                 if (assigneeId && teamMembers.indexOf(assigneeId) >= 0) {
-                    displayUser = { id: assigneeId, name: assigneeName };
+                    displayUser = { id: assigneeId, name: assigneeName, login: assigneeLogin };
                 }
                 // 2) worklog автор из команды
                 if (!displayUser) {
                     var teamAuthor = workAuthors.find(function(w) { return w.id && teamMembers.indexOf(w.id) >= 0; });
-                    if (teamAuthor) displayUser = { id: teamAuthor.id, name: teamAuthor.name };
+                    if (teamAuthor) displayUser = { id: teamAuthor.id, name: teamAuthor.name, login: teamAuthor.id };
                 }
                 // 3) assignee из истории в команде
                 if (!displayUser && historyAssignees.length > 0) {
                     var histMember = historyAssignees.find(function(hid) { return teamMembers.indexOf(hid) >= 0; });
-                    if (histMember) displayUser = { id: histMember, name: histMember };
+                    if (histMember) displayUser = { id: histMember, name: histMember, login: histMember };
                 }
                 item.outsideUser = fallbackUser;
                 if (displayUser && displayUser.id) {
-                    if (!map[displayUser.id]) map[displayUser.id] = { id: displayUser.id, name: displayUser.name || displayUser.id, issues: [], hours: 0 };
+                    if (!map[displayUser.id]) map[displayUser.id] = { id: displayUser.id, name: displayUser.name || displayUser.id, login: displayUser.login || displayUser.id, issues: [], hours: 0 };
                     map[displayUser.id].issues.push(item);
                     map[displayUser.id].hours += est;
                 } else {
@@ -928,8 +930,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (/^jirauser/i.test(val)) return;
                     set[val] = true;
                 }
-                add(g.name);
-                add(g.key);
+                add(g.login);
                 // g.id часто accountId вида JIRAUSER..., игнорируем
                 return Object.keys(set).filter(Boolean);
             }
