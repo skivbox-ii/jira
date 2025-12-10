@@ -843,7 +843,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     cls += " ujg-gt";
                 }
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
-                if (loggedSec > 0) cls += " ujg-wl";
+                
                 if (loggedSec > 0 && !showTextInsteadOfOverlay) cls += " ujg-gc-log";
                 var title = [];
                 if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
