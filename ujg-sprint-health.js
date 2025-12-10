@@ -5,7 +5,7 @@
 define("_ujgSprintHealth", ["jquery"], function($) {
     "use strict";
 
-    var CONFIG = { version: "1.3.0", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: true, sprintField: null };
+    var CONFIG = { version: "1.3.1", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: true, sprintField: null };
     var STORAGE_KEY = "ujg_sprint_health_settings";
     var baseUrl = (typeof AJS !== "undefined" && AJS.contextPath) ? AJS.contextPath() : "";
 
@@ -557,7 +557,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var assigneeId = f.assignee ? (f.assignee.accountId || f.assignee.key) : null;
                 var assigneeName = f.assignee ? (f.assignee.displayName || assigneeId) : null;
                 var assigneeLogin = f.assignee ? (f.assignee.name || f.assignee.key || f.assignee.accountId) : null;
-                var sprintNames = utils.parseSprintNames(f.customfield_10020 || []);
+                var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
+                var sprintNames = utils.parseSprintNames(sprintFieldVal);
+                var inCurrentSprint = false;
+                if (state.sprint && sprintNames.length) {
+                    var curId = String(state.sprint.id || "");
+                    var curName = state.sprint.name || "";
+                    inCurrentSprint = sprintNames.some(function(s) {
+                        if (!s) return false;
+                        return (curId && s.indexOf("id=" + curId) !== -1) || (curName && s.indexOf(curName) !== -1);
+                    });
+                }
 
                 var item = {
                     key: iss.key,
@@ -576,6 +586,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     worklogs: wlByDay,
                     worklogsByAuthor: wlByAuthor,
                     sprints: sprintNames,
+                    isOutsideSprint: state.sprint ? !inCurrentSprint : false,
                     outsideUser: null
                 };
                 issueMap[item.key] = item;
@@ -903,7 +914,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 collectApiDbg(a.id, a.name);
                 var dbgTaskList = Object.keys(dbgTasks);
                 var apiKeysUnique = Array.from(new Set(apiDbgKeys));
-                var dbgText = "DEBUG2: трудозатраты " + utils.formatHours(dbgSec);
+                var dbgText = "DEBUG3: трудозатраты " + utils.formatHours(dbgSec);
                 if (dbgTaskList.length) dbgText += " | задачи (view): " + dbgTaskList.join(", ");
                 var apiText = "API: jql=" + (dbgIdMap ? (dbgIdMap.jql || "") : "");
                 apiText += " | трудозатраты " + utils.formatHours(apiDbgSec);
@@ -1103,7 +1114,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var assigneeNote = "";
             if (iss.assignee && iss.assignee.id) {
                 if (!sameAssignee(iss.assignee, group)) {
-                    assigneeNote = "(назначено: " + (iss.assignee.name || iss.assignee.id) + ")";
+                    assigneeNote = "(назначено2: " + (iss.assignee.name || iss.assignee.id) + ")";
                     problems.push("Назначено на " + (iss.assignee.name || iss.assignee.id));
                 }
             }
