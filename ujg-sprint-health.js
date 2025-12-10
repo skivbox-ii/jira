@@ -923,8 +923,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
             function authorCandidates(g) {
                 var set = {};
-                if (g.id) set[g.id] = true;
-                if (g.name) set[g.name] = true;
+                function add(val) {
+                    if (!val) return;
+                    if (/^jirauser/i.test(val)) return;
+                    set[val] = true;
+                }
+                add(g.name);
+                add(g.key);
+                // g.id часто accountId вида JIRAUSER..., игнорируем
                 return Object.keys(set).filter(Boolean);
             }
 
@@ -942,7 +948,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var grp = groups[idx];
                 if (grp.id === "__outside__") { fetchForGroup(idx + 1); return; }
                 var authors = authorCandidates(grp);
-                if (authors.length === 0) { fetchForGroup(idx + 1); return; }
+                if (authors.length === 0) {
+                    // fallback: используем имя группы без фильтра, если всё вырезали
+                    if (grp.name) authors = [grp.name];
+                    else { fetchForGroup(idx + 1); return; }
+                }
                 var authorJql = authors.map(function(id) { return '"' + id + '"'; }).join(",");
                 var jql = 'worklogAuthor in (' + authorJql + ') AND worklogDate >= "' + start + '" AND worklogDate <= "' + end + '"';
 
