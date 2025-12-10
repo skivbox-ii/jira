@@ -833,6 +833,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var loggedSec = wl && wl.sec ? wl.sec : 0;
                 var comments = wl && wl.comments ? wl.comments : [];
                 var inRange = d >= start && d <= end;
+                var showTextInsteadOfOverlay = loggedSec > 0 && inRange;
                 if (inRange) {
                     if (!iss.due && !iss.start) cls += " ujg-gx"; // пунктир если нет дат
                     cls += iss.isDone ? " ujg-gd" : (iss.statusCat === "indeterminate" ? " ujg-gp" : " ujg-gt");
@@ -842,12 +843,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     cls += " ujg-gt";
                 }
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
-                if (loggedSec > 0) cls += " ujg-gc-log";
+                if (loggedSec > 0 && !showTextInsteadOfOverlay) cls += " ujg-gc-log";
                 var title = [];
                 if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
                 if (comments.length > 0) title.push(comments.join(" | "));
                 html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">';
-                if (loggedSec > 0) html += '<span class="ujg-wl">' + utils.formatHoursShort(loggedSec) + '</span>';
+                if (loggedSec > 0) {
+                    var txt = utils.formatHoursShort(loggedSec);
+                    html += '<span class="ujg-wl' + (showTextInsteadOfOverlay ? ' ujg-wl-task' : '') + '">' + txt + '</span>';
+                }
                 html += '</div>';
             });
             return html + '</div>';
