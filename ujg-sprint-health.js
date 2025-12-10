@@ -843,16 +843,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     cls += " ujg-gt";
                 }
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
+                if (loggedSec > 0) cls += " ujg-wl";
                 if (loggedSec > 0 && !showTextInsteadOfOverlay) cls += " ujg-gc-log";
                 var title = [];
                 if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
                 if (comments.length > 0) title.push(comments.join(" | "));
-                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">';
-                if (loggedSec > 0) {
-                    var txt = utils.formatHoursShort(loggedSec);
-                    html += '<span class="ujg-wl' + (showTextInsteadOfOverlay ? ' ujg-wl-task' : '') + '">' + txt + '</span>';
-                }
-                html += '</div>';
+                var txt = loggedSec > 0 ? utils.formatHoursShort(loggedSec) : '';
+                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">' + txt + '</div>';
             });
             return html + '</div>';
         }
@@ -867,13 +864,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var loggedSec = cell && cell.sec ? cell.sec : 0;
                 var comments = cell && cell.comments ? cell.comments : [];
                 var cls = "ujg-gc";
-                if (loggedSec > 0) cls += " ujg-gc-log";
+                if (loggedSec > 0) { cls += " ujg-gc-log ujg-wl"; }
                 var title = [];
                 if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
                 if (comments.length > 0) title.push(comments.join(" | "));
-                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">';
-                if (loggedSec > 0) html += '<span class="ujg-wl">' + utils.formatHoursShort(loggedSec) + '</span>';
-                html += '</div>';
+                var txt = loggedSec > 0 ? utils.formatHoursShort(loggedSec) : '';
+                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">' + txt + '</div>';
             });
             return html + '</div>';
         }
