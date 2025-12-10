@@ -5,7 +5,7 @@
 define("_ujgSprintHealth", ["jquery"], function($) {
     "use strict";
 
-    var CONFIG = { version: "1.3.0", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: true };
+    var CONFIG = { version: "1.3.0", debug: true, maxHours: 16, capacityPerPerson: 40, hoursPerDay: 8, startDateField: "customfield_XXXXX", allowEditDates: true, sprintField: null };
     var STORAGE_KEY = "ujg_sprint_health_settings";
     var baseUrl = (typeof AJS !== "undefined" && AJS.contextPath) ? AJS.contextPath() : "";
 
@@ -82,6 +82,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
     var api = {
         getBoards: function() { return $.ajax({ url: baseUrl + "/rest/agile/1.0/board", data: { maxResults: 100 } }); },
+        getFields: function() { return $.ajax({ url: baseUrl + "/rest/api/2/field" }); },
         getAllSprints: function(boardId) {
             var d = $.Deferred(), all = [];
             function load(startAt) {
@@ -104,13 +105,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         getSprintIssues: function(id) {
             return $.ajax({
                 url: baseUrl + "/rest/agile/1.0/sprint/" + id + "/issue",
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,updated,description,resolutiondate,customfield_10020", expand: "changelog", maxResults: 500 }
+                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,updated,description,resolutiondate," + (CONFIG.sprintField || "customfield_10020"), expand: "changelog", maxResults: 500 }
             });
         },
         getIssue: function(key) {
             return $.ajax({
                 url: baseUrl + "/rest/api/2/issue/" + key,
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,worklog,customfield_10020," + CONFIG.startDateField, expand: "changelog" }
+                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,worklog," + (CONFIG.sprintField || "customfield_10020") + "," + CONFIG.startDateField, expand: "changelog" }
             });
         },
         getIssueChangelog: function(key) {
@@ -244,12 +245,35 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             loadSprintData(id);
         }
 
+        var sprintFieldPromise = null;
+        function resolveSprintField() {
+            if (CONFIG.sprintField) return $.Deferred().resolve(CONFIG.sprintField).promise();
+            if (sprintFieldPromise) return sprintFieldPromise;
+            sprintFieldPromise = api.getFields().then(function(list) {
+                var field = (list || []).find(function(f) { return f && f.name === "Sprint" && f.schema && f.schema.customId; });
+                if (field && field.id) {
+                    CONFIG.sprintField = field.id;
+                    log("Sprint field resolved: " + field.id);
+                    return field.id;
+                }
+                // fallback
+                CONFIG.sprintField = "customfield_10020";
+                return CONFIG.sprintField;
+            }, function() {
+                CONFIG.sprintField = "customfield_10020";
+                return CONFIG.sprintField;
+            });
+            return sprintFieldPromise;
+        }
+
         function loadSprintData(id) {
             state.loading = true;
             saveSettings({ boardId: state.selectedBoardId, sprintId: id });
             $cont.html('<div class="ujg-loading">⏳ Загрузка данных спринта...</div>');
             
-            $.when(api.getSprint(id), api.getSprintIssues(id)).then(function(sprintResp, issuesResp) {
+            resolveSprintField().then(function() {
+                return $.when(api.getSprint(id), api.getSprintIssues(id));
+            }).then(function(sprintResp, issuesResp) {
                 state.sprint = sprintResp[0] || sprintResp;
                 state.issues = (issuesResp[0] || issuesResp).issues || [];
                 state.viewIssues = state.issues.slice();
@@ -301,7 +325,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (isDone) m.done++;
                 
                 // Проблемы
-                var sprints = f.customfield_10020 || []; // Sprint field
+                var sprints = f[CONFIG.sprintField] || f.customfield_10020 || []; // Sprint field
                 var sprintCount = Array.isArray(sprints) ? sprints.length : 0;
                 var statusTime = utils.daysDiff(utils.parseDate(f.updated), now);
                 
@@ -978,6 +1002,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     data: JSON.stringify({
                         jql: jql,
                         fields: ["summary","status","assignee","priority","issuetype","timeoriginalestimate","timetracking","duedate","created","updated","description","resolutiondate","customfield_10020"],
+                    // sprint field тоже нужно, если оно не customfield_10020 — но остальные 3rd-party кейсы пока не покрываем в extra
                         expand: ["changelog","worklog"],
                         maxResults: 500
                     })
