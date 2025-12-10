@@ -526,14 +526,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         if (!wlMap[aid]) wlMap[aid] = { id: aid, name: author.displayName || aid, seconds: 0 };
                         wlMap[aid].seconds += wl.timeSpentSeconds || 0;
                         var dk = utils.getDayKey(wd);
-                        if (!wlByDay[dk]) wlByDay[dk] = { sec: 0, comments: [] };
-                        wlByDay[dk].sec += wl.timeSpentSeconds || 0;
+                        if (!wlByDay[dk]) wlByDay[dk] = { sec: 0, comments: [], entries: [] };
+                        var spent = wl.timeSpentSeconds || 0;
+                        wlByDay[dk].sec += spent;
                         if (wl.comment) wlByDay[dk].comments.push(String(wl.comment));
+                        wlByDay[dk].entries.push({ sec: spent, comment: wl.comment ? String(wl.comment) : "" });
 
                         if (!wlByAuthor[aid]) wlByAuthor[aid] = {};
-                        if (!wlByAuthor[aid][dk]) wlByAuthor[aid][dk] = { sec: 0, comments: [] };
-                        wlByAuthor[aid][dk].sec += wl.timeSpentSeconds || 0;
+                        if (!wlByAuthor[aid][dk]) wlByAuthor[aid][dk] = { sec: 0, comments: [], entries: [] };
+                        wlByAuthor[aid][dk].sec += spent;
                         if (wl.comment) wlByAuthor[aid][dk].comments.push(String(wl.comment));
+                        wlByAuthor[aid][dk].entries.push({ sec: spent, comment: wl.comment ? String(wl.comment) : "" });
                     });
                     workAuthors = Object.values(wlMap).sort(function(a, b) { return b.seconds - a.seconds; });
                 }
@@ -925,6 +928,24 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html + '</tbody></table></div>';
         }
 
+        function buildWlTitle(wl) {
+            if (!wl || !wl.sec) return "";
+            var parts = [];
+            var entries = wl.entries || [];
+            if (entries.length) {
+                parts.push("Логи: " + utils.formatHours(wl.sec) + " (" + entries.length + " зап.)");
+                entries.forEach(function(e, idx) {
+                    var line = (idx + 1) + ") " + utils.formatHoursShort(e.sec);
+                    if (e.comment) line += " — " + e.comment;
+                    parts.push(line);
+                });
+            } else {
+                parts.push("Логи: " + utils.formatHours(wl.sec));
+                if (wl.comments && wl.comments.length) parts = parts.concat(wl.comments);
+            }
+            return parts.join("\\n");
+        }
+
         function renderGantt(iss, days, sprintStart, sprintEnd) {
             if (!days.length) return '';
             var start = iss.start || sprintStart || (iss.created || days[0]);
@@ -951,11 +972,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
                 
                 if (loggedSec > 0 && !showTextInsteadOfOverlay) cls += " ujg-gc-log";
-                var title = [];
-                if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
-                if (comments.length > 0) title.push(comments.join(" | "));
+                var title = buildWlTitle(wl);
                 var txt = loggedSec > 0 ? utils.formatHoursShort(loggedSec) : '';
-                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">' + txt + '</div>';
+                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title) + '">' + txt + '</div>';
             });
             return html + '</div>';
         }
@@ -1114,7 +1133,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var assigneeNote = "";
             if (iss.assignee && iss.assignee.id) {
                 if (!sameAssignee(iss.assignee, group)) {
-                    assigneeNote = "(назначено2: " + (iss.assignee.name || iss.assignee.id) + ")";
+                    assigneeNote = "(назначено: " + (iss.assignee.name || iss.assignee.id) + ")";
                     problems.push("Назначено на " + (iss.assignee.name || iss.assignee.id));
                 }
             }
@@ -1136,11 +1155,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var comments = cell && cell.comments ? cell.comments : [];
                 var cls = "ujg-gc";
                 if (loggedSec > 0) { cls += " ujg-gc-log ujg-wl"; }
-                var title = [];
-                if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
-                if (comments.length > 0) title.push(comments.join(" | "));
+                var title = buildWlTitle(cell);
                 var txt = loggedSec > 0 ? utils.formatHoursShort(loggedSec) : '';
-                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">' + txt + '</div>';
+                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title) + '">' + txt + '</div>';
             });
             return html + '</div>';
         }
