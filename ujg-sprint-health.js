@@ -916,7 +916,22 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var end = utils.getDayKey(utils.parseDate(sp.endDate));
             if (!start || !end) { d.resolve([]); return d.promise(); }
 
-            var authorJql = team.map(function(id) { return '"' + id + '"'; }).join(",");
+            // Собираем возможные идентификаторы авторов (username/name/key/accountId)
+            var authorSet = {};
+            function addAuthor(val) { if (!val) return; authorSet[val] = true; }
+            (state.issues || []).forEach(function(iss) {
+                var a = iss.fields && iss.fields.assignee;
+                if (a) {
+                    addAuthor(a.name);
+                    addAuthor(a.key);
+                    addAuthor(a.accountId);
+                }
+            });
+            team.forEach(addAuthor);
+            var authors = Object.keys(authorSet).filter(Boolean);
+            if (authors.length === 0) authors = team.slice();
+
+            var authorJql = authors.map(function(id) { return '"' + id + '"'; }).join(",");
             var jql = 'worklogAuthor in (' + authorJql + ') AND worklogDate >= "' + start + '" AND worklogDate <= "' + end + '"';
 
             $.ajax({
