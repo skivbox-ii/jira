@@ -13,6 +13,24 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         escapeHtml: function(t) { if (!t) return ""; var d = document.createElement("div"); d.textContent = String(t); return d.innerHTML; },
         formatHours: function(s) { if (!s || s <= 0) return "—"; var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h > 0 ? h + "ч" + (m > 0 ? m + "м" : "") : m + "м"; },
         formatHoursShort: function(s) { return s > 0 ? Math.round(s / 3600) + "ч" : "0"; },
+        parseHoursToSeconds: function(t) {
+            if (!t) return null;
+            var str = String(t).trim();
+            if (!str) return null;
+            str = str.replace(",", ".");
+            var numOnly = str.match(/^\d+(\.\d+)?$/);
+            if (numOnly) return Math.round(parseFloat(str) * 3600);
+            var re = /(\d+(?:\.\d+)?)(h|ч|m|м)/gi, match, totalH = 0, found = false;
+            while ((match = re.exec(str)) !== null) {
+                found = true;
+                var val = parseFloat(match[1]);
+                var unit = match[2].toLowerCase();
+                if (unit === "m" || unit === "м") totalH += val / 60;
+                else totalH += val;
+            }
+            if (!found) return null;
+            return Math.round(totalH * 3600);
+        },
         parseDate: function(v) { if (!v) return null; var d = new Date(v); return isNaN(d.getTime()) ? null : d; },
         formatDateShort: function(d) { if (!d) return "—"; return (d.getDate() < 10 ? "0" : "") + d.getDate() + "." + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1); },
         formatDateFull: function(d) { if (!d) return "—"; return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }); },
@@ -92,6 +110,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return $.ajax({
                 url: baseUrl + "/rest/api/2/issue/" + key + "/worklog",
                 data: { maxResults: 1000, startAt: 0 }
+            });
+        },
+        updateIssueEstimate: function(key, seconds) {
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/issue/" + key,
+                type: "PUT",
+                contentType: "application/json",
+                data: JSON.stringify({
+                    fields: {
+                        timetracking: { originalEstimateSeconds: seconds },
+                        timeoriginalestimate: seconds
+                    }
+                })
             });
         },
         getBoardTeams: function(boardId) {
@@ -748,7 +779,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
                     html += '<td title="' + utils.escapeHtml(iss.summary || "") + '">' + utils.escapeHtml(iss.summary || "") + '</td>';
-                    html += '<td>' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
+                    html += '<td class="ujg-est" data-key="' + iss.key + '" data-est="' + (iss.est || 0) + '">' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.start) + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
                     html += '<td><span class="ujg-st ujg-st-' + iss.statusCat + '">' + utils.escapeHtml((iss.status || "").substring(0, 8)) + '</span></td>';
@@ -801,9 +832,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var wl = wlMap[dk] || null;
                 var loggedSec = wl && wl.sec ? wl.sec : 0;
                 var comments = wl && wl.comments ? wl.comments : [];
-                if (d >= start && d <= end) {
+                var inRange = d >= start && d <= end;
+                if (inRange) {
                     if (!iss.due && !iss.start) cls += " ujg-gx"; // пунктир если нет дат
                     cls += iss.isDone ? " ujg-gd" : (iss.statusCat === "indeterminate" ? " ujg-gp" : " ujg-gt");
+                }
+                if (loggedSec > 0 && !inRange) {
+                    // есть worklog вне диапазона оценки — подсветим темнее, как базовый гант
+                    cls += " ujg-gt";
                 }
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
                 if (loggedSec > 0) cls += " ujg-gc-log";
@@ -960,6 +996,63 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 $cont.find('.ujg-row[data-aid="' + aid + '"]').toggle();
             });
             
+            var editingCell = null;
+            function endEdit(cancel) {
+                if (!editingCell) return;
+                var $cell = editingCell.$cell;
+                var origSec = editingCell.origSec;
+                $cell.removeClass("ujg-est-edit ujg-est-err");
+                var text = origSec > 0 ? utils.formatHoursShort(origSec) : "—";
+                $cell.data("est", origSec).attr("data-est", origSec).text(text);
+                editingCell = null;
+            }
+
+            function saveEdit($cell, key, newSec) {
+                $cell.addClass("ujg-busy");
+                api.updateIssueEstimate(key, newSec).then(function() {
+                    var issue = state.issues.find(function(it) { return it.key === key; });
+                    if (issue) issue.fields.timeoriginalestimate = newSec;
+                    if (issue) issue.est = newSec;
+                    calculate();
+                    render();
+                }, function(err) {
+                    alert("Не удалось обновить эстимейт: " + (err && err.statusText ? err.statusText : "ошибка"));
+                    endEdit(true);
+                }).always(function() { $cell.removeClass("ujg-busy"); });
+            }
+
+            $cont.find(".ujg-est").on("click", function(e) {
+                var $cell = $(this);
+                if ($cell.hasClass("ujg-est-edit")) return;
+                if (editingCell) endEdit(true);
+                var origSec = Number($cell.data("est")) || 0;
+                var hours = origSec > 0 ? Math.round(origSec / 360) / 10 : "";
+                var $input = $('<input type="text" class="ujg-est-input">').val(hours);
+                $cell.addClass("ujg-est-edit").empty().append($input);
+                editingCell = { $cell: $cell, origSec: origSec };
+                $input.focus().select();
+
+                function trySave() {
+                    var val = $input.val();
+                    var sec = utils.parseHoursToSeconds(val);
+                    if (sec === null) {
+                        $cell.addClass("ujg-est-err");
+                        return;
+                    }
+                    if (sec === origSec) {
+                        endEdit(true);
+                        return;
+                    }
+                    saveEdit($cell, $cell.data("key"), sec);
+                }
+
+                $input.on("keydown", function(ev) {
+                    if (ev.key === "Enter") { ev.preventDefault(); trySave(); }
+                    if (ev.key === "Escape") { ev.preventDefault(); endEdit(true); }
+                });
+                $input.on("blur", function() { if (editingCell) trySave(); });
+            });
+
             var hoverTimer;
             $cont.find(".ujg-prob-row").on("mouseenter", function() {
                 var $row = $(this), key = $row.data("key");

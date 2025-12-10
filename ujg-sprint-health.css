@@ -146,6 +146,12 @@
 .ujg-gh-cell:last-child { border-right: none; }
 .ujg-gh-cell span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 9px; color: #6b778c; line-height: 1; padding: 2px 1px; }
 
+/* Estimate inline edit */
+.ujg-est { cursor: pointer; white-space: nowrap; }
+.ujg-est-edit { padding: 0; }
+.ujg-est-input { width: 60px; padding: 2px 4px; font-size: 11px; box-sizing: border-box; }
+.ujg-est-err { background: #ffecec !important; border: 1px solid #f66 !important; }
+
 /* Fullscreen */
 .ujg-fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999 !important; background: #f4f5f7 !important; overflow: auto !important; padding: 15px !important; box-sizing: border-box !important; }
 .ujg-fullscreen .ujg-sprint-health { max-width: 1600px; margin: 0 auto; }
