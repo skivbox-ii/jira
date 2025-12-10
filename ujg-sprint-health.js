@@ -699,7 +699,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var statusCls = "ujg-st-" + p.statusCategory;
                 html += '<tr class="ujg-prob-row" data-key="' + p.key + '">';
                 html += '<td><a href="' + baseUrl + '/browse/' + p.key + '" target="_blank">' + p.key + '</a></td>';
-                html += '<td class="ujg-prob-sum" title="' + utils.escapeHtml(p.summary) + '">' + utils.escapeHtml(p.summary.substring(0, 40)) + (p.summary.length > 40 ? "…" : "") + '</td>';
+                html += '<td class="ujg-prob-sum" title="' + utils.escapeHtml(p.summary || "") + '">' + utils.escapeHtml(p.summary || "") + '</td>';
                 html += '<td><span class="ujg-st ' + statusCls + '">' + utils.escapeHtml(p.status) + '</span></td>';
                 html += '<td>' + p.statusTime + ' дн.</td>';
                 html += '<td>' + (p.sprintCount > 1 ? '<span class="ujg-rollover">' + p.sprintCount + '</span>' : '1') + '</td>';
@@ -747,7 +747,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 a.issues.forEach(function(iss) {
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
-                    html += '<td title="' + utils.escapeHtml(iss.summary) + '">' + utils.escapeHtml((iss.summary || "").substring(0, 35)) + '</td>';
+                    html += '<td title="' + utils.escapeHtml(iss.summary || "") + '">' + utils.escapeHtml(iss.summary || "") + '</td>';
                     html += '<td>' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.start) + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
