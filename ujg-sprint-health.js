@@ -927,6 +927,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     addAuthor(a.accountId);
                 }
             });
+            // Добавим авторов из сгруппированных исполнителей (id и имя)
+            if (state.byAssignee && state.byAssignee.length) {
+                state.byAssignee.forEach(function(grp) {
+                    addAuthor(grp.id);
+                    addAuthor(grp.name);
+                });
+            }
             team.forEach(addAuthor);
             var authors = Object.keys(authorSet).filter(Boolean);
             if (authors.length === 0) authors = team.slice();
