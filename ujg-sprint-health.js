@@ -37,6 +37,18 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         formatDateFull: function(d) { if (!d) return "—"; return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }); },
         getDayKey: function(d) { if (!d) return ""; return d.getFullYear() + "-" + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1) + "-" + (d.getDate() < 10 ? "0" : "") + d.getDate(); },
         formatDateJira: function(d) { if (!d) return ""; var dd = utils.startOfDay(d); return dd ? utils.getDayKey(dd) : ""; },
+        parseSprintNames: function(list) {
+            if (!list || !Array.isArray(list)) return [];
+            return list.map(function(s) {
+                if (!s) return "";
+                if (typeof s === "string") {
+                    var m = s.match(/name=([^,}]+)/);
+                    return m ? m[1] : s;
+                }
+                if (s.name) return s.name;
+                return String(s);
+            }).filter(Boolean);
+        },
         daysBetween: function(start, end) {
             var res = [], cur = new Date(start); cur.setHours(0,0,0,0);
             var ed = new Date(end); ed.setHours(0,0,0,0);
@@ -521,6 +533,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var assigneeId = f.assignee ? (f.assignee.accountId || f.assignee.key) : null;
                 var assigneeName = f.assignee ? (f.assignee.displayName || assigneeId) : null;
                 var assigneeLogin = f.assignee ? (f.assignee.name || f.assignee.key || f.assignee.accountId) : null;
+                var sprintNames = utils.parseSprintNames(f.customfield_10020 || []);
 
                 var item = {
                     key: iss.key,
@@ -538,6 +551,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     assignee: assigneeId ? { id: assigneeId, name: assigneeName, login: assigneeLogin } : null,
                     worklogs: wlByDay,
                     worklogsByAuthor: wlByAuthor,
+                    sprints: sprintNames,
                     outsideUser: null
                 };
                 issueMap[item.key] = item;
@@ -1043,6 +1057,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             }
             if (problems.length === 0) problems.push("Проблем нет");
             titleParts.push("Проблемы: " + problems.join("; "));
+
+            var sprintInfo = (iss.sprints && iss.sprints.length) ? iss.sprints.join(", ") : "—";
+            titleParts.push("Спринты: " + sprintInfo);
+            if (iss.isOutsideSprint) titleParts.push("OutsideSprint: true");
 
             var assigneeNote = "";
             if (iss.assignee && iss.assignee.id) {
