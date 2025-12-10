@@ -954,9 +954,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             titleParts.push("Проблемы: " + problems.join("; "));
 
             var assigneeNote = "";
-            if (iss.assignee && iss.assignee.id && groupId && iss.assignee.id !== groupId) {
+            if (iss.assignee && iss.assignee.id) {
                 assigneeNote = "(назначено: " + (iss.assignee.name || iss.assignee.id) + ")";
-                problems.push("Назначено на " + (iss.assignee.name || iss.assignee.id));
+                if (groupId && iss.assignee.id !== groupId) {
+                    problems.push("Назначено на " + (iss.assignee.name || iss.assignee.id));
+                }
             }
 
             return {
