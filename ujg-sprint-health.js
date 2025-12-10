@@ -157,7 +157,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             loading: false, isFullscreen: false,
             chartMode: "tasks", // tasks или hours
             metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {},
-            teams: {}, teamKey: "", teamMembers: []
+            teams: {}, teamKey: "", teamMembers: [],
+            worklogDebug: { jql: "", keys: [], byAuthorId: {}, byAuthorName: {} }
         };
 
         var $content = API.getGadgetContentEl();
@@ -785,6 +786,27 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
                 var dbgSec = 0;
                 var dbgTasks = {};
+                var apiDbgSec = 0;
+                var apiDbgKeys = [];
+                var dbgIdMap = state.worklogDebug || {};
+                function collectApiDbg(authorId, authorName) {
+                    if (dbgIdMap.byAuthorId && authorId && dbgIdMap.byAuthorId[authorId]) {
+                        apiDbgSec += dbgIdMap.byAuthorId[authorId].sec || 0;
+                        apiDbgKeys = apiDbgKeys.concat(Object.keys(dbgIdMap.byAuthorId[authorId].keys || {}));
+                    }
+                    var lname = (authorName || "").toLowerCase();
+                    if (dbgIdMap.byAuthorName && lname && dbgIdMap.byAuthorName[lname]) {
+                        apiDbgSec += dbgIdMap.byAuthorName[lname].sec || 0;
+                        apiDbgKeys = apiDbgKeys.concat(Object.keys(dbgIdMap.byAuthorName[lname].keys || {}));
+                    }
+                }
+                function samePerson(wa) {
+                    var waId = wa.id || "";
+                    var waName = (wa.name || "").toLowerCase();
+                    if (a.id && waId && a.id === waId) return true;
+                    if (a.name && waName && a.name.toLowerCase() === waName) return true;
+                    return false;
+                }
                 a.issues.forEach(function(iss) {
                     var meta = buildIssueMeta(iss, days, a.id);
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
@@ -799,7 +821,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<td>' + renderGantt(iss, days, sprintStart, sprintEnd) + '</td></tr>';
                     if (iss.workAuthors && Array.isArray(iss.workAuthors)) {
                         iss.workAuthors.forEach(function(wa) {
-                            if (wa.id && wa.id === a.id) {
+                            if (samePerson(wa)) {
                                 dbgSec += wa.seconds || 0;
                                 dbgTasks[iss.key] = true;
                             }
@@ -836,9 +858,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         html += '<td>—</td><td></td><td></td><td></td><td></td></tr>';
                     });
                 });
+                collectApiDbg(a.id, a.name);
                 var dbgTaskList = Object.keys(dbgTasks);
-                var dbgText = "DEBUG: трудозатраты " + utils.formatHours(dbgSec) + (dbgTaskList.length ? " | задачи: " + dbgTaskList.join(", ") : "");
+                var apiKeysUnique = Array.from(new Set(apiDbgKeys));
+                var dbgText = "DEBUG: трудозатраты " + utils.formatHours(dbgSec);
+                if (dbgTaskList.length) dbgText += " | задачи (view): " + dbgTaskList.join(", ");
+                var apiText = "API: jql=" + (dbgIdMap.jql || "");
+                apiText += " | трудозатраты " + utils.formatHours(apiDbgSec);
+                if (apiKeysUnique.length) apiText += " | задачи (api): " + apiKeysUnique.join(", ");
                 html += '<tr class="ujg-row ujg-sub"><td colspan="7" class="ujg-debug-row">' + utils.escapeHtml(dbgText) + '</td></tr>';
+                html += '<tr class="ujg-row ujg-sub"><td colspan="7" class="ujg-debug-row">' + utils.escapeHtml(apiText) + '</td></tr>';
             });
             return html + '</tbody></table></div>';
         }
@@ -902,6 +931,28 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 })
             }).then(function(res) {
                 var issues = (res && res.issues) ? res.issues : [];
+                state.worklogDebug = { jql: jql, keys: issues.map(function(i){return i.key;}), byAuthorId: {}, byAuthorName: {} };
+
+                // Считаем часы по авторам на основе ответа API (без фильтра)
+                issues.forEach(function(iss) {
+                    var wl = iss.fields && iss.fields.worklog && iss.fields.worklog.worklogs ? iss.fields.worklog.worklogs : [];
+                    wl.forEach(function(w) {
+                        var aid = (w.author && (w.author.accountId || w.author.key)) || "";
+                        var aname = (w.author && w.author.displayName || "").toLowerCase();
+                        var sec = w.timeSpentSeconds || 0;
+                        if (aid) {
+                            if (!state.worklogDebug.byAuthorId[aid]) state.worklogDebug.byAuthorId[aid] = { sec: 0, keys: {} };
+                            state.worklogDebug.byAuthorId[aid].sec += sec;
+                            state.worklogDebug.byAuthorId[aid].keys[iss.key] = true;
+                        }
+                        if (aname) {
+                            if (!state.worklogDebug.byAuthorName[aname]) state.worklogDebug.byAuthorName[aname] = { sec: 0, keys: {} };
+                            state.worklogDebug.byAuthorName[aname].sec += sec;
+                            state.worklogDebug.byAuthorName[aname].keys[iss.key] = true;
+                        }
+                    });
+                });
+
                 var existingKeys = {};
                 (state.issues || []).forEach(function(i) { existingKeys[i.key] = true; });
                 var extra = issues.filter(function(i) { return !existingKeys[i.key]; });
