@@ -772,7 +772,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         html += '<tr class="ujg-row ujg-sub" data-aid="' + a.id + '">';
                         html += '<td></td>';
                         html += '<td class="ujg-sub-name" title="Worklog автора">' + utils.escapeHtml(wa.name) + ' ' + togWa + '</td>';
-                        html += '<td colspan="5" class="ujg-wl-row">' + renderWorklogCellsForAuthor(iss, days, wa.id, wa.seconds) + '</td></tr>';
+                        html += '<td>' + (wa.seconds > 0 ? utils.formatHours(wa.seconds) : "—") + '</td>';
+                        html += '<td></td><td></td><td></td>';
+                        html += '<td>' + renderWorklogCellsForAuthor(iss, days, wa.id) + '</td></tr>';
                     });
                     // Прошлые ассайны без worklog
                     iss.pastAssignees.filter(function(n) { return !usedNames[n]; }).forEach(function(n) {
@@ -815,11 +817,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html + '</div>';
         }
 
-        function renderWorklogCellsForAuthor(iss, days, authorId, totalSec) {
+        function renderWorklogCellsForAuthor(iss, days, authorId) {
             if (!days.length) return '';
             var map = (iss.worklogsByAuthor && iss.worklogsByAuthor[authorId]) || {};
-            var total = totalSec || 0;
-            var html = '<div class="ujg-gantt ujg-gantt-wl" title="Сумма: ' + (total > 0 ? utils.formatHours(total) : "—") + '">';
+            var html = '<div class="ujg-gantt ujg-gantt-wl">';
             days.forEach(function(d) {
                 var dk = utils.getDayKey(d);
                 var cell = map[dk] || null;

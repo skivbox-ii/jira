@@ -122,7 +122,9 @@
 
 /* Gantt */
 .ujg-gantt { position: relative; display: flex; gap: 0; height: 16px; cursor: pointer; background: #fff; border: 1px solid #dfe1e6; border-radius: 2px; overflow: hidden; }
+.ujg-gantt-wl { height: 16px; border-color: #cbdcf7; background: #f7f9ff; }
 .ujg-gc { position: relative; flex: 1; min-width: 6px; height: 100%; background: #f4f5f7; border-right: 1px solid #dfe1e6; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-size: 9px; color: #1b1b1b; }
+.ujg-gantt-wl .ujg-gc { background: #eef3fb; border-right-color: #cbdcf7; }
 .ujg-gc:last-child { border-right: none; }
 .ujg-gt { background: #646a7a; }
 .ujg-gp { background: #2d66b2; color: #fff; }
@@ -132,8 +134,10 @@
 .ujg-dragging .ujg-gc { cursor: ew-resize; }
 .ujg-gc-today:after, .ujg-gh-today:after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #de350b; pointer-events: none; }
 .ujg-gc-log { box-shadow: inset 0 0 0 1px #90caf9; background: #e3f2fd; }
+.ujg-gantt-wl .ujg-gc-log { background: #d5e4ff; box-shadow: inset 0 0 0 1px #7da2ff; }
 .ujg-wl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 9px; line-height: 1; pointer-events: none; }
-.ujg-wl-row { padding: 2px 4px; }
+.ujg-gantt-wl .ujg-wl { color: #0d47a1; }
+.ujg-wl-row .ujg-gantt-wl { width: 100%; }
 
 .ujg-th-gantt { min-width: 240px; }
 .ujg-ghead { display: flex; align-items: stretch; justify-content: stretch; height: 42px; border: 1px solid #ebecf0; border-radius: 2px; overflow: hidden; background: #fff; }
