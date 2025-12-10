@@ -788,7 +788,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
                     var assigneeNote = meta.assigneeNote ? '<span class="ujg-asgn-note">' + utils.escapeHtml(meta.assigneeNote) + '</span>' : '';
-                    html += '<td title="' + utils.escapeHtml(meta.title) + '">' + utils.escapeHtml(iss.summary || "") + assigneeNote + '</td>';
+                    var outside = iss.isOutsideSprint ? '<span class="ujg-outside-pill">вне спринта</span>' : '';
+                    html += '<td title="' + utils.escapeHtml(meta.title) + '">' + utils.escapeHtml(iss.summary || "") + assigneeNote + outside + '</td>';
                     html += '<td class="ujg-est" data-key="' + iss.key + '" data-est="' + (iss.est || 0) + '">' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.start) + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
@@ -862,6 +863,44 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">' + txt + '</div>';
             });
             return html + '</div>';
+        }
+
+        function loadExtraWorklogIssues() {
+            var d = $.Deferred();
+            var sp = state.sprint;
+            var team = state.teamMembers || [];
+            if (!sp || !sp.startDate || !sp.endDate || team.length === 0) { d.resolve([]); return d.promise(); }
+            var start = utils.getDayKey(utils.parseDate(sp.startDate));
+            var end = utils.getDayKey(utils.parseDate(sp.endDate));
+            if (!start || !end) { d.resolve([]); return d.promise(); }
+
+            var authorJql = team.map(function(id) { return '"' + id + '"'; }).join(",");
+            var jql = 'worklogAuthor in (' + authorJql + ') AND worklogDate >= "' + start + '" AND worklogDate <= "' + end + '"';
+
+            $.ajax({
+                url: baseUrl + "/rest/api/2/search",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({
+                    jql: jql,
+                    fields: ["summary","status","assignee","priority","issuetype","timeoriginalestimate","timetracking","duedate","created","updated","description","resolutiondate","customfield_10020"],
+                    expand: ["changelog","worklog"],
+                    maxResults: 500
+                })
+            }).then(function(res) {
+                var issues = (res && res.issues) ? res.issues : [];
+                var existingKeys = {};
+                (state.issues || []).forEach(function(i) { existingKeys[i.key] = true; });
+                var extra = issues.filter(function(i) { return !existingKeys[i.key]; });
+                extra.forEach(function(i) { i.isOutsideSprint = true; });
+                if (extra.length === 0) { d.resolve([]); return; }
+                enrichIssues(extra).always(function() {
+                    state.extraIssues = extra;
+                    state.viewIssues = (state.issues || []).concat(extra);
+                    d.resolve(extra);
+                });
+            }, function() { d.resolve([]); });
+            return d.promise();
         }
 
         function buildIssueMeta(iss, days, groupId) {
