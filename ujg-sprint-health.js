@@ -850,7 +850,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     return false;
                 }
                 a.issues.forEach(function(iss) {
-                    var meta = buildIssueMeta(iss, days, a.id);
+                    var meta = buildIssueMeta(iss, days, a);
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
                     var assigneeNote = meta.assigneeNote ? '<span class="ujg-asgn-note">' + utils.escapeHtml(meta.assigneeNote) + '</span>' : '';
@@ -903,7 +903,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 collectApiDbg(a.id, a.name);
                 var dbgTaskList = Object.keys(dbgTasks);
                 var apiKeysUnique = Array.from(new Set(apiDbgKeys));
-                var dbgText = "DEBUG: трудозатраты " + utils.formatHours(dbgSec);
+                var dbgText = "DEBUG2: трудозатраты " + utils.formatHours(dbgSec);
                 if (dbgTaskList.length) dbgText += " | задачи (view): " + dbgTaskList.join(", ");
                 var apiText = "API: jql=" + (dbgIdMap ? (dbgIdMap.jql || "") : "");
                 apiText += " | трудозатраты " + utils.formatHours(apiDbgSec);
@@ -1046,7 +1046,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return d.promise();
         }
 
-        function buildIssueMeta(iss, days, groupId) {
+        function buildIssueMeta(iss, days, group) {
             var today = utils.startOfDay(new Date());
             var titleParts = [iss.summary || ""];
 
@@ -1087,10 +1087,23 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             titleParts.push("Спринты: " + sprintInfo);
             if (iss.isOutsideSprint) titleParts.push("OutsideSprint: true");
 
+            function sameAssignee(a, g) {
+                if (!a || !g) return false;
+                var aId = (a.id || "").toLowerCase();
+                var aLogin = (a.login || "").toLowerCase();
+                var aName = (a.name || "").toLowerCase();
+                var gId = (g.id || "").toLowerCase();
+                var gLogin = (g.login || "").toLowerCase();
+                var gName = (g.name || "").toLowerCase();
+                return (aId && gId && aId === gId) ||
+                       (aLogin && gLogin && aLogin === gLogin) ||
+                       (aName && gName && aName === gName);
+            }
+
             var assigneeNote = "";
             if (iss.assignee && iss.assignee.id) {
-                assigneeNote = "(назначено: " + (iss.assignee.name || iss.assignee.id) + ")";
-                if (groupId && iss.assignee.id !== groupId) {
+                if (!sameAssignee(iss.assignee, group)) {
+                    assigneeNote = "(назначено: " + (iss.assignee.name || iss.assignee.id) + ")";
                     problems.push("Назначено на " + (iss.assignee.name || iss.assignee.id));
                 }
             }
