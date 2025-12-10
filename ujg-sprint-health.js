@@ -783,6 +783,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var tog = isOutside ? '' : '<span class="ujg-tm-toggle ' + (inTeam ? 'on' : '') + '" data-uid="' + utils.escapeHtml(a.id) + '" data-uname="' + utils.escapeHtml(a.name) + '" title="' + (inTeam ? 'В команде' : 'Добавить в команду') + '">◎</span>';
                 var title = isOutside ? 'Вне команды' : utils.escapeHtml(a.name);
                 html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
+                var dbgSec = 0;
+                var dbgTasks = {};
                 a.issues.forEach(function(iss) {
                     var meta = buildIssueMeta(iss, days, a.id);
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
@@ -795,6 +797,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
                     html += '<td><span class="ujg-st ujg-st-' + iss.statusCat + '">' + utils.escapeHtml((iss.status || "").substring(0, 8)) + '</span></td>';
                     html += '<td>' + renderGantt(iss, days, sprintStart, sprintEnd) + '</td></tr>';
+                    if (iss.workAuthors && Array.isArray(iss.workAuthors)) {
+                        iss.workAuthors.forEach(function(wa) {
+                            if (wa.id && wa.id === a.id) {
+                                dbgSec += wa.seconds || 0;
+                                dbgTasks[iss.key] = true;
+                            }
+                        });
+                    }
                     // Для вне команды: показать назначение/кандидата с тогглом
                     if (isOutside && iss.outsideUser) {
                         var ou = iss.outsideUser;
@@ -826,6 +836,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         html += '<td>—</td><td></td><td></td><td></td><td></td></tr>';
                     });
                 });
+                var dbgTaskList = Object.keys(dbgTasks);
+                var dbgText = "DEBUG: трудозатраты " + utils.formatHours(dbgSec) + (dbgTaskList.length ? " | задачи: " + dbgTaskList.join(", ") : "");
+                html += '<tr class="ujg-row ujg-sub"><td colspan="7" class="ujg-debug-row">' + utils.escapeHtml(dbgText) + '</td></tr>';
             });
             return html + '</tbody></table></div>';
         }
