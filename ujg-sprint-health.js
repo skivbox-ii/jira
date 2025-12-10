@@ -816,8 +816,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
                     var assigneeNote = meta.assigneeNote ? '<span class="ujg-asgn-note">' + utils.escapeHtml(meta.assigneeNote) + '</span>' : '';
-                    var outside = iss.isOutsideSprint ? '<span class="ujg-outside-pill">вне спринта</span>' : '';
-                    html += '<td title="' + utils.escapeHtml(meta.title) + '">' + utils.escapeHtml(iss.summary || "") + assigneeNote + outside + '</td>';
+                    var outside = iss.isOutsideSprint ? '<span class="ujg-outside-pill">вне спринта</span>' : 'кккк';
+                    html += '<td title="' + utils.escapeHtml(meta.title) + '">1232131' + utils.escapeHtml(iss.summary || "") + assigneeNote + outside + '</td>';
                     html += '<td class="ujg-est" data-key="' + iss.key + '" data-est="' + (iss.est || 0) + '">' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.start) + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
