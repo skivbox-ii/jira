@@ -153,7 +153,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         var state = {
             boards: [], sprints: [], filteredSprints: [],
             selectedBoardId: null, selectedSprintId: null,
-            sprint: null, issues: [], loading: false, isFullscreen: false,
+            sprint: null, issues: [], viewIssues: [], extraIssues: [],
+            loading: false, isFullscreen: false,
             chartMode: "tasks", // tasks или hours
             metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {},
             teams: {}, teamKey: "", teamMembers: []
@@ -238,11 +239,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             $.when(api.getSprint(id), api.getSprintIssues(id)).then(function(sprintResp, issuesResp) {
                 state.sprint = sprintResp[0] || sprintResp;
                 state.issues = (issuesResp[0] || issuesResp).issues || [];
+                state.viewIssues = state.issues.slice();
+                state.extraIssues = [];
                 updateTeamKey();
                 enrichIssues(state.issues).always(function() {
                     calculate();
-                    render();
-                    state.loading = false;
+                    loadExtraWorklogIssues().always(function() {
+                        groupByAssignee();
+                        render();
+                        state.loading = false;
+                    });
                 });
             });
         }
@@ -456,7 +462,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var sprintStart = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null;
             var sprintEnd = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.endDate)) : null;
             var teamMembers = state.teamMembers || [];
-            state.issues.forEach(function(iss) {
+            var srcIssues = state.viewIssues && state.viewIssues.length ? state.viewIssues : state.issues;
+            srcIssues.forEach(function(iss) {
                 var f = iss.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
                 var due = utils.startOfDay(utils.parseDate(f.duedate) || (state.sprint ? utils.parseDate(state.sprint.endDate) : null));
@@ -777,7 +784,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var title = isOutside ? 'Вне команды' : utils.escapeHtml(a.name);
                 html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
                 a.issues.forEach(function(iss) {
-                    var meta = buildIssueMeta(iss, days);
+                    var meta = buildIssueMeta(iss, days, a.id);
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
                     var assigneeNote = meta.assigneeNote ? '<span class="ujg-asgn-note">' + utils.escapeHtml(meta.assigneeNote) + '</span>' : '';
@@ -857,7 +864,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html + '</div>';
         }
 
-        function buildIssueMeta(iss, days) {
+        function buildIssueMeta(iss, days, groupId) {
             var today = utils.startOfDay(new Date());
             var titleParts = [iss.summary || ""];
 
@@ -895,7 +902,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             titleParts.push("Проблемы: " + problems.join("; "));
 
             var assigneeNote = "";
-            if (iss.assignee && iss.assignee.name) assigneeNote = "(назначено: " + iss.assignee.name + ")";
+            if (iss.assignee && iss.assignee.id && groupId && iss.assignee.id !== groupId) {
+                assigneeNote = "(назначено: " + (iss.assignee.name || iss.assignee.id) + ")";
+                problems.push("Назначено на " + (iss.assignee.name || iss.assignee.id));
+            }
 
             return {
                 assigneeNote: assigneeNote,
