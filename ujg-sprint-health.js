@@ -31,6 +31,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (!found) return null;
             return Math.round(totalH * 3600);
         },
+        clamp: function(v, min, max) { return Math.max(min, Math.min(max, v)); },
         parseDate: function(v) { if (!v) return null; var d = new Date(v); return isNaN(d.getTime()) ? null : d; },
         formatDateShort: function(d) { if (!d) return "—"; return (d.getDate() < 10 ? "0" : "") + d.getDate() + "." + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1); },
         formatDateFull: function(d) { if (!d) return "—"; return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }); },
@@ -776,9 +777,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var title = isOutside ? 'Вне команды' : utils.escapeHtml(a.name);
                 html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
                 a.issues.forEach(function(iss) {
+                    var meta = buildIssueMeta(iss, days);
                     html += '<tr class="ujg-row" data-aid="' + a.id + '">';
                     html += '<td><a href="' + baseUrl + '/browse/' + iss.key + '" target="_blank" class="' + (iss.isDone ? "ujg-done" : "") + '">' + iss.key + '</a></td>';
-                    html += '<td title="' + utils.escapeHtml(iss.summary || "") + '">' + utils.escapeHtml(iss.summary || "") + '</td>';
+                    var assigneeNote = meta.assigneeNote ? '<span class="ujg-asgn-note">' + utils.escapeHtml(meta.assigneeNote) + '</span>' : '';
+                    html += '<td title="' + utils.escapeHtml(meta.title) + '">' + utils.escapeHtml(iss.summary || "") + assigneeNote + '</td>';
                     html += '<td class="ujg-est" data-key="' + iss.key + '" data-est="' + (iss.est || 0) + '">' + (iss.est > 0 ? utils.formatHoursShort(iss.est) : "—") + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.start) + '</td>';
                     html += '<td>' + utils.formatDateShort(iss.due) + '</td>';
@@ -852,6 +855,52 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">' + txt + '</div>';
             });
             return html + '</div>';
+        }
+
+        function buildIssueMeta(iss, days) {
+            var today = utils.startOfDay(new Date());
+            var titleParts = [iss.summary || ""];
+
+            // Нагрузка: сколько дней прошло от старта спринта
+            var loadPct = null;
+            if (state.sprint && state.sprint.startDate && state.sprint.endDate && days.length > 0) {
+                var start = utils.startOfDay(utils.parseDate(state.sprint.startDate));
+                var end = utils.startOfDay(utils.parseDate(state.sprint.endDate));
+                if (start && end) {
+                    var total = days.length;
+                    var passed = 0;
+                    days.forEach(function(d) { if (d <= today) passed++; });
+                    passed = utils.clamp(passed, 0, total);
+                    loadPct = total > 0 ? Math.round(passed / total * 100) : null;
+                }
+            }
+            if (loadPct !== null) titleParts.push("Нагрузка спринта: " + loadPct + "%");
+
+            // Проблемы
+            var problems = [];
+            if (iss.due && today > iss.due && !iss.isDone) problems.push("Просрочена");
+
+            // Переработка по worklog команды
+            var teamWlSec = 0;
+            if (iss.workAuthors && Array.isArray(iss.workAuthors) && state.teamMembers) {
+                iss.workAuthors.forEach(function(wa) {
+                    if (wa.id && state.teamMembers.indexOf(wa.id) >= 0) teamWlSec += wa.seconds || 0;
+                });
+            }
+            if (iss.est > 0 && teamWlSec > iss.est) {
+                var delta = teamWlSec - iss.est;
+                problems.push("Перерасход " + utils.formatHours(delta));
+            }
+            if (problems.length === 0) problems.push("Проблем нет");
+            titleParts.push("Проблемы: " + problems.join("; "));
+
+            var assigneeNote = "";
+            if (iss.assignee && iss.assignee.name) assigneeNote = "(назначено: " + iss.assignee.name + ")";
+
+            return {
+                assigneeNote: assigneeNote,
+                title: titleParts.join(" | ")
+            };
         }
 
         function renderWorklogCellsForAuthor(iss, days, authorId) {
