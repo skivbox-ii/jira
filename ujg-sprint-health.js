@@ -435,6 +435,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var workAuthors = [];
                 var pastAssignees = [];
                 var wlByDay = {};
+                var wlByAuthor = {};
                 // Worklogs за период спринта
                 if (iss._worklog && Array.isArray(iss._worklog)) {
                     var wlMap = {};
@@ -451,6 +452,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         if (!wlByDay[dk]) wlByDay[dk] = { sec: 0, comments: [] };
                         wlByDay[dk].sec += wl.timeSpentSeconds || 0;
                         if (wl.comment) wlByDay[dk].comments.push(String(wl.comment));
+
+                        if (!wlByAuthor[aid]) wlByAuthor[aid] = {};
+                        if (!wlByAuthor[aid][dk]) wlByAuthor[aid][dk] = { sec: 0, comments: [] };
+                        wlByAuthor[aid][dk].sec += wl.timeSpentSeconds || 0;
+                        if (wl.comment) wlByAuthor[aid][dk].comments.push(String(wl.comment));
                     });
                     workAuthors = Object.values(wlMap).sort(function(a, b) { return b.seconds - a.seconds; });
                 }
@@ -486,6 +492,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     pastAssignees: pastAssignees,
                     assignee: assigneeId ? { id: assigneeId, name: assigneeName } : null,
                     worklogs: wlByDay,
+                    worklogsByAuthor: wlByAuthor,
                     outsideUser: null
                 };
                 issueMap[item.key] = item;
@@ -765,8 +772,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         html += '<tr class="ujg-row ujg-sub" data-aid="' + a.id + '">';
                         html += '<td></td>';
                         html += '<td class="ujg-sub-name" title="Worklog автора">' + utils.escapeHtml(wa.name) + ' ' + togWa + '</td>';
-                        html += '<td>' + (wa.seconds > 0 ? utils.formatHours(wa.seconds) : "—") + '</td>';
-                        html += '<td></td><td></td><td></td><td></td></tr>';
+                        html += '<td colspan="5" class="ujg-wl-row">' + renderWorklogCellsForAuthor(iss, days, wa.id, wa.seconds) + '</td></tr>';
                     });
                     // Прошлые ассайны без worklog
                     iss.pastAssignees.filter(function(n) { return !usedNames[n]; }).forEach(function(n) {
@@ -798,6 +804,28 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     cls += iss.isDone ? " ujg-gd" : (iss.statusCat === "indeterminate" ? " ujg-gp" : " ujg-gt");
                 }
                 if (utils.getDayKey(d) === todayKey) cls += " ujg-gc-today";
+                if (loggedSec > 0) cls += " ujg-gc-log";
+                var title = [];
+                if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
+                if (comments.length > 0) title.push(comments.join(" | "));
+                html += '<div class="' + cls + '" data-day="' + dk + '" data-key="' + iss.key + '" title="' + utils.escapeHtml(title.join("\\n")) + '">';
+                if (loggedSec > 0) html += '<span class="ujg-wl">' + utils.formatHoursShort(loggedSec) + '</span>';
+                html += '</div>';
+            });
+            return html + '</div>';
+        }
+
+        function renderWorklogCellsForAuthor(iss, days, authorId, totalSec) {
+            if (!days.length) return '';
+            var map = (iss.worklogsByAuthor && iss.worklogsByAuthor[authorId]) || {};
+            var total = totalSec || 0;
+            var html = '<div class="ujg-gantt ujg-gantt-wl" title="Сумма: ' + (total > 0 ? utils.formatHours(total) : "—") + '">';
+            days.forEach(function(d) {
+                var dk = utils.getDayKey(d);
+                var cell = map[dk] || null;
+                var loggedSec = cell && cell.sec ? cell.sec : 0;
+                var comments = cell && cell.comments ? cell.comments : [];
+                var cls = "ujg-gc";
                 if (loggedSec > 0) cls += " ujg-gc-log";
                 var title = [];
                 if (loggedSec > 0) title.push("Логи: " + utils.formatHours(loggedSec));
