@@ -823,14 +823,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             var html = '<div class="ujg-probs">';
             html += '<div class="ujg-section-title">⚠️ Проблемы (' + probs.length + ')</div>';
-            html += '<table class="ujg-prob-tbl"><thead><tr><th>Ключ</th><th>Тема</th><th>Статус</th><th>В статусе</th><th>Спринты</th><th>Проблема</th></tr></thead><tbody>';
+            html += '<table class="ujg-prob-tbl"><thead><tr><th>Ключ</th><th>Тема</th><th>Исполнитель</th><th>Статус</th><th>Срок</th><th>В статусе</th><th>Спринты</th><th>Проблема</th></tr></thead><tbody>';
             
             probs.forEach(function(p) {
                 var statusCls = "ujg-st-" + p.statusCategory;
                 html += '<tr class="ujg-prob-row" data-key="' + p.key + '">';
                 html += '<td><a href="' + baseUrl + '/browse/' + p.key + '" target="_blank">' + p.key + '</a></td>';
                 html += '<td class="ujg-prob-sum" title="' + utils.escapeHtml(p.summary || "") + '">' + utils.escapeHtml(p.summary || "") + '</td>';
+                html += '<td>' + utils.escapeHtml(p.assignee || "—") + '</td>';
                 html += '<td><span class="ujg-st ' + statusCls + '">' + utils.escapeHtml(p.status) + '</span></td>';
+                html += '<td>' + utils.formatDateShort(p.dueDate) + '</td>';
                 html += '<td>' + p.statusTime + ' дн.</td>';
                 html += '<td>' + (p.sprintCount > 1 ? '<span class="ujg-rollover">' + p.sprintCount + '</span>' : '1') + '</td>';
                 html += '<td><span class="ujg-prob-type ujg-prob-' + p.probType + '">' + p.probLabel + '</span></td>';
@@ -950,15 +952,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     });
                 });
                 collectApiDbg(a.id, a.name);
-                var dbgTaskList = Object.keys(dbgTasks);
-                var apiKeysUnique = Array.from(new Set(apiDbgKeys));
-                var dbgText = "DEBUG3: трудозатраты " + utils.formatHours(dbgSec);
-                if (dbgTaskList.length) dbgText += " | задачи (view): " + dbgTaskList.join(", ");
-                var apiText = "API: jql=" + (dbgIdMap ? (dbgIdMap.jql || "") : "");
-                apiText += " | трудозатраты " + utils.formatHours(apiDbgSec);
-                if (apiKeysUnique.length) apiText += " | задачи (api): " + apiKeysUnique.join(", ");
-                html += '<tr class="ujg-row ujg-sub"><td colspan="7" class="ujg-debug-row">' + utils.escapeHtml(dbgText) + '</td></tr>';
-                html += '<tr class="ujg-row ujg-sub"><td colspan="7" class="ujg-debug-row">' + utils.escapeHtml(apiText) + '</td></tr>';
+
             });
             return html + '</tbody></table></div>';
         }
