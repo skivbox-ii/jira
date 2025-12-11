@@ -176,6 +176,28 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
     function getSprints(boardId) {
         return apiAgileRequest('board/' + boardId + '/sprint?state=active,closed&maxResults=50');
     }
+
+    // Получить все спринты борда (активные, будущие, закрытые) с пагинацией — как в v1
+    function getAllSprints(boardId) {
+        const d = $.Deferred();
+        let all = [];
+        function load(startAt) {
+            apiAgileRequest('board/' + boardId + '/sprint?state=active,future,closed&maxResults=100&startAt=' + startAt)
+                .then(function(data) {
+                    all = all.concat(data.values || []);
+                    if (data.isLast === false && data.values && data.values.length > 0) {
+                        load(startAt + data.values.length);
+                    } else {
+                        d.resolve(all);
+                    }
+                })
+                .fail(function(err) {
+                    d.reject(err);
+                });
+        }
+        load(0);
+        return d.promise();
+    }
     
     function getSprintIssues(sprintId) {
         const fields = 'summary,status,assignee,priority,issuetype,timeoriginalestimate,timespent,timeestimate,duedate,created,updated,description,labels,resolution,resolutiondate';
@@ -1608,47 +1630,48 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
         
         $container.html('<div class="ujg-loading">Загрузка данных...</div>');
 
-        // Пытаемся найти первую доску, которая поддерживает спринты и имеет активный спринт
-        function pickBoardWithActiveSprint(boards, index) {
-            if (index >= boards.length) {
-                return $.Deferred().reject(new Error('Не найдено ни одной доски со спринтами')).promise();
-            }
-            const boardId = boards[index].id;
-            return getSprints(boardId)
-                .then(function(sprintsResponse) {
-                    const sprints = sprintsResponse.values || [];
-                    const activeSprint = sprints.find(s => s.state === 'active');
-                    if (!activeSprint) {
-                        // Пробуем следующую доску
-                        return pickBoardWithActiveSprint(boards, index + 1);
-                    }
-                    return { boardId: boardId, sprint: activeSprint };
-                })
-                .fail(function(err) {
-                    // Если доска не поддерживает спринты — идём дальше, иначе бросаем
-                    const msg = (err && err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages[0]) || '';
-                    if (msg.toLowerCase().indexOf('не поддерживает спринты') >= 0 || msg.toLowerCase().indexOf('does not support sprints') >= 0) {
-                        return pickBoardWithActiveSprint(boards, index + 1);
-                    }
-                    return $.Deferred().reject(err).promise();
-                });
-        }
-
         getBoards()
             .then(function(boardsResponse) {
                 const boards = boardsResponse.values || [];
                 if (boards.length === 0) {
                     throw new Error('Не найдено ни одной доски');
                 }
-                // Если указали boardId — сначала попробуем его, затем остальные
+
+                // Упорядочиваем: если указан boardId — он первый, затем остальные (как в v1 — без фильтров по типу)
+                let orderedBoards = boards.slice();
                 if (options.boardId) {
-                    const preferred = boards.find(b => b.id === options.boardId);
-                    if (preferred) {
-                        const reordered = [preferred].concat(boards.filter(b => b.id !== options.boardId));
-                        return pickBoardWithActiveSprint(reordered, 0);
+                    const pref = boards.find(b => b.id === options.boardId);
+                    if (pref) {
+                        orderedBoards = [pref].concat(boards.filter(b => b.id !== options.boardId));
                     }
                 }
-                return pickBoardWithActiveSprint(boards, 0);
+
+                // Перебираем доски, пропуская те, что не поддерживают спринты
+                function tryBoard(idx) {
+                    if (idx >= orderedBoards.length) {
+                        return $.Deferred().reject(new Error('Не найдено ни одной доски, поддерживающей спринты')).promise();
+                    }
+                    const board = orderedBoards[idx];
+                    return getAllSprints(board.id).then(function(sprints) {
+                        sprints.sort(function(a, b) { return b.id - a.id; });
+                        const active = sprints.find(s => s.state === 'active');
+                        const chosen = active || sprints[0];
+                        if (!chosen) {
+                            // нет спринтов — пробуем следующую доску
+                            return tryBoard(idx + 1);
+                        }
+                        return { board: board, sprint: chosen };
+                    }).fail(function(err) {
+                        const msg = (err && err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages[0]) || '';
+                        const lower = (msg || '').toLowerCase();
+                        if (lower.indexOf('не поддерживает спринты') >= 0 || lower.indexOf('does not support sprints') >= 0) {
+                            return tryBoard(idx + 1);
+                        }
+                        return $.Deferred().reject(err).promise();
+                    });
+                }
+
+                return tryBoard(0);
             })
             .then(function(found) {
                 return $.when(
