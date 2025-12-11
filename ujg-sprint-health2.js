@@ -132,8 +132,13 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
     // API FUNCTIONS (НЕ ИЗМЕНЯТЬ)
     // ============================================
     
+    // Безопасный контекст-путь: если wrm/context-path недоступен, используем AJS
+    const ctxProvider = (typeof contextPath === 'function') ? contextPath :
+        ((typeof AJS !== 'undefined' && typeof AJS.contextPath === 'function') ? AJS.contextPath : function() { return ''; });
+    
     function getContextPath() {
-        return contextPath() || '';
+        try { return ctxProvider() || ''; }
+        catch (e) { return ''; }
     }
     
     function apiRequest(endpoint) {
@@ -1579,6 +1584,9 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
     
     function init($container, options) {
         options = options || {};
+        try {
+            console.info('[UJG2] init start');
+        } catch (e) {}
         
         $container.html('<div class="ujg-loading">Загрузка данных...</div>');
         
@@ -1635,6 +1643,11 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
 
     GadgetAdapter.init = init;
     GadgetAdapter.CONFIG = CONFIG;
+
+    // Дублируем на window для ручного вызова и отладки, если require не сработал
+    if (typeof window !== 'undefined') {
+        window._ujgSprintHealth = GadgetAdapter;
+    }
 
     return GadgetAdapter;
 });
