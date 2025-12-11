@@ -20,7 +20,7 @@
  * - Cycle Time Distribution (распределение времени)
  */
 
-define('ujg-sprint-health', ['jquery', 'wrm/context-path'], function($, contextPath) {
+define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPath) {
     'use strict';
 
     // ============================================
@@ -582,7 +582,7 @@ define('ujg-sprint-health', ['jquery', 'wrm/context-path'], function($, contextP
     // RENDERING FUNCTIONS
     // ============================================
     
-    function render($container, data, sprint) {
+    function render($container, data, sprint, api) {
         $container.empty();
         
         const html = `
@@ -690,6 +690,10 @@ define('ujg-sprint-health', ['jquery', 'wrm/context-path'], function($, contextP
             renderPriorityChart($container, data);
             renderIssueTypeChart($container, data);
             renderScopeChange($container, data);
+            
+            if (api && typeof api.resize === 'function') {
+                api.resize();
+            }
         }, 100);
         
         // Event handlers
@@ -1606,7 +1610,7 @@ define('ujg-sprint-health', ['jquery', 'wrm/context-path'], function($, contextP
                 const issues = (issuesResponse[0] || issuesResponse).issues || [];
                 
                 const data = processSprintData(issues, sprint);
-                render($container, data, sprint);
+                render($container, data, sprint, options.api);
             })
             .catch(function(error) {
                 console.error('UJG Sprint Health Error:', error);
@@ -1623,8 +1627,14 @@ define('ujg-sprint-health', ['jquery', 'wrm/context-path'], function($, contextP
     // EXPORT
     // ============================================
     
-    return {
-        init: init,
-        CONFIG: CONFIG
-    };
+    // Адаптер для Universal Gadget (как в v1)
+    function GadgetAdapter(API) {
+        var $container = API.getGadgetContentEl();
+        init($container, { api: API });
+    }
+
+    GadgetAdapter.init = init;
+    GadgetAdapter.CONFIG = CONFIG;
+
+    return GadgetAdapter;
 });
