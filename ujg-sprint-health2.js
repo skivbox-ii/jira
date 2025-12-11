@@ -28,7 +28,7 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
     // ============================================
     
     const CONFIG = {
-        version: '2.0.0',
+        version: '2.0.1',
         // Пороги для метрик
         thresholds: {
             largeTask: 16,           // часов - слишком большая задача
@@ -1628,41 +1628,132 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
             console.info('[UJG2] init start');
         } catch (e) {}
         
-        $container.html('<div class="ujg-loading">Загрузка данных...</div>');
+        // состояние для фильтров
+        const uiState = { boards: [], sprints: [], selectedBoardId: null, selectedSprintId: null };
+
+        function getErrorMessage(err) {
+            return (err && err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages[0]) ||
+                   (err && err.responseText) ||
+                   (err && err.message) ||
+                   (err && err.statusText) ||
+                   'Unknown error';
+        }
+
+        const $filters = $('<div class="ujg-filters-wrap"></div>');
+        const $content = $('<div class="ujg-content"></div>');
+        $container.empty().append($filters).append($content);
+        $content.html('<div class="ujg-loading">Загрузка данных...</div>');
+
+        function renderFilters() {
+            const boards = uiState.boards.map(b => `<option value="${b.id}" ${b.id === uiState.selectedBoardId ? 'selected' : ''}>${b.name}</option>`).join('');
+            const sprints = uiState.sprints.map(s => `<option value="${s.id}" ${s.id === uiState.selectedSprintId ? 'selected' : ''}>${s.name}</option>`).join('');
+            $filters.html(`
+                <div class="ujg-filters">
+                    <label>Доска:
+                        <select class="ujg-filter-board">
+                            ${boards || '<option value="">Нет досок</option>'}
+                        </select>
+                    </label>
+                    <label>Спринт:
+                        <select class="ujg-filter-sprint" ${uiState.sprints.length === 0 ? 'disabled' : ''}>
+                            ${sprints || '<option value="">Нет спринтов</option>'}
+                        </select>
+                    </label>
+                </div>
+            `);
+        }
+
+        function loadSprintAndRender(boardId, sprintId) {
+            uiState.selectedBoardId = boardId;
+            uiState.selectedSprintId = sprintId;
+            renderFilters();
+            $content.html('<div class="ujg-loading">Загрузка данных...</div>');
+
+            $.when(getSprintDetails(sprintId), getSprintIssues(sprintId))
+                .then(function(sprintDetails, issuesResponse) {
+                    const sprint = sprintDetails[0] || sprintDetails;
+                    const issues = (issuesResponse[0] || issuesResponse).issues || [];
+                    const data = processSprintData(issues, sprint);
+                    render($content, data, sprint, options.api);
+                })
+                .fail(function(err) {
+                    const msg = getErrorMessage(err);
+                    console.error('UJG Sprint Health Error:', err);
+                    $content.html(`
+                        <div class="ujg-error">
+                            <p>❌ Ошибка загрузки данных [v${CONFIG.version}]</p>
+                            <p class="ujg-error-details">${msg}</p>
+                        </div>
+                    `);
+                });
+        }
+
+        function loadBoard(boardId, preferredSprintId) {
+            uiState.selectedBoardId = boardId;
+            renderFilters();
+            $content.html('<div class="ujg-loading">Загрузка спринтов...</div>');
+            getAllSprints(boardId).then(function(sprints) {
+                sprints.sort(function(a, b) { return b.id - a.id; });
+                uiState.sprints = sprints;
+                let sprint = sprints.find(s => s.id == preferredSprintId) || sprints.find(s => s.state === 'active') || sprints[0];
+                if (!sprint) {
+                    $content.html(`
+                        <div class="ujg-error">
+                            <p>❌ Ошибка загрузки данных [v${CONFIG.version}]</p>
+                            <p class="ujg-error-details">Нет спринтов на доске</p>
+                        </div>
+                    `);
+                    renderFilters();
+                    return;
+                }
+                uiState.selectedSprintId = sprint.id;
+                renderFilters();
+                loadSprintAndRender(boardId, sprint.id);
+            }).fail(function(err) {
+                const msg = getErrorMessage(err);
+                console.error('UJG Sprint Health Error:', err);
+                $content.html(`
+                    <div class="ujg-error">
+                        <p>❌ Ошибка загрузки данных [v${CONFIG.version}]</p>
+                        <p class="ujg-error-details">${msg}</p>
+                    </div>
+                `);
+            });
+        }
 
         getBoards()
             .then(function(boardsResponse) {
                 const boards = boardsResponse.values || [];
-                if (boards.length === 0) {
-                    throw new Error('Не найдено ни одной доски');
-                }
+                if (boards.length === 0) throw new Error('Не найдено ни одной доски');
+                uiState.boards = boards.slice();
 
-                // Упорядочиваем: если указан boardId — он первый, затем остальные (как в v1 — без фильтров по типу)
-                let orderedBoards = boards.slice();
+                // boardId предпочтительно — ставим в начало
+                let ordered = boards.slice();
                 if (options.boardId) {
                     const pref = boards.find(b => b.id === options.boardId);
-                    if (pref) {
-                        orderedBoards = [pref].concat(boards.filter(b => b.id !== options.boardId));
-                    }
+                    if (pref) ordered = [pref].concat(boards.filter(b => b.id !== options.boardId));
                 }
 
-                // Перебираем доски, пропуская те, что не поддерживают спринты
+                renderFilters();
+
+                // Пробуем доски по порядку, пропуская те, что не поддерживают спринты
                 function tryBoard(idx) {
-                    if (idx >= orderedBoards.length) {
+                    if (idx >= ordered.length) {
                         return $.Deferred().reject(new Error('Не найдено ни одной доски, поддерживающей спринты')).promise();
                     }
-                    const board = orderedBoards[idx];
-                    return getAllSprints(board.id).then(function(sprints) {
+                    const b = ordered[idx];
+                    return getAllSprints(b.id).then(function(sprints) {
+                        if (!sprints || sprints.length === 0) return tryBoard(idx + 1);
+                        uiState.selectedBoardId = b.id;
+                        uiState.sprints = sprints;
                         sprints.sort(function(a, b) { return b.id - a.id; });
                         const active = sprints.find(s => s.state === 'active');
                         const chosen = active || sprints[0];
-                        if (!chosen) {
-                            // нет спринтов — пробуем следующую доску
-                            return tryBoard(idx + 1);
-                        }
-                        return { board: board, sprint: chosen };
+                        uiState.selectedSprintId = chosen.id;
+                        renderFilters();
+                        return { board: b, sprint: chosen };
                     }).fail(function(err) {
-                        const msg = (err && err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages[0]) || '';
+                        const msg = getErrorMessage(err);
                         const lower = (msg || '').toLowerCase();
                         if (lower.indexOf('не поддерживает спринты') >= 0 || lower.indexOf('does not support sprints') >= 0) {
                             return tryBoard(idx + 1);
@@ -1674,28 +1765,30 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
                 return tryBoard(0);
             })
             .then(function(found) {
-                return $.when(
-                    getSprintDetails(found.sprint.id),
-                    getSprintIssues(found.sprint.id)
-                );
+                loadSprintAndRender(found.board.id, found.sprint.id);
             })
-            .then(function(sprintDetails, issuesResponse) {
-                const sprint = sprintDetails[0] || sprintDetails;
-                const issues = (issuesResponse[0] || issuesResponse).issues || [];
-                
-                const data = processSprintData(issues, sprint);
-                render($container, data, sprint, options.api);
-            })
-            .fail(function(error) {
-                console.error('UJG Sprint Health Error:', error);
-                const msg = (error && error.message) || (error && error.statusText) || 'Unknown error';
-                $container.html(`
+            .fail(function(err) {
+                const msg = getErrorMessage(err);
+                console.error('UJG Sprint Health Error:', err);
+                $content.html(`
                     <div class="ujg-error">
                         <p>❌ Ошибка загрузки данных [v${CONFIG.version}]</p>
                         <p class="ujg-error-details">${msg}</p>
                     </div>
                 `);
             });
+
+        // обработчики фильтров
+        $container.on('change', '.ujg-filter-board', function() {
+            const val = $(this).val();
+            if (!val) return;
+            loadBoard(val, null);
+        });
+        $container.on('change', '.ujg-filter-sprint', function() {
+            const val = $(this).val();
+            if (!val || !uiState.selectedBoardId) return;
+            loadSprintAndRender(uiState.selectedBoardId, val);
+        });
     }
 
     // ============================================
