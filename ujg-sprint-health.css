@@ -63,21 +63,6 @@
 .ujg-burn-label { font-size: 3.5px; fill: #5e6c84; }
 .ujg-burn-y { text-anchor: end; }
 .ujg-burn-x { text-anchor: middle; }
-.ujg-sprint-compare { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #172b4d; }
-.ujg-sc-wrap { background: #fff; border: 1px solid #dfe1e6; border-radius: 4px; padding: 10px; }
-.ujg-sc-panel { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-.ujg-sc-hint { color: #6b778c; font-size: 11px; }
-.ujg-sc-table-wrap { overflow-x: auto; }
-.ujg-sc-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.ujg-sc-table th, .ujg-sc-table td { border: 1px solid #ebecf0; padding: 6px; vertical-align: top; background: #fff; }
-.ujg-sc-table th { background: #f4f5f7; font-weight: 600; text-transform: uppercase; color: #6b778c; font-size: 10px; }
-.ujg-sc-sprintcol { width: 220px; min-width: 200px; }
-.ujg-sc-sname { font-weight: 600; margin-bottom: 4px; }
-.ujg-sc-range { font-size: 11px; color: #6b778c; }
-.ujg-sc-cell { min-width: 200px; }
-.ujg-sc-mini { min-height: 170px; }
-.ujg-sc-emptycell { background: #f9fafb; }
-.ujg-sc-empty { padding: 12px; text-align: center; color: #6b778c; font-size: 11px; }
 .ujg-xaxis { position: absolute; bottom: 5px; left: 35px; right: 10px; height: 15px; font-size: 9px; color: #6b778c; }
 .ujg-xaxis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .ujg-yaxis { position: absolute; top: 10px; left: 0; bottom: 25px; width: 30px; font-size: 9px; color: #6b778c; text-align: right; }
