@@ -151,22 +151,34 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
             }
         });
     }
+
+    // Agile API (нужен для досок/спринтов)
+    function apiAgileRequest(endpoint) {
+        return $.ajax({
+            url: getContextPath() + '/rest/agile/1.0/' + endpoint,
+            type: 'GET',
+            dataType: 'json',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+    }
     
     function getBoards() {
-        return apiRequest('board');
+        return apiAgileRequest('board?maxResults=100');
     }
     
     function getSprints(boardId) {
-        return apiRequest('board/' + boardId + '/sprint?state=active,closed&maxResults=50');
+        return apiAgileRequest('board/' + boardId + '/sprint?state=active,closed&maxResults=50');
     }
     
     function getSprintIssues(sprintId) {
         const fields = 'summary,status,assignee,priority,issuetype,timeoriginalestimate,timespent,timeestimate,duedate,created,updated,description,labels,resolution,resolutiondate';
-        return apiRequest('sprint/' + sprintId + '/issue?fields=' + fields + '&maxResults=500');
+        return apiAgileRequest('sprint/' + sprintId + '/issue?fields=' + fields + '&maxResults=500');
     }
     
     function getSprintDetails(sprintId) {
-        return apiRequest('sprint/' + sprintId);
+        return apiAgileRequest('sprint/' + sprintId);
     }
 
     // ============================================
@@ -1620,12 +1632,12 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
                 const data = processSprintData(issues, sprint);
                 render($container, data, sprint, options.api);
             })
-            .catch(function(error) {
+            .fail(function(error) {
                 console.error('UJG Sprint Health Error:', error);
                 $container.html(`
                     <div class="ujg-error">
                         <p>❌ Ошибка загрузки данных</p>
-                        <p class="ujg-error-details">${error.message || 'Unknown error'}</p>
+                        <p class="ujg-error-details">${(error && error.message) || (error && error.statusText) || 'Unknown error'}</p>
                     </div>
                 `);
             });
