@@ -132,13 +132,17 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
     // API FUNCTIONS (НЕ ИЗМЕНЯТЬ)
     // ============================================
     
-    // Безопасный контекст-путь: если wrm/context-path недоступен, используем AJS
-    const ctxProvider = (typeof contextPath === 'function') ? contextPath :
-        ((typeof AJS !== 'undefined' && typeof AJS.contextPath === 'function') ? AJS.contextPath : function() { return ''; });
-    
+    // Безопасный контекст-путь: если wrm/context-path недоступен, пытаемся взять глобальный contextPath/AJS
     function getContextPath() {
-        try { return ctxProvider() || ''; }
-        catch (e) { return ''; }
+        try {
+            if (typeof contextPath === 'function') return contextPath() || '';
+            if (typeof contextPath === 'string' && contextPath) return contextPath;
+            if (typeof window !== 'undefined' && typeof window.contextPath === 'string' && window.contextPath) return window.contextPath;
+            if (typeof AJS !== 'undefined' && typeof AJS.contextPath === 'function') return AJS.contextPath() || '';
+        } catch (e) {
+            // ignore
+        }
+        return '';
     }
     
     function apiRequest(endpoint) {
