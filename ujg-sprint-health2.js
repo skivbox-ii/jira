@@ -1668,7 +1668,7 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
                 const msg = (error && error.message) || (error && error.statusText) || 'Unknown error';
                 $container.html(`
                     <div class="ujg-error">
-                        <p>❌ Ошибка загрузки данных</p>
+                        <p>❌ Ошибка загрузки данных [v${CONFIG.version}]</p>
                         <p class="ujg-error-details">${msg}</p>
                     </div>
                 `);
