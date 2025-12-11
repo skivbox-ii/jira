@@ -168,17 +168,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             selectedBoardId: null, selectedSprintId: null,
             sprint: null, issues: [], viewIssues: [], extraIssues: [],
             loading: false, isFullscreen: false,
+            viewMode: "health", // health | compare
             chartMode: "tasks", // tasks или hours
             metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {},
             teams: {}, teamKey: "", teamMembers: [],
-            worklogDebugPerAuthor: {}
+            worklogDebugPerAuthor: {},
+            compare: { boardId: null, allSprints: [], displayed: [], rows: [], teams: [], limit: 10, burnCache: {} }
         };
 
         var $content = API.getGadgetContentEl();
         var $cont = $content.find(".ujg-sprint-health");
         if ($cont.length === 0) { $cont = $('<div class="ujg-sprint-health"></div>'); $content.append($cont); }
 
-        var $boardSelect, $sprintInput, $sprintDropdown, $refreshBtn, $fsBtn;
+        var $boardSelect, $sprintInput, $sprintDropdown, $refreshBtn, $fsBtn, $compareBtn;
 
         function log(msg) { if (CONFIG.debug) console.log("[UJG]", msg); }
 
@@ -214,10 +216,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             loadTeams(boardId);
             api.getAllSprints(boardId).then(function(sprints) {
-                // Сортировка по ID убывание (новые сверху)
-                sprints.sort(function(a, b) { return b.id - a.id; });
+                // Сортировка по дате старта (новые сверху)
+                sprints.sort(function(a, b) {
+                    var ad = utils.parseDate(a.startDate), bd = utils.parseDate(b.startDate);
+                    var av = ad ? ad.getTime() : 0;
+                    var bv = bd ? bd.getTime() : 0;
+                    if (av === bv) return b.id - a.id;
+                    return bv - av;
+                });
                 state.sprints = sprints;
                 state.filteredSprints = sprints.slice();
+                state.compare.boardId = boardId;
+                state.compare.allSprints = sprints.slice();
+                state.compare.burnCache = {};
+                state.compare.limit = 10;
+                rebuildCompareMatrix();
                 $sprintInput.val("");
                 updateSprintDropdown();
                 
@@ -373,24 +386,23 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return ["done","closed","resolved","готово","закрыт","завершён","выполнено"].some(function(s) { return n.indexOf(s) >= 0; });
         }
 
-        function calculateBurnup() {
-            var sp = state.sprint;
-            if (!sp || !sp.startDate || !sp.endDate) { state.burnupData = []; return; }
+        function buildBurndown(params) {
+            var sp = params && params.sprint;
+            var issues = (params && params.issues) || [];
+            var mode = (params && params.mode) || "tasks";
+            if (!sp || !sp.startDate || !sp.endDate) { return { data: [], mode: mode }; }
             var start = utils.startOfDay(utils.parseDate(sp.startDate));
             var end = utils.startOfDay(utils.parseDate(sp.endDate));
-            if (!start || !end) { state.burnupData = []; return; }
+            if (!start || !end) { return { data: [], mode: mode }; }
             var days = utils.daysBetween(start, end);
             var now = utils.startOfDay(new Date());
             var sprintId = sp.id;
-            
-            // Подготовка данных по задачам
-            var issuesInfo = state.issues.map(function(iss) {
+
+            var issuesInfo = issues.map(function(iss) {
                 var f = iss.fields || {};
                 var estSec = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
                 var resolved = utils.startOfDay(utils.parseDate(f.resolutiondate));
-                var isDone = isIssueDone(f.status);
-                
-                // Дата входа/выхода в спринт по changelog (по полю Sprint)
+                var done = isIssueDone(f.status);
                 var addDate = start, removeDate = null;
                 var ch = iss.changelog || iss._changelog || {};
                 (ch.histories || []).forEach(function(h) {
@@ -399,7 +411,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         if ((it.field || "").toLowerCase() === "sprint") {
                             var fromHas = it.from && it.from.indexOf && it.from.indexOf(sprintId) >= 0;
                             var toHas = it.to && it.to.indexOf && it.to.indexOf(sprintId) >= 0;
-                            // Jira cloud often stores ids in to/from as string with sprint ids like "123,456"
                             var fromStr = it.fromString || "";
                             var toStr = it.toString || "";
                             if (!fromHas && !toHas) {
@@ -408,13 +419,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             }
                             if (toHas && !fromHas) { addDate = hd || addDate; }
                             if (fromHas && !toHas) { removeDate = hd || removeDate; }
-                    }
+                        }
+                    });
                 });
-            });
                 if (addDate < start) addDate = start;
                 if (removeDate && removeDate < addDate) removeDate = null;
-                
-                // Worklog по дням (в секундах)
+
                 var wlByDay = {};
                 if (iss._worklog && Array.isArray(iss._worklog)) {
                     iss._worklog.forEach(function(wl) {
@@ -425,35 +435,34 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         wlByDay[dk] = (wlByDay[dk] || 0) + (wl.timeSpentSeconds || 0);
                     });
                 }
-                
+
                 return {
                     key: iss.key,
                     estSec: estSec,
                     resolved: resolved,
-                    isDone: isDone,
+                    isDone: done,
                     addDate: addDate,
                     removeDate: removeDate,
                     wlByDay: wlByDay
                 };
             });
-            
+
             var data = [];
             var finalScopeTasks = 0, finalScopeHours = 0;
-            var cumLoggedCache = {}; // key -> {dk:cumSec}
-            
+            var cumLoggedCache = {};
+
             days.forEach(function(day, idx) {
                 var dk = utils.getDayKey(day);
                 var scopeTasks = 0, scopeHours = 0;
                 var doneTasks = 0, doneHoursSec = 0;
-                
+
                 issuesInfo.forEach(function(info) {
                     var inScope = day >= info.addDate && (!info.removeDate || day <= info.removeDate);
                     if (!inScope) return;
-                    
+
                     scopeTasks += 1;
-                    scopeHours += info.estSec / 3600; // в часах
-                    
-                    // logged cumulative до дня включительно
+                    scopeHours += info.estSec / 3600;
+
                     if (!cumLoggedCache[info.key]) cumLoggedCache[info.key] = {};
                     var cumLog = cumLoggedCache[info.key][dk];
                     if (cumLog === undefined) {
@@ -466,15 +475,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         cumLoggedCache[info.key][dk] = cumLog;
                     }
                     doneHoursSec += cumLog;
-                    
+
                     if (info.isDone && info.resolved && info.resolved <= day) {
                         doneTasks += 1;
                     }
                 });
-                
+
                 if (scopeTasks > finalScopeTasks) finalScopeTasks = scopeTasks;
                 if (scopeHours > finalScopeHours) finalScopeHours = scopeHours;
-                
+
                 data.push({
                     date: day,
                     label: utils.formatDateShort(day),
@@ -485,14 +494,156 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     isToday: utils.getDayKey(day) === utils.getDayKey(now)
                 });
             });
-            
-            // Идеальные линии
+
             data.forEach(function(d, idx) {
-                d.idealTasks = Math.round(finalScopeTasks * (idx + 1) / data.length);
-                d.idealHours = Math.round(finalScopeHours * (idx + 1) / data.length);
+                d.idealTasks = Math.round(finalScopeTasks * (idx + 1) / Math.max(data.length, 1));
+                d.idealHours = Math.round(finalScopeHours * (idx + 1) / Math.max(data.length, 1));
             });
-            
-            state.burnupData = data;
+
+            return { data: data, mode: mode };
+        }
+
+        function calculateBurnup() {
+            var res = buildBurndown({ sprint: state.sprint, issues: state.issues, mode: state.chartMode });
+            state.burnupData = res.data || [];
+        }
+
+        function rebuildCompareMatrix() {
+            var cmp = state.compare;
+            if (!cmp) return;
+            var limit = cmp.limit || 10;
+            var list = (cmp.allSprints || []).slice(0, limit);
+            cmp.displayed = list;
+            var teamsSet = {};
+            var rowsMap = {};
+            var rowOrder = [];
+
+            list.forEach(function(sp) {
+                var team = getTeamKeyBySprintName(sp.name) || "Без команды";
+                var sd = utils.formatDateShort(utils.parseDate(sp.startDate));
+                var ed = utils.formatDateShort(utils.parseDate(sp.endDate));
+                var periodKey = (sp.startDate || "") + "|" + (sp.endDate || "");
+                var label = (sd || "—") + " – " + (ed || "—");
+                if (!rowsMap[periodKey]) {
+                    rowsMap[periodKey] = { key: periodKey, label: label, byTeam: {} };
+                    rowOrder.push(periodKey);
+                }
+                rowsMap[periodKey].byTeam[team] = sp;
+                teamsSet[team] = true;
+            });
+
+            cmp.rows = rowOrder.map(function(k) { return rowsMap[k]; });
+            cmp.teams = Object.keys(teamsSet).sort(function(a, b) { return a.localeCompare(b); });
+        }
+
+        function addMoreCompareSprints(step) {
+            var cmp = state.compare;
+            if (!cmp || !cmp.allSprints) return;
+            cmp.limit = Math.min((cmp.limit || 10) + (step || 1), cmp.allSprints.length);
+            rebuildCompareMatrix();
+            render();
+        }
+
+        function ensureCompareBurndown(sp) {
+            var cmp = state.compare;
+            if (!cmp || !sp || !sp.id) return;
+            var cache = cmp.burnCache[sp.id];
+            if (cache && cache.data) return;
+            if (cache && cache.loading) return;
+            cmp.burnCache[sp.id] = { loading: true };
+            api.getSprintIssues(sp.id).then(function(res) {
+                var issues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
+                var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
+                cmp.burnCache[sp.id] = { data: bd.data, sprint: sp };
+                render();
+            }, function() {
+                cmp.burnCache[sp.id] = { error: true };
+                render();
+            });
+        }
+
+        function renderMiniBurn(data, mode) {
+            mode = mode || "tasks";
+            if (!data || data.length === 0) return '<div class="ujg-compare-loading">Нет данных</div>';
+
+            function getVal(d, keyHours, keyTasks) {
+                return mode === "hours" ? (d[keyHours] == null ? null : d[keyHours]) : (d[keyTasks] == null ? null : d[keyTasks]);
+            }
+
+            function niceTicks(maxVal, count) {
+                if (maxVal <= 0) return [0, 1];
+                var rough = maxVal / Math.max(count, 1);
+                var pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+                var step = pow10;
+                var err = rough / pow10;
+                if (err >= 7.5) step = pow10 * 10;
+                else if (err >= 3.5) step = pow10 * 5;
+                else if (err >= 1.5) step = pow10 * 2;
+                var ticks = [];
+                for (var v = 0; v <= maxVal + step * 0.4; v += step) ticks.push(v);
+                if (ticks[ticks.length - 1] < maxVal) ticks.push(maxVal);
+                return ticks;
+            }
+
+            var maxScope = Math.max.apply(null, data.map(function(d) { return getVal(d, "scopeHours", "scopeTasks") || 0; }));
+            var maxDone = Math.max.apply(null, data.map(function(d) { return getVal(d, "doneHours", "doneTasks") || 0; }));
+            var maxIdeal = Math.max.apply(null, data.map(function(d) { return getVal(d, "idealHours", "idealTasks") || 0; }));
+            var maxValRaw = Math.max(maxScope, maxDone, maxIdeal, 1);
+            var yTicks = niceTicks(maxValRaw, 5);
+            var maxVal = yTicks[yTicks.length - 1] || 1;
+
+            var VIEW_W = 110, VIEW_H = 80;
+            var pad = { top: 8, right: 4, bottom: 12, left: 10 };
+            var plotW = VIEW_W - pad.left - pad.right;
+            var plotH = VIEW_H - pad.top - pad.bottom;
+
+            function xPos(idx) {
+                var n = Math.max(data.length - 1, 1);
+                return pad.left + (plotW * idx / n);
+            }
+            function yPos(val) {
+                return pad.top + plotH - (plotH * (val / maxVal));
+            }
+
+            var idealPts = [], realPts = [];
+            data.forEach(function(d, idx) {
+                var x = xPos(idx);
+                var idealVal = getVal(d, "idealHours", "idealTasks");
+                var realVal = getVal(d, "doneHours", "doneTasks");
+                if (idealVal != null) idealPts.push(x + "," + yPos(idealVal));
+                if (realVal != null) realPts.push(x + "," + yPos(realVal));
+            });
+
+            var todayIdx = data.findIndex(function(d) { return d.isToday; });
+
+            var html = '<div class="ujg-mini-burn">';
+            html += '<svg class="ujg-svg ujg-burn-svg" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+
+            yTicks.forEach(function(v) {
+                var y = yPos(v);
+                html += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
+            });
+            var xStep = Math.max(1, Math.ceil(data.length / 6));
+            data.forEach(function(d, idx) {
+                var x = xPos(idx);
+                html += '<line class="ujg-burn-grid" x1="' + x + '" y1="' + pad.top + '" x2="' + x + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+                if (idx % xStep === 0 || idx === data.length - 1) {
+                    html += '<text class="ujg-burn-label ujg-burn-x" x="' + x + '" y="' + (VIEW_H - pad.bottom + 4) + '">' + utils.escapeHtml(d.label || "") + '</text>';
+                }
+            });
+            html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+            html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+
+            if (todayIdx >= 0) {
+                var todayX = xPos(todayIdx);
+                html += '<line class="ujg-burn-today" x1="' + todayX + '" y1="' + pad.top + '" x2="' + todayX + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+            }
+
+            if (idealPts.length > 0) html += '<polyline class="ujg-burn-ideal" points="' + idealPts.join(" ") + '"/>';
+            if (realPts.length > 0) html += '<polyline class="ujg-burn-real" points="' + realPts.join(" ") + '"/>';
+
+            html += '</svg></div>';
+            return html;
         }
 
         function groupByAssignee() {
@@ -652,6 +803,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function hideSprintDropdown() { $sprintDropdown.removeClass("ujg-show"); }
 
         function render() {
+            if (state.viewMode === "compare") {
+                $cont.html(renderCompare());
+                ensureFullWidth();
+                bindCompareEvents();
+                API.resize();
+                return;
+            }
             if (state.issues.length === 0) { $cont.html('<div class="ujg-loading">Нет задач в спринте</div>'); API.resize(); return; }
             
             var html = '';
@@ -858,6 +1016,56 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     '<span class="ujg-asgn-val">' + utils.formatHours(a.hours) + ' (' + a.issues.length + ')</span></div>';
             });
             return html + '</div></div>';
+        }
+
+        function renderCompare() {
+            var cmp = state.compare || {};
+            var teams = cmp.teams || [];
+            var rows = cmp.rows || [];
+            if (!cmp.displayed || cmp.displayed.length === 0) return '<div class="ujg-loading">Нет спринтов для сравнения</div>';
+
+            var isHours = state.chartMode === "hours";
+            var html = '<div class="ujg-compare">';
+            html += '<div class="ujg-compare-bar"><span class="ujg-chart-title">Сравнение спринтов</span><div class="ujg-toggle ujg-toggle-compare"><span class="ujg-tog ' + (!isHours ? "on" : "") + '" data-mode="tasks">Задачи</span><span class="ujg-tog ' + (isHours ? "on" : "") + '" data-mode="hours">Часы</span></div></div>';
+
+            html += '<div class="ujg-compare-grid" style="grid-template-columns: 140px repeat(' + teams.length + ', 1fr);">';
+            html += '<div class="ujg-compare-head">Период</div>';
+            teams.forEach(function(t) { html += '<div class="ujg-compare-head">' + utils.escapeHtml(t) + '</div>'; });
+
+            rows.forEach(function(row) {
+                html += '<div class="ujg-compare-period">' + utils.escapeHtml(row.label) + '</div>';
+                teams.forEach(function(team) {
+                    var sp = row.byTeam[team];
+                    if (!sp) {
+                        html += '<div class="ujg-compare-cell ujg-empty">—</div>';
+                        return;
+                    }
+                    var cache = cmp.burnCache[sp.id];
+                    var cellBody = '';
+                    if (cache && cache.data && cache.data.length) {
+                        cellBody = renderMiniBurn(cache.data, state.chartMode);
+                    } else if (cache && cache.loading) {
+                        cellBody = '<div class="ujg-compare-loading">⏳ Загрузка...</div>';
+                    } else if (cache && cache.error) {
+                        cellBody = '<div class="ujg-compare-loading">Ошибка загрузки</div>';
+                    } else {
+                        cellBody = '<div class="ujg-compare-loading">Загрузка...</div>';
+                        ensureCompareBurndown(sp);
+                    }
+                    html += '<div class="ujg-compare-cell" data-sid="' + sp.id + '" title="' + utils.escapeHtml(sp.name || "") + '">';
+                    html += '<div class="ujg-compare-sname">' + utils.escapeHtml(sp.name || "") + '</div>';
+                    html += cellBody;
+                    html += '</div>';
+                });
+            });
+            html += '</div>';
+
+            if (cmp.limit < (cmp.allSprints ? cmp.allSprints.length : 0)) {
+                html += '<div class="ujg-compare-actions"><button class="ujg-btn ujg-btn-more" data-more="5">Добавить спринт</button></div>';
+            }
+
+            html += '</div>';
+            return html;
         }
 
         function renderTable() {
@@ -1303,6 +1511,25 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function hideTooltip() { $("#ujgTooltip").removeClass("ujg-show"); }
 
+        function bindCompareEvents() {
+            $cont.find(".ujg-toggle-compare .ujg-tog").on("click", function() {
+                var mode = $(this).data("mode");
+                if (mode && mode !== state.chartMode) { state.chartMode = mode; render(); }
+            });
+            $cont.find(".ujg-btn-more").on("click", function() {
+                var step = Number($(this).data("more")) || 1;
+                addMoreCompareSprints(step);
+            });
+            $cont.find(".ujg-compare-cell").on("click", function() {
+                var sid = $(this).data("sid");
+                if (sid) {
+                    selectSprint(sid);
+                    state.viewMode = "health";
+                    render();
+                }
+            });
+        }
+
         function bindEvents() {
             $cont.find(".ujg-tog").on("click", function() {
                 var mode = $(this).data("mode");
@@ -1450,13 +1677,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             $sprintWrap.append($sprintInput, $sprintDropdown);
             
+            $compareBtn = $('<button class="ujg-btn" title="Сравнение спринтов">⇄</button>');
+            $compareBtn.on("click", function() {
+                state.viewMode = state.viewMode === "compare" ? "health" : "compare";
+                render();
+            });
+
             $refreshBtn = $('<button class="ujg-btn" title="Обновить">🔄</button>');
             $refreshBtn.on("click", function() { if (state.selectedSprintId) loadSprintData(state.selectedSprintId); });
             
             $fsBtn = $('<button class="ujg-btn ujg-btn-fs" title="На весь экран">⛶</button>');
             $fsBtn.on("click", toggleFullscreen);
             
-            $panel.append($boardSelect, $sprintWrap, $refreshBtn, $fsBtn);
+            $panel.append($boardSelect, $sprintWrap, $compareBtn, $refreshBtn, $fsBtn);
             $cont.before($panel);
             
             $(document).on("keydown.ujgSh", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFullscreen(); });

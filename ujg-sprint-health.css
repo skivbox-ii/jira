@@ -156,6 +156,21 @@
 .ujg-gh-cell:last-child { border-right: none; }
 .ujg-gh-cell span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 9px; color: #6b778c; line-height: 1; padding: 2px 1px; }
 
+/* Compare view */
+.ujg-compare { background: #fff; border: 1px solid #dfe1e6; border-radius: 4px; padding: 10px; margin-bottom: 8px; }
+.ujg-compare-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.ujg-compare-grid { display: grid; gap: 6px; width: 100%; }
+.ujg-compare-head { font-weight: 600; font-size: 11px; background: #f4f5f7; padding: 6px; border: 1px solid #dfe1e6; border-radius: 3px; }
+.ujg-compare-period { font-weight: 600; font-size: 11px; padding: 6px; border: 1px solid #dfe1e6; border-radius: 3px; background: #fff; }
+.ujg-compare-cell { background: #fff; border: 1px solid #dfe1e6; border-radius: 4px; padding: 6px; min-height: 120px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; }
+.ujg-compare-cell:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+.ujg-compare-cell.ujg-empty { cursor: default; color: #6b778c; text-align: center; justify-content: center; }
+.ujg-compare-sname { font-size: 11px; font-weight: 600; color: #172b4d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ujg-compare-loading { color: #6b778c; font-size: 11px; }
+.ujg-compare-actions { margin-top: 8px; }
+.ujg-mini-burn { height: 120px; }
+.ujg-mini-burn .ujg-burn-svg { height: 120px; }
+
 /* Estimate inline edit */
 .ujg-est { cursor: pointer; white-space: nowrap; }
 .ujg-est-edit { padding: 0; }
