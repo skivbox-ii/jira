@@ -280,13 +280,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 state.extraIssues = [];
                 updateTeamKey();
                 enrichIssues(state.issues).always(function() {
-                    calculate();
+                calculate();
                     groupByAssignee(); // предварительно для списка групп/авторов
                     loadExtraWorklogIssues().always(function() {
                         groupByAssignee(); // пересобираем после добавления extra
-                        render();
-                        state.loading = false;
-                    });
+                render();
+                state.loading = false;
+            });
                 });
             });
         }
@@ -408,9 +408,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             }
                             if (toHas && !fromHas) { addDate = hd || addDate; }
                             if (fromHas && !toHas) { removeDate = hd || removeDate; }
-                        }
-                    });
+                    }
                 });
+            });
                 if (addDate < start) addDate = start;
                 if (removeDate && removeDate < addDate) removeDate = null;
                 
@@ -688,96 +688,131 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function renderBurnup() {
             var data = state.burnupData;
             if (!data || data.length === 0) return '';
-            
+
             var isHours = state.chartMode === "hours";
-            var maxScope = Math.max.apply(null, data.map(function(d) { return isHours ? (d.scopeHours || 0) : (d.scopeTasks || 0); }));
-            var maxDone = Math.max.apply(null, data.map(function(d) { return isHours ? (d.doneHours || 0) : (d.doneTasks || 0); }));
-            var maxIdeal = Math.max.apply(null, data.map(function(d) { return isHours ? (d.idealHours || 0) : (d.idealTasks || 0); }));
-            var maxVal = Math.max(maxScope, maxDone, maxIdeal, 1);
-            
-            var h = 300, padding = 50;
-            
+
+            function getVal(d, keyHours, keyTasks) {
+                return isHours ? (d[keyHours] == null ? null : d[keyHours]) : (d[keyTasks] == null ? null : d[keyTasks]);
+            }
+
+            function niceTicks(maxVal, count) {
+                if (maxVal <= 0) return [0, 1];
+                var rough = maxVal / Math.max(count, 1);
+                var pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+                var step = pow10;
+                var err = rough / pow10;
+                if (err >= 7.5) step = pow10 * 10;
+                else if (err >= 3.5) step = pow10 * 5;
+                else if (err >= 1.5) step = pow10 * 2;
+                var ticks = [];
+                for (var v = 0; v <= maxVal + step * 0.4; v += step) ticks.push(v);
+                if (ticks[ticks.length - 1] < maxVal) ticks.push(maxVal);
+                return ticks;
+            }
+
+            var maxScope = Math.max.apply(null, data.map(function(d) { return getVal(d, "scopeHours", "scopeTasks") || 0; }));
+            var maxDone = Math.max.apply(null, data.map(function(d) { return getVal(d, "doneHours", "doneTasks") || 0; }));
+            var maxIdeal = Math.max.apply(null, data.map(function(d) { return getVal(d, "idealHours", "idealTasks") || 0; }));
+            var maxValRaw = Math.max(maxScope, maxDone, maxIdeal, 1);
+            var yTicks = niceTicks(maxValRaw, 6);
+            var maxVal = yTicks[yTicks.length - 1] || 1;
+
+            var VIEW_W = 120, VIEW_H = 90;
+            var pad = { top: 10, right: 6, bottom: 14, left: 12 };
+            var plotW = VIEW_W - pad.left - pad.right;
+            var plotH = VIEW_H - pad.top - pad.bottom;
+
+            function xPos(idx) {
+                var n = Math.max(data.length - 1, 1);
+                return pad.left + (plotW * idx / n);
+            }
+            function yPos(val) {
+                return pad.top + plotH - (plotH * (val / maxVal));
+            }
+            function fmt(val) {
+                return isHours ? utils.formatHoursShort((val || 0) * 3600) : val;
+            }
+            function tip(d) {
+                var scope = getVal(d, "scopeHours", "scopeTasks");
+                var done = getVal(d, "doneHours", "doneTasks");
+                var ideal = getVal(d, "idealHours", "idealTasks");
+                var left = (scope != null && done != null) ? Math.max(scope - done, 0) : null;
+                var parts = [];
+                if (d.label) parts.push(d.label);
+                if (scope != null) parts.push("Объём: " + fmt(scope));
+                if (done != null) parts.push("Реально: " + fmt(done));
+                if (ideal != null) parts.push("Идеал: " + fmt(ideal));
+                if (left != null) parts.push("Остаток: " + fmt(left));
+                return parts.join("\n");
+            }
+
+            var idealPts = [], realPts = [], idealTips = [], realTips = [];
+            data.forEach(function(d, idx) {
+                var x = xPos(idx);
+                var idealVal = getVal(d, "idealHours", "idealTasks");
+                var realVal = getVal(d, "doneHours", "doneTasks");
+                if (idealVal != null) {
+                    idealPts.push(x + "," + yPos(idealVal));
+                    idealTips.push({ x: x, y: yPos(idealVal), tip: tip(d) });
+                }
+                if (realVal != null) {
+                    realPts.push(x + "," + yPos(realVal));
+                    realTips.push({ x: x, y: yPos(realVal), tip: tip(d) });
+                }
+            });
+
+            var todayIdx = data.findIndex(function(d) { return d.isToday; });
+
             var html = '<div class="ujg-chart-wrap">';
             html += '<div class="ujg-chart-hdr">';
-            html += '<span class="ujg-chart-title">Burnup Chart</span>';
+            html += '<span class="ujg-chart-title">Burndown Chart</span>';
             html += '<div class="ujg-toggle"><span class="ujg-tog ' + (!isHours ? "on" : "") + '" data-mode="tasks">Задачи</span><span class="ujg-tog ' + (isHours ? "on" : "") + '" data-mode="hours">Часы</span></div>';
             html += '<div class="ujg-legend">';
-            html += '<span class="ujg-leg"><i style="background:#ef5350"></i>Объём</span>';
-            html += '<span class="ujg-leg"><i style="background:#66bb6a"></i>Выполнено</span>';
-            html += '<span class="ujg-leg"><i style="background:#bdbdbd"></i>План</span>';
+            html += '<span class="ujg-leg"><i style="background:#0d8bff"></i>Идеальная линия</span>';
+            html += '<span class="ujg-leg"><i style="background:#d93026"></i>Реальная линия</span>';
+            html += '<span class="ujg-leg"><i style="background:#f4b400"></i>Текущий день</span>';
             html += '</div></div>';
-            
-            html += '<div class="ujg-chart-body">';
-            html += '<svg class="ujg-svg" viewBox="0 0 100 ' + h + '" preserveAspectRatio="none">';
-            
-            // Сетка
-            for (var i = 0; i <= 5; i++) {
-                var y = padding + (h - padding * 2) * i / 5;
-                html += '<line x1="0" y1="' + y + '" x2="100" y2="' + y + '" stroke="#e0e0e0" stroke-width="0.3"/>';
-            }
-            
-            // Находим индекс "сегодня"
-            var todayIdx = data.findIndex(function(d) { return d.isToday; });
+
+            html += '<div class="ujg-chart-body ujg-chart-burn">';
+            html += '<svg class="ujg-svg ujg-burn-svg" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+
+            // Grid & axes
+            yTicks.forEach(function(v) {
+                var y = yPos(v);
+                html += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
+                html += '<text class="ujg-burn-label ujg-burn-y" x="' + (pad.left - 1.5) + '" y="' + (y + 1.2) + '">' + fmt(v) + '</text>';
+            });
+            var xStep = Math.max(1, Math.ceil(data.length / 12));
+            data.forEach(function(d, idx) {
+                var x = xPos(idx);
+                html += '<line class="ujg-burn-grid" x1="' + x + '" y1="' + pad.top + '" x2="' + x + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+                if (idx % xStep === 0 || idx === data.length - 1) {
+                    html += '<text class="ujg-burn-label ujg-burn-x" x="' + x + '" y="' + (VIEW_H - pad.bottom + 5) + '">' + utils.escapeHtml(d.label || "") + '</text>';
+                }
+            });
+            html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+            html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+
+            // Today line
             if (todayIdx >= 0) {
-                var todayX = (todayIdx + 0.5) / data.length * 100;
-                html += '<line x1="' + todayX + '" y1="' + padding + '" x2="' + todayX + '" y2="' + (h - padding) + '" stroke="#9e9e9e" stroke-width="0.6" stroke-dasharray="1.2,1.2"/>';
-                html += '<text x="' + todayX + '" y="' + (padding - 6) + '" text-anchor="middle" font-size="3.5" fill="#666">Сегодня</text>';
+                var todayX = xPos(todayIdx);
+                html += '<line class="ujg-burn-today" x1="' + todayX + '" y1="' + pad.top + '" x2="' + todayX + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+                html += '<text class="ujg-burn-label ujg-burn-x" x="' + todayX + '" y="' + (pad.top - 2) + '" fill="#d7a000">Сегодня</text>';
             }
-            
-            var scopePts = [], donePts = [], idealPts = [];
-            
-            data.forEach(function(d, idx) {
-                var x = (idx + 0.5) / data.length * 100;
-                var scopeV = isHours ? d.scopeHours : d.scopeTasks;
-                var doneV = isHours ? d.doneHours : d.doneTasks;
-                var idealV = isHours ? d.idealHours : d.idealTasks;
-                
-                if (scopeV !== null) {
-                    var yS = padding + (h - padding * 2) * (1 - scopeV / maxVal);
-                    scopePts.push(x + "," + yS);
-                }
-                if (doneV !== null) {
-                    var yD = padding + (h - padding * 2) * (1 - doneV / maxVal);
-                    donePts.push(x + "," + yD);
-                }
-                var yI = padding + (h - padding * 2) * (1 - idealV / maxVal);
-                idealPts.push(x + "," + yI);
+
+            // Lines
+            if (idealPts.length > 0) html += '<polyline class="ujg-burn-ideal" points="' + idealPts.join(" ") + '"/>';
+            if (realPts.length > 0) html += '<polyline class="ujg-burn-real" points="' + realPts.join(" ") + '"/>';
+
+            // Dots with native titles
+            idealTips.forEach(function(p) {
+                html += '<circle class="ujg-burn-dot" cx="' + p.x + '" cy="' + p.y + '" r="1.6" fill="#0d8bff"><title>' + utils.escapeHtml(p.tip) + '</title></circle>';
             });
-            
-            // Идеальная линия (серая)
-            html += '<polyline points="' + idealPts.join(" ") + '" fill="none" stroke="#bdbdbd" stroke-width="0.8"/>';
-            
-            // Scope (красная)
-            if (scopePts.length > 0) {
-                html += '<polyline points="' + scopePts.join(" ") + '" fill="none" stroke="#ef5350" stroke-width="1.4"/>';
-                scopePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="1.2" fill="#ef5350"/>'; });
-            }
-            
-            // Done (зелёная)
-            if (donePts.length > 0) {
-                html += '<polyline points="' + donePts.join(" ") + '" fill="none" stroke="#66bb6a" stroke-width="1.4"/>';
-                donePts.forEach(function(p) { var c = p.split(","); html += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="1.2" fill="#66bb6a"/>'; });
-            }
-            
+            realTips.forEach(function(p) {
+                html += '<circle class="ujg-burn-dot" cx="' + p.x + '" cy="' + p.y + '" r="1.6" fill="#d93026"><title>' + utils.escapeHtml(p.tip) + '</title></circle>';
+            });
+
             html += '</svg>';
-            
-            // Ось X - даты
-            html += '<div class="ujg-xaxis">';
-            data.forEach(function(d, idx) {
-                if (idx % Math.ceil(data.length / 10) === 0 || idx === data.length - 1) {
-                    html += '<span style="left:' + ((idx + 0.5) / data.length * 100) + '%">' + d.label + '</span>';
-                }
-            });
-            html += '</div>';
-            
-            // Ось Y
-            html += '<div class="ujg-yaxis">';
-            for (var i = 0; i <= 5; i++) {
-                var val = Math.round(maxVal * (5 - i) / 5);
-                html += '<span style="top:' + (i * 20) + '%">' + (isHours ? utils.formatHoursShort(val * 3600) : val) + '</span>';
-            }
-            html += '</div>';
-            
             html += '</div></div>';
             return html;
         }
@@ -1340,7 +1375,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 });
                 $input.on("blur", function() { if (editingCell) trySave(); });
             });
-
+            
             var hoverTimer;
             $cont.find(".ujg-prob-row").on("mouseenter", function() {
                 var $row = $(this), key = $row.data("key");

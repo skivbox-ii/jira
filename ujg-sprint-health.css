@@ -51,7 +51,18 @@
 .ujg-leg i { width: 12px; height: 3px; border-radius: 2px; }
 
 .ujg-chart-body { position: relative; padding: 10px 10px 25px 35px; }
+.ujg-chart-burn { padding: 16px; background: #f9fafb; }
 .ujg-svg { width: 100%; height: 180px; display: block; }
+.ujg-burn-svg { height: 260px; }
+.ujg-burn-grid { stroke: #e6eaf0; stroke-width: 0.4; }
+.ujg-burn-axis { stroke: #d0d4da; stroke-width: 0.6; }
+.ujg-burn-today { stroke: #f4b400; stroke-width: 1; stroke-dasharray: 2,1.2; }
+.ujg-burn-ideal { stroke: #0d8bff; stroke-width: 1.4; fill: none; }
+.ujg-burn-real { stroke: #d93026; stroke-width: 1.4; fill: none; }
+.ujg-burn-dot { stroke: #fff; stroke-width: 0.6; }
+.ujg-burn-label { font-size: 3.5px; fill: #5e6c84; }
+.ujg-burn-y { text-anchor: end; }
+.ujg-burn-x { text-anchor: middle; }
 .ujg-xaxis { position: absolute; bottom: 5px; left: 35px; right: 10px; height: 15px; font-size: 9px; color: #6b778c; }
 .ujg-xaxis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .ujg-yaxis { position: absolute; top: 10px; left: 0; bottom: 25px; width: 30px; font-size: 9px; color: #6b778c; text-align: right; }
