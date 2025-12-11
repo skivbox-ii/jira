@@ -28,6 +28,7 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
     // ============================================
     
     const CONFIG = {
+        version: '2.0.0',
         // Пороги для метрик
         thresholds: {
             largeTask: 16,           // часов - слишком большая задача
@@ -615,6 +616,7 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
                         <span class="ujg-subtitle">${formatDate(sprint.startDate)} - ${formatDate(sprint.endDate)}</span>
                     </div>
                     <div class="ujg-header-right">
+                        <span class="ujg-version">v${CONFIG.version}</span>
                         <button class="ujg-btn ujg-btn-refresh" title="Обновить">🔄</button>
                         <button class="ujg-btn ujg-btn-fullscreen" title="На весь экран">⛶</button>
                     </div>

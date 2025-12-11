@@ -54,6 +54,16 @@
 .ujg-header-right {
     display: flex;
     gap: 8px;
+    align-items: center;
+}
+
+.ujg-version {
+    font-size: 11px;
+    color: #6B778C;
+    padding: 4px 6px;
+    border: 1px solid #DFE1E6;
+    border-radius: 4px;
+    background: #F4F5F7;
 }
 
 .ujg-btn {
