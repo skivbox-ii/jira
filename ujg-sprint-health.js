@@ -514,25 +514,57 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var limit = cmp.limit || 10;
             var list = (cmp.allSprints || []).slice(0, limit);
             cmp.displayed = list;
+
+            function periodKey(sp) {
+                var sd = utils.formatDateJira(utils.parseDate(sp.startDate));
+                var ed = utils.formatDateJira(utils.parseDate(sp.endDate));
+                if (!sd || !ed) return null;
+                return sd + "|" + ed;
+            }
+
+            var periods = [];
+            var periodMap = {};
             var teamsSet = {};
-            var rowsMap = {};
-            var rowOrder = [];
 
             list.forEach(function(sp) {
-                var team = getTeamKeyBySprintName(sp.name) || "Без команды";
-                var sd = utils.formatDateShort(utils.parseDate(sp.startDate));
-                var ed = utils.formatDateShort(utils.parseDate(sp.endDate));
-                var periodKey = (sp.startDate || "") + "|" + (sp.endDate || "");
-                var label = (sd || "—") + " – " + (ed || "—");
-                if (!rowsMap[periodKey]) {
-                    rowsMap[periodKey] = { key: periodKey, label: label, byTeam: {} };
-                    rowOrder.push(periodKey);
+                var key = periodKey(sp);
+                if (key && !periodMap[key]) {
+                    var sd = utils.formatDateShort(utils.parseDate(sp.startDate));
+                    var ed = utils.formatDateShort(utils.parseDate(sp.endDate));
+                    periodMap[key] = { key: key, label: (sd || "—") + " – " + (ed || "—"), byTeam: {} };
+                    periods.push(key);
                 }
-                rowsMap[periodKey].byTeam[team] = sp;
+                var team = getTeamKeyBySprintName(sp.name) || "Без команды";
                 teamsSet[team] = true;
             });
 
-            cmp.rows = rowOrder.map(function(k) { return rowsMap[k]; });
+            // Сортировка периодов по дате начала убыв.
+            periods.sort(function(a, b) {
+                var asd = a.split("|")[0];
+                var bsd = b.split("|")[0];
+                return bsd.localeCompare(asd);
+            });
+
+            // Заполняем матрицу: для каждой команды ищем спринт с тем же периодом.
+            var sprintsByTeam = {};
+            list.forEach(function(sp) {
+                var key = periodKey(sp);
+                if (!key) return;
+                var team = getTeamKeyBySprintName(sp.name) || "Без команды";
+                if (!sprintsByTeam[team]) sprintsByTeam[team] = {};
+                // если несколько, берём первый в отсортированном списке (уже по дате)
+                if (!sprintsByTeam[team][key]) sprintsByTeam[team][key] = sp;
+            });
+
+            periods.forEach(function(pk) {
+                var row = periodMap[pk];
+                Object.keys(teamsSet).forEach(function(team) {
+                    var sp = sprintsByTeam[team] && sprintsByTeam[team][pk];
+                    if (sp) row.byTeam[team] = sp;
+                });
+            });
+
+            cmp.rows = periods.map(function(k) { return periodMap[k]; });
             cmp.teams = Object.keys(teamsSet).sort(function(a, b) { return a.localeCompare(b); });
         }
 
