@@ -1605,28 +1605,53 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
         } catch (e) {}
         
         $container.html('<div class="ujg-loading">Загрузка данных...</div>');
-        
+
+        // Пытаемся найти первую доску, которая поддерживает спринты и имеет активный спринт
+        function pickBoardWithActiveSprint(boards, index) {
+            if (index >= boards.length) {
+                return $.Deferred().reject(new Error('Не найдено ни одной доски со спринтами')).promise();
+            }
+            const boardId = boards[index].id;
+            return getSprints(boardId)
+                .then(function(sprintsResponse) {
+                    const sprints = sprintsResponse.values || [];
+                    const activeSprint = sprints.find(s => s.state === 'active');
+                    if (!activeSprint) {
+                        // Пробуем следующую доску
+                        return pickBoardWithActiveSprint(boards, index + 1);
+                    }
+                    return { boardId: boardId, sprint: activeSprint };
+                })
+                .fail(function(err) {
+                    // Если доска не поддерживает спринты — идём дальше, иначе бросаем
+                    const msg = (err && err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages[0]) || '';
+                    if (msg.toLowerCase().indexOf('не поддерживает спринты') >= 0 || msg.toLowerCase().indexOf('does not support sprints') >= 0) {
+                        return pickBoardWithActiveSprint(boards, index + 1);
+                    }
+                    return $.Deferred().reject(err).promise();
+                });
+        }
+
         getBoards()
             .then(function(boardsResponse) {
                 const boards = boardsResponse.values || [];
                 if (boards.length === 0) {
                     throw new Error('Не найдено ни одной доски');
                 }
-                
-                const boardId = options.boardId || boards[0].id;
-                return getSprints(boardId);
-            })
-            .then(function(sprintsResponse) {
-                const sprints = sprintsResponse.values || [];
-                const activeSprint = sprints.find(s => s.state === 'active');
-                
-                if (!activeSprint) {
-                    throw new Error('Не найден активный спринт');
+                // Если указали boardId — сначала попробуем его, затем остальные
+                if (options.boardId) {
+                    const preferred = boards.find(b => b.id === options.boardId);
+                    if (preferred) {
+                        const reordered = [preferred].concat(boards.filter(b => b.id !== options.boardId));
+                        return pickBoardWithActiveSprint(reordered, 0);
+                    }
                 }
-                
+                return pickBoardWithActiveSprint(boards, 0);
+            })
+            .then(function(found) {
                 return $.when(
-                    getSprintDetails(activeSprint.id),
-                    getSprintIssues(activeSprint.id)
+                    getSprintDetails(found.sprint.id),
+                    getSprintIssues(found.sprint.id)
                 );
             })
             .then(function(sprintDetails, issuesResponse) {
@@ -1638,10 +1663,11 @@ define('_ujgSprintHealth', ['jquery', 'wrm/context-path'], function($, contextPa
             })
             .fail(function(error) {
                 console.error('UJG Sprint Health Error:', error);
+                const msg = (error && error.message) || (error && error.statusText) || 'Unknown error';
                 $container.html(`
                     <div class="ujg-error">
                         <p>❌ Ошибка загрузки данных</p>
-                        <p class="ujg-error-details">${(error && error.message) || (error && error.statusText) || 'Unknown error'}</p>
+                        <p class="ujg-error-details">${msg}</p>
                     </div>
                 `);
             });
