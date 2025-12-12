@@ -746,6 +746,53 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return { scope: scopePts, completed: donePts, guideline: guideline, projection: null, now: now };
         }
 
+        function ensureJiraScopeChangeForSprint() {
+            if (!state.selectedSprintId || !state.selectedBoardId || !state.sprint) return;
+            if (!state.jiraScope) state.jiraScope = { sprintId: null, mode: "tasks", loading: false, error: false, series: null };
+            var js = state.jiraScope;
+            var sid = state.selectedSprintId;
+            var mode = state.chartMode || "tasks";
+            if (js.loading) return;
+            if (js.sprintId === sid && js.mode === mode && (js.series || js.error)) return;
+            js.sprintId = sid;
+            js.mode = mode;
+            js.loading = true;
+            js.error = false;
+            js.series = null;
+
+            var statId = mode === "hours" ? "issueEstimate" : "issueCount";
+            api.getRapidScopeChangeBurndown(state.selectedBoardId, sid, statId).then(function(resp) {
+                if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart resp", resp);
+                var series = parseScopeChangeBurndown(resp);
+                if (series && (series.scope || series.completed || series.guideline)) {
+                    js.series = series;
+                    js.loading = false;
+                    render();
+                    return;
+                }
+                if (statId !== "issueCount") {
+                    return api.getRapidScopeChangeBurndown(state.selectedBoardId, sid, "issueCount").then(function(resp2) {
+                        if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart resp(issueCount)", resp2);
+                        js.series = parseScopeChangeBurndown(resp2);
+                        js.loading = false;
+                        render();
+                    }, function() {
+                        js.error = true;
+                        js.loading = false;
+                        render();
+                    });
+                }
+                js.error = true;
+                js.loading = false;
+                render();
+            }, function(err) {
+                if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart error", err);
+                js.error = true;
+                js.loading = false;
+                render();
+            });
+        }
+
         function extractJiraStepSeries(resp) {
             // Пытаемся «вытащить» 3 ключевые серии из разных версий Jira
             // Возвращаем { scope: [{x,y}], completed: [{x,y}], guideline: [{x,y}], projection?: [{x,y}] }
