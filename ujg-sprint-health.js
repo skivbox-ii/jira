@@ -1063,12 +1063,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     var pad = { top: 20, right: 20, bottom: 50, left: 60 };
                     var sScopeRaw = series.scope || [];
                     var sCompRaw = series.completed || [];
-                    var sGuide = series.guideline || [];
-                    var sProj = series.projection || [];
+                    var sGuideRaw = series.guideline || [];
+                    var sProjRaw = series.projection || [];
                     var all = [].concat(sScope || []).concat(sComp || []).concat(sGuide || []).concat(sProj || []);
                     if (!all.length) return '<div class="ujg-compare-loading">Нет данных</div>';
-                    var minX = Math.min.apply(null, all.map(function(p) { return p.x; }));
-                    var maxX = Math.max.apply(null, all.map(function(p) { return p.x; }));
+                    // Ось X строго по границам спринта (не выходим за диапазон)
+                    var minX = series.startTime != null ? series.startTime : Math.min.apply(null, all.map(function(p) { return p.x; }));
+                    var maxX = series.endTime != null ? series.endTime : Math.max.apply(null, all.map(function(p) { return p.x; }));
                     if (!isFinite(minX) || !isFinite(maxX) || minX === maxX) { minX = 0; maxX = Math.max(all.length - 1, 1); }
                     var maxY = Math.max.apply(null, all.map(function(p) { return p.y; })) || 1;
                     function niceTicks(maxVal, count) {
@@ -1106,6 +1107,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         }
                         return val;
                     }
+                    function clipToSprint(pts, startTs, endTs) {
+                        if (!pts || !pts.length) return [];
+                        var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                        if (!(isFinite(startTs) && isFinite(endTs)) || endTs <= startTs) return sorted;
+                        // стартовое значение берём из последней точки <= startTs (может быть "вне спринта")
+                        var yStart = yAtOrBefore(sorted, startTs);
+                        var out = [{ x: startTs, y: yStart }];
+                        sorted.forEach(function(p) {
+                            if (p.x > startTs && p.x <= endTs) out.push({ x: p.x, y: p.y });
+                        });
+                        // гарантируем конец в endTs (без выхода за спринт)
+                        var yEnd = yAtOrBefore(sorted, endTs);
+                        if (out[out.length - 1].x !== endTs) out.push({ x: endTs, y: yEnd });
+                        return out;
+                    }
                     function clipToNow(pts, nowTs) {
                         if (!pts || !pts.length) return [];
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
@@ -1140,8 +1156,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
                         return pathFromPoints(sorted);
                     }
-                    function dots(pts, cls, label, onlyChanges) {
+                    function dots(pts, cls, label, opts) {
                         if (!pts || !pts.length) return "";
+                        opts = opts || {};
+                        var onlyChanges = !!opts.onlyChanges;
+                        var excludeX = opts.excludeX;
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
                         var filtered = [];
                         for (var i = 0; i < sorted.length; i++) {
@@ -1151,6 +1170,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             var changedFromPrev = !prev || prev.y !== sorted[i].y;
                             var changedToNext = !next || next.y !== sorted[i].y;
                             if (changedFromPrev || changedToNext) filtered.push(sorted[i]);
+                        }
+                        if (excludeX != null) {
+                            filtered = filtered.filter(function(p) { return p.x !== excludeX; });
                         }
                         return filtered.map(function(p) {
                             var tip = "Дата: " + fmtX(p.x) + "\n" + label + ": " + p.y;
@@ -1180,10 +1202,18 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             return m + " " + d.getDate();
                         } catch (e) { return ""; }
                     }
+                    // Сначала клипуем все серии в границы спринта (X строго внутри спринта)
+                    var spStart = series.startTime != null ? series.startTime : minX;
+                    var spEnd = series.endTime != null ? series.endTime : maxX;
+                    var sScopeBase = clipToSprint(sScopeRaw, spStart, spEnd);
+                    var sCompBase = clipToSprint(sCompRaw, spStart, spEnd);
+                    var sGuide = clipToSprint(sGuideRaw, spStart, spEnd);
+                    var sProj = clipToSprint(sProjRaw, spStart, spEnd);
+
                     // Обрезаем "факт" по линии сегодня (как в Jira): после Today зелёный не рисуем, красный "факт" не рисуем
                     var nowInSprint = series.now && series.startTime && series.endTime && series.now >= series.startTime && series.now <= series.endTime;
-                    var sScope = nowInSprint ? clipToNow(sScopeRaw, series.now) : sScopeRaw;
-                    var sComp = nowInSprint ? clipToNow(sCompRaw, series.now) : sCompRaw;
+                    var sScope = nowInSprint ? clipToNow(sScopeBase, series.now) : sScopeBase;
+                    var sComp = nowInSprint ? clipToNow(sCompBase, series.now) : sCompBase;
 
                     var out = '<svg class="ujg-svg ujg-burn-svg" width="' + VIEW_W + '" height="' + VIEW_H + '" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
 
@@ -1222,8 +1252,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     // - scope/work: ступеньки + кружки только когда значение менялось
                     if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + linePath(sGuide) + '"/>';
                     if (sProj && sProj.length) out += dottedProjection(sProj);
-                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' + dots(sScope, "ujg-jira-scope-dot", "Объём работ", true);
-                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа", true);
+                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' + dots(sScope, "ujg-jira-scope-dot", "Объём работ", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null) });
+                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null) });
 
                     // Today line — только если "сегодня" попадает в период спринта
                     if (nowInSprint) {
