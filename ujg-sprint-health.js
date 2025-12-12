@@ -666,51 +666,50 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
             var times = Object.keys(changes).map(function(k) { return Number(k); }).filter(function(v) { return !isNaN(v); }).sort(function(a, b) { return a - b; });
 
-            // Jira хранит изменения как события по issue: stat.newValue, column.notDone, added/removed.
-            // Для issueCount_ stat.newValue обычно 1.0 — это "вклад" задачи в scope.
-            var issues = {}; // key -> { inScope, done, val }
-            var scopeVal = 0;
+            // Для issueCount_ Jira строит график по "присутствию задач" (1 задача = 1),
+            // стартовый scope = задачи, которые были в спринте на старте, а не "все текущие".
+            // Берём финальный набор из issueToSummary и вычитаем те, которые были added:true после старта.
+            var finalKeys = resp.issueToSummary ? Object.keys(resp.issueToSummary) : [];
+            var addedAfterStart = {};
+            times.forEach(function(ts) {
+                if (startTime != null && ts <= startTime) return;
+                var evs = changes[String(ts)] || changes[ts] || [];
+                (evs || []).forEach(function(ev) {
+                    if (ev && ev.key && ev.added === true) addedAfterStart[ev.key] = true;
+                });
+            });
+
+            var inScope = {};
+            finalKeys.forEach(function(k) {
+                if (!k) return;
+                if (addedAfterStart[k]) return;
+                inScope[k] = true;
+            });
+            var done = {};
+            var scopeVal = Object.keys(inScope).length;
             var doneVal = 0;
 
-            function getIssue(k) {
-                if (!issues[k]) issues[k] = { inScope: false, done: false, val: 0 };
-                return issues[k];
-            }
             function setInScope(k, flag) {
-                var it = getIssue(k);
-                if (it.inScope === flag) return;
-                it.inScope = flag;
+                if (!k) return;
                 if (flag) {
-                    scopeVal += it.val || 0;
-                    if (it.done) doneVal += it.val || 0;
+                    if (!inScope[k]) { inScope[k] = true; scopeVal += 1; }
                 } else {
-                    scopeVal -= it.val || 0;
-                    if (it.done) doneVal -= it.val || 0;
-                    it.done = false;
+                    if (inScope[k]) {
+                        delete inScope[k];
+                        scopeVal -= 1;
+                        if (done[k]) { delete done[k]; doneVal -= 1; }
+                    }
                 }
             }
             function setDone(k, flag) {
-                var it = getIssue(k);
-                if (!it.inScope) setInScope(k, true);
-                if (it.done === flag) return;
-                it.done = flag;
-                if (flag) doneVal += it.val || 0;
-                else doneVal -= it.val || 0;
-            }
-            function setVal(k, newVal) {
-                var it = getIssue(k);
-                var old = it.val || 0;
-                var nv = Number(newVal);
-                if (isNaN(nv)) nv = 0;
-                if (old === nv) return;
-                it.val = nv;
-                if (it.inScope) {
-                    scopeVal += (nv - old);
-                    if (it.done) doneVal += (nv - old);
+                if (!k) return;
+                if (!inScope[k]) setInScope(k, true);
+                if (flag) {
+                    if (!done[k]) { done[k] = true; doneVal += 1; }
+                } else {
+                    if (done[k]) { delete done[k]; doneVal -= 1; }
                 }
             }
-
-            // 1) Сначала применяем все события до старта спринта (<= startTime), чтобы начальный scope совпал с Jira
             function applyEventsAt(ts) {
                 var evs = changes[String(ts)] || changes[ts] || [];
                 (evs || []).forEach(function(ev) {
@@ -718,11 +717,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     var k = ev.key;
                     if (ev.removed === true || ev.deleted === true) setInScope(k, false);
                     if (ev.added === true) setInScope(k, true);
-                    if (ev.stat && ev.stat.newValue != null) {
-                        // если есть stat — считаем, что issue участвует в scope
-                        setInScope(k, true);
-                        setVal(k, ev.stat.newValue);
-                    }
                     if (ev.column) {
                         var isDone = (ev.column.done === true) || (ev.column.notDone === false) || (ev.done === true);
                         setDone(k, isDone);
@@ -732,9 +726,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 });
             }
 
-            if (startTime != null) {
-                times.filter(function(t) { return t <= startTime; }).forEach(applyEventsAt);
-            }
+            // применяем события до старта, чтобы учесть закрытые до старта/удалённые до старта
+            if (startTime != null) times.filter(function(t) { return t <= startTime; }).forEach(applyEventsAt);
 
             var scopePts = [];
             var donePts = [];
@@ -742,8 +735,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 scopePts.push({ x: startTime, y: scopeVal });
                 donePts.push({ x: startTime, y: doneVal });
             }
-
-            // 2) Потом события после старта
             times.filter(function(t) { return startTime == null ? true : t > startTime; }).forEach(function(ts) {
                 applyEventsAt(ts);
                 scopePts.push({ x: ts, y: scopeVal });
@@ -769,28 +760,33 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 }
             }
 
-            // Guideline как в Jira: линейно от 0 к финальному scope (по времени спринта)
+            // Guideline как в Jira: линейная кривая к финальному scope, но с плато на нерабочих днях
             var guideline = null;
             if (startTime != null && endTime != null && resp.workRateData && resp.workRateData.rates && resp.workRateData.rates.length) {
-                // rates: [{start,end,rate}] — rate=0 на выходных => plateau как в Jira
+                var rates = resp.workRateData.rates.slice().sort(function(a, b) { return (a.start || 0) - (b.start || 0); });
+                var workDays = 0;
+                rates.forEach(function(r) {
+                    var rs = Math.max(Number(r.start) || 0, startTime);
+                    var re = Math.min(Number(r.end) || 0, endTime);
+                    var rate = Number(r.rate) || 0;
+                    if (re <= rs) return;
+                    if (rate > 0) workDays += (re - rs) / (24 * 3600 * 1000);
+                });
+                var finalScope = scopePts.length ? scopePts[scopePts.length - 1].y : 0;
+                var perDay = workDays > 0 ? (finalScope / workDays) : 0;
                 var pts = [{ x: startTime, y: 0 }];
                 var cur = 0;
-                var rates = resp.workRateData.rates.slice().sort(function(a, b) { return (a.start || 0) - (b.start || 0); });
                 rates.forEach(function(r) {
-                    var rs = Number(r.start), re = Number(r.end), rate = Number(r.rate);
-                    if (!isFinite(rs) || !isFinite(re) || re <= rs) return;
-                    // ограничиваем периодом спринта
-                    var s = Math.max(rs, startTime);
-                    var e = Math.min(re, endTime);
-                    if (e <= s) return;
-                    // Jira rate — "units per day". Конвертируем по ms.
-                    var days = (e - s) / (24 * 3600 * 1000);
-                    if (!isFinite(days) || days < 0) days = 0;
-                    if (!isFinite(rate)) rate = 0;
-                    // точка на старте сегмента
-                    if (pts.length === 0 || pts[pts.length - 1].x !== s) pts.push({ x: s, y: cur });
-                    cur += rate * days;
-                    pts.push({ x: e, y: cur });
+                    var rs = Math.max(Number(r.start) || 0, startTime);
+                    var re = Math.min(Number(r.end) || 0, endTime);
+                    var rate = Number(r.rate) || 0;
+                    if (re <= rs) return;
+                    if (pts[pts.length - 1].x !== rs) pts.push({ x: rs, y: cur });
+                    if (rate > 0) {
+                        var days = (re - rs) / (24 * 3600 * 1000);
+                        cur += perDay * days;
+                    }
+                    pts.push({ x: re, y: cur });
                 });
                 guideline = pts;
             } else if (startTime != null && endTime != null && scopePts.length) {
@@ -1062,13 +1058,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             } else if (js.series && (js.series.scope || js.series.completed || js.series.guideline)) {
                 // Увеличенный step-chart (по timestamp x)
                 var svg = (function(series) {
-                    var VIEW_W = 640, VIEW_H = 220;
-                    var pad = { top: 14, right: 10, bottom: 26, left: 32 };
+                    // как в Jira: 882x500
+                    var VIEW_W = 882, VIEW_H = 500;
+                    var pad = { top: 20, right: 20, bottom: 50, left: 60 };
                     var sScope = series.scope || [];
                     var sComp = series.completed || [];
                     var sGuide = series.guideline || [];
                     var sProj = series.projection || [];
-                    var all = [].concat(sScope || []).concat(sComp || []).concat(sGuide || []);
+                    var all = [].concat(sScope || []).concat(sComp || []).concat(sGuide || []).concat(sProj || []);
                     if (!all.length) return '<div class="ujg-compare-loading">Нет данных</div>';
                     var minX = Math.min.apply(null, all.map(function(p) { return p.x; }));
                     var maxX = Math.max.apply(null, all.map(function(p) { return p.x; }));
@@ -1116,11 +1113,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         if (!pts || !pts.length) return "";
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
                         return sorted.map(function(p) {
-                            return '<circle class="' + cls + '" cx="' + xPos(p.x) + '" cy="' + yPos(p.y) + '" r="2.2"/>';
+                            var tip = "Дата: " + fmtX(p.x) + "\nScope: " + (p._scope != null ? p._scope : "") + "\nCompleted: " + (p._done != null ? p._done : "");
+                            return '<circle class="' + cls + '" cx="' + xPos(p.x) + '" cy="' + yPos(p.y) + '" r="4"><title>' + utils.escapeHtml(tip) + '</title></circle>';
                         }).join("");
                     }
                     function fmtX(ts) {
-                        try { return new Date(ts).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }); } catch (e) { return ""; }
+                        try {
+                            var d = new Date(ts);
+                            var m = d.toLocaleDateString("ru-RU", { month: "short" }).replace(".", "");
+                            return m + " " + d.getDate();
+                        } catch (e) { return ""; }
                     }
                     var out = '<svg class="ujg-svg ujg-burn-svg" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
                     yTicks.forEach(function(v) {
@@ -1130,8 +1132,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     });
                     out += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
                     out += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
-                    out += '<text class="ujg-burn-label ujg-burn-x" x="' + xPos(minX) + '" y="' + (VIEW_H - pad.bottom + 12) + '">' + utils.escapeHtml(fmtX(minX)) + '</text>';
-                    out += '<text class="ujg-burn-label ujg-burn-x" x="' + xPos(maxX) + '" y="' + (VIEW_H - pad.bottom + 12) + '">' + utils.escapeHtml(fmtX(maxX)) + '</text>';
+                    // x ticks как Jira (примерно раз в 2 дня)
+                    var dayMs = 24 * 3600 * 1000;
+                    var startDay = utils.startOfDay(new Date(minX)).getTime();
+                    var endDay = utils.startOfDay(new Date(maxX)).getTime();
+                    for (var t = startDay; t <= endDay + 1; t += 2 * dayMs) {
+                        var x = xPos(t);
+                        out += '<line class="ujg-burn-grid" x1="' + x + '" y1="' + pad.top + '" x2="' + x + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+                        out += '<text class="ujg-burn-label ujg-burn-x" x="' + x + '" y="' + (VIEW_H - pad.bottom + 16) + '">' + utils.escapeHtml(fmtX(t)) + '</text>';
+                    }
+
                     if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + stepPath(sGuide) + '"/>' + dots(sGuide, "ujg-jira-guide-dot");
                     if (sProj && sProj.length) out += '<path class="ujg-jira-proj" d="' + stepPath(sProj) + '"/>' + dots(sProj, "ujg-jira-proj-dot");
                     if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + stepPath(sScope) + '"/>' + dots(sScope, "ujg-jira-scope-dot");
