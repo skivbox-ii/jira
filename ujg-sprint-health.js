@@ -159,6 +159,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 contentType: "application/json",
                 data: JSON.stringify({ fields: { duedate: dueDateStr } })
             });
+        },
+
+        // Jira Software Server/DC (GreenHopper) rapid charts — для 1-в-1 как в Jira Sprint Report
+        getRapidSprintReport: function(rapidViewId, sprintId) {
+            return $.ajax({
+                url: baseUrl + "/rest/greenhopper/1.0/rapid/charts/sprintreport",
+                data: { rapidViewId: rapidViewId, sprintId: sprintId }
+            });
+        },
+        getRapidScopeChangeBurndown: function(rapidViewId, sprintId) {
+            return $.ajax({
+                url: baseUrl + "/rest/greenhopper/1.0/rapid/charts/scopechangeburndownchart",
+                data: { rapidViewId: rapidViewId, sprintId: sprintId }
+            });
         }
     };
 
@@ -580,18 +594,239 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var cmp = state.compare;
             if (!cmp || !sp || !sp.id) return;
             var cache = cmp.burnCache[sp.id];
-            if (cache && cache.data) return;
+            if (cache && (cache.jiraSeries || cache.data)) return;
             if (cache && cache.loading) return;
             cmp.burnCache[sp.id] = { loading: true };
-            api.getSprintIssues(sp.id).then(function(res) {
-                var issues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
-                var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
-                cmp.burnCache[sp.id] = { data: bd.data, sprint: sp };
-                render();
+            // Пытаемся получить ровно те же точки, что Jira рисует в Sprint Report
+            var rapidViewId = state.compare && state.compare.boardId ? state.compare.boardId : state.selectedBoardId;
+            api.getRapidScopeChangeBurndown(rapidViewId, sp.id).then(function(resp) {
+                var series = extractJiraStepSeries(resp);
+                if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart resp", resp);
+                if (series && (series.scope || series.completed || series.guideline)) {
+                    cmp.burnCache[sp.id] = { jiraSeries: series, jiraSource: "scopechangeburndownchart", sprint: sp };
+                    render();
+                    return;
+                }
+                // fallback: sprintreport
+                return api.getRapidSprintReport(rapidViewId, sp.id).then(function(resp2) {
+                    if (CONFIG.debug) console.log("[UJG] sprintreport resp", resp2);
+                    var series2 = extractJiraStepSeries(resp2);
+                    if (series2 && (series2.scope || series2.completed || series2.guideline)) {
+                        cmp.burnCache[sp.id] = { jiraSeries: series2, jiraSource: "sprintreport", sprint: sp };
+                    } else {
+                        cmp.burnCache[sp.id] = { error: true };
+                    }
+                    render();
+                }, function() {
+                    cmp.burnCache[sp.id] = { error: true };
+                    render();
+                });
             }, function() {
-                cmp.burnCache[sp.id] = { error: true };
-                render();
+                // Фоллбэк: локальный расчёт по задачам (может отличаться от Jira)
+                api.getSprintIssues(sp.id).then(function(res) {
+                    var issues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
+                    var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
+                    cmp.burnCache[sp.id] = { data: bd.data, sprint: sp };
+                    render();
+                }, function() {
+                    cmp.burnCache[sp.id] = { error: true };
+                    render();
+                });
             });
+        }
+
+        function extractJiraStepSeries(resp) {
+            // Пытаемся «вытащить» 3 ключевые серии из разных версий Jira
+            // Возвращаем { scope: [{x,y}], completed: [{x,y}], guideline: [{x,y}], projection?: [{x,y}] }
+            function isNum(v) { return typeof v === "number" && !isNaN(v); }
+            function toPoints(raw) {
+                if (!raw) return null;
+                // array of numbers
+                if (Array.isArray(raw) && raw.length && isNum(raw[0])) {
+                    return raw.map(function(y, i) { return { x: i, y: y }; });
+                }
+                // array of pairs
+                if (Array.isArray(raw) && raw.length && Array.isArray(raw[0]) && raw[0].length >= 2) {
+                    return raw.map(function(p) { return { x: isNum(p[0]) ? p[0] : Number(p[0]) || 0, y: isNum(p[1]) ? p[1] : Number(p[1]) || 0 }; });
+                }
+                // array of objects {x,y} or {time,value}
+                if (Array.isArray(raw) && raw.length && typeof raw[0] === "object") {
+                    var keys = Object.keys(raw[0] || {});
+                    if (keys.indexOf("x") >= 0 && keys.indexOf("y") >= 0) {
+                        return raw.map(function(p) { return { x: Number(p.x) || 0, y: Number(p.y) || 0 }; });
+                    }
+                    if (keys.indexOf("time") >= 0 && (keys.indexOf("value") >= 0 || keys.indexOf("y") >= 0)) {
+                        return raw.map(function(p) { return { x: Number(p.time) || 0, y: Number(p.value != null ? p.value : p.y) || 0 }; });
+                    }
+                }
+                // object map {ts:val}
+                if (typeof raw === "object") {
+                    var pts = [];
+                    Object.keys(raw).forEach(function(k) {
+                        var x = Number(k);
+                        var y = Number(raw[k]);
+                        if (!isNaN(x) && !isNaN(y)) pts.push({ x: x, y: y });
+                    });
+                    if (pts.length) {
+                        pts.sort(function(a, b) { return a.x - b.x; });
+                        return pts;
+                    }
+                }
+                return null;
+            }
+
+            function findCandidates(obj, path, out) {
+                if (!obj || typeof obj !== "object") return;
+                if (out.length > 200) return; // safety
+                Object.keys(obj).forEach(function(k) {
+                    var v = obj[k];
+                    var p = path ? (path + "." + k) : k;
+                    // candidate series by key
+                    if (v && (Array.isArray(v) || typeof v === "object")) {
+                        if (/(scope|totalScope|allIssues|allIssuesEstimate)/i.test(k) ||
+                            /(completed|done|work|workCompleted|doneIssues|completedIssues)/i.test(k) ||
+                            /(guideline|guide|ideal|baseline)/i.test(k) ||
+                            /(projection|forecast|predict)/i.test(k)) {
+                            var pts = toPoints(v);
+                            if (pts && pts.length) out.push({ key: k, path: p, pts: pts });
+                        }
+                    }
+                    // recurse
+                    if (v && typeof v === "object" && !Array.isArray(v)) findCandidates(v, p, out);
+                });
+            }
+
+            var cands = [];
+            findCandidates(resp, "", cands);
+
+            function pick(re) {
+                var hit = cands.find(function(c) { return re.test(c.key) || re.test(c.path); });
+                return hit ? hit.pts : null;
+            }
+
+            var scope = pick(/scope|allIssues|total/i);
+            var completed = pick(/completed|done|work/i);
+            var guideline = pick(/guideline|ideal|baseline/i);
+            var projection = pick(/projection|forecast|predict/i);
+
+            // если не нашли по ключам — пробуем по размерам (самая «верхняя» серия = scope)
+            if (!scope && cands.length) {
+                var byMax = cands.slice().sort(function(a, b) {
+                    var am = Math.max.apply(null, a.pts.map(function(p) { return p.y; }));
+                    var bm = Math.max.apply(null, b.pts.map(function(p) { return p.y; }));
+                    return bm - am;
+                });
+                scope = byMax[0] ? byMax[0].pts : null;
+            }
+
+            // нормализация: если x — индексы, приводим x в общий диапазон
+            function ensureX(pts) {
+                if (!pts || !pts.length) return pts;
+                var uniq = {};
+                pts.forEach(function(p) { uniq[p.x] = true; });
+                var keys = Object.keys(uniq);
+                if (keys.length <= 1) {
+                    return pts.map(function(p, i) { return { x: i, y: p.y }; });
+                }
+                return pts;
+            }
+
+            return {
+                scope: ensureX(scope),
+                completed: ensureX(completed),
+                guideline: ensureX(guideline),
+                projection: ensureX(projection)
+            };
+        }
+
+        function renderMiniJiraStepChart(series) {
+            if (!series) return '<div class="ujg-compare-loading">Нет данных</div>';
+            var sScope = series.scope || [];
+            var sComp = series.completed || [];
+            var sGuide = series.guideline || [];
+            var sProj = series.projection || [];
+            var all = []
+                .concat(sScope || [])
+                .concat(sComp || [])
+                .concat(sGuide || [])
+                .concat(sProj || []);
+            if (!all.length) return '<div class="ujg-compare-loading">Нет данных</div>';
+
+            var minX = Math.min.apply(null, all.map(function(p) { return p.x; }));
+            var maxX = Math.max.apply(null, all.map(function(p) { return p.x; }));
+            if (!isFinite(minX) || !isFinite(maxX) || minX === maxX) { minX = 0; maxX = Math.max(all.length - 1, 1); }
+            var maxY = Math.max.apply(null, all.map(function(p) { return p.y; })) || 1;
+
+            function niceTicks(maxVal, count) {
+                if (maxVal <= 0) return [0, 1];
+                var rough = maxVal / Math.max(count, 1);
+                var pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+                var step = pow10;
+                var err = rough / pow10;
+                if (err >= 7.5) step = pow10 * 10;
+                else if (err >= 3.5) step = pow10 * 5;
+                else if (err >= 1.5) step = pow10 * 2;
+                var ticks = [];
+                for (var v = 0; v <= maxVal + step * 0.4; v += step) ticks.push(v);
+                if (ticks[ticks.length - 1] < maxVal) ticks.push(maxVal);
+                return ticks;
+            }
+
+            var yTicks = niceTicks(maxY, 5);
+            maxY = yTicks[yTicks.length - 1] || 1;
+
+            var VIEW_W = 110, VIEW_H = 80;
+            var pad = { top: 8, right: 4, bottom: 10, left: 8 };
+            var plotW = VIEW_W - pad.left - pad.right;
+            var plotH = VIEW_H - pad.top - pad.bottom;
+
+            function xPos(x) {
+                var t = (x - minX) / Math.max((maxX - minX), 1);
+                return pad.left + plotW * t;
+            }
+            function yPos(y) {
+                return pad.top + plotH - (plotH * (y / maxY));
+            }
+
+            function stepPath(pts) {
+                if (!pts || pts.length === 0) return "";
+                var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                var d = "M " + xPos(sorted[0].x) + " " + yPos(sorted[0].y);
+                for (var i = 1; i < sorted.length; i++) {
+                    var prev = sorted[i - 1];
+                    var cur = sorted[i];
+                    var x = xPos(cur.x);
+                    d += " L " + x + " " + yPos(prev.y);
+                    d += " L " + x + " " + yPos(cur.y);
+                }
+                return d;
+            }
+
+            function dots(pts, cls) {
+                if (!pts || !pts.length) return "";
+                var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                return sorted.map(function(p) {
+                    return '<circle class="' + cls + '" cx="' + xPos(p.x) + '" cy="' + yPos(p.y) + '" r="1.4"/>';
+                }).join("");
+            }
+
+            var html = '<div class="ujg-mini-burn ujg-mini-jira">';
+            html += '<svg class="ujg-svg ujg-burn-svg" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+
+            yTicks.forEach(function(v) {
+                var y = yPos(v);
+                html += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
+            });
+            html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+            html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+
+            if (sGuide && sGuide.length) html += '<path class="ujg-jira-guide" d="' + stepPath(sGuide) + '"/>' + dots(sGuide, "ujg-jira-guide-dot");
+            if (sProj && sProj.length) html += '<path class="ujg-jira-proj" d="' + stepPath(sProj) + '"/>' + dots(sProj, "ujg-jira-proj-dot");
+            if (sScope && sScope.length) html += '<path class="ujg-jira-scope" d="' + stepPath(sScope) + '"/>' + dots(sScope, "ujg-jira-scope-dot");
+            if (sComp && sComp.length) html += '<path class="ujg-jira-done" d="' + stepPath(sComp) + '"/>' + dots(sComp, "ujg-jira-done-dot");
+
+            html += '</svg></div>';
+            return html;
         }
 
         function renderMiniBurn(data, mode) {
@@ -1074,7 +1309,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     }
                     var cache = cmp.burnCache[sp.id];
                     var cellBody = '';
-                    if (cache && cache.data && cache.data.length) {
+                    if (cache && cache.jiraSeries && (cache.jiraSeries.scope || cache.jiraSeries.completed || cache.jiraSeries.guideline)) {
+                        cellBody = renderMiniJiraStepChart(cache.jiraSeries);
+                    } else if (cache && cache.data && cache.data.length) {
                         cellBody = renderMiniBurn(cache.data, state.chartMode);
                     } else if (cache && cache.loading) {
                         cellBody = '<div class="ujg-compare-loading">⏳ Загрузка...</div>';

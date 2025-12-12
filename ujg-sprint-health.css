@@ -171,6 +171,17 @@
 .ujg-mini-burn { height: 120px; }
 .ujg-mini-burn .ujg-burn-svg { height: 120px; }
 
+/* Jira-like step charts (scope change burndown / sprint report) */
+.ujg-mini-jira .ujg-jira-scope { stroke: #de350b; stroke-width: 1.4; fill: none; }
+.ujg-mini-jira .ujg-jira-done { stroke: #36b37e; stroke-width: 1.4; fill: none; }
+.ujg-mini-jira .ujg-jira-guide { stroke: #b3bac5; stroke-width: 1.2; fill: none; }
+.ujg-mini-jira .ujg-jira-proj { stroke: #ff8b00; stroke-width: 1.2; fill: none; stroke-dasharray: 2,1.6; }
+
+.ujg-mini-jira .ujg-jira-scope-dot { fill: #fff; stroke: #de350b; stroke-width: 0.8; }
+.ujg-mini-jira .ujg-jira-done-dot { fill: #fff; stroke: #36b37e; stroke-width: 0.8; }
+.ujg-mini-jira .ujg-jira-guide-dot { fill: #fff; stroke: #b3bac5; stroke-width: 0.8; }
+.ujg-mini-jira .ujg-jira-proj-dot { fill: #fff; stroke: #ff8b00; stroke-width: 0.8; }
+
 /* Estimate inline edit */
 .ujg-est { cursor: pointer; white-space: nowrap; }
 .ujg-est-edit { padding: 0; }
