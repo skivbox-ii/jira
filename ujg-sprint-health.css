@@ -189,6 +189,9 @@
 .ujg-jira-main .ujg-burn-svg { height: 500px !important; width: 100% !important; }
 .ujg-jira-main .axis-label { font-size: 12px; fill: #5e6c84; }
 .ujg-jira-main .non-working-days { fill: rgba(9, 30, 66, 0.04); }
+.ujg-jira-main .ujg-burn-label { font-size: 12px !important; }
+.ujg-jira-main .ujg-burn-grid { stroke-width: 1; }
+.ujg-jira-main .ujg-burn-axis { stroke-width: 1.2; }
 .ujg-jira-main .ujg-jira-scope { stroke: #de350b; stroke-width: 2; fill: none; }
 .ujg-jira-main .ujg-jira-done { stroke: #36b37e; stroke-width: 2; fill: none; }
 .ujg-jira-main .ujg-jira-guide { stroke: #b3bac5; stroke-width: 1.6; fill: none; }
@@ -201,6 +204,7 @@
 .ujg-mini-jira .ujg-jira-proj-dot { fill: #fff; stroke: #ff5630; stroke-width: 0.8; }
 .ujg-jira-main .ujg-jira-proj { stroke: #ff5630; stroke-width: 1.6; fill: none; stroke-dasharray: 3,2; }
 .ujg-jira-main .ujg-jira-proj-dot { fill: #fff; stroke: #ff5630; stroke-width: 1; }
+.ujg-jira-main .ujg-jira-proj-dotline { fill: #ff5630; }
 
 /* Estimate inline edit */
 .ujg-est { cursor: pointer; white-space: nowrap; }
