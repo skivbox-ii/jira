@@ -1111,13 +1111,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         }
                         return val;
                     }
-                    function clipToSprint(pts, startTs, endTs) {
+                    function clipToSprint(pts, startTs, endTs, opts) {
                         if (!pts || !pts.length) return [];
+                        opts = opts || {};
+                        var noPrependStart = !!opts.noPrependStart;
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
                         if (!(isFinite(startTs) && isFinite(endTs)) || endTs <= startTs) return sorted;
                         // стартовое значение берём из последней точки <= startTs (может быть "вне спринта")
                         var yStart = yAtOrBefore(sorted, startTs);
-                        var out = [{ x: startTs, y: yStart }];
+                        var out = noPrependStart ? [] : [{ x: startTs, y: yStart }];
                         sorted.forEach(function(p) {
                             if (p.x > startTs && p.x <= endTs) out.push({ x: p.x, y: p.y });
                         });
@@ -1165,6 +1167,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         opts = opts || {};
                         var onlyChanges = !!opts.onlyChanges;
                         var excludeX = opts.excludeX;
+                        var skipFirstIfZero = !!opts.skipFirstIfZero;
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
                         var filtered = [];
                         for (var i = 0; i < sorted.length; i++) {
@@ -1177,6 +1180,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         }
                         if (excludeX != null) {
                             filtered = filtered.filter(function(p) { return p.x !== excludeX; });
+                        }
+                        if (skipFirstIfZero && filtered.length && filtered[0].y === 0) {
+                            filtered = filtered.slice(1);
                         }
                         return filtered.map(function(p) {
                             var tip = "Дата: " + fmtX(p.x) + "\n" + label + ": " + p.y;
@@ -1194,9 +1200,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         for (var x = x0; x <= x1 + 0.1; x += step) {
                             html += '<circle class="ujg-jira-proj-dotline" cx="' + x + '" cy="' + y + '" r="2.1"></circle>';
                         }
-                        // маркеры на концах
-                        html += '<circle class="ujg-jira-proj-dot" cx="' + x0 + '" cy="' + y + '" r="4"></circle>';
-                        html += '<circle class="ujg-jira-proj-dot" cx="' + x1 + '" cy="' + y + '" r="4"></circle>';
                         return html;
                     }
                     function fmtX(ts) {
@@ -1212,12 +1215,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     var sScopeBase = clipToSprint(sScopeRaw, spStart, spEnd);
                     var sCompBase = clipToSprint(sCompRaw, spStart, spEnd);
                     var sGuide = clipToSprint(sGuideRaw, spStart, spEnd);
-                    var sProj = clipToSprint(sProjRaw, spStart, spEnd);
 
                     // Обрезаем "факт" по линии сегодня (как в Jira): после Today зелёный не рисуем, красный "факт" не рисуем
                     var nowInSprint = series.now && series.startTime && series.endTime && series.now >= series.startTime && series.now <= series.endTime;
                     var sScope = nowInSprint ? clipToNow(sScopeBase, series.now) : sScopeBase;
                     var sComp = nowInSprint ? clipToNow(sCompBase, series.now) : sCompBase;
+                    // Прогноз должен начинаться строго с линии "Сегодня", без "дотягивания" от старта спринта
+                    var projStart = nowInSprint ? series.now : spStart;
+                    var sProj = clipToSprint(sProjRaw, projStart, spEnd, { noPrependStart: true });
 
                     var out = '<svg class="ujg-svg ujg-burn-svg" width="' + VIEW_W + '" height="' + VIEW_H + '" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
 
@@ -1257,7 +1262,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + linePath(sGuide) + '"/>';
                     if (sProj && sProj.length) out += dottedProjection(sProj);
                     if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' + dots(sScope, "ujg-jira-scope-dot", "Объём работ", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null) });
-                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null) });
+                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null), skipFirstIfZero: true });
 
                     // Today line — только если "сегодня" попадает в период спринта
                     if (nowInSprint) {
