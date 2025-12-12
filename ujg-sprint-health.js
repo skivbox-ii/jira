@@ -169,9 +169,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             });
         },
         getRapidScopeChangeBurndown: function(rapidViewId, sprintId, statisticFieldId) {
+            // Jira иногда чувствителен к типам параметров/кэшу — делаем максимально близко к вызову из UI Jira
+            var rv = Number(rapidViewId);
+            var sid = Number(sprintId);
             return $.ajax({
                 url: baseUrl + "/rest/greenhopper/1.0/rapid/charts/scopechangeburndownchart",
-                data: { rapidViewId: rapidViewId, sprintId: sprintId, statisticFieldId: statisticFieldId || "issueCount" }
+                cache: false, // добавит _=timestamp как в Jira UI
+                data: {
+                    rapidViewId: isNaN(rv) ? rapidViewId : rv,
+                    sprintId: isNaN(sid) ? sprintId : sid,
+                    statisticFieldId: statisticFieldId || "issueCount"
+                }
             });
         }
     };
@@ -613,7 +621,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 });
             }
 
-            api.getRapidScopeChangeBurndown(rapidViewId, sp.id, "issueCount").then(function(resp) {
+            fetchRapidScopeChangeSeries(rapidViewId, sp.id, state.chartMode).then(function(resp) {
                 var series = parseScopeChangeBurndown(resp);
                 if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart resp", resp);
                 if (series && (series.scope || series.completed || series.guideline)) {
@@ -639,6 +647,28 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 // Фоллбэк: локальный расчёт по задачам (может отличаться от Jira)
                 fallbackLocal();
             });
+        }
+
+        function fetchRapidScopeChangeSeries(rapidViewId, sprintId, mode) {
+            // Jira инстансы отличаются: statisticFieldId может быть issueCount / issueCount_ / IssueCount_ и т.п.
+            // Плюс Jira UI всегда добавляет _=timestamp (мы уже делаем cache:false в api.getRapidScopeChangeBurndown).
+            var d = $.Deferred();
+            var isHours = mode === "hours";
+            var candidates = isHours
+                ? ["issueEstimate", "issueEstimate_", "IssueEstimate_"]
+                : ["issueCount", "issueCount_", "IssueCount_"];
+
+            function tryIdx(i) {
+                if (i >= candidates.length) { d.reject(); return; }
+                api.getRapidScopeChangeBurndown(rapidViewId, sprintId, candidates[i]).then(function(resp) {
+                    d.resolve(resp);
+                }, function(err) {
+                    if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart failed statisticFieldId=" + candidates[i], err && err.status, err && err.responseText);
+                    tryIdx(i + 1);
+                });
+            }
+            tryIdx(0);
+            return d.promise();
         }
 
         function parseScopeChangeBurndown(resp) {
@@ -760,8 +790,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             js.error = false;
             js.series = null;
 
-            var statId = mode === "hours" ? "issueEstimate" : "issueCount";
-            api.getRapidScopeChangeBurndown(state.selectedBoardId, sid, statId).then(function(resp) {
+            fetchRapidScopeChangeSeries(state.selectedBoardId, sid, mode).then(function(resp) {
                 if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart resp", resp);
                 var series = parseScopeChangeBurndown(resp);
                 if (series && (series.scope || series.completed || series.guideline)) {
@@ -770,23 +799,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     render();
                     return;
                 }
-                if (statId !== "issueCount") {
-                    return api.getRapidScopeChangeBurndown(state.selectedBoardId, sid, "issueCount").then(function(resp2) {
-                        if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart resp(issueCount)", resp2);
-                        js.series = parseScopeChangeBurndown(resp2);
-                        js.loading = false;
-                        render();
-                    }, function() {
-                        js.error = true;
-                        js.loading = false;
-                        render();
-                    });
-                }
                 js.error = true;
                 js.loading = false;
                 render();
             }, function(err) {
-                if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart error", err);
+                if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart error", err, err && err.responseText);
                 js.error = true;
                 js.loading = false;
                 render();
