@@ -191,6 +191,12 @@
 .ujg-jira-main .ujg-jira-done-dot { fill: #fff; stroke: #36b37e; stroke-width: 1; }
 .ujg-jira-main .ujg-jira-guide-dot { fill: #fff; stroke: #b3bac5; stroke-width: 1; }
 
+/* Projection (Jira "Прогноз объёма") */
+.ujg-mini-jira .ujg-jira-proj { stroke: #ff5630; stroke-width: 1.2; fill: none; stroke-dasharray: 2,1.6; }
+.ujg-mini-jira .ujg-jira-proj-dot { fill: #fff; stroke: #ff5630; stroke-width: 0.8; }
+.ujg-jira-main .ujg-jira-proj { stroke: #ff5630; stroke-width: 1.6; fill: none; stroke-dasharray: 3,2; }
+.ujg-jira-main .ujg-jira-proj-dot { fill: #fff; stroke: #ff5630; stroke-width: 1; }
+
 /* Estimate inline edit */
 .ujg-est { cursor: pointer; white-space: nowrap; }
 .ujg-est-edit { padding: 0; }
