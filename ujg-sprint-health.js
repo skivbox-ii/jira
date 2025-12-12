@@ -111,7 +111,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         getIssue: function(key) {
             return $.ajax({
                 url: baseUrl + "/rest/api/2/issue/" + key,
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,worklog," + (CONFIG.sprintField || "customfield_10020") + "," + CONFIG.startDateField, expand: "changelog" }
+                data: { fields: "summary,status,assignee,reporter,creator,priority,issuetype,timeoriginalestimate,timetracking,timespent,duedate,created,updated,description,resolutiondate,comment,changelog,worklog," + (CONFIG.sprintField || "customfield_10020") + "," + CONFIG.startDateField, expand: "changelog" }
             });
         },
         getIssueChangelog: function(key) {
@@ -688,6 +688,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var done = {};
             var scopeVal = Object.keys(inScope).length;
             var doneVal = 0;
+            var markersScope = [];
+            var markersDone = [];
+            var issueToSummary = resp.issueToSummary && typeof resp.issueToSummary === "object" ? resp.issueToSummary : {};
 
             function setInScope(k, flag) {
                 if (!k) return;
@@ -710,11 +713,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (done[k]) { delete done[k]; doneVal -= 1; }
                 }
             }
-            function applyEventsAt(ts) {
+            function applyEventsAt(ts, collectMarkers) {
                 var evs = changes[String(ts)] || changes[ts] || [];
                 (evs || []).forEach(function(ev) {
                     if (!ev || !ev.key) return;
                     var k = ev.key;
+                    var prevScope = scopeVal;
+                    var prevDone = doneVal;
+                    var beforeIn = !!inScope[k];
+                    var beforeDone = !!done[k];
                     if (ev.removed === true || ev.deleted === true) setInScope(k, false);
                     if (ev.added === true) setInScope(k, true);
                     if (ev.column) {
@@ -723,11 +730,42 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     }
                     if (ev.done === true) setDone(k, true);
                     if (ev.notDone === true) setDone(k, false);
+
+                    if (collectMarkers) {
+                        // маркер только если реально изменилась линия
+                        if (scopeVal !== prevScope) {
+                            markersScope.push({
+                                ts: ts,
+                                key: k,
+                                y: scopeVal,
+                                from: prevScope,
+                                to: scopeVal,
+                                op: ev.added ? "added" : (ev.removed || ev.deleted) ? "removed" : "scope",
+                                summary: issueToSummary[k] || "",
+                                beforeIn: beforeIn,
+                                afterIn: !!inScope[k]
+                            });
+                        }
+                        if (doneVal !== prevDone) {
+                            markersDone.push({
+                                ts: ts,
+                                key: k,
+                                y: doneVal,
+                                from: prevDone,
+                                to: doneVal,
+                                op: (beforeDone ? "undone" : "done"),
+                                statusId: ev.column && ev.column.newStatus ? String(ev.column.newStatus) : (ev.column && ev.column.newstatus ? String(ev.column.newstatus) : ""),
+                                summary: issueToSummary[k] || "",
+                                beforeDone: beforeDone,
+                                afterDone: !!done[k]
+                            });
+                        }
+                    }
                 });
             }
 
             // применяем события до старта, чтобы учесть закрытые до старта/удалённые до старта
-            if (startTime != null) times.filter(function(t) { return t <= startTime; }).forEach(applyEventsAt);
+            if (startTime != null) times.filter(function(t) { return t <= startTime; }).forEach(function(t){ applyEventsAt(t, false); });
 
             var scopePts = [];
             var donePts = [];
@@ -736,7 +774,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 donePts.push({ x: startTime, y: doneVal });
             }
             times.filter(function(t) { return startTime == null ? true : t > startTime; }).forEach(function(ts) {
-                applyEventsAt(ts);
+                // маркеры собираем только в пределах спринта
+                var inSprint = (!startTime || ts >= startTime) && (!endTime || ts <= endTime);
+                applyEventsAt(ts, inSprint);
                 scopePts.push({ x: ts, y: scopeVal });
                 donePts.push({ x: ts, y: doneVal });
             });
@@ -806,7 +846,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 projection = [{ x: now, y: curScope }, { x: endTime, y: curScope }];
             }
 
-            return { scope: scopePts, completed: donePts, guideline: guideline, projection: projection, now: now, startTime: startTime, endTime: endTime, workRateData: resp.workRateData || null };
+            return {
+                scope: scopePts,
+                completed: donePts,
+                guideline: guideline,
+                projection: projection,
+                now: now,
+                startTime: startTime,
+                endTime: endTime,
+                workRateData: resp.workRateData || null,
+                markers: { scope: markersScope, done: markersDone }
+            };
         }
 
         function ensureJiraScopeChangeForSprint() {
@@ -1042,7 +1092,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (!state.sprint || !state.sprint.id) return '';
             var html = '<div class="ujg-chart-wrap">';
             html += '<div class="ujg-chart-hdr">';
-            html += '<span class="ujg-chart-title">Scope Change (как в Jira)</span>';
+            html += '<span class="ujg-chart-title">Диаграма сгорания</span>';
             html += '<div class="ujg-legend">';
             html += '<span class="ujg-leg"><i style="background:#de350b"></i>Объём работ</span>';
             html += '<span class="ujg-leg"><i style="background:#ff5630"></i>Прогноз объёма</span>';
@@ -1189,6 +1239,28 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             return '<circle class="' + cls + '" cx="' + xPos(p.x) + '" cy="' + yPos(p.y) + '" r="4"><title>' + utils.escapeHtml(tip) + '</title></circle>';
                         }).join("");
                     }
+                    function eventDots(markers, cls, label, opts) {
+                        markers = markers || [];
+                        opts = opts || {};
+                        var excludeX = opts.excludeX;
+                        var skipFirstIfZero = !!opts.skipFirstIfZero;
+                        var filtered = markers.slice().sort(function(a, b) { return a.ts - b.ts; });
+                        if (excludeX != null) filtered = filtered.filter(function(m) { return m.ts !== excludeX; });
+                        if (skipFirstIfZero && filtered.length && filtered[0].y === 0) filtered = filtered.slice(1);
+                        return filtered.map(function(m) {
+                            var tip = "Дата: " + fmtX(m.ts) + "\n" + label + ": " + m.y + "\n" + (m.key || "");
+                            var summary = m.summary ? ("\n" + m.summary) : "";
+                            return '<circle class="ujg-jira-mk ' + cls + '" cx="' + xPos(m.ts) + '" cy="' + yPos(m.y) + '" r="4"' +
+                                ' data-key="' + utils.escapeHtml(m.key || "") + '"' +
+                                ' data-ts="' + m.ts + '"' +
+                                ' data-kind="' + utils.escapeHtml(label) + '"' +
+                                ' data-from="' + m.from + '"' +
+                                ' data-to="' + m.to + '"' +
+                                ' data-op="' + utils.escapeHtml(m.op || "") + '"' +
+                                ' data-summary="' + utils.escapeHtml(m.summary || "") + '"' +
+                                '><title>' + utils.escapeHtml(tip + summary) + '</title></circle>';
+                        }).join("");
+                    }
                     function dottedProjection(projPts) {
                         if (!projPts || projPts.length < 2) return "";
                         var p0 = projPts[0], p1 = projPts[projPts.length - 1];
@@ -1261,8 +1333,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     // - scope/work: ступеньки + кружки только когда значение менялось
                     if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + linePath(sGuide) + '"/>';
                     if (sProj && sProj.length) out += dottedProjection(sProj);
-                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' + dots(sScope, "ujg-jira-scope-dot", "Объём работ", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null) });
-                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа", { onlyChanges: true, excludeX: (nowInSprint ? series.now : null), skipFirstIfZero: true });
+                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' +
+                        eventDots((series.markers && series.markers.scope) ? series.markers.scope : [], "ujg-jira-scope-dot", "Объём работ", { excludeX: (nowInSprint ? series.now : null) });
+                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' +
+                        eventDots((series.markers && series.markers.done) ? series.markers.done : [], "ujg-jira-done-dot", "Завершенная работа", { excludeX: (nowInSprint ? series.now : null), skipFirstIfZero: true });
 
                     // Today line — только если "сегодня" попадает в период спринта
                     if (nowInSprint) {
@@ -1543,10 +1617,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             html += renderProblems();
             html += renderAssignees();
             html += renderTable();
+            // тултип для кликов по точкам графика
+            html += '<div class="ujg-tooltip" id="ujgChartTooltip"></div>';
             
             $cont.html(html);
             ensureFullWidth();
             bindEvents();
+            bindJiraChartPointEvents();
             API.resize();
         }
 
@@ -2236,6 +2313,129 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         }
 
         function hideTooltip() { $("#ujgTooltip").removeClass("ujg-show"); }
+
+        function ensureChartTooltipEl() {
+            var $tip = $("#ujgChartTooltip");
+            if ($tip.length) return $tip;
+            $tip = $('<div class="ujg-tooltip" id="ujgChartTooltip"></div>');
+            $("body").append($tip);
+            return $tip;
+        }
+
+        function hideChartTooltip() { $("#ujgChartTooltip").removeClass("ujg-show"); }
+
+        function showChartTooltipAt(x, y, html) {
+            var $tip = ensureChartTooltipEl();
+            $tip.html(html).addClass("ujg-show");
+            $tip.css({ top: y + 10, left: x + 10 });
+        }
+
+        function buildIssueTooltipHtml(issue, worklog, marker) {
+            var f = issue && issue.fields ? issue.fields : {};
+            var key = issue ? issue.key : (marker && marker.key) || "";
+            var summary = f.summary || (marker && marker.summary) || "";
+            var status = f.status ? f.status.name : "";
+            var assignee = f.assignee ? f.assignee.displayName : "—";
+            var reporter = f.reporter ? f.reporter.displayName : (f.creator ? f.creator.displayName : "—");
+            var prio = f.priority ? f.priority.name : "—";
+            var type = f.issuetype ? f.issuetype.name : "—";
+            var orig = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+            var spent = f.timespent || 0;
+            var rem = (f.timetracking && f.timetracking.remainingEstimateSeconds) || 0;
+
+            var link = key ? ('<a href="' + baseUrl + '/browse/' + utils.escapeHtml(key) + '" target="_blank">' + utils.escapeHtml(key) + '</a>') : utils.escapeHtml(key);
+            var html = '<div class="ujg-tip-hdr"><b>' + link + '</b>: ' + utils.escapeHtml(summary) + '</div>';
+            html += '<div class="ujg-tip-row"><b>Статус:</b> ' + utils.escapeHtml(status || "—") + '</div>';
+            html += '<div class="ujg-tip-row"><b>Тип:</b> ' + utils.escapeHtml(type) + ' | <b>Приоритет:</b> ' + utils.escapeHtml(prio) + '</div>';
+            html += '<div class="ujg-tip-row"><b>Исполнитель:</b> ' + utils.escapeHtml(assignee) + '</div>';
+            html += '<div class="ujg-tip-row"><b>Автор:</b> ' + utils.escapeHtml(reporter) + '</div>';
+            html += '<div class="ujg-tip-row"><b>Оценка:</b> ' + utils.formatHours(orig) + ' | <b>Затрачено:</b> ' + utils.formatHours(spent) + (rem ? (' | <b>Осталось:</b> ' + utils.formatHours(rem)) : '') + '</div>';
+
+            if (marker) {
+                var dt = marker.ts ? (new Date(Number(marker.ts))).toLocaleString("ru-RU") : "";
+                html += '<div class="ujg-tip-row"><b>Событие:</b> ' + utils.escapeHtml(marker.kind || "") + ' ' + utils.escapeHtml(marker.from + " → " + marker.to) + (dt ? (' | ' + utils.escapeHtml(dt)) : '') + '</div>';
+            }
+
+            // Worklog summary
+            if (worklog && worklog.worklogs && Array.isArray(worklog.worklogs)) {
+                var by = {};
+                worklog.worklogs.forEach(function(w) {
+                    var name = (w.author && w.author.displayName) ? w.author.displayName : "—";
+                    by[name] = (by[name] || 0) + (w.timeSpentSeconds || 0);
+                });
+                var top = Object.keys(by).map(function(n){ return { n: n, s: by[n] }; }).sort(function(a,b){ return b.s-a.s; }).slice(0, 5);
+                if (top.length) {
+                    html += '<div class="ujg-tip-desc"><b>Трудозатраты по авторам:</b><br>' +
+                        top.map(function(t){ return utils.escapeHtml(t.n) + ': ' + utils.formatHours(t.s); }).join('<br>') +
+                        '</div>';
+                }
+
+                // Последние worklog записи В ПЕРИОД СПРИНТА
+                var spStart = state && state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null;
+                var spEnd = state && state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.endDate)) : null;
+                var entries = worklog.worklogs.slice();
+                if (spStart && spEnd) {
+                    entries = entries.filter(function(w) {
+                        var d = utils.startOfDay(utils.parseDate(w.started));
+                        return d && d >= spStart && d <= spEnd;
+                    });
+                }
+                entries.sort(function(a, b) {
+                    var ad = utils.parseDate(a.started), bd = utils.parseDate(b.started);
+                    var av = ad ? ad.getTime() : 0;
+                    var bv = bd ? bd.getTime() : 0;
+                    return bv - av;
+                });
+                entries = entries.slice(0, 8);
+                if (entries.length) {
+                    html += '<div class="ujg-tip-desc"><b>Последние worklog в спринте:</b><br>' +
+                        entries.map(function(w) {
+                            var name = (w.author && w.author.displayName) ? w.author.displayName : "—";
+                            var d = utils.parseDate(w.started);
+                            var when = d ? d.toLocaleString("ru-RU") : "";
+                            var line = utils.escapeHtml(when) + ' — ' + utils.escapeHtml(name) + ': ' + utils.formatHours(w.timeSpentSeconds || 0);
+                            var c = (w.comment || "").trim();
+                            if (c) line += ' — ' + utils.escapeHtml(c);
+                            return line;
+                        }).join('<br>') +
+                        '</div>';
+                }
+            }
+
+            return html;
+        }
+
+        function bindJiraChartPointEvents() {
+            // закрытие по клику вне тултипа
+            $(document).off("click.ujgChartTip").on("click.ujgChartTip", function(e) {
+                if (!$(e.target).closest("#ujgChartTooltip").length && !$(e.target).closest(".ujg-jira-mk").length) hideChartTooltip();
+            });
+
+            $cont.find(".ujg-jira-mk").off("click.ujgChart").on("click.ujgChart", function(ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                var $c = $(this);
+                var key = $c.data("key");
+                var ts = Number($c.data("ts")) || 0;
+                var kind = $c.data("kind") || "";
+                var from = Number($c.data("from"));
+                var to = Number($c.data("to"));
+                var summary = $c.data("summary") || "";
+                var marker = { key: key, ts: ts, kind: kind, from: from, to: to, summary: summary };
+
+                showChartTooltipAt(ev.pageX, ev.pageY, "Загрузка...");
+                if (!key) return;
+
+                $.when(api.getIssue(key), api.getIssueWorklog(key)).then(function(issueResp, wlResp) {
+                    var issue = issueResp && issueResp[0] ? issueResp[0] : issueResp;
+                    var wl = wlResp && wlResp[0] ? wlResp[0] : wlResp;
+                    var html = buildIssueTooltipHtml(issue, wl, marker);
+                    showChartTooltipAt(ev.pageX, ev.pageY, html);
+                }, function() {
+                    showChartTooltipAt(ev.pageX, ev.pageY, '<div class="ujg-tip-hdr"><b>' + utils.escapeHtml(key) + '</b></div><div class="ujg-tip-row">Не удалось загрузить детали задачи</div>');
+                });
+            });
+        }
 
         function bindCompareEvents() {
             $cont.find(".ujg-toggle-compare .ujg-tog").on("click", function() {
