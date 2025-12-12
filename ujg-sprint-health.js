@@ -1065,7 +1065,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     var sCompRaw = series.completed || [];
                     var sGuideRaw = series.guideline || [];
                     var sProjRaw = series.projection || [];
-                    var all = [].concat(sScope || []).concat(sComp || []).concat(sGuide || []).concat(sProj || []);
+                    var all = []
+                        .concat(sScopeRaw || [])
+                        .concat(sCompRaw || [])
+                        .concat(sGuideRaw || [])
+                        .concat(sProjRaw || []);
                     if (!all.length) return '<div class="ujg-compare-loading">Нет данных</div>';
                     // Ось X строго по границам спринта (не выходим за диапазон)
                     var minX = series.startTime != null ? series.startTime : Math.min.apply(null, all.map(function(p) { return p.x; }));
