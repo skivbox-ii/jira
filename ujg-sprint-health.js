@@ -1171,8 +1171,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' + dots(sScope, "ujg-jira-scope-dot", "Объём работ");
                     if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа");
 
-                    // Today line
-                    if (series.now) {
+                    // Today line — только если "сегодня" попадает в период спринта
+                    if (series.now && series.startTime && series.endTime && series.now >= series.startTime && series.now <= series.endTime) {
                         var tx = xPos(series.now);
                         out += '<line class="ujg-burn-today" x1="' + tx + '" y1="' + pad.top + '" x2="' + tx + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
                         out += '<text class="ujg-burn-label ujg-burn-x" x="' + tx + '" y="' + (pad.top - 2) + '" fill="#d7a000">Сегодня</text>';
