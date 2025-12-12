@@ -599,8 +599,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             cmp.burnCache[sp.id] = { loading: true };
             // Пытаемся получить ровно те же точки, что Jira рисует в Sprint Report
             var rapidViewId = state.compare && state.compare.boardId ? state.compare.boardId : state.selectedBoardId;
+            function fallbackLocal() {
+                api.getSprintIssues(sp.id).then(function(res) {
+                    var issues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
+                    var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
+                    cmp.burnCache[sp.id] = { data: bd.data, sprint: sp };
+                    render();
+                }, function() {
+                    cmp.burnCache[sp.id] = { error: true };
+                    render();
+                });
+            }
+
             api.getRapidScopeChangeBurndown(rapidViewId, sp.id).then(function(resp) {
-                var series = extractJiraStepSeries(resp);
+                var series = parseScopeChangeBurndown(resp);
                 if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart resp", resp);
                 if (series && (series.scope || series.completed || series.guideline)) {
                     cmp.burnCache[sp.id] = { jiraSeries: series, jiraSource: "scopechangeburndownchart", sprint: sp };
@@ -614,25 +626,122 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (series2 && (series2.scope || series2.completed || series2.guideline)) {
                         cmp.burnCache[sp.id] = { jiraSeries: series2, jiraSource: "sprintreport", sprint: sp };
                     } else {
-                        cmp.burnCache[sp.id] = { error: true };
+                        fallbackLocal();
+                        return;
                     }
                     render();
                 }, function() {
-                    cmp.burnCache[sp.id] = { error: true };
-                    render();
+                    fallbackLocal();
                 });
             }, function() {
                 // Фоллбэк: локальный расчёт по задачам (может отличаться от Jira)
-                api.getSprintIssues(sp.id).then(function(res) {
-                    var issues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
-                    var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
-                    cmp.burnCache[sp.id] = { data: bd.data, sprint: sp };
-                    render();
-                }, function() {
-                    cmp.burnCache[sp.id] = { error: true };
-                    render();
-                });
+                fallbackLocal();
             });
+        }
+
+        function parseScopeChangeBurndown(resp) {
+            // Jira Server/DC: /rest/greenhopper/1.0/rapid/charts/scopechangeburndownchart
+            // resp.changes: { "<ts>": [ {key, added?, removed?, column:{done?, notDone?, newStatus?}, ...}, ... ] }
+            if (!resp || !resp.changes) return null;
+            var changes = resp.changes || {};
+            var startTime = Number(resp.startTime) || null;
+            var endTime = Number(resp.endTime) || null;
+            var now = Number(resp.now) || null;
+
+            var times = Object.keys(changes).map(function(k) { return Number(k); }).filter(function(v) { return !isNaN(v); }).sort(function(a, b) { return a - b; });
+
+            var inScope = {};
+            var done = {};
+            var scopeCount = 0;
+            var doneCount = 0;
+
+            // IMPORTANT: во многих Jira (как на ваших данных) scopechangeburndownchart может не отдавать added:true
+            // Поэтому берём начальный scope из issueToSummary (если есть), иначе scope останется 0 и график будет "пустым".
+            if (resp.issueToSummary && typeof resp.issueToSummary === "object") {
+                Object.keys(resp.issueToSummary).forEach(function(k) {
+                    if (!k) return;
+                    inScope[k] = true;
+                });
+                scopeCount = Object.keys(inScope).length;
+            }
+
+            function setInScope(key, flag) {
+                if (!key) return;
+                if (flag) {
+                    if (!inScope[key]) { inScope[key] = true; scopeCount++; }
+                } else {
+                    if (inScope[key]) {
+                        inScope[key] = false;
+                        scopeCount--;
+                        if (done[key]) { done[key] = false; doneCount--; }
+                    }
+                }
+            }
+            function setDone(key, flag) {
+                if (!key) return;
+                if (!inScope[key]) setInScope(key, true);
+                if (flag) {
+                    if (!done[key]) { done[key] = true; doneCount++; }
+                } else {
+                    if (done[key]) { done[key] = false; doneCount--; }
+                }
+            }
+
+            var scopePts = [];
+            var donePts = [];
+
+            // стартовая точка на startTime (если есть), до применения событий
+            if (startTime != null) {
+                scopePts.push({ x: startTime, y: scopeCount });
+                donePts.push({ x: startTime, y: doneCount });
+            }
+
+            times.forEach(function(ts) {
+                var evs = changes[String(ts)] || changes[ts] || [];
+                (evs || []).forEach(function(ev) {
+                    if (!ev) return;
+                    var key = ev.key;
+                    if (!key) return;
+                    if (ev.added === true) setInScope(key, true);
+                    if (ev.removed === true || ev.deleted === true) setInScope(key, false);
+                    if (ev.column) {
+                        // В ответе встречается notDone/done
+                        var isDone = (ev.column.done === true) || (ev.column.notDone === false);
+                        setDone(key, isDone);
+                    }
+                });
+                scopePts.push({ x: ts, y: scopeCount });
+                donePts.push({ x: ts, y: doneCount });
+            });
+
+            if (!startTime && scopePts.length) startTime = scopePts[0].x;
+            if (!endTime && scopePts.length) endTime = scopePts[scopePts.length - 1].x;
+
+            // гарантируем точку на старте
+            if (startTime != null && scopePts.length && scopePts[0].x > startTime) {
+                scopePts.unshift({ x: startTime, y: scopePts[0].y });
+                donePts.unshift({ x: startTime, y: donePts[0].y });
+            }
+
+            // гарантируем точку на конце
+            if (endTime != null && scopePts.length) {
+                var lastScope = scopePts[scopePts.length - 1].y;
+                var lastDone = donePts[donePts.length - 1].y;
+                if (scopePts[scopePts.length - 1].x !== endTime) {
+                    scopePts.push({ x: endTime, y: lastScope });
+                    donePts.push({ x: endTime, y: lastDone });
+                }
+            }
+
+            // Guideline как в Jira: линейно от 0 к финальному scope (по времени спринта)
+            var guideline = null;
+            if (startTime != null && endTime != null && scopePts.length) {
+                var finalScope = scopePts[scopePts.length - 1].y;
+                guideline = [{ x: startTime, y: 0 }, { x: endTime, y: finalScope }];
+            }
+
+            // Projection (опционально) — пока не считаем, т.к. Jira хранит это иначе; добавим если понадобится.
+            return { scope: scopePts, completed: donePts, guideline: guideline, projection: null, now: now };
         }
 
         function extractJiraStepSeries(resp) {
