@@ -182,6 +182,15 @@
 .ujg-mini-jira .ujg-jira-guide-dot { fill: #fff; stroke: #b3bac5; stroke-width: 0.8; }
 .ujg-mini-jira .ujg-jira-proj-dot { fill: #fff; stroke: #ff8b00; stroke-width: 0.8; }
 
+/* Main Jira step chart */
+.ujg-jira-main { background: #f9fafb; }
+.ujg-jira-main .ujg-jira-scope { stroke: #de350b; stroke-width: 2; fill: none; }
+.ujg-jira-main .ujg-jira-done { stroke: #36b37e; stroke-width: 2; fill: none; }
+.ujg-jira-main .ujg-jira-guide { stroke: #b3bac5; stroke-width: 1.6; fill: none; }
+.ujg-jira-main .ujg-jira-scope-dot { fill: #fff; stroke: #de350b; stroke-width: 1; }
+.ujg-jira-main .ujg-jira-done-dot { fill: #fff; stroke: #36b37e; stroke-width: 1; }
+.ujg-jira-main .ujg-jira-guide-dot { fill: #fff; stroke: #b3bac5; stroke-width: 1; }
+
 /* Estimate inline edit */
 .ujg-est { cursor: pointer; white-space: nowrap; }
 .ujg-est-edit { padding: 0; }

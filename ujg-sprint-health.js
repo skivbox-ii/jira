@@ -168,10 +168,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 data: { rapidViewId: rapidViewId, sprintId: sprintId }
             });
         },
-        getRapidScopeChangeBurndown: function(rapidViewId, sprintId) {
+        getRapidScopeChangeBurndown: function(rapidViewId, sprintId, statisticFieldId) {
             return $.ajax({
                 url: baseUrl + "/rest/greenhopper/1.0/rapid/charts/scopechangeburndownchart",
-                data: { rapidViewId: rapidViewId, sprintId: sprintId }
+                data: { rapidViewId: rapidViewId, sprintId: sprintId, statisticFieldId: statisticFieldId || "issueCount" }
             });
         }
     };
@@ -187,7 +187,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {},
             teams: {}, teamKey: "", teamMembers: [],
             worklogDebugPerAuthor: {},
-            compare: { boardId: null, allSprints: [], displayed: [], rows: [], teams: [], limit: 10, burnCache: {} }
+            compare: { boardId: null, allSprints: [], displayed: [], rows: [], teams: [], limit: 10, burnCache: {} },
+            jiraScope: { sprintId: null, mode: "tasks", loading: false, error: false, series: null }
         };
 
         var $content = API.getGadgetContentEl();
@@ -306,6 +307,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 state.viewIssues = state.issues.slice();
                 state.extraIssues = [];
                 updateTeamKey();
+                ensureJiraScopeChangeForSprint();
                 enrichIssues(state.issues).always(function() {
                 calculate();
                     groupByAssignee(); // предварительно для списка групп/авторов
@@ -611,7 +613,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 });
             }
 
-            api.getRapidScopeChangeBurndown(rapidViewId, sp.id).then(function(resp) {
+            api.getRapidScopeChangeBurndown(rapidViewId, sp.id, "issueCount").then(function(resp) {
                 var series = parseScopeChangeBurndown(resp);
                 if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart resp", resp);
                 if (series && (series.scope || series.completed || series.guideline)) {
@@ -938,6 +940,109 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html;
         }
 
+        function renderJiraScopeChangeChart() {
+            var js = state.jiraScope || {};
+            if (!state.sprint || !state.sprint.id) return '';
+            var html = '<div class="ujg-chart-wrap">';
+            html += '<div class="ujg-chart-hdr">';
+            html += '<span class="ujg-chart-title">Jira Scope Change (Sprint Report)</span>';
+            html += '<div class="ujg-legend">';
+            html += '<span class="ujg-leg"><i style="background:#de350b"></i>Scope</span>';
+            html += '<span class="ujg-leg"><i style="background:#36b37e"></i>Completed</span>';
+            html += '<span class="ujg-leg"><i style="background:#b3bac5"></i>Guideline</span>';
+            html += '</div></div>';
+
+            html += '<div class="ujg-chart-body ujg-chart-burn ujg-jira-main">';
+            if (js.loading) {
+                html += '<div class="ujg-loading">⏳ Загрузка Jira Sprint Report...</div>';
+            } else if (js.error) {
+                html += '<div class="ujg-loading">Не удалось загрузить Jira Sprint Report</div>';
+            } else if (js.series && (js.series.scope || js.series.completed || js.series.guideline)) {
+                // Увеличенный step-chart (по timestamp x)
+                var svg = (function(series) {
+                    var VIEW_W = 640, VIEW_H = 220;
+                    var pad = { top: 14, right: 10, bottom: 26, left: 32 };
+                    var sScope = series.scope || [];
+                    var sComp = series.completed || [];
+                    var sGuide = series.guideline || [];
+                    var all = [].concat(sScope || []).concat(sComp || []).concat(sGuide || []);
+                    if (!all.length) return '<div class="ujg-compare-loading">Нет данных</div>';
+                    var minX = Math.min.apply(null, all.map(function(p) { return p.x; }));
+                    var maxX = Math.max.apply(null, all.map(function(p) { return p.x; }));
+                    if (!isFinite(minX) || !isFinite(maxX) || minX === maxX) { minX = 0; maxX = Math.max(all.length - 1, 1); }
+                    var maxY = Math.max.apply(null, all.map(function(p) { return p.y; })) || 1;
+                    function niceTicks(maxVal, count) {
+                        if (maxVal <= 0) return [0, 1];
+                        var rough = maxVal / Math.max(count, 1);
+                        var pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+                        var step = pow10;
+                        var err = rough / pow10;
+                        if (err >= 7.5) step = pow10 * 10;
+                        else if (err >= 3.5) step = pow10 * 5;
+                        else if (err >= 1.5) step = pow10 * 2;
+                        var ticks = [];
+                        for (var v = 0; v <= maxVal + step * 0.4; v += step) ticks.push(v);
+                        if (ticks[ticks.length - 1] < maxVal) ticks.push(maxVal);
+                        return ticks;
+                    }
+                    var yTicks = niceTicks(maxY, 6);
+                    maxY = yTicks[yTicks.length - 1] || 1;
+                    var plotW = VIEW_W - pad.left - pad.right;
+                    var plotH = VIEW_H - pad.top - pad.bottom;
+                    function xPos(x) {
+                        var t = (x - minX) / Math.max((maxX - minX), 1);
+                        return pad.left + plotW * t;
+                    }
+                    function yPos(y) {
+                        return pad.top + plotH - (plotH * (y / maxY));
+                    }
+                    function stepPath(pts) {
+                        if (!pts || pts.length === 0) return "";
+                        var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                        var d = "M " + xPos(sorted[0].x) + " " + yPos(sorted[0].y);
+                        for (var i = 1; i < sorted.length; i++) {
+                            var prev = sorted[i - 1];
+                            var cur = sorted[i];
+                            var x = xPos(cur.x);
+                            d += " L " + x + " " + yPos(prev.y);
+                            d += " L " + x + " " + yPos(cur.y);
+                        }
+                        return d;
+                    }
+                    function dots(pts, cls) {
+                        if (!pts || !pts.length) return "";
+                        var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                        return sorted.map(function(p) {
+                            return '<circle class="' + cls + '" cx="' + xPos(p.x) + '" cy="' + yPos(p.y) + '" r="2.2"/>';
+                        }).join("");
+                    }
+                    function fmtX(ts) {
+                        try { return new Date(ts).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }); } catch (e) { return ""; }
+                    }
+                    var out = '<svg class="ujg-svg ujg-burn-svg" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+                    yTicks.forEach(function(v) {
+                        var y = yPos(v);
+                        out += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
+                        out += '<text class="ujg-burn-label ujg-burn-y" x="' + (pad.left - 2) + '" y="' + (y + 1.2) + '">' + v + '</text>';
+                    });
+                    out += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+                    out += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+                    out += '<text class="ujg-burn-label ujg-burn-x" x="' + xPos(minX) + '" y="' + (VIEW_H - pad.bottom + 12) + '">' + utils.escapeHtml(fmtX(minX)) + '</text>';
+                    out += '<text class="ujg-burn-label ujg-burn-x" x="' + xPos(maxX) + '" y="' + (VIEW_H - pad.bottom + 12) + '">' + utils.escapeHtml(fmtX(maxX)) + '</text>';
+                    if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + stepPath(sGuide) + '"/>' + dots(sGuide, "ujg-jira-guide-dot");
+                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + stepPath(sScope) + '"/>' + dots(sScope, "ujg-jira-scope-dot");
+                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + stepPath(sComp) + '"/>' + dots(sComp, "ujg-jira-done-dot");
+                    out += '</svg>';
+                    return out;
+                })(js.series);
+                html += svg;
+            } else {
+                html += '<div class="ujg-loading">Нет данных Jira Sprint Report</div>';
+            }
+            html += '</div></div>';
+            return html;
+        }
+
         function renderMiniBurn(data, mode) {
             mode = mode || "tasks";
             if (!data || data.length === 0) return '<div class="ujg-compare-loading">Нет данных</div>';
@@ -1192,6 +1297,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             html += renderHealth();
             html += renderMetrics();
             html += renderBurnup();
+            html += renderJiraScopeChangeChart();
             html += renderProblems();
             html += renderAssignees();
             html += renderTable();
@@ -1911,7 +2017,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function bindEvents() {
             $cont.find(".ujg-tog").on("click", function() {
                 var mode = $(this).data("mode");
-                if (mode !== state.chartMode) { state.chartMode = mode; render(); }
+                if (mode !== state.chartMode) { state.chartMode = mode; ensureJiraScopeChangeForSprint(); render(); }
             });
             $cont.find(".ujg-grp").on("click", function() {
                 var aid = $(this).data("aid");
