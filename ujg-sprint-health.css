@@ -183,7 +183,12 @@
 .ujg-mini-jira .ujg-jira-proj-dot { fill: #fff; stroke: #ff8b00; stroke-width: 0.8; }
 
 /* Main Jira step chart */
-.ujg-jira-main { background: #f9fafb; }
+.ujg-jira-main { background: #fff; }
+.ujg-chart-body.ujg-jira-main { padding: 0 !important; }
+.ujg-jira-main .ujg-svg,
+.ujg-jira-main .ujg-burn-svg { height: 500px !important; width: 100% !important; }
+.ujg-jira-main .axis-label { font-size: 12px; fill: #5e6c84; }
+.ujg-jira-main .non-working-days { fill: rgba(9, 30, 66, 0.04); }
 .ujg-jira-main .ujg-jira-scope { stroke: #de350b; stroke-width: 2; fill: none; }
 .ujg-jira-main .ujg-jira-done { stroke: #36b37e; stroke-width: 2; fill: none; }
 .ujg-jira-main .ujg-jira-guide { stroke: #b3bac5; stroke-width: 1.6; fill: none; }

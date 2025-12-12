@@ -1042,12 +1042,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (!state.sprint || !state.sprint.id) return '';
             var html = '<div class="ujg-chart-wrap">';
             html += '<div class="ujg-chart-hdr">';
-            html += '<span class="ujg-chart-title">Jira Scope Change (Sprint Report)</span>';
+            html += '<span class="ujg-chart-title">Scope Change (как в Jira)</span>';
             html += '<div class="ujg-legend">';
-            html += '<span class="ujg-leg"><i style="background:#de350b"></i>Scope</span>';
+            html += '<span class="ujg-leg"><i style="background:#de350b"></i>Объём работ</span>';
             html += '<span class="ujg-leg"><i style="background:#ff5630"></i>Прогноз объёма</span>';
-            html += '<span class="ujg-leg"><i style="background:#36b37e"></i>Completed</span>';
-            html += '<span class="ujg-leg"><i style="background:#b3bac5"></i>Guideline</span>';
+            html += '<span class="ujg-leg"><i style="background:#36b37e"></i>Завершенная работа</span>';
+            html += '<span class="ujg-leg"><i style="background:#b3bac5"></i>Руководство</span>';
             html += '</div></div>';
 
             html += '<div class="ujg-chart-body ujg-chart-burn ujg-jira-main">';
@@ -1096,24 +1096,34 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     function yPos(y) {
                         return pad.top + plotH - (plotH * (y / maxY));
                     }
-                    function stepPath(pts) {
-                        if (!pts || pts.length === 0) return "";
+                    function stepPoints(pts) {
+                        if (!pts || pts.length === 0) return [];
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
-                        var d = "M " + xPos(sorted[0].x) + " " + yPos(sorted[0].y);
+                        var out = [{ x: sorted[0].x, y: sorted[0].y }];
                         for (var i = 1; i < sorted.length; i++) {
                             var prev = sorted[i - 1];
                             var cur = sorted[i];
-                            var x = xPos(cur.x);
-                            d += " L " + x + " " + yPos(prev.y);
-                            d += " L " + x + " " + yPos(cur.y);
+                            out.push({ x: cur.x, y: prev.y });
+                            out.push({ x: cur.x, y: cur.y });
                         }
+                        return out;
+                    }
+                    function pathFromPoints(pts) {
+                        if (!pts || pts.length === 0) return "";
+                        var d = "M " + xPos(pts[0].x) + " " + yPos(pts[0].y);
+                        for (var i = 1; i < pts.length; i++) d += " L " + xPos(pts[i].x) + " " + yPos(pts[i].y);
                         return d;
                     }
-                    function dots(pts, cls) {
+                    function linePath(pts) {
+                        if (!pts || pts.length === 0) return "";
+                        var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                        return pathFromPoints(sorted);
+                    }
+                    function dots(pts, cls, label) {
                         if (!pts || !pts.length) return "";
                         var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
                         return sorted.map(function(p) {
-                            var tip = "Дата: " + fmtX(p.x) + "\nScope: " + (p._scope != null ? p._scope : "") + "\nCompleted: " + (p._done != null ? p._done : "");
+                            var tip = "Дата: " + fmtX(p.x) + "\n" + label + ": " + p.y;
                             return '<circle class="' + cls + '" cx="' + xPos(p.x) + '" cy="' + yPos(p.y) + '" r="4"><title>' + utils.escapeHtml(tip) + '</title></circle>';
                         }).join("");
                     }
@@ -1124,7 +1134,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             return m + " " + d.getDate();
                         } catch (e) { return ""; }
                     }
-                    var out = '<svg class="ujg-svg ujg-burn-svg" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+                    var out = '<svg class="ujg-svg ujg-burn-svg" width="' + VIEW_W + '" height="' + VIEW_H + '" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+
+                    // Нерабочие дни (серые полосы) как в Jira
+                    if (series.workRateData && series.workRateData.rates && Array.isArray(series.workRateData.rates)) {
+                        series.workRateData.rates.forEach(function(r) {
+                            var rs = Number(r.start), re = Number(r.end), rate = Number(r.rate);
+                            if (!isFinite(rs) || !isFinite(re) || re <= rs) return;
+                            if (!isFinite(rate) || rate !== 0) return;
+                            var x1 = xPos(rs);
+                            var x2 = xPos(re);
+                            out += '<rect class="non-working-days" x="' + x1 + '" y="' + pad.top + '" width="' + Math.max(0, x2 - x1) + '" height="' + plotH + '"/>';
+                        });
+                    }
+
                     yTicks.forEach(function(v) {
                         var y = yPos(v);
                         out += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
@@ -1142,10 +1165,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         out += '<text class="ujg-burn-label ujg-burn-x" x="' + x + '" y="' + (VIEW_H - pad.bottom + 16) + '">' + utils.escapeHtml(fmtX(t)) + '</text>';
                     }
 
-                    if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + stepPath(sGuide) + '"/>' + dots(sGuide, "ujg-jira-guide-dot");
-                    if (sProj && sProj.length) out += '<path class="ujg-jira-proj" d="' + stepPath(sProj) + '"/>' + dots(sProj, "ujg-jira-proj-dot");
-                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + stepPath(sScope) + '"/>' + dots(sScope, "ujg-jira-scope-dot");
-                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + stepPath(sComp) + '"/>' + dots(sComp, "ujg-jira-done-dot");
+                    // Линии/маркеры как в Jira: scope/work — ступеньки, guideline — линейно, projection — пунктир по уровню scope
+                    if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + linePath(sGuide) + '"/>' + dots(sGuide, "ujg-jira-guide-dot", "Руководство");
+                    if (sProj && sProj.length) out += '<path class="ujg-jira-proj" d="' + linePath(sProj) + '"/>' + dots(sProj, "ujg-jira-proj-dot", "Прогноз объёма");
+                    if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' + dots(sScope, "ujg-jira-scope-dot", "Объём работ");
+                    if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' + dots(sComp, "ujg-jira-done-dot", "Завершенная работа");
 
                     // Today line
                     if (series.now) {
@@ -1153,6 +1177,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         out += '<line class="ujg-burn-today" x1="' + tx + '" y1="' + pad.top + '" x2="' + tx + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
                         out += '<text class="ujg-burn-label ujg-burn-x" x="' + tx + '" y="' + (pad.top - 2) + '" fill="#d7a000">Сегодня</text>';
                     }
+
+                    // Axis labels как в Jira
+                    out += '<text class="axis-label" text-anchor="middle" transform="translate(' + ((pad.left + (VIEW_W - pad.right)) / 2) + ',' + (VIEW_H - 8) + ') rotate(0,0,0)">ВРЕМЯ</text>';
+                    out += '<text class="axis-label" text-anchor="middle" transform="translate(16,' + ((pad.top + (VIEW_H - pad.bottom)) / 2) + ') rotate(270,0,0)">КОЛИЧЕСТВО ПРОБЛЕМ</text>';
                     out += '</svg>';
                     return out;
                 })(js.series);
