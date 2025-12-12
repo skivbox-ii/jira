@@ -621,7 +621,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 });
             }
 
-            fetchRapidScopeChangeSeries(rapidViewId, sp.id, state.chartMode).then(function(resp) {
+            fetchRapidScopeChangeSeries(rapidViewId, sp.id).then(function(resp) {
                 var series = parseScopeChangeBurndown(resp);
                 if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart resp", resp);
                 if (series && (series.scope || series.completed || series.guideline)) {
@@ -649,26 +649,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             });
         }
 
-        function fetchRapidScopeChangeSeries(rapidViewId, sprintId, mode) {
-            // Jira инстансы отличаются: statisticFieldId может быть issueCount / issueCount_ / IssueCount_ и т.п.
-            // Плюс Jira UI всегда добавляет _=timestamp (мы уже делаем cache:false в api.getRapidScopeChangeBurndown).
-            var d = $.Deferred();
-            var isHours = mode === "hours";
-            var candidates = isHours
-                ? ["issueEstimate", "issueEstimate_", "IssueEstimate_"]
-                : ["issueCount", "issueCount_", "IssueCount_"];
-
-            function tryIdx(i) {
-                if (i >= candidates.length) { d.reject(); return; }
-                api.getRapidScopeChangeBurndown(rapidViewId, sprintId, candidates[i]).then(function(resp) {
-                    d.resolve(resp);
-                }, function(err) {
-                    if (CONFIG.debug) console.log("[UJG] scopechangeburndownchart failed statisticFieldId=" + candidates[i], err && err.status, err && err.responseText);
-                    tryIdx(i + 1);
-                });
-            }
-            tryIdx(0);
-            return d.promise();
+        function fetchRapidScopeChangeSeries(rapidViewId, sprintId) {
+            // На вашем инстансе Jira корректно работает только этот параметр:
+            // statisticFieldId=issueCount_
+            return api.getRapidScopeChangeBurndown(rapidViewId, sprintId, "issueCount_");
         }
 
         function parseScopeChangeBurndown(resp) {
@@ -790,7 +774,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             js.error = false;
             js.series = null;
 
-            fetchRapidScopeChangeSeries(state.selectedBoardId, sid, mode).then(function(resp) {
+            fetchRapidScopeChangeSeries(state.selectedBoardId, sid).then(function(resp) {
                 if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart resp", resp);
                 var series = parseScopeChangeBurndown(resp);
                 if (series && (series.scope || series.completed || series.guideline)) {
