@@ -2414,6 +2414,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             $cont.find(".ujg-jira-mk").off("click.ujgChart").on("click.ujgChart", function(ev) {
                 ev.preventDefault();
                 ev.stopPropagation();
+                // Tooltip у нас position:fixed, поэтому координаты берём из clientX/clientY (а не pageX/pageY)
+                var cx = (ev.clientX != null ? ev.clientX : ev.pageX) || 0;
+                var cy = (ev.clientY != null ? ev.clientY : ev.pageY) || 0;
                 var $c = $(this);
                 var key = $c.data("key");
                 var ts = Number($c.data("ts")) || 0;
@@ -2423,16 +2426,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var summary = $c.data("summary") || "";
                 var marker = { key: key, ts: ts, kind: kind, from: from, to: to, summary: summary };
 
-                showChartTooltipAt(ev.pageX, ev.pageY, "Загрузка...");
+                showChartTooltipAt(cx, cy, "Загрузка...");
                 if (!key) return;
 
                 $.when(api.getIssue(key), api.getIssueWorklog(key)).then(function(issueResp, wlResp) {
                     var issue = issueResp && issueResp[0] ? issueResp[0] : issueResp;
                     var wl = wlResp && wlResp[0] ? wlResp[0] : wlResp;
                     var html = buildIssueTooltipHtml(issue, wl, marker);
-                    showChartTooltipAt(ev.pageX, ev.pageY, html);
+                    showChartTooltipAt(cx, cy, html);
                 }, function() {
-                    showChartTooltipAt(ev.pageX, ev.pageY, '<div class="ujg-tip-hdr"><b>' + utils.escapeHtml(key) + '</b></div><div class="ujg-tip-row">Не удалось загрузить детали задачи</div>');
+                    showChartTooltipAt(cx, cy, '<div class="ujg-tip-hdr"><b>' + utils.escapeHtml(key) + '</b></div><div class="ujg-tip-row">Не удалось загрузить детали задачи</div>');
                 });
             });
         }
