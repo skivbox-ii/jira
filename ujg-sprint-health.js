@@ -1449,6 +1449,46 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var sprintEnd = state.sprint ? utils.startOfDay(utils.parseDate(state.sprint.endDate)) : null;
             var teamMembers = state.teamMembers || [];
             var srcIssues = state.viewIssues && state.viewIssues.length ? state.viewIssues : state.issues;
+            var totalLoggedInSprintSec = 0;
+            var totalLoggedOutSprintSec = 0;
+
+            function sumWorklogByDaySec(wlByDay) {
+                if (!wlByDay) return 0;
+                var sum = 0;
+                Object.keys(wlByDay).forEach(function(k) {
+                    var v = wlByDay[k];
+                    if (v && v.sec) sum += (v.sec || 0);
+                });
+                return sum;
+            }
+
+            function matchAuthorSeconds(workAuthors, user) {
+                if (!workAuthors || !workAuthors.length || !user) return 0;
+                var uid = user.id || "";
+                var uname = (user.name || "").toLowerCase();
+                var ulogin = (user.login || "").toLowerCase();
+                for (var i = 0; i < workAuthors.length; i++) {
+                    var wa = workAuthors[i] || {};
+                    if (uid && wa.id && wa.id === uid) return wa.seconds || 0;
+                }
+                for (var j = 0; j < workAuthors.length; j++) {
+                    var wa2 = workAuthors[j] || {};
+                    if (ulogin && wa2.id && String(wa2.id).toLowerCase() === ulogin) return wa2.seconds || 0;
+                    if (uname && wa2.name && String(wa2.name).toLowerCase() === uname) return wa2.seconds || 0;
+                }
+                return 0;
+            }
+
+            function ensureGroupStats(g) {
+                if (!g) return g;
+                if (g.plannedSec == null) g.plannedSec = 0;
+                if (g.spentInSprintSec == null) g.spentInSprintSec = 0;
+                if (g.spentOutSprintSec == null) g.spentOutSprintSec = 0;
+                if (g.tasksInSprint == null) g.tasksInSprint = 0;
+                if (g.doneInSprint == null) g.doneInSprint = 0;
+                return g;
+            }
+
             srcIssues.forEach(function(iss) {
                 var f = iss.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
@@ -1541,6 +1581,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     outsideUser: null
                 };
                 issueMap[item.key] = item;
+
+                // Агрегаты списаний (всего по графикам)
+                var loggedSec = sumWorklogByDaySec(item.worklogs);
+                if (item.isOutsideSprint) totalLoggedOutSprintSec += loggedSec;
+                else totalLoggedInSprintSec += loggedSec;
                 
                 var displayUser = null;
                 var fallbackUser = assigneeId ? { id: assigneeId, name: assigneeName } : (workAuthors[0] ? { id: workAuthors[0].id, name: workAuthors[0].name } : null);
@@ -1563,15 +1608,40 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     if (!map[displayUser.id]) map[displayUser.id] = { id: displayUser.id, name: displayUser.name || displayUser.id, login: displayUser.login || displayUser.id, issues: [], hours: 0 };
                     map[displayUser.id].issues.push(item);
                     map[displayUser.id].hours += est;
+                    ensureGroupStats(map[displayUser.id]);
+                    // Планируем только задачи спринта, "вне спринта" считаем как неплан
+                    if (!item.isOutsideSprint) {
+                        map[displayUser.id].plannedSec += est;
+                        map[displayUser.id].tasksInSprint += 1;
+                        if (item.isDone) map[displayUser.id].doneInSprint += 1;
+                    }
+                    // Списания по пользователю: берём worklog именно этого автора
+                    var userSpent = matchAuthorSeconds(workAuthors, displayUser);
+                    if (item.isOutsideSprint) map[displayUser.id].spentOutSprintSec += userSpent;
+                    else map[displayUser.id].spentInSprintSec += userSpent;
                 } else {
                     outside.issues.push(item);
                     outside.hours += est;
+                    ensureGroupStats(outside);
+                    if (!item.isOutsideSprint) {
+                        outside.plannedSec += est;
+                        outside.tasksInSprint += 1;
+                        if (item.isDone) outside.doneInSprint += 1;
+                    }
+                    // Для "Вне команды" показываем списания как сумму по всем авторам (по сути уже total по задаче)
+                    if (item.isOutsideSprint) outside.spentOutSprintSec += loggedSec;
+                    else outside.spentInSprintSec += loggedSec;
                 }
             });
             var arr = Object.values(map).sort(function(a, b) { return a.name.localeCompare(b.name); });
             if (outside.issues.length > 0) arr.push(outside);
             state.byAssignee = arr;
             state.issueMap = issueMap;
+
+            // Пишем агрегаты в метрики (важно: groupByAssignee вызывается ещё раз после загрузки extra-issues)
+            if (!state.metrics) state.metrics = {};
+            state.metrics.loggedInSprintSec = totalLoggedInSprintSec;
+            state.metrics.loggedOutSprintSec = totalLoggedOutSprintSec;
         }
 
         function updateBoardSelect() {
@@ -1635,8 +1705,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function renderMetrics() {
             var m = state.metrics;
+            var loggedIn = m.loggedInSprintSec || 0;
+            var loggedOut = m.loggedOutSprintSec || 0;
             return '<div class="ujg-mrow">' +
-                '<div class="ujg-m"><span class="ujg-mi">📊</span><span class="ujg-mv">' + utils.formatHours(m.totalHours) + '</span><span class="ujg-ml">' + m.total + ' задач</span></div>' +
+                '<div class="ujg-m"><span class="ujg-mi">📊</span><span class="ujg-mv">' + utils.formatHours(m.totalHours) + '</span>' +
+                    '<span class="ujg-ml">' + m.total + ' задач (выполнено ' + m.done + ')</span>' +
+                    '<span class="ujg-ml ujg-ml2">Списано: ' + utils.formatHours(loggedIn) + ' по спринту, ' + utils.formatHours(loggedOut) + ' вне спринта</span>' +
+                '</div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.estPct) + '"><span class="ujg-mi">📝</span><span class="ujg-mv">' + m.estPct + '%</span><span class="ujg-ml">Оценки ' + m.estimated + '/' + m.total + '</span></div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.datesPct) + '"><span class="ujg-mi">📅</span><span class="ujg-mv">' + m.datesPct + '%</span><span class="ujg-ml">Сроки ' + m.withDates + '/' + m.total + '</span></div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.asgnPct) + '"><span class="ujg-mi">👤</span><span class="ujg-mv">' + m.asgnPct + '%</span><span class="ujg-ml">Исполн. ' + m.assigned + '/' + m.total + '</span></div>' +
@@ -1812,9 +1887,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var html = '<div class="ujg-asgn-wrap"><div class="ujg-section-title">👥 Распределение (' + data.length + ')</div><div class="ujg-asgn-list">';
             data.forEach(function(a) {
                 var pct = Math.round(a.hours / maxH * 100);
+                var plan = a.plannedSec || 0;
+                var inSp = a.spentInSprintSec || 0;
+                var outSp = a.spentOutSprintSec || 0;
+                var tIn = a.tasksInSprint || 0;
+                var dIn = a.doneInSprint || 0;
                 html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
                     '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + pct + '%"></div></div>' +
-                    '<span class="ujg-asgn-val">' + utils.formatHours(a.hours) + ' (' + a.issues.length + ')</span></div>';
+                    '<span class="ujg-asgn-val">' +
+                        'План: ' + utils.formatHours(plan) +
+                        ' | Спринт: ' + utils.formatHours(inSp) +
+                        ' | Вне: ' + utils.formatHours(outSp) +
+                        ' | ' + tIn + ' задач (готово ' + dIn + ')' +
+                    '</span></div>';
             });
             return html + '</div></div>';
         }
