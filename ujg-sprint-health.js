@@ -1826,8 +1826,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function renderHealth() {
             var m = state.metrics, c = utils.getHealthColor(m.health);
-            return '<div class="ujg-health"><div class="ujg-hbar"><div class="ujg-hfill" style="width:' + m.health + '%;background:' + c + '"></div></div>' +
-                '<span class="ujg-hpct" style="color:' + c + '">' + m.health + '%</span><span class="ujg-hlbl">' + utils.getHealthLabel(m.health) + '</span></div>';
+            var label = utils.getHealthLabel(m.health);
+            // мягкий градиент как в примере
+            var grad = "linear-gradient(90deg, " + c + ", #ffab00)";
+            return '' +
+                '<div class="ujg-card ujg-health-card">' +
+                    '<div class="ujg-health-strip"><div class="ujg-health-strip-fill" style="width:' + m.health + '%;background:' + grad + '"></div></div>' +
+                    '<div class="ujg-health-bottom">' +
+                        '<span class="ujg-health-pct" style="color:' + c + '">' + m.health + '%</span>' +
+                        '<span class="ujg-health-text">' + utils.escapeHtml(label) + '</span>' +
+                    '</div>' +
+                '</div>';
         }
 
         function renderMetrics() {
@@ -1852,58 +1861,84 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var expectedSpentByNow = teamCapSec > 0 ? Math.round(teamCapSec * timePct / 100) : 0;
             var deltaSpent = spentTotal - expectedSpentByNow;
 
-            function fmtDelta(n, unit) {
-                if (!n) return "0" + (unit || "");
-                var sign = n > 0 ? "+" : "";
-                return sign + n + (unit || "");
-            }
-
-            function fmtHoursDelta(sec) {
-                if (!sec) return "0ч";
-                var sign = sec > 0 ? "+" : "";
-                return sign + utils.formatHours(Math.abs(sec));
+            function badgeColor(p) {
+                if (p >= 120) return "ujg-bad";
+                if (p >= 100) return "ujg-warn";
+                return "ujg-okc";
             }
 
             var capLabel = utils.formatHours(teamCapSec || capSec);
-            var planLabel = utils.formatHours(planSec) + ' (' + planPct + '%)';
-            var spentLabel = utils.formatHours(spentTotal) + ' (' + spentPct + '%)';
-            var spentBreakdown = utils.formatHours(loggedIn) + ' + ' + utils.formatHours(loggedOut);
-            var paceTasks = expectedDoneTasks + ' задач → факт ' + m.done + ' (' + (deltaTasks >= 0 ? '+' : '−') + Math.abs(deltaTasks) + ')';
-            var paceHours = utils.formatHours(expectedSpentByNow) + ' → факт ' + utils.formatHours(spentTotal) + ' (' + (deltaSpent >= 0 ? '+' : '−') + utils.formatHours(Math.abs(deltaSpent)) + ')';
+            var planColor = badgeColor(planPct);
+            var deltaSpentLabel = (deltaSpent >= 0 ? "+" : "-") + utils.formatHours(Math.abs(deltaSpent));
+            var deltaTasksLabel = (deltaTasks >= 0 ? "+" : "−") + Math.abs(deltaTasks);
 
-            return '<div class="ujg-mrow">' +
-                '<div class="ujg-m ujg-m-main">' +
-                    '<div class="ujg-m-main-top">' +
-                        '<span class="ujg-mi">📊</span>' +
-                        '<span class="ujg-mv">' + capLabel + '</span>' +
-                        '<span class="ujg-m-sub">Ёмкость команды</span>' +
+            var html = '<div class="ujg-mgrid">';
+            // Ёмкость
+            html += '' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-cap">' +
+                    '<div class="ujg-kcard-top">' +
+                        '<div class="ujg-ic ujg-ic-blue">📊</div>' +
+                        '<div class="ujg-kcard-title">' + utils.escapeHtml(capLabel) + '</div>' +
                     '</div>' +
-                    '<div class="ujg-m-kpis">' +
-                        '<div class="ujg-kpi">' +
-                            '<div class="ujg-kpi-title">Команда</div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + (teamSize || '—') + '</span><span class="ujg-kpi-txt">чел.</span></div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + (totalWd || '—') + '</span><span class="ujg-kpi-txt">раб.дн.</span></div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + passed + '</span><span class="ujg-kpi-txt">прошло (' + timePct + '%)</span></div>' +
-                        '</div>' +
-                        '<div class="ujg-kpi">' +
-                            '<div class="ujg-kpi-title">План</div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + utils.escapeHtml(planLabel) + '</span><span class="ujg-kpi-txt">от ёмкости</span></div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Задач:</span> <span class="ujg-kpi-val">' + m.total + '</span><span class="ujg-kpi-txt"> (готово </span><span class="ujg-kpi-val">' + m.done + '</span><span class="ujg-kpi-txt">)</span></div>' +
-                        '</div>' +
-                        '<div class="ujg-kpi">' +
-                            '<div class="ujg-kpi-title">Факт</div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + utils.escapeHtml(spentLabel) + '</span><span class="ujg-kpi-txt">всего</span></div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Спринт+вне:</span> <span class="ujg-kpi-val">' + utils.escapeHtml(spentBreakdown) + '</span></div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Темп:</span> <span class="ujg-kpi-val">' + utils.escapeHtml(paceTasks) + '</span></div>' +
-                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Темп (ч):</span> <span class="ujg-kpi-val">' + utils.escapeHtml(paceHours) + '</span></div>' +
-                        '</div>' +
+                    '<div class="ujg-kcard-sub">Ёмкость команды</div>' +
+                    '<div class="ujg-kcard-mini">' +
+                        '<div><b>' + (teamSize || "—") + '</b> <span>чел.</span></div>' +
+                        '<div><b>' + (totalWd || "—") + '</b> <span>раб.дн.</span></div>' +
+                        '<div class="span2"><b>' + passed + '</b> <span>прошло (' + timePct + '%)</span></div>' +
                     '</div>' +
-                '</div>' +
-                '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.estPct) + '"><span class="ujg-mi">📝</span><span class="ujg-mv">' + m.estPct + '%</span><span class="ujg-ml">Оценки ' + m.estimated + '/' + m.total + '</span></div>' +
-                '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.datesPct) + '"><span class="ujg-mi">📅</span><span class="ujg-mv">' + m.datesPct + '%</span><span class="ujg-ml">Сроки ' + m.withDates + '/' + m.total + '</span></div>' +
-                '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.asgnPct) + '"><span class="ujg-mi">👤</span><span class="ujg-mv">' + m.asgnPct + '%</span><span class="ujg-ml">Исполн. ' + m.assigned + '/' + m.total + '</span></div>' +
-                '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.donePct) + '"><span class="ujg-mi">✅</span><span class="ujg-mv">' + m.donePct + '%</span><span class="ujg-ml">Готово ' + m.done + '/' + m.total + '</span></div>' +
-            '</div>';
+                '</div>';
+
+            // План
+            html += '' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-plan">' +
+                    '<div class="ujg-khead">ПЛАН</div>' +
+                    '<div class="ujg-kbig">' + utils.escapeHtml(utils.formatHours(planSec)) + '<span class="ujg-kpct ' + planColor + '">(' + planPct + '%)</span></div>' +
+                    '<div class="ujg-kmuted">от ёмкости</div>' +
+                    '<div class="ujg-kline">Задач: <b>' + m.total + '</b><span class="ujg-kmuted"> (готово ' + m.done + ')</span></div>' +
+                '</div>';
+
+            // Факт
+            html += '' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-fact">' +
+                    '<div class="ujg-khead">ФАКТ</div>' +
+                    '<div class="ujg-kbig">' + utils.escapeHtml(utils.formatHours(spentTotal)) + '<span class="ujg-kpct">(' + spentPct + '%)</span></div>' +
+                    '<div class="ujg-kmuted">всего</div>' +
+                    '<div class="ujg-kline">Темп (ч): <b>' + utils.escapeHtml(utils.formatHours(expectedSpentByNow)) + '</b> <span class="ujg-kmuted">→</span> <b>' + utils.escapeHtml(utils.formatHours(spentTotal)) + '</b> <span class="ujg-kdelta ' + (deltaSpent >= 0 ? "ok" : "bad") + '">(' + utils.escapeHtml(deltaSpentLabel) + ')</span></div>' +
+                    '<div class="ujg-kline">Темп: <b>' + expectedDoneTasks + '</b> <span class="ujg-kmuted">задач</span> <span class="ujg-kdelta ' + (deltaTasks >= 0 ? "ok" : "bad") + '">(' + utils.escapeHtml(deltaTasksLabel) + ')</span></div>' +
+                '</div>';
+
+            // Оценки
+            html += '' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-mini">' +
+                    '<div class="ujg-kbig">' + m.estPct + '%</div>' +
+                    '<div class="ujg-kmuted">Оценки ' + m.estimated + '/' + m.total + '</div>' +
+                '</div>';
+
+            // Сроки
+            html += '' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-mini">' +
+                    '<div class="ujg-kbig">' + m.datesPct + '%</div>' +
+                    '<div class="ujg-kmuted">Сроки ' + m.withDates + '/' + m.total + '</div>' +
+                '</div>';
+
+            // Исполнители
+            html += '' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-mini">' +
+                    '<div class="ujg-kbig">' + m.asgnPct + '%</div>' +
+                    '<div class="ujg-kmuted">Исполн. ' + m.assigned + '/' + m.total + '</div>' +
+                '</div>';
+
+            // Progress bar “Готово”
+            html += '' +
+                '<div class="ujg-card ujg-done-card">' +
+                    '<div class="ujg-done-row">' +
+                        '<div class="ujg-done-left"><span class="ujg-done-ic">✅</span> <span class="ujg-done-pct">' + m.donePct + '%</span> <span class="ujg-kmuted">Готово ' + m.done + '/' + m.total + '</span></div>' +
+                    '</div>' +
+                    '<div class="ujg-done-bar"><div class="ujg-done-fill" style="width:' + m.donePct + '%"></div></div>' +
+                '</div>';
+
+            html += '</div>';
+            return html;
         }
 
         function renderBurnup() {
@@ -2972,7 +3007,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             $fsBtn = $('<button class="ujg-btn ujg-btn-fs" title="На весь экран">⛶</button>');
             $fsBtn.on("click", toggleFullscreen);
             
-            $panel.append($boardSelect, $sprintWrap, $compareBtn, $refreshBtn, $fsBtn);
+            // topbar layout (как на 1-м скрине: слева селекты, справа иконки)
+            var $left = $('<div class="ujg-top-left"></div>');
+            var $right = $('<div class="ujg-top-right"></div>');
+            $left.append($boardSelect, $sprintWrap);
+            $right.append($compareBtn, $refreshBtn, $fsBtn);
+            $panel.append($left, $right);
 
             // Page wrapper (shadcn-like layout without Tailwind)
             var $existingPage = $content.find(".ujg-page");
