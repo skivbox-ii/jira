@@ -69,6 +69,10 @@
 .ujg-health-card { overflow: hidden; }
 .ujg-health-strip { height: 12px; background: var(--muted); }
 .ujg-health-strip-fill { height: 100%; transition: width .4s ease; }
+.ujg-health-strip { position: relative; height: 14px; }
+.ujg-health-strip-label { position:absolute; left:10px; top:50%; transform: translateY(-50%); font-size: 11px; color: #0f172a; opacity: .85; white-space: nowrap; }
+.ujg-health-strip-label b { font-weight: 800; }
+.ujg-health-guide { position:absolute; top:0; bottom:0; width:0; border-left: 2px dashed rgba(15,23,42,.55); }
 .ujg-health-bottom { display:flex; justify-content:flex-end; align-items: baseline; gap: 8px; padding: 8px 10px; }
 .ujg-health-pct { font-size: 34px; font-weight: 800; letter-spacing: -0.6px; }
 .ujg-health-text { font-size: 18px; color: var(--muted-foreground); }

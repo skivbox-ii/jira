@@ -256,6 +256,70 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return { workDays: workDays, capSec: workDays * hoursPerDay * 3600 };
         }
 
+        function getBurndownNowMetrics() {
+            // Возвращает значения "как в Jira burndown": scope/done на текущий момент (или на конец, если спринт завершён)
+            // Используем jiraScope.series (scopechangeburndownchart), фоллбек — локальный burnupData.
+            var m = state.metrics || {};
+            var res = { scope: null, done: null, pct: null, guidePct: null, isActive: false, isFinished: false };
+
+            var sp = state.sprint;
+            var spStart = sp && sp.startDate ? utils.startOfDay(utils.parseDate(sp.startDate)) : null;
+            var spEnd = sp && sp.endDate ? utils.startOfDay(utils.parseDate(sp.endDate)) : null;
+            var today = utils.startOfDay(new Date());
+            if (spStart && spEnd && today) {
+                res.isActive = today >= spStart && today <= spEnd;
+                res.isFinished = today > spEnd;
+            }
+
+            var nowTs = Date.now();
+            if (spStart && spEnd) {
+                var st = spStart.getTime(), en = spEnd.getTime();
+                if (nowTs < st) nowTs = st;
+                if (nowTs > en) nowTs = en;
+            }
+
+            function yAtOrBefore(pts, x) {
+                if (!pts || !pts.length) return null;
+                var sorted = pts.slice().sort(function(a, b) { return a.x - b.x; });
+                var y = sorted[0].y;
+                for (var i = 0; i < sorted.length; i++) {
+                    if (sorted[i].x <= x) y = sorted[i].y;
+                    else break;
+                }
+                return y;
+            }
+
+            var js = state.jiraScope && state.jiraScope.series ? state.jiraScope.series : null;
+            if (js && js.scope && js.completed) {
+                var s = yAtOrBefore(js.scope, Number(js.now) || nowTs);
+                var d = yAtOrBefore(js.completed, Number(js.now) || nowTs);
+                if (s != null && d != null && isFinite(s) && isFinite(d)) {
+                    res.scope = s;
+                    res.done = d;
+                }
+            }
+
+            if (res.scope == null || res.done == null) {
+                var bd = state.burnupData || [];
+                if (bd.length) {
+                    var cur = bd.find(function(x) { return x.isToday; }) || bd[bd.length - 1];
+                    res.scope = cur ? (cur.scopeTasks != null ? cur.scopeTasks : null) : null;
+                    res.done = cur ? (cur.doneTasks != null ? cur.doneTasks : null) : null;
+                }
+            }
+
+            if (res.scope != null && res.scope > 0 && res.done != null) {
+                res.pct = Math.round((res.done / res.scope) * 100);
+            }
+
+            // Руководство = ожидаемый % по времени (рабочие дни), рисуем если спринт ещё идёт
+            if (m.workDays && m.workDays > 0 && m.workDaysPassed != null) {
+                var g = Math.round((m.workDaysPassed / m.workDays) * 100);
+                res.guidePct = Math.max(0, Math.min(100, g));
+            }
+            return res;
+        }
+
         function pct(partSec, totalSec) {
             if (!totalSec || totalSec <= 0) return 0;
             return Math.round((partSec || 0) / totalSec * 100);
@@ -445,8 +509,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
                 // Статусы (для блока "Статусы")
                 var stName = (f.status && f.status.name) ? String(f.status.name) : "—";
-                var bucket = isDone ? "Выполнено" : stName;
-                m.statusCounts[bucket] = (m.statusCounts[bucket] || 0) + 1;
+                // ВАЖНО: показываем именно статусы (без объединения в "Выполнено")
+                m.statusCounts[stName] = (m.statusCounts[stName] || 0) + 1;
                 
                 // Проблемы
                 var sprints = f[CONFIG.sprintField] || f.customfield_10020 || []; // Sprint field
@@ -487,7 +551,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             m.datesPct = m.total > 0 ? Math.round(m.withDates / m.total * 100) : 0;
             m.asgnPct = m.total > 0 ? Math.round(m.assigned / m.total * 100) : 0;
             m.donePct = m.total > 0 ? Math.round(m.done / m.total * 100) : 0;
-            m.health = Math.round((m.estPct + m.datesPct + m.asgnPct) / 3);
+            // Health теперь строим по burndown: выполнено/объём (как Jira)
+            var bd = getBurndownNowMetrics();
+            m.health = (bd && bd.pct != null) ? bd.pct : Math.round((m.estPct + m.datesPct + m.asgnPct) / 3);
             
             calculateBurnup();
             groupByAssignee();
@@ -501,6 +567,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (k === "done") return true;
             }
             var n = (st.name || "").toLowerCase();
+            // В вашем процессе "Тестирование" считаем как выполнено
+            if (n.indexOf("тестирован") >= 0 || n.indexOf("testing") >= 0) return true;
             return ["done","closed","resolved","готово","закрыт","завершён","выполнено"].some(function(s) { return n.indexOf(s) >= 0; });
         }
 
@@ -516,6 +584,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var now = utils.startOfDay(new Date());
             var sprintId = sp.id;
             var capSec = days.length * ((CONFIG.hoursPerDay && CONFIG.hoursPerDay > 0) ? CONFIG.hoursPerDay : 8) * 3600;
+            function isDoneStatusName(name) {
+                var n = (name || "").toLowerCase();
+                if (!n) return false;
+                if (n.indexOf("тестирован") >= 0 || n.indexOf("testing") >= 0) return true;
+                return ["done","closed","resolved","готово","закрыт","завершён","выполнено"].some(function(s) { return n.indexOf(s) >= 0; });
+            }
 
             var issuesInfo = issues.map(function(iss) {
                 var f = iss.fields || {};
@@ -523,6 +597,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var estSec = (capSec && capSec > 0) ? Math.min(estRaw, capSec) : estRaw;
                 var resolved = utils.startOfDay(utils.parseDate(f.resolutiondate));
                 var done = isIssueDone(f.status);
+                // Дата, когда задача стала "выполненной" (done/тестирование) — берём из changelog status, если resolutiondate нет
+                var doneDate = resolved;
                 var addDate = start, removeDate = null;
                 var ch = iss.changelog || iss._changelog || {};
                 (ch.histories || []).forEach(function(h) {
@@ -539,6 +615,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             }
                             if (toHas && !fromHas) { addDate = hd || addDate; }
                             if (fromHas && !toHas) { removeDate = hd || removeDate; }
+                        }
+                        if ((it.field || "").toLowerCase() === "status") {
+                            // it.toString — новое имя статуса
+                            var toName = it.toString || it.toString === "" ? it.toString : it.tostring;
+                            if (!doneDate && hd && isDoneStatusName(String(toName || ""))) {
+                                doneDate = hd;
+                            }
                         }
                     });
                 });
@@ -561,6 +644,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     estSec: estSec,
                     estRaw: estRaw,
                     resolved: resolved,
+                    doneDate: doneDate,
                     isDone: done,
                     addDate: addDate,
                     removeDate: removeDate,
@@ -597,7 +681,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     }
                     doneHoursSec += cumLog;
 
-                    if (info.isDone && info.resolved && info.resolved <= day) {
+                    // Реальная линия (tasks): выполненные задачи по дате перехода в done/тестирование
+                    if (info.isDone && info.doneDate && info.doneDate <= day) {
                         doneTasks += 1;
                     }
                 });
@@ -1838,11 +1923,18 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function renderHealth() {
             var m = state.metrics, c = utils.getHealthColor(m.health);
             var label = utils.getHealthLabel(m.health);
+            var bd = getBurndownNowMetrics();
+            var scopeTxt = (bd && bd.scope != null) ? String(bd.scope) : "—";
+            var pctTxt = (bd && bd.pct != null) ? String(bd.pct) : String(m.health);
             // мягкий градиент как в примере
             var grad = "linear-gradient(90deg, " + c + ", #ffab00)";
             return '' +
                 '<div class="ujg-card ujg-health-card">' +
-                    '<div class="ujg-health-strip"><div class="ujg-health-strip-fill" style="width:' + m.health + '%;background:' + grad + '"></div></div>' +
+                    '<div class="ujg-health-strip">' +
+                        '<div class="ujg-health-strip-fill" style="width:' + pctTxt + '%;background:' + grad + '"></div>' +
+                        (bd && bd.guidePct != null && bd.isActive && !bd.isFinished ? ('<div class="ujg-health-guide" style="left:' + bd.guidePct + '%"></div>') : '') +
+                        '<div class="ujg-health-strip-label">Объём: <b>' + utils.escapeHtml(scopeTxt) + '</b> · Выполнено: <b>' + utils.escapeHtml(pctTxt) + '%</b></div>' +
+                    '</div>' +
                     '<div class="ujg-health-bottom">' +
                         '<span class="ujg-health-pct" style="color:' + c + '">' + m.health + '%</span>' +
                         '<span class="ujg-health-text">' + utils.escapeHtml(label) + '</span>' +
