@@ -1,15 +1,51 @@
 /* UJG Sprint Health v1.2 */
 .ujg-sprint-health { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #172b4d; width: 100%; max-width: none; }
+
+/* shadcn-like tokens + tiny utility subset (под классы из примера) */
+:root{
+  --background:#f6f7fb;
+  --card:#ffffff;
+  --muted:#f0f2f6;
+  --border:#e6e8ee;
+  --text:#0f172a;
+  --muted-foreground:#6b778c;
+}
+.min-h-screen{min-height:100vh;}
+.bg-background{background:var(--background);}
+.bg-card{background:var(--card);}
+.bg-muted{background:var(--muted);}
+.border{border:1px solid var(--border);}
+.rounded-lg{border-radius:12px;}
+.rounded-md{border-radius:10px;}
+.shadow-md{box-shadow:0 6px 18px rgba(15,23,42,.08);}
+.shadow-lg{box-shadow:0 10px 30px rgba(15,23,42,.12);}
+.p-4{padding:16px;}
+.p-6{padding:24px;}
+.mx-auto{margin-left:auto;margin-right:auto;}
+.max-w-7xl{max-width:1280px;}
+.space-y-6>*+*{margin-top:24px;}
+.flex{display:flex;}
+.items-center{align-items:center;}
+.justify-between{justify-content:space-between;}
+.gap-4{gap:16px;}
+.flex-wrap{flex-wrap:wrap;}
+.gap-2{gap:8px;}
+.md\:p-6{}
+@media (min-width:768px){.md\:p-6{padding:24px;}}
+
 .ujg-wide-container, .dashboard-item-content .ujg-sprint-health, .dashboard-item-content .ujg-wide-container, .aui-page-panel .ujg-sprint-health { width: 100% !important; max-width: none !important; flex: 1 1 auto !important; }
 
 /* Панель */
-.ujg-panel { display: flex; align-items: center; gap: 8px; padding: 8px; background: #f4f5f7; border-radius: 4px; margin-bottom: 8px; }
+.ujg-page { width: 100%; }
+.ujg-page-inner { width: 100%; }
+
+.ujg-panel { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--card); border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 6px 18px rgba(15,23,42,.08); margin-bottom: 0; }
 .ujg-sel, .ujg-input { padding: 6px 10px; border: 1px solid #dfe1e6; border-radius: 3px; font-size: 12px; background: #fff; }
 .ujg-sel { min-width: 100px; }
 .ujg-input { flex: 1; min-width: 180px; }
 .ujg-sel:focus, .ujg-input:focus { border-color: #0052cc; outline: none; }
-.ujg-btn { padding: 6px 10px; border: 1px solid #dfe1e6; border-radius: 3px; background: #fff; cursor: pointer; font-size: 13px; }
-.ujg-btn:hover { background: #ebecf0; }
+.ujg-btn { padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); cursor: pointer; font-size: 13px; }
+.ujg-btn:hover { background: #f7f8fa; }
 .ujg-btn-fs { margin-left: auto; background: #6554c0; color: #fff; border-color: #6554c0; }
 
 /* Dropdown */

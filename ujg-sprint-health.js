@@ -2973,7 +2973,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             $fsBtn.on("click", toggleFullscreen);
             
             $panel.append($boardSelect, $sprintWrap, $compareBtn, $refreshBtn, $fsBtn);
-            $cont.before($panel);
+
+            // Page wrapper (shadcn-like layout without Tailwind)
+            var $existingPage = $content.find(".ujg-page");
+            if ($existingPage.length === 0) {
+                var $page = $('<div class="ujg-page min-h-screen bg-background p-4 md:p-6"></div>');
+                var $inner = $('<div class="ujg-page-inner mx-auto max-w-7xl space-y-6"></div>');
+                $page.append($inner);
+                // Вставляем обёртку и переносим внутрь панель + контент
+                $content.append($page);
+                $inner.append($panel, $cont);
+            } else {
+                // fallback: если уже есть (например, при горячей перезагрузке)
+                $existingPage.find(".ujg-page-inner").append($panel);
+            }
             
             $(document).on("keydown.ujgSh", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFullscreen(); });
             
