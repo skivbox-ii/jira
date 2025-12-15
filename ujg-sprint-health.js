@@ -1502,6 +1502,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (g.spentOutSprintSec == null) g.spentOutSprintSec = 0;
                 if (g.tasksInSprint == null) g.tasksInSprint = 0;
                 if (g.doneInSprint == null) g.doneInSprint = 0;
+                if (g.estimatedInSprint == null) g.estimatedInSprint = 0;
                 return g;
             }
 
@@ -1650,6 +1651,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         map[displayUser.id].plannedSec += est;
                         map[displayUser.id].tasksInSprint += 1;
                         if (item.isDone) map[displayUser.id].doneInSprint += 1;
+                        if (est > 0) map[displayUser.id].estimatedInSprint += 1;
                     }
                     // Списания по пользователю: берём worklog именно этого автора
                     var userSpent = matchAuthorSeconds(workAuthors, displayUser);
@@ -1663,6 +1665,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         outside.plannedSec += est;
                         outside.tasksInSprint += 1;
                         if (item.isDone) outside.doneInSprint += 1;
+                        if (est > 0) outside.estimatedInSprint += 1;
                     }
                     // Для "Вне команды" показываем списания как сумму по всем авторам (по сути уже total по задаче)
                     if (item.isOutsideSprint) outside.spentOutSprintSec += loggedSec;
@@ -2007,7 +2010,18 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var inTeam = !isOutside && state.teamMembers && state.teamMembers.indexOf(a.id) >= 0;
                 var tog = isOutside ? '' : '<span class="ujg-tm-toggle ' + (inTeam ? 'on' : '') + '" data-uid="' + utils.escapeHtml(a.id) + '" data-uname="' + utils.escapeHtml(a.name) + '" title="' + (inTeam ? 'В команде' : 'Добавить в команду') + '">◎</span>';
                 var title = isOutside ? 'Вне команды' : utils.escapeHtml(a.name);
-                html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.formatHours(a.hours) + ', ' + a.issues.length + ')</span></td></tr>';
+                var tasksIn = a.tasksInSprint || 0;
+                var doneIn = a.doneInSprint || 0;
+                var estIn = a.estimatedInSprint || 0;
+                var pctPlanned = tasksIn > 0 ? Math.round(estIn / tasksIn * 100) : 0;
+                var plannedSec = a.plannedSec || 0;
+                var spentIn = a.spentInSprintSec || 0;
+                var spentOut = a.spentOutSprintSec || 0;
+                var stat = 'запланировано ' + pctPlanned + '% ' + utils.formatHours(plannedSec) +
+                    ', ' + tasksIn + ' задач (готово ' + doneIn + ')' +
+                    ', списано ' + utils.formatHours(spentIn) +
+                    ' и ' + utils.formatHours(spentOut) + ' вне спринта';
+                html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.escapeHtml(stat) + ')</span></td></tr>';
                 var dbgSec = 0;
                 var dbgTasks = {};
                 var apiDbgSec = 0;
