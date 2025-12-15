@@ -1975,14 +1975,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             var html = '<div class="ujg-asgn-wrap"><div class="ujg-section-title">👥 Распределение (' + data.length + ')</div><div class="ujg-asgn-list">';
             data.forEach(function(a) {
-                var pct = Math.round(a.hours / maxH * 100);
+                var barPct = Math.round(a.hours / maxH * 100);
                 var plan = a.plannedSec || 0;
                 var inSp = a.spentInSprintSec || 0;
                 var outSp = a.spentOutSprintSec || 0;
                 var tIn = a.tasksInSprint || 0;
                 var dIn = a.doneInSprint || 0;
                 html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
-                    '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + pct + '%"></div></div>' +
+                    '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + barPct + '%"></div></div>' +
                     '<span class="ujg-asgn-val">' +
                         'Ёмк: ' + capLabel +
                         ' | План: ' + utils.formatHours(plan) + ' (' + pct(plan, capSec) + '%)' +
