@@ -70,9 +70,10 @@
 .ujg-health-strip { height: 12px; background: var(--muted); }
 .ujg-health-strip-fill { height: 100%; transition: width .4s ease; }
 .ujg-health-strip { position: relative; height: 14px; }
-.ujg-health-strip-label { position:absolute; left:10px; top:50%; transform: translateY(-50%); font-size: 11px; color: #0f172a; opacity: .85; white-space: nowrap; }
-.ujg-health-strip-label b { font-weight: 800; }
 .ujg-health-guide { position:absolute; top:0; bottom:0; width:0; border-left: 2px dashed rgba(15,23,42,.55); }
+.ujg-health-meta { padding: 4px 10px; font-size: 12px; color: rgba(15,23,42,.82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ujg-health-meta b { font-weight: 800; color:#0f172a; }
+.ujg-health-meta2 { color: var(--muted-foreground); }
 .ujg-health-bottom { display:flex; justify-content:flex-end; align-items: baseline; gap: 8px; padding: 8px 10px; }
 .ujg-health-pct { font-size: 34px; font-weight: 800; letter-spacing: -0.6px; }
 .ujg-health-text { font-size: 18px; color: var(--muted-foreground); }
@@ -114,7 +115,7 @@
 .ujg-meta-name { color: var(--muted-foreground); }
 .ujg-meta-val b { font-weight: 800; color:#0f172a; }
 
-.ujg-status-card { grid-column: 1 / -1; padding: 10px; border-left: 4px solid #f59e0b; }
+.ujg-kcard-status { border-left: 4px solid #f59e0b; padding: 10px; }
 .ujg-status-list { margin-top: 8px; display:flex; flex-wrap: wrap; gap: 8px; }
 .ujg-status-pill { display:inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border-radius: 999px; background: var(--muted); color:#0f172a; font-size: 13px; }
 .ujg-status-name { color: #334155; }
@@ -140,6 +141,9 @@
 .ujg-chart-wrap { background: #fff; border-radius: 4px; border: 1px solid #dfe1e6; margin-bottom: 8px; overflow: hidden; }
 .ujg-chart-hdr { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #f4f5f7; border-bottom: 1px solid #dfe1e6; flex-wrap: wrap; }
 .ujg-chart-title { font-weight: 600; font-size: 13px; }
+.ujg-burn-tabs { display:flex; gap: 6px; margin-left: 10px; }
+.ujg-burn-tab { padding: 4px 10px; border-radius: 999px; background: var(--muted); color: #334155; font-size: 12px; cursor: pointer; user-select: none; }
+.ujg-burn-tab.on { background: #0f172a; color: #fff; }
 .ujg-toggle { display: flex; gap: 2px; background: #ebecf0; border-radius: 3px; padding: 2px; }
 .ujg-tog { padding: 3px 10px; font-size: 11px; cursor: pointer; border-radius: 2px; color: #6b778c; }
 .ujg-tog.on { background: #fff; color: #0052cc; font-weight: 500; }
@@ -226,6 +230,9 @@
 /* Подсветка чисел/процентов в статистике: цифры чёрные и bold, остальное серое */
 .ujg-stat-val { color: #172b4d; font-weight: 700; }
 .ujg-stat-txt { color: #6b778c; font-weight: 400; }
+
+.ujg-badge-bad { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; background: #ffebe6; color: #de350b; font-size: 10px; font-weight: 800; vertical-align: middle; }
+.ujg-asgn-bad .ujg-asgn-name { color: #de350b; font-weight: 700; }
 
 /* Table */
 .ujg-tbl-wrap { background: #fff; border-radius: 4px; border: 1px solid #dfe1e6; overflow: hidden; }

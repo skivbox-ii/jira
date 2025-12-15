@@ -207,6 +207,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             loading: false, isFullscreen: false,
             viewMode: "health", // health | compare
             chartMode: "tasks", // tasks или hours
+            burnView: "jira", // jira | burndown
             metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {},
             teams: {}, teamKey: "", teamMembers: [],
             teamMemberNames: {}, // { userId: displayName } для отображения даже без задач
@@ -520,6 +521,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var prob = null;
                 if (!est && !isDone) prob = { type: "noest", label: "Без оценки" };
                 else if (!f.assignee && !isDone) prob = { type: "noasgn", label: "Без исполнителя" };
+                else if (est > (5 * (CONFIG.hoursPerDay || 8) * 3600)) prob = { type: "bigplan", label: "План > 5 дн." };
                 else if (est > CONFIG.maxHours * 3600) prob = { type: "big", label: "Большая задача" };
                 else if (f.duedate && utils.parseDate(f.duedate) < now && !isDone) prob = { type: "overdue", label: "Просрочено" };
                 else if (sprintCount > 2) prob = { type: "rollover", label: "Переносы: " + sprintCount };
@@ -1275,6 +1277,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var html = '<div class="ujg-chart-wrap">';
             html += '<div class="ujg-chart-hdr">';
             html += '<span class="ujg-chart-title">Диаграма сгорания</span>';
+            html += '<div class="ujg-burn-tabs"><span class="ujg-burn-tab on" data-burnview="jira">Jira</span><span class="ujg-burn-tab" data-burnview="burndown">Burndown</span></div>';
             html += '<div class="ujg-legend">';
             html += '<span class="ujg-leg"><i style="background:#de350b"></i>Объём работ</span>';
             html += '<span class="ujg-leg"><i style="background:#ff5630"></i>Прогноз объёма</span>';
@@ -1673,6 +1676,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (g.estimatedInSprint == null) g.estimatedInSprint = 0;
                 if (g.alertNoEstCount == null) g.alertNoEstCount = 0;
                 if (!g.alertNoEstKeys) g.alertNoEstKeys = [];
+                if (g.wipCount == null) g.wipCount = 0;
+                if (!g.wipKeys) g.wipKeys = [];
                 return g;
             }
 
@@ -1830,6 +1835,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             map[displayUser.id].alertNoEstCount += 1;
                             map[displayUser.id].alertNoEstKeys.push(item.key);
                         }
+                        // WIP: задачи "в работе" (по названию статуса) — для подсветки (особенно Казарбов)
+                        var stn = (item.status || "").toLowerCase();
+                        var isWip = (!item.isDone) && (stn.indexOf("в работе") >= 0 || stn.indexOf("in progress") >= 0 || stn.indexOf("разработ") >= 0 || stn.indexOf("doing") >= 0);
+                        if (isWip) { map[displayUser.id].wipCount += 1; map[displayUser.id].wipKeys.push(item.key); }
                     }
                     // Списания по пользователю: берём worklog именно этого автора
                     var userSpent = matchAuthorSeconds(workAuthors, displayUser);
@@ -1849,6 +1858,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                             outside.alertNoEstCount += 1;
                             outside.alertNoEstKeys.push(item.key);
                         }
+                        var stn2 = (item.status || "").toLowerCase();
+                        var isWip2 = (!item.isDone) && (stn2.indexOf("в работе") >= 0 || stn2.indexOf("in progress") >= 0 || stn2.indexOf("разработ") >= 0 || stn2.indexOf("doing") >= 0);
+                        if (isWip2) { outside.wipCount += 1; outside.wipKeys.push(item.key); }
                     }
                     // Для "Вне команды" показываем списания как сумму по всем авторам (по сути уже total по задаче)
                     if (item.isOutsideSprint) outside.spentOutSprintSec += loggedSec;
@@ -1904,8 +1916,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var html = '';
             html += renderHealth();
             html += renderMetrics();
-            html += renderBurnup();
-            html += renderJiraScopeChangeChart();
+            // Диаграмма сгорания (переключаемая: Jira-like <-> Burndown Chart)
+            html += (state.burnView === "burndown") ? renderBurnup() : renderJiraScopeChangeChart();
             html += renderAssigneeAlerts();
             html += renderProblems();
             html += renderAssignees();
@@ -1933,7 +1945,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     '<div class="ujg-health-strip">' +
                         '<div class="ujg-health-strip-fill" style="width:' + pctTxt + '%;background:' + grad + '"></div>' +
                         (bd && bd.guidePct != null && bd.isActive && !bd.isFinished ? ('<div class="ujg-health-guide" style="left:' + bd.guidePct + '%"></div>') : '') +
-                        '<div class="ujg-health-strip-label">Объём: <b>' + utils.escapeHtml(scopeTxt) + '</b> · Выполнено: <b>' + utils.escapeHtml(pctTxt) + '%</b></div>' +
+                    '</div>' +
+                    '<div class="ujg-health-meta">Объём: <b>' + utils.escapeHtml(scopeTxt) + '</b> · Выполнено: <b>' + utils.escapeHtml(pctTxt) + '%</b>' +
+                        (bd && bd.guidePct != null && bd.isActive && !bd.isFinished ? (' <span class="ujg-health-meta2">· Руководство: ' + bd.guidePct + '%</span>') : '') +
                     '</div>' +
                     '<div class="ujg-health-bottom">' +
                         '<span class="ujg-health-pct" style="color:' + c + '">' + m.health + '%</span>' +
@@ -2047,15 +2061,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     '<div class="ujg-kline">Темп: <b>' + expectedDoneTasks + '</b> <span class="ujg-kmuted">задач</span> <span class="ujg-kdelta ' + (deltaTasks >= 0 ? "ok" : "bad") + '">(' + utils.escapeHtml(deltaTasksLabel) + ')</span></div>' +
                 '</div>';
 
-            // Оценки
-            html += '' +
-                '<div class="ujg-card ujg-kcard ujg-kcard-mini">' +
-                    '<div class="ujg-kbig">' + m.estPct + '%</div>' +
-                    '<div class="ujg-kmuted">Оценки ' + m.estimated + '/' + m.total + '</div>' +
-                '</div>';
-
-            // Сроки
-            // Объединённый блок: Оценки + Сроки + Исполн.
+            // Объединённый блок: Оценки + Сроки + Исполн. (убрали отдельную карточку "Оценки", чтобы не дублировалось)
             html += '' +
                 '<div class="ujg-card ujg-kcard ujg-kcard-meta">' +
                     '<div class="ujg-khead">КОНТРОЛЬ</div>' +
@@ -2069,7 +2075,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 return { name: k, n: m.statusCounts[k] || 0 };
             }).sort(function(a, b) { return b.n - a.n; });
             html += '' +
-                '<div class="ujg-card ujg-status-card">' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-status">' +
                     '<div class="ujg-khead">СТАТУСЫ</div>' +
                     '<div class="ujg-status-list">' +
                         statusArr.slice(0, 10).map(function(s) {
@@ -2164,6 +2170,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var html = '<div class="ujg-chart-wrap">';
             html += '<div class="ujg-chart-hdr">';
             html += '<span class="ujg-chart-title">Burndown Chart</span>';
+            html += '<div class="ujg-burn-tabs"><span class="ujg-burn-tab" data-burnview="jira">Jira</span><span class="ujg-burn-tab on" data-burnview="burndown">Burndown</span></div>';
             html += '<div class="ujg-toggle"><span class="ujg-tog ' + (!isHours ? "on" : "") + '" data-mode="tasks">Задачи</span><span class="ujg-tog ' + (isHours ? "on" : "") + '" data-mode="hours">Часы</span></div>';
             html += '<div class="ujg-legend">';
             html += '<span class="ujg-leg"><i style="background:#0d8bff"></i>Идеальная линия</span>';
@@ -2286,7 +2293,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 function v(sec) { return '<span class="ujg-stat-val">' + utils.escapeHtml(utils.formatHours(sec || 0)) + '</span>'; }
                 function p(sec) { return '<span class="ujg-stat-val">' + pct(sec, capSec) + '%</span>'; }
                 var warn = a && a.alertNoEstCount ? (' <span class="ujg-badge-warn" title="Есть задачи в спринте без оценки">⚠ ' + a.alertNoEstCount + '</span>') : '';
-                html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' + warn +
+                var wip = a && a.wipCount != null ? a.wipCount : 0;
+                var isKazarbov = a && a.name && String(a.name).toLowerCase().indexOf("казарбов") >= 0;
+                var wipBad = isKazarbov ? (wip === 0 || wip >= 3) : (wip >= 4);
+                var wipWarn = isKazarbov ? (wip === 0 || wip >= 2) : (wip >= 3);
+                var wipBadge = (wipWarn || wipBad) ? (' <span class="' + (wipBad ? 'ujg-badge-bad' : 'ujg-badge-warn') + '" title="Задачи в работе">' + (wipBad ? '🟥' : '🟧') + ' WIP ' + wip + '</span>') : '';
+                html += '<div class="ujg-asgn ' + (wipBad ? 'ujg-asgn-bad' : '') + '"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' + warn + wipBadge +
                     '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + barPct + '%"></div></div>' +
                     '<span class="ujg-asgn-val">' +
                         '<span class="ujg-stat-txt">План:</span> ' + v(plan) + ' <span class="ujg-stat-txt">(' + p(plan) + ')</span>' +
@@ -2994,6 +3006,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             $cont.find(".ujg-tog").on("click", function() {
                 var mode = $(this).data("mode");
                 if (mode !== state.chartMode) { state.chartMode = mode; ensureJiraScopeChangeForSprint(); render(); }
+            });
+            $cont.find(".ujg-burn-tab").on("click", function() {
+                var v = $(this).data("burnview");
+                if (!v || v === state.burnView) return;
+                state.burnView = v;
+                render();
             });
             $cont.find(".ujg-grp").on("click", function() {
                 var aid = $(this).data("aid");
