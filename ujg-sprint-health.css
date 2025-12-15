@@ -118,6 +118,10 @@
 .ujg-asgn-fill { height: 100%; background: linear-gradient(90deg, #0052cc, #4c9aff); border-radius: 3px; }
 .ujg-asgn-val { min-width: 80px; font-size: 10px; color: #6b778c; text-align: right; }
 
+/* Подсветка чисел/процентов в статистике: цифры чёрные и bold, остальное серое */
+.ujg-stat-val { color: #172b4d; font-weight: 700; }
+.ujg-stat-txt { color: #6b778c; font-weight: 400; }
+
 /* Table */
 .ujg-tbl-wrap { background: #fff; border-radius: 4px; border: 1px solid #dfe1e6; overflow: hidden; }
 .ujg-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }

@@ -2003,13 +2003,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var outSp = a.spentOutSprintSec || 0;
                 var tIn = a.tasksInSprint || 0;
                 var dIn = a.doneInSprint || 0;
+                function v(sec) { return '<span class="ujg-stat-val">' + utils.escapeHtml(utils.formatHours(sec || 0)) + '</span>'; }
+                function p(sec) { return '<span class="ujg-stat-val">' + pct(sec, capSec) + '%</span>'; }
                 html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
                     '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + barPct + '%"></div></div>' +
                     '<span class="ujg-asgn-val">' +
-                        'План: ' + utils.formatHours(plan) + ' (' + pct(plan, capSec) + '%)' +
-                        ' | Спринт: ' + utils.formatHours(inSp) + ' (' + pct(inSp, capSec) + '%)' +
-                        ' | Вне: ' + utils.formatHours(outSp) + ' (' + pct(outSp, capSec) + '%)' +
-                        ' | ' + tIn + ' задач (готово ' + dIn + ')' +
+                        '<span class="ujg-stat-txt">План:</span> ' + v(plan) + ' <span class="ujg-stat-txt">(' + p(plan) + ')</span>' +
+                        '<span class="ujg-stat-txt"> | Спринт:</span> ' + v(inSp) + ' <span class="ujg-stat-txt">(' + p(inSp) + ')</span>' +
+                        '<span class="ujg-stat-txt"> | Вне:</span> ' + v(outSp) + ' <span class="ujg-stat-txt">(' + p(outSp) + ')</span>' +
+                        '<span class="ujg-stat-txt"> | </span><span class="ujg-stat-val">' + tIn + '</span><span class="ujg-stat-txt"> задач (готово </span><span class="ujg-stat-val">' + dIn + '</span><span class="ujg-stat-txt">)</span>' +
                     '</span></div>';
             });
             return html + '</div></div>';
