@@ -1835,14 +1835,49 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var loggedIn = m.loggedInSprintSec || 0;
             var loggedOut = m.loggedOutSprintSec || 0;
             var capSec = m.capacitySec || 0;
+            var teamSize = (state.teamMembers && state.teamMembers.length) ? state.teamMembers.length : 0;
+            var teamCapSec = (capSec && teamSize) ? (capSec * teamSize) : 0;
+            var passed = m.workDaysPassed || 0;
+            var totalWd = m.workDays || 0;
+            var timePct = (totalWd > 0) ? Math.round(passed / totalWd * 100) : 0;
+
+            var planSec = m.totalHours || 0; // сумма оценок задач спринта (с капом на задачу)
+            var planPct = teamCapSec > 0 ? Math.round(planSec / teamCapSec * 100) : 0;
+            var spentTotal = (loggedIn || 0) + (loggedOut || 0);
+            var spentPct = teamCapSec > 0 ? Math.round(spentTotal / teamCapSec * 100) : 0;
+
+            // "Должны были" по времени (простая линейная модель): ожидаемая доля выполнения по прошедшим рабочим дням
+            var expectedDoneTasks = (m.total > 0 && totalWd > 0) ? Math.round(m.total * passed / totalWd) : 0;
+            var deltaTasks = (m.done || 0) - expectedDoneTasks;
+            var expectedSpentByNow = teamCapSec > 0 ? Math.round(teamCapSec * timePct / 100) : 0;
+            var deltaSpent = spentTotal - expectedSpentByNow;
+
+            function fmtDelta(n, unit) {
+                if (!n) return "0" + (unit || "");
+                var sign = n > 0 ? "+" : "";
+                return sign + n + (unit || "");
+            }
+
+            function fmtHoursDelta(sec) {
+                if (!sec) return "0ч";
+                var sign = sec > 0 ? "+" : "";
+                return sign + utils.formatHours(Math.abs(sec));
+            }
+
             return '<div class="ujg-mrow">' +
-                '<div class="ujg-m"><span class="ujg-mi">📊</span><span class="ujg-mv">' + utils.formatHours(m.totalHours) + '</span>' +
-                    '<span class="ujg-ml">' + m.total + ' задач (выполнено ' + m.done + ')</span>' +
+                '<div class="ujg-m"><span class="ujg-mi">📊</span><span class="ujg-mv">' + utils.formatHours(teamCapSec || capSec) + '</span>' +
+                    '<span class="ujg-ml">' +
+                        (teamSize ? ('Команда: ' + teamSize + ' чел. · ') : '') +
+                        (totalWd ? ('Спринт: ' + totalWd + ' раб.дн. · ') : '') +
+                        (passed ? ('Прошло: ' + passed + ' раб.дн. (' + timePct + '%)') : '') +
+                    '</span>' +
                     '<span class="ujg-ml ujg-ml2">' +
-                        'Ёмкость: ' + utils.formatHours(capSec) + (m.workDays ? (' (' + (Math.round(m.workDays * 10) / 10) + ' дн.)') : '') +
-                        ' | План: ' + utils.formatHours(m.totalHours) + ' (' + pct(m.totalHours, capSec) + '%)' +
-                        ' | Списано: ' + utils.formatHours(loggedIn) + ' (' + pct(loggedIn, capSec) + '%)' +
-                        ' + ' + utils.formatHours(loggedOut) + ' вне (' + pct(loggedOut, capSec) + '%)' +
+                        '<b>План</b>: ' + utils.formatHours(planSec) + ' (' + planPct + '% от ёмкости команды)' +
+                        ' · <b>Списано</b>: ' + utils.formatHours(loggedIn) + ' по спринту + ' + utils.formatHours(loggedOut) + ' вне = ' + utils.formatHours(spentTotal) + ' (' + spentPct + '%)' +
+                    '</span>' +
+                    '<span class="ujg-ml ujg-ml2">' +
+                        '<b>По идее к этому дню</b>: закрыть ' + expectedDoneTasks + ' задач (факт ' + m.done + ', ' + (deltaTasks >= 0 ? 'опережение ' : 'отставание ') + utils.escapeHtml(fmtDelta(Math.abs(deltaTasks), "")) + ')' +
+                        ' · списать ' + utils.formatHours(expectedSpentByNow) + ' (факт ' + utils.formatHours(spentTotal) + ', ' + (deltaSpent >= 0 ? 'перерасход ' : 'недобор ') + fmtHoursDelta(deltaSpent) + ')' +
                     '</span>' +
                 '</div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.estPct) + '"><span class="ujg-mi">📝</span><span class="ujg-mv">' + m.estPct + '%</span><span class="ujg-ml">Оценки ' + m.estimated + '/' + m.total + '</span></div>' +
