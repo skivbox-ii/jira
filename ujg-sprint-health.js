@@ -223,6 +223,44 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function log(msg) { if (CONFIG.debug) console.log("[UJG]", msg); }
 
+        function getSprintCapacity() {
+            var sp = state.sprint;
+            if (!sp || !sp.startDate || !sp.endDate) return { workDays: 0, capSec: 0 };
+            var start = utils.startOfDay(utils.parseDate(sp.startDate));
+            var end = utils.startOfDay(utils.parseDate(sp.endDate));
+            if (!start || !end) return { workDays: 0, capSec: 0 };
+
+            var dayMs = 24 * 3600 * 1000;
+            var hoursPerDay = (CONFIG.hoursPerDay && CONFIG.hoursPerDay > 0) ? CONFIG.hoursPerDay : 8;
+
+            // Если есть workRateData (из Jira scopechangeburndownchart), считаем рабочие дни по нему (учтёт праздники/выходные из Jira)
+            var js = state.jiraScope && state.jiraScope.series ? state.jiraScope.series : null;
+            if (js && js.workRateData && Array.isArray(js.workRateData.rates) && js.workRateData.rates.length) {
+                var st = Number(js.startTime || js.start || (start && start.getTime())) || (start && start.getTime());
+                var en = Number(js.endTime || js.end || (end && end.getTime())) || (end && end.getTime());
+                var wd = 0;
+                js.workRateData.rates.forEach(function(r) {
+                    var rs = Math.max(Number(r.start) || 0, st);
+                    var re = Math.min(Number(r.end) || 0, en);
+                    var rate = Number(r.rate);
+                    if (!isFinite(rs) || !isFinite(re) || re <= rs) return;
+                    if (!isFinite(rate) || rate <= 0) return;
+                    wd += (re - rs) / dayMs;
+                });
+                var capSec = wd * hoursPerDay * 3600;
+                return { workDays: wd, capSec: capSec };
+            }
+
+            // Фоллбек: рабочие дни = будни (без суб/вс)
+            var workDays = utils.daysBetween(start, end).length;
+            return { workDays: workDays, capSec: workDays * hoursPerDay * 3600 };
+        }
+
+        function pct(partSec, totalSec) {
+            if (!totalSec || totalSec <= 0) return 0;
+            return Math.round((partSec || 0) / totalSec * 100);
+        }
+
         function ensureFullWidth() {
             var $wrap = $content.closest(".dashboard-item-content, .gadget, .ajs-gadget, .aui-page-panel, .dashboard-item");
             var $targets = $wrap.add($content).add($cont);
@@ -363,6 +401,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var issues = state.issues, m = state.metrics = {};
             m.total = issues.length;
             m.totalHours = m.estimated = m.withDates = m.assigned = m.done = 0;
+            var cap = getSprintCapacity();
+            m.workDays = cap.workDays || 0;
+            m.capacitySec = cap.capSec || 0;
             
             state.problems = [];
             var now = new Date();
@@ -1746,10 +1787,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var m = state.metrics;
             var loggedIn = m.loggedInSprintSec || 0;
             var loggedOut = m.loggedOutSprintSec || 0;
+            var capSec = m.capacitySec || 0;
             return '<div class="ujg-mrow">' +
                 '<div class="ujg-m"><span class="ujg-mi">📊</span><span class="ujg-mv">' + utils.formatHours(m.totalHours) + '</span>' +
                     '<span class="ujg-ml">' + m.total + ' задач (выполнено ' + m.done + ')</span>' +
-                    '<span class="ujg-ml ujg-ml2">Списано: ' + utils.formatHours(loggedIn) + ' по спринту, ' + utils.formatHours(loggedOut) + ' вне спринта</span>' +
+                    '<span class="ujg-ml ujg-ml2">' +
+                        'Ёмкость: ' + utils.formatHours(capSec) + (m.workDays ? (' (' + (Math.round(m.workDays * 10) / 10) + ' дн.)') : '') +
+                        ' | План: ' + utils.formatHours(m.totalHours) + ' (' + pct(m.totalHours, capSec) + '%)' +
+                        ' | Списано: ' + utils.formatHours(loggedIn) + ' (' + pct(loggedIn, capSec) + '%)' +
+                        ' + ' + utils.formatHours(loggedOut) + ' вне (' + pct(loggedOut, capSec) + '%)' +
+                    '</span>' +
                 '</div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.estPct) + '"><span class="ujg-mi">📝</span><span class="ujg-mv">' + m.estPct + '%</span><span class="ujg-ml">Оценки ' + m.estimated + '/' + m.total + '</span></div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.datesPct) + '"><span class="ujg-mi">📅</span><span class="ujg-mv">' + m.datesPct + '%</span><span class="ujg-ml">Сроки ' + m.withDates + '/' + m.total + '</span></div>' +
@@ -1922,6 +1969,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var data = state.byAssignee;
             if (!data || data.length === 0) return '';
             var maxH = Math.max.apply(null, data.map(function(a) { return a.hours; })) || 1;
+            var cap = getSprintCapacity();
+            var capSec = cap.capSec || 0;
+            var capLabel = utils.formatHours(capSec) + (cap.workDays ? (' (' + (Math.round(cap.workDays * 10) / 10) + ' дн.)') : '');
             
             var html = '<div class="ujg-asgn-wrap"><div class="ujg-section-title">👥 Распределение (' + data.length + ')</div><div class="ujg-asgn-list">';
             data.forEach(function(a) {
@@ -1934,9 +1984,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
                     '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + pct + '%"></div></div>' +
                     '<span class="ujg-asgn-val">' +
-                        'План: ' + utils.formatHours(plan) +
-                        ' | Спринт: ' + utils.formatHours(inSp) +
-                        ' | Вне: ' + utils.formatHours(outSp) +
+                        'Ёмк: ' + capLabel +
+                        ' | План: ' + utils.formatHours(plan) + ' (' + pct(plan, capSec) + '%)' +
+                        ' | Спринт: ' + utils.formatHours(inSp) + ' (' + pct(inSp, capSec) + '%)' +
+                        ' | Вне: ' + utils.formatHours(outSp) + ' (' + pct(outSp, capSec) + '%)' +
                         ' | ' + tIn + ' задач (готово ' + dIn + ')' +
                     '</span></div>';
             });
@@ -2002,6 +2053,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var sprintEnd = state.sprint ? utils.parseDate(state.sprint.endDate) : null;
             var days = sprintStart && sprintEnd ? utils.daysBetween(sprintStart, sprintEnd) : [];
             var gHead = renderGanttHeader(days);
+            var cap = getSprintCapacity();
+            var capSec = cap.capSec || 0;
+            var capLabel = utils.formatHours(capSec) + (cap.workDays ? (' (' + (Math.round(cap.workDays * 10) / 10) + ' дн.)') : '');
             
             var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Start</th><th>End</th><th>Статус</th><th class="ujg-th-gantt">Gantt ' + gHead + '</th></tr></thead><tbody>';
             
@@ -2012,15 +2066,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var title = isOutside ? 'Вне команды' : utils.escapeHtml(a.name);
                 var tasksIn = a.tasksInSprint || 0;
                 var doneIn = a.doneInSprint || 0;
-                var estIn = a.estimatedInSprint || 0;
-                var pctPlanned = tasksIn > 0 ? Math.round(estIn / tasksIn * 100) : 0;
                 var plannedSec = a.plannedSec || 0;
                 var spentIn = a.spentInSprintSec || 0;
                 var spentOut = a.spentOutSprintSec || 0;
-                var stat = 'запланировано ' + pctPlanned + '% ' + utils.formatHours(plannedSec) +
+                var stat = 'ёмкость ' + capLabel +
+                    ', план ' + utils.formatHours(plannedSec) + ' (' + pct(plannedSec, capSec) + '%)' +
                     ', ' + tasksIn + ' задач (готово ' + doneIn + ')' +
-                    ', списано ' + utils.formatHours(spentIn) +
-                    ' и ' + utils.formatHours(spentOut) + ' вне спринта';
+                    ', списано ' + utils.formatHours(spentIn) + ' (' + pct(spentIn, capSec) + '%)' +
+                    ' и ' + utils.formatHours(spentOut) + ' вне (' + pct(spentOut, capSec) + '%)';
                 html += '<tr class="ujg-grp" data-aid="' + a.id + '"><td colspan="7"><b>' + title + '</b> ' + tog + ' <span>(' + utils.escapeHtml(stat) + ')</span></td></tr>';
                 var dbgSec = 0;
                 var dbgTasks = {};
