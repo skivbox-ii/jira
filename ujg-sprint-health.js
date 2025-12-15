@@ -83,6 +83,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
     var api = {
         getBoards: function() { return $.ajax({ url: baseUrl + "/rest/agile/1.0/board", data: { maxResults: 100 } }); },
         getFields: function() { return $.ajax({ url: baseUrl + "/rest/api/2/field" }); },
+        getUser: function(userId) {
+            // Jira Server/DC: чаще всего работает ?key=JIRAUSER12345 или ?username=...
+            // Jira Cloud: ?accountId=...
+            function tryReq(params) {
+                return $.ajax({ url: baseUrl + "/rest/api/2/user", data: params });
+            }
+            var id = userId;
+            if (!id) return $.Deferred().reject().promise();
+            // Пробуем по очереди (на разных инстансах разные параметры)
+            return tryReq({ key: id }).then(function(r) { return r; }, function() {
+                return tryReq({ username: id }).then(function(r) { return r; }, function() {
+                    return tryReq({ accountId: id });
+                });
+            });
+        },
         getAllSprints: function(boardId) {
             var d = $.Deferred(), all = [];
             function load(startAt) {
@@ -2142,7 +2157,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var set = {};
                 function add(val) {
                     if (!val) return;
-                    if (/^jirauser/i.test(val)) return;
                     set[val] = true;
                 }
                 add(g.login);
@@ -2363,10 +2377,37 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             });
         }
 
+        function ensureTeamMemberNames() {
+            var ids = state.teamMembers || [];
+            if (!ids.length) return $.Deferred().resolve().promise();
+            if (!state.teamMemberNames) state.teamMemberNames = {};
+            var tasks = [];
+            ids.forEach(function(uid) {
+                if (!uid) return;
+                if (state.teamMemberNames[uid]) return;
+                var p = api.getUser(uid).then(function(u) {
+                    var dn = u && (u.displayName || u.name || u.key || u.accountId) ? (u.displayName || u.name || u.key || u.accountId) : uid;
+                    state.teamMemberNames[uid] = dn;
+                    return dn;
+                }, function() {
+                    state.teamMemberNames[uid] = uid;
+                    return uid;
+                });
+                tasks.push(p);
+            });
+            if (!tasks.length) return $.Deferred().resolve().promise();
+            return $.when.apply($, tasks).always(function() {
+                // перерисуем, чтобы заголовки групп и "пустые" участники получили ФИО
+                groupByAssignee();
+                render();
+            });
+        }
+
         function updateTeamKey() {
             if (!state.sprint) return;
             state.teamKey = getTeamKeyBySprintName(state.sprint.name);
             state.teamMembers = (state.teams && state.teamKey && state.teams[state.teamKey]) ? state.teams[state.teamKey] : [];
+            ensureTeamMemberNames();
         }
 
         function toggleTeamMember(uid, uname) {
@@ -2382,6 +2423,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (!state.teamMemberNames) state.teamMemberNames = {};
                 state.teamMemberNames[uid] = uname;
             }
+            ensureTeamMemberNames();
             saveTeams(state.selectedBoardId, state.teams).always(function() { render(); });
         }
 
