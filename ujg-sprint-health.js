@@ -194,6 +194,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             chartMode: "tasks", // tasks или hours
             metrics: {}, burnupData: [], byAssignee: [], problems: [], issueMap: {},
             teams: {}, teamKey: "", teamMembers: [],
+            teamMemberNames: {}, // { userId: displayName } для отображения даже без задач
             worklogDebugPerAuthor: {},
             compare: { boardId: null, allSprints: [], displayed: [], rows: [], teams: [], limit: 10, burnCache: {} },
             jiraScope: { sprintId: null, mode: "tasks", loading: false, error: false, series: null }
@@ -1489,6 +1490,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 return g;
             }
 
+            // ВАЖНО: добавляем всех участников команды заранее, даже если у них нет задач в спринте.
+            // Это нужно, чтобы loadExtraWorklogIssues() мог запросить "вне спринта" по каждому.
+            teamMembers.forEach(function(uid) {
+                if (!uid) return;
+                if (!map[uid]) {
+                    var nm = (state.teamMemberNames && state.teamMemberNames[uid]) ? state.teamMemberNames[uid] : uid;
+                    map[uid] = { id: uid, name: nm, login: uid, issues: [], hours: 0 };
+                    ensureGroupStats(map[uid]);
+                }
+            });
+
             srcIssues.forEach(function(iss) {
                 var f = iss.fields || {};
                 var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
@@ -1589,6 +1601,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 
                 var displayUser = null;
                 var fallbackUser = assigneeId ? { id: assigneeId, name: assigneeName } : (workAuthors[0] ? { id: workAuthors[0].id, name: workAuthors[0].name } : null);
+
+                // Если это extra-задача, найденная по конкретному автору worklog — используем его как первичный displayUser.
+                // Это покрывает кейс: "нет задач в спринте, но есть списания вне спринта".
+                if (iss && iss._ujgExtraFor && iss._ujgExtraFor.id && teamMembers.indexOf(iss._ujgExtraFor.id) >= 0) {
+                    var exId = iss._ujgExtraFor.id;
+                    var exName = iss._ujgExtraFor.name || (state.teamMemberNames && state.teamMemberNames[exId]) || exId;
+                    var exLogin = iss._ujgExtraFor.login || exId;
+                    displayUser = { id: exId, name: exName, login: exLogin };
+                }
                 // 1) текущий ассайн в команде
                 if (assigneeId && teamMembers.indexOf(assigneeId) >= 0) {
                     displayUser = { id: assigneeId, name: assigneeName, login: assigneeLogin };
@@ -2114,6 +2135,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
             var groups = state.byAssignee.slice(); // уже построены
             var extraAll = [];
+            var extraByKey = {};
             state.worklogDebugPerAuthor = {};
 
             function authorCandidates(g) {
@@ -2124,6 +2146,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     set[val] = true;
                 }
                 add(g.login);
+                add(g.name);
+                add(g.id);
                 // g.id часто accountId вида JIRAUSER..., игнорируем
                 return Object.keys(set).filter(Boolean);
             }
@@ -2189,6 +2213,13 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     issues.forEach(function(i) {
                         if (!existingKeys[i.key]) {
                             i.isOutsideSprint = true;
+                            // помечаем, для кого нашли эту задачу (чтобы гарантированно отрендерить пользователя даже без задач в спринте)
+                            i._ujgExtraFor = { id: grp.id, name: grp.name, login: grp.login };
+                            if (extraByKey[i.key]) {
+                                // уже добавляли — просто дополним метку (оставим первую как основную)
+                            } else {
+                                extraByKey[i.key] = i;
+                            }
                             extraAll.push(i);
                             existingKeys[i.key] = true;
                         }
@@ -2347,6 +2378,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (idx >= 0) list.splice(idx, 1);
             else list.push(uid);
             state.teamMembers = list.slice();
+            if (uid && uname) {
+                if (!state.teamMemberNames) state.teamMemberNames = {};
+                state.teamMemberNames[uid] = uname;
+            }
             saveTeams(state.selectedBoardId, state.teams).always(function() { render(); });
         }
 
