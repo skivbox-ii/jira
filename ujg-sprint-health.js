@@ -521,8 +521,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var prob = null;
                 if (!est && !isDone) prob = { type: "noest", label: "Без оценки" };
                 else if (!f.assignee && !isDone) prob = { type: "noasgn", label: "Без исполнителя" };
-                else if (est > (5 * (CONFIG.hoursPerDay || 8) * 3600)) prob = { type: "bigplan", label: "План > 5 дн." };
-                else if (est > CONFIG.maxHours * 3600) prob = { type: "big", label: "Большая задача" };
+                // "Большая задача" — только если план > 40 часов
+                else if (estRaw > (40 * 3600)) prob = { type: "big", label: "Большая задача" };
                 else if (f.duedate && utils.parseDate(f.duedate) < now && !isDone) prob = { type: "overdue", label: "Просрочено" };
                 else if (sprintCount > 2) prob = { type: "rollover", label: "Переносы: " + sprintCount };
                 
@@ -1946,12 +1946,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         '<div class="ujg-health-strip-fill" style="width:' + pctTxt + '%;background:' + grad + '"></div>' +
                         (bd && bd.guidePct != null && bd.isActive && !bd.isFinished ? ('<div class="ujg-health-guide" style="left:' + bd.guidePct + '%"></div>') : '') +
                     '</div>' +
-                    '<div class="ujg-health-meta">Объём: <b>' + utils.escapeHtml(scopeTxt) + '</b> · Выполнено: <b>' + utils.escapeHtml(pctTxt) + '%</b>' +
+                    '<div class="ujg-health-meta">Объём: <b>' + utils.escapeHtml(scopeTxt) + '</b> · Выполнено: <b>' + utils.escapeHtml(pctTxt) + '%</b> <span class="ujg-health-meta2">(' + utils.escapeHtml(label) + ')</span>' +
                         (bd && bd.guidePct != null && bd.isActive && !bd.isFinished ? (' <span class="ujg-health-meta2">· Руководство: ' + bd.guidePct + '%</span>') : '') +
-                    '</div>' +
-                    '<div class="ujg-health-bottom">' +
-                        '<span class="ujg-health-pct" style="color:' + c + '">' + m.health + '%</span>' +
-                        '<span class="ujg-health-text">' + utils.escapeHtml(label) + '</span>' +
                     '</div>' +
                 '</div>';
         }
@@ -2070,19 +2066,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     '<div class="ujg-meta-line"><span class="ujg-meta-name">Исполн.</span><span class="ujg-meta-val"><b>' + m.asgnPct + '%</b> <span class="ujg-kmuted">' + m.assigned + '/' + m.total + '</span></span></div>' +
                 '</div>';
 
-            // Статусы вместо "Готово"
+            // Статусы (компактно, в том же стиле/отступах что "Контроль")
             var statusArr = Object.keys(m.statusCounts || {}).map(function(k) {
                 return { name: k, n: m.statusCounts[k] || 0 };
             }).sort(function(a, b) { return b.n - a.n; });
             html += '' +
                 '<div class="ujg-card ujg-kcard ujg-kcard-status">' +
                     '<div class="ujg-khead">СТАТУСЫ</div>' +
-                    '<div class="ujg-status-list">' +
-                        statusArr.slice(0, 10).map(function(s) {
-                            var pp = m.total > 0 ? Math.round(s.n / m.total * 100) : 0;
-                            return '<span class="ujg-status-pill"><span class="ujg-status-name">' + utils.escapeHtml(s.name) + '</span>: <b>' + s.n + '</b> <span class="ujg-kmuted">(' + pp + '%)</span></span>';
-                        }).join('') +
-                    '</div>' +
+                    statusArr.slice(0, 6).map(function(s) {
+                        var pp = m.total > 0 ? Math.round(s.n / m.total * 100) : 0;
+                        return '<div class="ujg-meta-line ujg-status-line">' +
+                            '<span class="ujg-meta-name">' + utils.escapeHtml(s.name) + '</span>' +
+                            '<span class="ujg-meta-val"><b>' + s.n + '</b> <span class="ujg-kmuted">(' + pp + '%)</span></span>' +
+                        '</div>';
+                    }).join('') +
                 '</div>';
 
             html += '</div>';
