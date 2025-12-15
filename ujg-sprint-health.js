@@ -517,10 +517,24 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var sprints = f[CONFIG.sprintField] || f.customfield_10020 || []; // Sprint field
                 var sprintCount = Array.isArray(sprints) ? sprints.length : 0;
                 var statusTime = utils.daysDiff(utils.parseDate(f.updated), now);
+
+                // В текущем спринте?
+                var inCurrentSprint = false;
+                if (state.sprint) {
+                    var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
+                    var sprintNames = utils.parseSprintNames(sprintFieldVal);
+                    var curId = String(state.sprint.id || "");
+                    var curName = state.sprint.name || "";
+                    inCurrentSprint = sprintNames.some(function(s) {
+                        if (!s) return false;
+                        return (curId && s.indexOf("id=" + curId) !== -1) || (curName && s.indexOf(curName) !== -1);
+                    });
+                }
                 
                 var prob = null;
                 if (!est && !isDone) prob = { type: "noest", label: "Без оценки" };
                 else if (!f.assignee && !isDone) prob = { type: "noasgn", label: "Без исполнителя" };
+                else if (inCurrentSprint && estRaw > (40 * 3600)) prob = { type: "big", label: "План > 5 дн." };
                 else if (f.duedate && utils.parseDate(f.duedate) < now && !isDone) prob = { type: "overdue", label: "Просрочено" };
                 else if (sprintCount > 2) prob = { type: "rollover", label: "Переносы: " + sprintCount };
                 
@@ -1676,7 +1690,36 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (!g.alertNoEstKeys) g.alertNoEstKeys = [];
                 if (g.wipCount == null) g.wipCount = 0;
                 if (!g.wipKeys) g.wipKeys = [];
+                if (g.lastLogDate == null) g.lastLogDate = null; // последний день списаний В СПРИНТЕ
+                if (g.alertNoWip == null) g.alertNoWip = false; // нет задач "в работе"
+                if (g.alertAllDone == null) g.alertAllDone = false; // все задачи спринта выполнены
+                if (g.alertNoLogs3d == null) g.alertNoLogs3d = false; // нет списаний >=3 раб.дн (только текущий спринт)
+                if (g.alertUnderLogFinished == null) g.alertUnderLogFinished = false; // спринт закрыт, списаний мало
+                if (g.noLogDays == null) g.noLogDays = 0;
                 return g;
+            }
+
+            function matchAuthorLastDay(wlByAuthor, user) {
+                if (!wlByAuthor || !user) return null;
+                var uid = (user.id || "").toLowerCase();
+                var uname = (user.name || "").toLowerCase();
+                var ulogin = (user.login || "").toLowerCase();
+                var best = null;
+                Object.keys(wlByAuthor).forEach(function(aid) {
+                    var aidL = String(aid || "").toLowerCase();
+                    var ok = false;
+                    if (uid && aidL === uid) ok = true;
+                    if (!ok && ulogin && aidL === ulogin) ok = true;
+                    if (!ok && uname && aidL === uname) ok = true;
+                    if (!ok) return;
+                    var byDay = wlByAuthor[aid] || {};
+                    Object.keys(byDay).forEach(function(dk) {
+                        var d = utils.startOfDay(utils.parseDate(dk));
+                        if (!d) return;
+                        if (!best || d > best) best = d;
+                    });
+                });
+                return best;
             }
 
             // ВАЖНО: добавляем всех участников команды заранее, даже если у них нет задач в спринте.
@@ -1841,7 +1884,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     // Списания по пользователю: берём worklog именно этого автора
                     var userSpent = matchAuthorSeconds(workAuthors, displayUser);
                     if (item.isOutsideSprint) map[displayUser.id].spentOutSprintSec += userSpent;
-                    else map[displayUser.id].spentInSprintSec += userSpent;
+                    else {
+                        map[displayUser.id].spentInSprintSec += userSpent;
+                        // Последний день списаний в спринте (для "нет списаний 3 дня")
+                        var lastD = matchAuthorLastDay(item.worklogsByAuthor, displayUser);
+                        if (lastD && (!map[displayUser.id].lastLogDate || lastD > map[displayUser.id].lastLogDate)) {
+                            map[displayUser.id].lastLogDate = lastD;
+                        }
+                    }
                 } else {
                     outside.issues.push(item);
                     outside.hours += est;
@@ -1869,6 +1919,46 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             if (outside.issues.length > 0) arr.push(outside);
             state.byAssignee = arr;
             state.issueMap = issueMap;
+
+            // Логические флаги уведомлений по каждому участнику
+            var m = state.metrics || {};
+            var wdPassed = m.workDaysPassed || 0;
+            var wdTotal = m.workDays || 0;
+            var today2 = utils.startOfDay(new Date());
+            var spS2 = state.sprint && state.sprint.startDate ? utils.startOfDay(utils.parseDate(state.sprint.startDate)) : null;
+            var spE2 = state.sprint && state.sprint.endDate ? utils.startOfDay(utils.parseDate(state.sprint.endDate)) : null;
+            var isCurrentSprint = !!(spS2 && spE2 && today2 && today2 >= spS2 && today2 <= spE2);
+            var isClosed = (state.sprint && state.sprint.state && String(state.sprint.state).toLowerCase() === "closed") || (!!(spE2 && today2 && today2 > spE2));
+            arr.forEach(function(g) {
+                if (!g || g.id === "__outside__") return;
+                ensureGroupStats(g);
+                var tIn = g.tasksInSprint || 0;
+                var dIn = g.doneInSprint || 0;
+                var wip = g.wipCount || 0;
+                g.alertAllDone = (tIn > 0 && dIn === tIn);
+                // 1) нет задач в работе (только если есть задачи спринта И не все выполнены)
+                g.alertNoWip = (tIn > 0 && !g.alertAllDone && wip === 0);
+                // 3) нет трудозатрат/списаний > 3 раб.дн. (только текущий спринт)
+                g.alertNoLogs3d = false;
+                g.noLogDays = 0;
+                if (isCurrentSprint && wdPassed >= 3) {
+                    if (!g.lastLogDate || (g.spentInSprintSec || 0) <= 0) {
+                        g.noLogDays = wdPassed;
+                        g.alertNoLogs3d = (wdPassed >= 3);
+                    } else if (today2 && g.lastLogDate) {
+                        var nextWork = utils.shiftWorkDays(g.lastLogDate, 1);
+                        var days = (nextWork && today2 && today2 >= nextWork) ? utils.daysBetween(nextWork, today2).length : 0;
+                        g.noLogDays = days;
+                        g.alertNoLogs3d = (days >= 3);
+                    }
+                }
+                // 4) если спринт закончен — списаний меньше чем кол-во раб.дней (условно < 1ч/день)
+                g.alertUnderLogFinished = false;
+                if (isClosed && wdTotal > 0) {
+                    var minSec = wdTotal * 3600;
+                    g.alertUnderLogFinished = (g.spentInSprintSec || 0) < minSec;
+                }
+            });
 
             // Пишем агрегаты в метрики (важно: groupByAssignee вызывается ещё раз после загрузки extra-issues)
             if (!state.metrics) state.metrics = {};
@@ -2251,21 +2341,38 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var data = state.byAssignee || [];
             var passed = state.metrics && state.metrics.workDaysPassed ? state.metrics.workDaysPassed : 0;
             if (!data.length || passed <= 0) return '';
-            var offenders = data.filter(function(a) { return a && a.id !== "__outside__" && a.alertNoEstCount > 0; });
+            var offenders = data.filter(function(a) {
+                return a && a.id !== "__outside__" && (
+                    (a.alertNoEstCount > 0) ||
+                    a.alertNoWip ||
+                    a.alertAllDone ||
+                    a.alertNoLogs3d ||
+                    a.alertUnderLogFinished
+                );
+            });
             if (!offenders.length) return '';
 
             var html = '<div class="ujg-probs ujg-alerts">';
             html += '<div class="ujg-section-title">🔔 Уведомления</div>';
-            html += '<div class="ujg-alert-note">Спринт идёт уже <b>' + passed + '</b> раб. дн. Есть задачи в работе без оценки (мешает планированию).</div>';
+            html += '<div class="ujg-alert-note">Авто-проверки по людям: WIP, завершение, списания и оценки. Спринт идёт уже <b>' + passed + '</b> раб. дн.</div>';
             html += '<ul class="ujg-alert-list">';
             offenders.forEach(function(a) {
-                var keys = (a.alertNoEstKeys || []).slice(0, 6);
-                var more = (a.alertNoEstKeys || []).length - keys.length;
-                html += '<li><span class="ujg-badge-warn">⚠</span> <b>' + utils.escapeHtml(a.name) + '</b>: ' +
-                    a.alertNoEstCount + ' без оценки в спринте. ' +
-                    keys.map(function(k) { return '<a href="' + baseUrl + '/browse/' + utils.escapeHtml(k) + '" target="_blank">' + utils.escapeHtml(k) + '</a>'; }).join(', ') +
-                    (more > 0 ? (' и ещё ' + more) : '') +
-                    '</li>';
+                var parts = [];
+                if (a.alertNoWip) parts.push('<span class="ujg-badge-warn">🟧</span> нет задач <b>в работе</b> (WIP=0)');
+                if (a.alertAllDone) parts.push('<span class="ujg-badge-ok">🟩</span> все задачи спринта <b>выполнены</b>');
+                if (a.alertNoLogs3d) parts.push('<span class="ujg-badge-warn">⚠</span> нет списаний уже <b>' + (a.noLogDays || 3) + '</b> раб.дн.');
+                if (a.alertUnderLogFinished) {
+                    var wd = (state.metrics && state.metrics.workDays) ? state.metrics.workDays : 0;
+                    parts.push('<span class="ujg-badge-warn">⚠</span> спринт завершён: списано <b>' + utils.escapeHtml(utils.formatHours(a.spentInSprintSec || 0)) + '</b> (меньше чем <b>' + wd + 'ч</b>)');
+                }
+                if (a.alertNoEstCount > 0) {
+                    var keys = (a.alertNoEstKeys || []).slice(0, 6);
+                    var more = (a.alertNoEstKeys || []).length - keys.length;
+                    parts.push('<span class="ujg-badge-warn">⚠</span> ' + a.alertNoEstCount + ' задач без оценки в спринте: ' +
+                        keys.map(function(k) { return '<a href="' + baseUrl + '/browse/' + utils.escapeHtml(k) + '" target="_blank">' + utils.escapeHtml(k) + '</a>'; }).join(', ') +
+                        (more > 0 ? (' и ещё ' + more) : ''));
+                }
+                html += '<li><b>' + utils.escapeHtml(a.name) + '</b>: ' + parts.join(' · ') + '</li>';
             });
             html += '</ul></div>';
             return html;

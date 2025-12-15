@@ -210,6 +210,7 @@
 .ujg-alert-list a { color: #0052cc; text-decoration: none; font-weight: 500; }
 .ujg-alert-list a:hover { text-decoration: underline; }
 .ujg-badge-warn { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; background: #ffebe6; color: #de350b; font-size: 10px; font-weight: 700; vertical-align: middle; }
+.ujg-badge-ok { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; background: #e3fcef; color: #006644; font-size: 10px; font-weight: 800; vertical-align: middle; }
 
 /* Tooltip */
 .ujg-tooltip { position: fixed; z-index: 10000; background: #fff; border: 1px solid #dfe1e6; border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); padding: 12px; max-width: 400px; font-size: 12px; display: none; }
