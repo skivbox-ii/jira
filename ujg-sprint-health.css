@@ -95,6 +95,14 @@
 .ujg-prob-overdue { background: #ffebe6; color: #de350b; }
 .ujg-prob-rollover { background: #f4f5f7; color: #5e6c84; }
 
+/* Alerts */
+.ujg-alerts .ujg-alert-note { font-size: 11px; color: #5e6c84; margin: 6px 0 8px; }
+.ujg-alert-list { margin: 0; padding-left: 18px; font-size: 11px; color: #172b4d; }
+.ujg-alert-list li { margin: 4px 0; }
+.ujg-alert-list a { color: #0052cc; text-decoration: none; font-weight: 500; }
+.ujg-alert-list a:hover { text-decoration: underline; }
+.ujg-badge-warn { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; background: #ffebe6; color: #de350b; font-size: 10px; font-weight: 700; vertical-align: middle; }
+
 /* Tooltip */
 .ujg-tooltip { position: fixed; z-index: 10000; background: #fff; border: 1px solid #dfe1e6; border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); padding: 12px; max-width: 400px; font-size: 12px; display: none; }
 .ujg-tooltip.ujg-show { display: block; }

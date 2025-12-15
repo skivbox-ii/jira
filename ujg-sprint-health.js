@@ -404,6 +404,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var cap = getSprintCapacity();
             m.workDays = cap.workDays || 0;
             m.capacitySec = cap.capSec || 0;
+            // сколько рабочих дней уже прошло в спринте (для логических уведомлений)
+            m.workDaysPassed = 0;
+            if (state.sprint && state.sprint.startDate && state.sprint.endDate) {
+                var spS = utils.startOfDay(utils.parseDate(state.sprint.startDate));
+                var spE = utils.startOfDay(utils.parseDate(state.sprint.endDate));
+                var today = utils.startOfDay(new Date());
+                if (spS && spE && today) {
+                    var till = today < spE ? today : spE;
+                    if (till >= spS) m.workDaysPassed = utils.daysBetween(spS, till).length;
+                }
+            }
             
             state.problems = [];
             var now = new Date();
@@ -1564,6 +1575,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (g.tasksInSprint == null) g.tasksInSprint = 0;
                 if (g.doneInSprint == null) g.doneInSprint = 0;
                 if (g.estimatedInSprint == null) g.estimatedInSprint = 0;
+                if (g.alertNoEstCount == null) g.alertNoEstCount = 0;
+                if (!g.alertNoEstKeys) g.alertNoEstKeys = [];
                 return g;
             }
 
@@ -1715,6 +1728,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         map[displayUser.id].tasksInSprint += 1;
                         if (item.isDone) map[displayUser.id].doneInSprint += 1;
                         if (est > 0) map[displayUser.id].estimatedInSprint += 1;
+                        // Логическое предупреждение: спринт уже идёт, а задача в работе без оценки
+                        var passed = state.metrics && state.metrics.workDaysPassed ? state.metrics.workDaysPassed : 0;
+                        if (passed >= 3 && !item.isDone && (item.estRaw || 0) <= 0) {
+                            map[displayUser.id].alertNoEstCount += 1;
+                            map[displayUser.id].alertNoEstKeys.push(item.key);
+                        }
                     }
                     // Списания по пользователю: берём worklog именно этого автора
                     var userSpent = matchAuthorSeconds(workAuthors, displayUser);
@@ -1729,6 +1748,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         outside.tasksInSprint += 1;
                         if (item.isDone) outside.doneInSprint += 1;
                         if (est > 0) outside.estimatedInSprint += 1;
+                        var passed2 = state.metrics && state.metrics.workDaysPassed ? state.metrics.workDaysPassed : 0;
+                        if (passed2 >= 3 && !item.isDone && (item.estRaw || 0) <= 0) {
+                            outside.alertNoEstCount += 1;
+                            outside.alertNoEstKeys.push(item.key);
+                        }
                     }
                     // Для "Вне команды" показываем списания как сумму по всем авторам (по сути уже total по задаче)
                     if (item.isOutsideSprint) outside.spentOutSprintSec += loggedSec;
@@ -1786,6 +1810,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             html += renderMetrics();
             html += renderBurnup();
             html += renderJiraScopeChangeChart();
+            html += renderAssigneeAlerts();
             html += renderProblems();
             html += renderAssignees();
             html += renderTable();
@@ -1988,6 +2013,30 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html;
         }
 
+        function renderAssigneeAlerts() {
+            var data = state.byAssignee || [];
+            var passed = state.metrics && state.metrics.workDaysPassed ? state.metrics.workDaysPassed : 0;
+            if (!data.length || passed <= 0) return '';
+            var offenders = data.filter(function(a) { return a && a.id !== "__outside__" && a.alertNoEstCount > 0; });
+            if (!offenders.length) return '';
+
+            var html = '<div class="ujg-probs ujg-alerts">';
+            html += '<div class="ujg-section-title">🔔 Уведомления</div>';
+            html += '<div class="ujg-alert-note">Спринт идёт уже <b>' + passed + '</b> раб. дн. Есть задачи в работе без оценки (мешает планированию).</div>';
+            html += '<ul class="ujg-alert-list">';
+            offenders.forEach(function(a) {
+                var keys = (a.alertNoEstKeys || []).slice(0, 6);
+                var more = (a.alertNoEstKeys || []).length - keys.length;
+                html += '<li><span class="ujg-badge-warn">⚠</span> <b>' + utils.escapeHtml(a.name) + '</b>: ' +
+                    a.alertNoEstCount + ' без оценки в спринте. ' +
+                    keys.map(function(k) { return '<a href="' + baseUrl + '/browse/' + utils.escapeHtml(k) + '" target="_blank">' + utils.escapeHtml(k) + '</a>'; }).join(', ') +
+                    (more > 0 ? (' и ещё ' + more) : '') +
+                    '</li>';
+            });
+            html += '</ul></div>';
+            return html;
+        }
+
         function renderAssignees() {
             var data = state.byAssignee;
             if (!data || data.length === 0) return '';
@@ -2005,7 +2054,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var dIn = a.doneInSprint || 0;
                 function v(sec) { return '<span class="ujg-stat-val">' + utils.escapeHtml(utils.formatHours(sec || 0)) + '</span>'; }
                 function p(sec) { return '<span class="ujg-stat-val">' + pct(sec, capSec) + '%</span>'; }
-                html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
+                var warn = a && a.alertNoEstCount ? (' <span class="ujg-badge-warn" title="Есть задачи в спринте без оценки">⚠ ' + a.alertNoEstCount + '</span>') : '';
+                html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' + warn +
                     '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + barPct + '%"></div></div>' +
                     '<span class="ujg-asgn-val">' +
                         '<span class="ujg-stat-txt">План:</span> ' + v(plan) + ' <span class="ujg-stat-txt">(' + p(plan) + ')</span>' +
