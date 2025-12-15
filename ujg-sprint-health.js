@@ -521,8 +521,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var prob = null;
                 if (!est && !isDone) prob = { type: "noest", label: "Без оценки" };
                 else if (!f.assignee && !isDone) prob = { type: "noasgn", label: "Без исполнителя" };
-                // "Большая задача" — только если план > 40 часов
-                else if (estRaw > (40 * 3600)) prob = { type: "big", label: "Большая задача" };
                 else if (f.duedate && utils.parseDate(f.duedate) < now && !isDone) prob = { type: "overdue", label: "Просрочено" };
                 else if (sprintCount > 2) prob = { type: "rollover", label: "Переносы: " + sprintCount };
                 
@@ -2022,6 +2020,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
             var html = '<div class="ujg-mgrid">';
             // Ёмкость
+            var totalWdDisp = (totalWd != null && totalWd !== 0) ? Math.round(totalWd) : "—";
             html += '' +
                 '<div class="ujg-card ujg-kcard ujg-kcard-cap">' +
                     '<div class="ujg-kcard-top">' +
@@ -2031,7 +2030,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     '<div class="ujg-kcard-sub">Ёмкость команды</div>' +
                     '<div class="ujg-kcard-mini">' +
                         '<div><b>' + (teamSize || "—") + '</b> <span>чел.</span></div>' +
-                        '<div><b>' + (totalWd || "—") + '</b> <span>раб.дн.</span></div>' +
+                        '<div><b>' + totalWdDisp + '</b> <span>раб.дн.</span></div>' +
                         '<div class="span2"><b>' + passed + '</b> <span>прошло (' + timePct + '%)</span></div>' +
                     '</div>' +
                 '</div>';

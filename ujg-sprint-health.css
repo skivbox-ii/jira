@@ -75,6 +75,8 @@
 .ujg-health-meta b { font-weight: 800; color:#0f172a; }
 .ujg-health-meta2 { color: var(--muted-foreground); }
 /* убрали большой % справа — всё в строке meta */
+/* На всякий случай: если в DOM осталась старая разметка, прячем */
+.ujg-health-bottom, .ujg-health-pct, .ujg-health-text { display: none !important; }
 
 /* Metrics */
 .ujg-mgrid { display: grid; gap: 8px; margin-bottom: 8px; grid-template-columns: repeat(1, 1fr); }
@@ -117,9 +119,13 @@
 .ujg-status-line { margin-top: 6px; }
 
 .ujg-kcard-status { border-left: 4px solid #f59e0b; padding: 10px; }
-.ujg-status-list { margin-top: 8px; display:flex; flex-wrap: wrap; gap: 8px; }
-.ujg-status-pill { display:inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border-radius: 999px; background: var(--muted); color:#0f172a; font-size: 13px; }
-.ujg-status-name { color: #334155; }
+.ujg-status-list { margin-top: 0; display:block; }
+/* Делает "как контроль": строка слева/справа, без больших отступов */
+.ujg-status-line { margin-top: 4px; }
+.ujg-kcard-status .ujg-meta-line { margin-top: 4px; }
+/* fallback для старого варианта со "пилюлями" — тоже ужимаем до вида как контроль */
+.ujg-status-pill { display:flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 0; border-radius: 0; background: transparent; font-size: 14px; margin-top: 4px; }
+.ujg-status-name { color: var(--muted-foreground); }
 
 /* Main analytics card */
 .ujg-m-main { flex: 2 1 520px; align-items: stretch; gap: 10px; }
