@@ -1864,21 +1864,40 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 return sign + utils.formatHours(Math.abs(sec));
             }
 
+            var capLabel = utils.formatHours(teamCapSec || capSec);
+            var planLabel = utils.formatHours(planSec) + ' (' + planPct + '%)';
+            var spentLabel = utils.formatHours(spentTotal) + ' (' + spentPct + '%)';
+            var spentBreakdown = utils.formatHours(loggedIn) + ' + ' + utils.formatHours(loggedOut);
+            var paceTasks = expectedDoneTasks + ' задач → факт ' + m.done + ' (' + (deltaTasks >= 0 ? '+' : '−') + Math.abs(deltaTasks) + ')';
+            var paceHours = utils.formatHours(expectedSpentByNow) + ' → факт ' + utils.formatHours(spentTotal) + ' (' + (deltaSpent >= 0 ? '+' : '−') + utils.formatHours(Math.abs(deltaSpent)) + ')';
+
             return '<div class="ujg-mrow">' +
-                '<div class="ujg-m"><span class="ujg-mi">📊</span><span class="ujg-mv">' + utils.formatHours(teamCapSec || capSec) + '</span>' +
-                    '<span class="ujg-ml">' +
-                        (teamSize ? ('Команда: ' + teamSize + ' чел. · ') : '') +
-                        (totalWd ? ('Спринт: ' + totalWd + ' раб.дн. · ') : '') +
-                        (passed ? ('Прошло: ' + passed + ' раб.дн. (' + timePct + '%)') : '') +
-                    '</span>' +
-                    '<span class="ujg-ml ujg-ml2">' +
-                        '<b>План</b>: ' + utils.formatHours(planSec) + ' (' + planPct + '% от ёмкости команды)' +
-                        ' · <b>Списано</b>: ' + utils.formatHours(loggedIn) + ' по спринту + ' + utils.formatHours(loggedOut) + ' вне = ' + utils.formatHours(spentTotal) + ' (' + spentPct + '%)' +
-                    '</span>' +
-                    '<span class="ujg-ml ujg-ml2">' +
-                        '<b>По идее к этому дню</b>: закрыть ' + expectedDoneTasks + ' задач (факт ' + m.done + ', ' + (deltaTasks >= 0 ? 'опережение ' : 'отставание ') + utils.escapeHtml(fmtDelta(Math.abs(deltaTasks), "")) + ')' +
-                        ' · списать ' + utils.formatHours(expectedSpentByNow) + ' (факт ' + utils.formatHours(spentTotal) + ', ' + (deltaSpent >= 0 ? 'перерасход ' : 'недобор ') + fmtHoursDelta(deltaSpent) + ')' +
-                    '</span>' +
+                '<div class="ujg-m ujg-m-main">' +
+                    '<div class="ujg-m-main-top">' +
+                        '<span class="ujg-mi">📊</span>' +
+                        '<span class="ujg-mv">' + capLabel + '</span>' +
+                        '<span class="ujg-m-sub">Ёмкость команды</span>' +
+                    '</div>' +
+                    '<div class="ujg-m-kpis">' +
+                        '<div class="ujg-kpi">' +
+                            '<div class="ujg-kpi-title">Команда</div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + (teamSize || '—') + '</span><span class="ujg-kpi-txt">чел.</span></div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + (totalWd || '—') + '</span><span class="ujg-kpi-txt">раб.дн.</span></div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + passed + '</span><span class="ujg-kpi-txt">прошло (' + timePct + '%)</span></div>' +
+                        '</div>' +
+                        '<div class="ujg-kpi">' +
+                            '<div class="ujg-kpi-title">План</div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + utils.escapeHtml(planLabel) + '</span><span class="ujg-kpi-txt">от ёмкости</span></div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Задач:</span> <span class="ujg-kpi-val">' + m.total + '</span><span class="ujg-kpi-txt"> (готово </span><span class="ujg-kpi-val">' + m.done + '</span><span class="ujg-kpi-txt">)</span></div>' +
+                        '</div>' +
+                        '<div class="ujg-kpi">' +
+                            '<div class="ujg-kpi-title">Факт</div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-val">' + utils.escapeHtml(spentLabel) + '</span><span class="ujg-kpi-txt">всего</span></div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Спринт+вне:</span> <span class="ujg-kpi-val">' + utils.escapeHtml(spentBreakdown) + '</span></div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Темп:</span> <span class="ujg-kpi-val">' + utils.escapeHtml(paceTasks) + '</span></div>' +
+                            '<div class="ujg-kpi-line"><span class="ujg-kpi-txt">Темп (ч):</span> <span class="ujg-kpi-val">' + utils.escapeHtml(paceHours) + '</span></div>' +
+                        '</div>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.estPct) + '"><span class="ujg-mi">📝</span><span class="ujg-mv">' + m.estPct + '%</span><span class="ujg-ml">Оценки ' + m.estimated + '/' + m.total + '</span></div>' +
                 '<div class="ujg-m" style="border-color:' + utils.getHealthColor(m.datesPct) + '"><span class="ujg-mi">📅</span><span class="ujg-mv">' + m.datesPct + '%</span><span class="ujg-ml">Сроки ' + m.withDates + '/' + m.total + '</span></div>' +
