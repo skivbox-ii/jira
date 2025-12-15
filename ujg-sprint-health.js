@@ -445,7 +445,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
                 // Статусы (для блока "Статусы")
                 var stName = (f.status && f.status.name) ? String(f.status.name) : "—";
-                m.statusCounts[stName] = (m.statusCounts[stName] || 0) + 1;
+                var bucket = isDone ? "Выполнено" : stName;
+                m.statusCounts[bucket] = (m.statusCounts[bucket] || 0) + 1;
                 
                 // Проблемы
                 var sprints = f[CONFIG.sprintField] || f.customfield_10020 || []; // Sprint field
@@ -494,6 +495,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
         function isIssueDone(st) {
             if (!st) return false;
+            // Jira отдаёт признак "закрывает ли статус задачу" через statusCategory.key === "done"
+            if (st.statusCategory && st.statusCategory.key) {
+                var k = String(st.statusCategory.key).toLowerCase();
+                if (k === "done") return true;
+            }
             var n = (st.name || "").toLowerCase();
             return ["done","closed","resolved","готово","закрыт","завершён","выполнено"].some(function(s) { return n.indexOf(s) >= 0; });
         }
@@ -1866,6 +1872,41 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var expectedSpentByNow = teamCapSec > 0 ? Math.round(teamCapSec * timePct / 100) : 0;
             var deltaSpent = spentTotal - expectedSpentByNow;
 
+            // Почему в "сгорании" может быть больше задач:
+            // верхний блок = текущие задачи в спринте (agile sprint issues),
+            // диаграмма = scope по истории (scopechangeburndownchart), там учитываются добавленные/убранные.
+            // Покажем явно "текущее" и "scope сейчас/пик".
+            var scopeNow = null, scopePeak = null;
+            (function computeScopeInfo() {
+                var js = state.jiraScope && state.jiraScope.series ? state.jiraScope.series : null;
+                if (js && js.scope && js.scope.length) {
+                    var pts = js.scope.slice().sort(function(a, b) { return a.x - b.x; });
+                    var startTs = Number(js.startTime) || pts[0].x;
+                    var endTs = Number(js.endTime) || pts[pts.length - 1].x;
+                    var nowTs = Number(js.now) || Date.now();
+                    if (isFinite(startTs) && isFinite(endTs)) {
+                        if (nowTs < startTs) nowTs = startTs;
+                        if (nowTs > endTs) nowTs = endTs;
+                    }
+                    var y = pts[0].y;
+                    for (var i = 0; i < pts.length; i++) {
+                        if (pts[i].x <= nowTs) y = pts[i].y;
+                        else break;
+                    }
+                    scopeNow = y;
+                    scopePeak = Math.max.apply(null, pts.map(function(p){ return p.y; }));
+                    return;
+                }
+                // fallback: из локального buildBurndown (scopeTasks)
+                var bd = state.burnupData || [];
+                if (!bd.length) return;
+                var maxS = 0;
+                bd.forEach(function(d) { if ((d.scopeTasks || 0) > maxS) maxS = d.scopeTasks || 0; });
+                scopePeak = maxS;
+                var today = bd.find(function(d){ return d.isToday; });
+                scopeNow = today ? today.scopeTasks : bd[bd.length - 1].scopeTasks;
+            })();
+
             function badgeColor(p) {
                 if (p >= 120) return "ujg-bad";
                 if (p >= 100) return "ujg-warn";
@@ -1899,7 +1940,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     '<div class="ujg-khead">ПЛАН</div>' +
                     '<div class="ujg-kbig">' + utils.escapeHtml(utils.formatHours(planSec)) + '<span class="ujg-kpct ' + planColor + '">(' + planPct + '%)</span></div>' +
                     '<div class="ujg-kmuted">от ёмкости</div>' +
-                    '<div class="ujg-kline">Задач: <b>' + m.total + '</b><span class="ujg-kmuted"> (готово ' + m.done + ')</span></div>' +
+                    '<div class="ujg-kline">Задач: <b>' + m.total + '</b><span class="ujg-kmuted"> (готово ' + m.done + ')</span>' +
+                        (scopeNow != null ? (' <span class="ujg-kmuted">· scope</span> <b>' + scopeNow + '</b>' + (scopePeak != null && scopePeak !== scopeNow ? (' <span class="ujg-kmuted">(пик ' + scopePeak + ')</span>') : '')) : '') +
+                    '</div>' +
                 '</div>';
 
             // Факт
