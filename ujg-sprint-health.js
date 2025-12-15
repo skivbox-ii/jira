@@ -401,6 +401,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var issues = state.issues, m = state.metrics = {};
             m.total = issues.length;
             m.totalHours = m.estimated = m.withDates = m.assigned = m.done = 0;
+            m.statusCounts = {};
             var cap = getSprintCapacity();
             m.workDays = cap.workDays || 0;
             m.capacitySec = cap.capSec || 0;
@@ -441,6 +442,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (f.duedate) m.withDates++;
                 if (f.assignee) m.assigned++;
                 if (isDone) m.done++;
+
+                // Статусы (для блока "Статусы")
+                var stName = (f.status && f.status.name) ? String(f.status.name) : "—";
+                m.statusCounts[stName] = (m.statusCounts[stName] || 0) + 1;
                 
                 // Проблемы
                 var sprints = f[CONFIG.sprintField] || f.customfield_10020 || []; // Sprint field
@@ -1915,26 +1920,28 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 '</div>';
 
             // Сроки
+            // Объединённый блок: Оценки + Сроки + Исполн.
             html += '' +
-                '<div class="ujg-card ujg-kcard ujg-kcard-mini">' +
-                    '<div class="ujg-kbig">' + m.datesPct + '%</div>' +
-                    '<div class="ujg-kmuted">Сроки ' + m.withDates + '/' + m.total + '</div>' +
+                '<div class="ujg-card ujg-kcard ujg-kcard-meta">' +
+                    '<div class="ujg-khead">КОНТРОЛЬ</div>' +
+                    '<div class="ujg-meta-line"><span class="ujg-meta-name">Оценки</span><span class="ujg-meta-val"><b>' + m.estPct + '%</b> <span class="ujg-kmuted">' + m.estimated + '/' + m.total + '</span></span></div>' +
+                    '<div class="ujg-meta-line"><span class="ujg-meta-name">Сроки</span><span class="ujg-meta-val"><b>' + m.datesPct + '%</b> <span class="ujg-kmuted">' + m.withDates + '/' + m.total + '</span></span></div>' +
+                    '<div class="ujg-meta-line"><span class="ujg-meta-name">Исполн.</span><span class="ujg-meta-val"><b>' + m.asgnPct + '%</b> <span class="ujg-kmuted">' + m.assigned + '/' + m.total + '</span></span></div>' +
                 '</div>';
 
-            // Исполнители
+            // Статусы вместо "Готово"
+            var statusArr = Object.keys(m.statusCounts || {}).map(function(k) {
+                return { name: k, n: m.statusCounts[k] || 0 };
+            }).sort(function(a, b) { return b.n - a.n; });
             html += '' +
-                '<div class="ujg-card ujg-kcard ujg-kcard-mini">' +
-                    '<div class="ujg-kbig">' + m.asgnPct + '%</div>' +
-                    '<div class="ujg-kmuted">Исполн. ' + m.assigned + '/' + m.total + '</div>' +
-                '</div>';
-
-            // Progress bar “Готово”
-            html += '' +
-                '<div class="ujg-card ujg-done-card">' +
-                    '<div class="ujg-done-row">' +
-                        '<div class="ujg-done-left"><span class="ujg-done-ic">✅</span> <span class="ujg-done-pct">' + m.donePct + '%</span> <span class="ujg-kmuted">Готово ' + m.done + '/' + m.total + '</span></div>' +
+                '<div class="ujg-card ujg-status-card">' +
+                    '<div class="ujg-khead">СТАТУСЫ</div>' +
+                    '<div class="ujg-status-list">' +
+                        statusArr.slice(0, 10).map(function(s) {
+                            var pp = m.total > 0 ? Math.round(s.n / m.total * 100) : 0;
+                            return '<span class="ujg-status-pill"><span class="ujg-status-name">' + utils.escapeHtml(s.name) + '</span>: <b>' + s.n + '</b> <span class="ujg-kmuted">(' + pp + '%)</span></span>';
+                        }).join('') +
                     '</div>' +
-                    '<div class="ujg-done-bar"><div class="ujg-done-fill" style="width:' + m.donePct + '%"></div></div>' +
                 '</div>';
 
             html += '</div>';
