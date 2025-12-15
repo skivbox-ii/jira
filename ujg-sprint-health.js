@@ -3017,8 +3017,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             // Page wrapper (shadcn-like layout without Tailwind)
             var $existingPage = $content.find(".ujg-page");
             if ($existingPage.length === 0) {
-                var $page = $('<div class="ujg-page min-h-screen bg-background p-4 md:p-6"></div>');
-                var $inner = $('<div class="ujg-page-inner mx-auto max-w-7xl space-y-6"></div>');
+                // максимально компактно: без внешних паддингов/отступов
+                var $page = $('<div class="ujg-page min-h-screen bg-background"></div>');
+                var $inner = $('<div class="ujg-page-inner mx-auto max-w-7xl"></div>');
                 $page.append($inner);
                 // Вставляем обёртку и переносим внутрь панель + контент
                 $content.append($page);
