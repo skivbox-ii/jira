@@ -410,8 +410,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             issues.forEach(function(iss) {
                 var f = iss.fields || {};
-                var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var estRaw = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                // Ограничиваем оценку одной задачи ёмкостью спринта (человек физически не сделает больше ёмкости за спринт)
+                var est = (m.capacitySec && m.capacitySec > 0) ? Math.min(estRaw, m.capacitySec) : estRaw;
                 var isDone = isIssueDone(f.status);
+                // Worklog в пределах спринта (сек)
+                var loggedInSprint = 0;
+                if (iss._worklog && Array.isArray(iss._worklog) && state.sprint && state.sprint.startDate && state.sprint.endDate) {
+                    var spStart = utils.startOfDay(utils.parseDate(state.sprint.startDate));
+                    var spEnd = utils.startOfDay(utils.parseDate(state.sprint.endDate));
+                    iss._worklog.forEach(function(wl) {
+                        var wd = utils.startOfDay(utils.parseDate(wl.started));
+                        if (!wd || wd < spStart || wd > spEnd) return;
+                        loggedInSprint += (wl.timeSpentSeconds || 0);
+                    });
+                }
                 
                 if (est > 0) { m.estimated++; m.totalHours += est; }
                 if (f.duedate) m.withDates++;
@@ -438,7 +451,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         statusCategory: f.status && f.status.statusCategory ? f.status.statusCategory.key : "",
                         statusTime: statusTime,
                         sprintCount: sprintCount,
-                        estimate: est,
+                        estimate: est, // уже ограничено ёмкостью
+                        estimateRaw: estRaw,
+                        loggedInSprint: loggedInSprint,
                         assignee: f.assignee ? f.assignee.displayName : null,
                         priority: f.priority ? f.priority.name : "",
                         type: f.issuetype ? f.issuetype.name : "",
@@ -478,10 +493,12 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var days = utils.daysBetween(start, end);
             var now = utils.startOfDay(new Date());
             var sprintId = sp.id;
+            var capSec = days.length * ((CONFIG.hoursPerDay && CONFIG.hoursPerDay > 0) ? CONFIG.hoursPerDay : 8) * 3600;
 
             var issuesInfo = issues.map(function(iss) {
                 var f = iss.fields || {};
-                var estSec = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var estRaw = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var estSec = (capSec && capSec > 0) ? Math.min(estRaw, capSec) : estRaw;
                 var resolved = utils.startOfDay(utils.parseDate(f.resolutiondate));
                 var done = isIssueDone(f.status);
                 var addDate = start, removeDate = null;
@@ -520,6 +537,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 return {
                     key: iss.key,
                     estSec: estSec,
+                    estRaw: estRaw,
                     resolved: resolved,
                     isDone: done,
                     addDate: addDate,
@@ -1508,6 +1526,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var srcIssues = state.viewIssues && state.viewIssues.length ? state.viewIssues : state.issues;
             var totalLoggedInSprintSec = 0;
             var totalLoggedOutSprintSec = 0;
+            var cap = getSprintCapacity();
+            var capSec = cap.capSec || 0;
 
             function sumWorklogByDaySec(wlByDay) {
                 if (!wlByDay) return 0;
@@ -1560,7 +1580,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
             srcIssues.forEach(function(iss) {
                 var f = iss.fields || {};
-                var est = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var estRaw = (f.timetracking && f.timetracking.originalEstimateSeconds) || f.timeoriginalestimate || 0;
+                var est = (capSec && capSec > 0) ? Math.min(estRaw, capSec) : estRaw;
                 var due = utils.startOfDay(utils.parseDate(f.duedate) || (state.sprint ? utils.parseDate(state.sprint.endDate) : null));
                 var durationDays = utils.getWorkDurationDays(est, CONFIG.hoursPerDay);
                 var start = due ? utils.shiftWorkDays(due, -(durationDays - 1)) :
@@ -1634,7 +1655,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     summary: f.summary,
                     status: f.status ? f.status.name : "",
                     statusCat: f.status && f.status.statusCategory ? f.status.statusCategory.key : "",
-                    est: est,
+                    est: est, // ограничено ёмкостью спринта
+                    estRaw: estRaw,
                     start: start,
                     due: due,
                     created: utils.parseDate(f.created),
@@ -1943,7 +1965,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             
             var html = '<div class="ujg-probs">';
             html += '<div class="ujg-section-title">⚠️ Проблемы (' + probs.length + ')</div>';
-            html += '<table class="ujg-prob-tbl"><thead><tr><th>Ключ</th><th>Тема</th><th>Исполнитель</th><th>Статус</th><th>Срок</th><th>В статусе</th><th>Спринты</th><th>Проблема</th></tr></thead><tbody>';
+            html += '<table class="ujg-prob-tbl"><thead><tr><th>Ключ</th><th>Тема</th><th>Исполнитель</th><th>Статус</th><th>Срок</th><th>В статусе</th><th>Трудозатраты</th><th>Спринты</th><th>Проблема</th></tr></thead><tbody>';
             
             probs.forEach(function(p) {
                 var statusCls = "ujg-st-" + p.statusCategory;
@@ -1954,6 +1976,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 html += '<td><span class="ujg-st ' + statusCls + '">' + utils.escapeHtml(p.status) + '</span></td>';
                 html += '<td>' + utils.formatDateShort(p.dueDate) + '</td>';
                 html += '<td>' + p.statusTime + ' дн.</td>';
+                html += '<td>' + utils.escapeHtml('план ' + utils.formatHours(p.estimate || 0) + ', списано ' + utils.formatHours(p.loggedInSprint || 0)) + '</td>';
                 html += '<td>' + (p.sprintCount > 1 ? '<span class="ujg-rollover">' + p.sprintCount + '</span>' : '1') + '</td>';
                 html += '<td><span class="ujg-prob-type ujg-prob-' + p.probType + '">' + p.probLabel + '</span></td>';
                 html += '</tr>';
@@ -1971,7 +1994,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var maxH = Math.max.apply(null, data.map(function(a) { return a.hours; })) || 1;
             var cap = getSprintCapacity();
             var capSec = cap.capSec || 0;
-            var capLabel = utils.formatHours(capSec) + (cap.workDays ? (' (' + (Math.round(cap.workDays * 10) / 10) + ' дн.)') : '');
             
             var html = '<div class="ujg-asgn-wrap"><div class="ujg-section-title">👥 Распределение (' + data.length + ')</div><div class="ujg-asgn-list">';
             data.forEach(function(a) {
@@ -1984,8 +2006,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 html += '<div class="ujg-asgn"><span class="ujg-asgn-name">' + utils.escapeHtml(a.name) + '</span>' +
                     '<div class="ujg-asgn-bar"><div class="ujg-asgn-fill" style="width:' + barPct + '%"></div></div>' +
                     '<span class="ujg-asgn-val">' +
-                        'Ёмк: ' + capLabel +
-                        ' | План: ' + utils.formatHours(plan) + ' (' + pct(plan, capSec) + '%)' +
+                        'План: ' + utils.formatHours(plan) + ' (' + pct(plan, capSec) + '%)' +
                         ' | Спринт: ' + utils.formatHours(inSp) + ' (' + pct(inSp, capSec) + '%)' +
                         ' | Вне: ' + utils.formatHours(outSp) + ' (' + pct(outSp, capSec) + '%)' +
                         ' | ' + tIn + ' задач (готово ' + dIn + ')' +
@@ -2055,7 +2076,6 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var gHead = renderGanttHeader(days);
             var cap = getSprintCapacity();
             var capSec = cap.capSec || 0;
-            var capLabel = utils.formatHours(capSec) + (cap.workDays ? (' (' + (Math.round(cap.workDays * 10) / 10) + ' дн.)') : '');
             
             var html = '<div class="ujg-tbl-wrap"><table class="ujg-tbl"><thead><tr><th>Ключ</th><th>Задача</th><th>Ч</th><th>Start</th><th>End</th><th>Статус</th><th class="ujg-th-gantt">Gantt ' + gHead + '</th></tr></thead><tbody>';
             
@@ -2069,8 +2089,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var plannedSec = a.plannedSec || 0;
                 var spentIn = a.spentInSprintSec || 0;
                 var spentOut = a.spentOutSprintSec || 0;
-                var stat = 'ёмкость ' + capLabel +
-                    ', план ' + utils.formatHours(plannedSec) + ' (' + pct(plannedSec, capSec) + '%)' +
+                var stat = 'план ' + utils.formatHours(plannedSec) + ' (' + pct(plannedSec, capSec) + '%)' +
                     ', ' + tasksIn + ' задач (готово ' + doneIn + ')' +
                     ', списано ' + utils.formatHours(spentIn) + ' (' + pct(spentIn, capSec) + '%)' +
                     ' и ' + utils.formatHours(spentOut) + ' вне (' + pct(spentOut, capSec) + '%)';
