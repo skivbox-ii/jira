@@ -134,11 +134,27 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return d.promise();
         },
         getSprint: function(id) { return $.ajax({ url: baseUrl + "/rest/agile/1.0/sprint/" + id }); },
-        getSprintIssues: function(id) {
-            return $.ajax({
-                url: baseUrl + "/rest/agile/1.0/sprint/" + id + "/issue",
-                data: { fields: "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,updated,description,resolutiondate," + (CONFIG.sprintField || "customfield_10020"), expand: "changelog", maxResults: 500 }
-            });
+        getSprintIssues: function(id, onProgress) {
+            var d = $.Deferred(), all = [];
+            var maxTotal = 2000;
+            var fields = "summary,status,assignee,priority,issuetype,timeoriginalestimate,timetracking,duedate,created,updated,description,resolutiondate," + (CONFIG.sprintField || "customfield_10020");
+            function load(startAt) {
+                $.ajax({
+                    url: baseUrl + "/rest/agile/1.0/sprint/" + id + "/issue",
+                    data: { fields: fields, expand: "changelog", maxResults: 100, startAt: startAt }
+                }).then(function(data) {
+                    all = all.concat(data.issues || []);
+                    var total = data.total || all.length;
+                    if (onProgress) onProgress(all.length, total);
+                    if (all.length < total && all.length < maxTotal && data.issues && data.issues.length > 0) {
+                        load(startAt + data.issues.length);
+                    } else {
+                        d.resolve({ issues: all, total: total });
+                    }
+                }, function(err) { d.resolve({ issues: all, total: all.length }); });
+            }
+            load(0);
+            return d.promise();
         },
         getIssue: function(key) {
             return $.ajax({
@@ -449,10 +465,23 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function loadSprintData(id) {
             state.loading = true;
             saveSettings({ boardId: state.selectedBoardId, sprintId: id });
-            $cont.html('<div class="ujg-loading">⏳ Загрузка данных спринта...</div>');
+            $cont.html('<div class="ujg-loading"><div class="ujg-load-icon">⏳</div><div class="ujg-load-text">Загрузка данных спринта...</div><div class="ujg-load-progress"></div></div>');
+            
+            function updateProgress(text) {
+                $cont.find(".ujg-load-text").text(text);
+            }
+            function updateSubProgress(text) {
+                $cont.find(".ujg-load-progress").text(text);
+            }
             
             resolveSprintField().then(function() {
-                return $.when(api.getSprint(id), api.getSprintIssues(id));
+                updateProgress("Загрузка задач спринта...");
+                return $.when(
+                    api.getSprint(id),
+                    api.getSprintIssues(id, function(loaded, total) {
+                        updateSubProgress("Получено " + loaded + " из " + total + " задач");
+                    })
+                );
             }).then(function(sprintResp, issuesResp) {
                 state.sprint = sprintResp[0] || sprintResp;
                 state.issues = (issuesResp[0] || issuesResp).issues || [];
@@ -460,29 +489,47 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 state.extraIssues = [];
                 updateTeamKey();
                 ensureJiraScopeChangeForSprint();
-                enrichIssues(state.issues).always(function() {
-                calculate();
-                    groupByAssignee(); // предварительно для списка групп/авторов
+                
+                updateProgress("Загрузка worklogs и changelog...");
+                updateSubProgress("0 из " + state.issues.length + " задач");
+                
+                var enriched = 0;
+                enrichIssues(state.issues, function() {
+                    enriched++;
+                    updateSubProgress(enriched + " из " + state.issues.length + " задач");
+                }).always(function() {
+                    calculate();
+                    groupByAssignee();
+                    
+                    updateProgress("Загрузка задач вне спринта...");
+                    updateSubProgress("");
+                    
                     loadExtraWorklogIssues().always(function() {
-                        groupByAssignee(); // пересобираем после добавления extra
-                render();
-                state.loading = false;
-            });
+                        groupByAssignee();
+                        render();
+                        state.loading = false;
+                    });
                 });
             });
         }
 
-        function enrichIssues(issues) {
+        function enrichIssues(issues, onProgress) {
             if (!issues || issues.length === 0) return $.Deferred().resolve().promise();
             var tasks = [];
             issues.forEach(function(iss) {
-                var w = api.getIssueWorklog(iss.key).then(function(res) {
-                    iss._worklog = res && res.worklogs ? res.worklogs : [];
-                }, function() { iss._worklog = []; });
-                var c = api.getIssueChangelog(iss.key).then(function(res) {
-                    iss._changelog = res && res.changelog ? res.changelog : {};
-                }, function() { iss._changelog = {}; });
-                tasks.push($.when(w, c));
+                var task = $.Deferred();
+                $.when(
+                    api.getIssueWorklog(iss.key).then(function(res) {
+                        iss._worklog = res && res.worklogs ? res.worklogs : [];
+                    }, function() { iss._worklog = []; }),
+                    api.getIssueChangelog(iss.key).then(function(res) {
+                        iss._changelog = res && res.changelog ? res.changelog : {};
+                    }, function() { iss._changelog = {}; })
+                ).always(function() {
+                    if (onProgress) onProgress();
+                    task.resolve();
+                });
+                tasks.push(task.promise());
             });
             return $.when.apply($, tasks);
         }
@@ -2207,13 +2254,16 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 '</div>';
 
             // Факт
+            var loggedInPct = teamCapSec > 0 ? Math.round(loggedIn / teamCapSec * 100) : 0;
+            var loggedOutPct = teamCapSec > 0 ? Math.round(loggedOut / teamCapSec * 100) : 0;
             html += '' +
                 '<div class="ujg-card ujg-kcard ujg-kcard-fact">' +
                     '<div class="ujg-khead">ФАКТ</div>' +
                     '<div class="ujg-kbig">' + utils.escapeHtml(utils.formatHours(spentTotal)) + '<span class="ujg-kpct">(' + spentPct + '%)</span></div>' +
-                    '<div class="ujg-kmuted">всего</div>' +
-                    '<div class="ujg-kline">Темп (ч): <b>' + utils.escapeHtml(utils.formatHours(expectedSpentByNow)) + '</b> <span class="ujg-kmuted">→</span> <b>' + utils.escapeHtml(utils.formatHours(spentTotal)) + '</b> <span class="ujg-kdelta ' + (deltaSpent >= 0 ? "ok" : "bad") + '">(' + utils.escapeHtml(deltaSpentLabel) + ')</span></div>' +
-                    '<div class="ujg-kline">Темп: <b>' + expectedDoneTasks + '</b> <span class="ujg-kmuted">задач</span> <span class="ujg-kdelta ' + (deltaTasks >= 0 ? "ok" : "bad") + '">(' + utils.escapeHtml(deltaTasksLabel) + ')</span></div>' +
+                    '<div class="ujg-kmuted">всего списано</div>' +
+                    '<div class="ujg-kline"><span class="ujg-kmuted">В спринте:</span> <b>' + utils.escapeHtml(utils.formatHours(loggedIn)) + '</b> <span class="ujg-kmuted">(' + loggedInPct + '%)</span></div>' +
+                    '<div class="ujg-kline"><span class="ujg-kmuted">Вне спринта:</span> <b>' + utils.escapeHtml(utils.formatHours(loggedOut)) + '</b> <span class="ujg-kmuted">(' + loggedOutPct + '%)</span></div>' +
+                    '<div class="ujg-kline">Темп: <b>' + utils.escapeHtml(utils.formatHours(expectedSpentByNow)) + '</b> <span class="ujg-kmuted">→</span> <b>' + utils.escapeHtml(utils.formatHours(spentTotal)) + '</b> <span class="ujg-kdelta ' + (deltaSpent >= 0 ? "ok" : "bad") + '">(' + utils.escapeHtml(deltaSpentLabel) + ')</span></div>' +
                 '</div>';
 
             // Объединённый блок: Оценки + Сроки + Исполн. (убрали отдельную карточку "Оценки", чтобы не дублировалось)
@@ -2960,7 +3010,29 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function updateTeamKey() {
             if (!state.sprint) return;
             state.teamKey = getTeamKeyBySprintName(state.sprint.name);
-            state.teamMembers = (state.teams && state.teamKey && state.teams[state.teamKey]) ? state.teams[state.teamKey] : [];
+            var savedTeam = (state.teams && state.teamKey && state.teams[state.teamKey]) ? state.teams[state.teamKey] : [];
+            
+            // Если команда не настроена — считаем всех assignee из задач членами команды
+            if (savedTeam.length === 0 && state.issues && state.issues.length > 0) {
+                var allAssignees = {};
+                state.issues.forEach(function(iss) {
+                    var f = iss.fields || {};
+                    if (f.assignee) {
+                        var aid = f.assignee.accountId || f.assignee.key || f.assignee.name;
+                        if (aid) {
+                            allAssignees[aid] = f.assignee.displayName || aid;
+                        }
+                    }
+                });
+                state.teamMembers = Object.keys(allAssignees);
+                // Сохраняем имена для отображения
+                if (!state.teamMemberNames) state.teamMemberNames = {};
+                Object.keys(allAssignees).forEach(function(uid) {
+                    state.teamMemberNames[uid] = allAssignees[uid];
+                });
+            } else {
+                state.teamMembers = savedTeam;
+            }
             ensureTeamMemberNames();
         }
 
