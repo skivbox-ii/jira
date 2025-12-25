@@ -81,7 +81,24 @@ define("_ujgSprintHealth", ["jquery"], function($) {
     function saveSettings(s) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch(e) {} }
 
     var api = {
-        getBoards: function() { return $.ajax({ url: baseUrl + "/rest/agile/1.0/board", data: { maxResults: 100 } }); },
+        getBoards: function() {
+            var d = $.Deferred(), all = [];
+            function load(startAt) {
+                $.ajax({
+                    url: baseUrl + "/rest/agile/1.0/board",
+                    data: { maxResults: 100, startAt: startAt }
+                }).then(function(data) {
+                    all = all.concat(data.values || []);
+                    if (data.isLast === false && data.values && data.values.length > 0) {
+                        load(startAt + data.values.length);
+                    } else {
+                        d.resolve({ values: all });
+                    }
+                }, function(err) { d.resolve({ values: all }); });
+            }
+            load(0);
+            return d.promise();
+        },
         getFields: function() { return $.ajax({ url: baseUrl + "/rest/api/2/field" }); },
         getUser: function(userId) {
             // Jira Server/DC: чаще всего работает ?key=JIRAUSER12345 или ?username=...
@@ -1979,7 +1996,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var html = '';
             state.filteredBoards.slice(0, 50).forEach(function(b) {
                 var cls = state.selectedBoardId == b.id ? "ujg-active" : "";
-                html += '<div class="ujg-dd-item ' + cls + '" data-id="' + b.id + '">' + utils.escapeHtml(b.name) + ' <span class="ujg-dd-id">(ID: ' + b.id + ')</span></div>';
+                var projectInfo = '';
+                if (b.location && (b.location.projectKey || b.location.projectName)) {
+                    projectInfo = ' [' + utils.escapeHtml(b.location.projectKey || b.location.projectName) + ']';
+                }
+                var typeInfo = b.type ? ' <span class="ujg-dd-type">' + utils.escapeHtml(b.type) + '</span>' : '';
+                html += '<div class="ujg-dd-item ' + cls + '" data-id="' + b.id + '">' + 
+                    utils.escapeHtml(b.name) + projectInfo + typeInfo + 
+                    ' <span class="ujg-dd-id">#' + b.id + '</span></div>';
             });
             if (state.filteredBoards.length > 50) html += '<div class="ujg-dd-more">...ещё ' + (state.filteredBoards.length - 50) + '</div>';
             $boardDropdown.html(html || '<div class="ujg-dd-empty">Не найдено</div>');
@@ -1988,7 +2012,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function filterBoards(q) {
             q = q.toLowerCase();
             state.filteredBoards = state.boards.filter(function(b) {
-                return b.name.toLowerCase().indexOf(q) >= 0 || String(b.id).indexOf(q) >= 0;
+                // Поиск по названию
+                if (b.name && b.name.toLowerCase().indexOf(q) >= 0) return true;
+                // Поиск по ID
+                if (String(b.id).indexOf(q) >= 0) return true;
+                // Поиск по типу (scrum, kanban)
+                if (b.type && b.type.toLowerCase().indexOf(q) >= 0) return true;
+                // Поиск по проекту (projectName, projectKey)
+                if (b.location) {
+                    if (b.location.projectName && b.location.projectName.toLowerCase().indexOf(q) >= 0) return true;
+                    if (b.location.projectKey && b.location.projectKey.toLowerCase().indexOf(q) >= 0) return true;
+                    if (b.location.displayName && b.location.displayName.toLowerCase().indexOf(q) >= 0) return true;
+                }
+                return false;
             });
             updateBoardDropdown();
         }
