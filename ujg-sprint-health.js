@@ -201,7 +201,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
 
     function SprintHealthGadget(API) {
         var state = {
-            boards: [], sprints: [], filteredSprints: [],
+            boards: [], filteredBoards: [], sprints: [], filteredSprints: [],
             selectedBoardId: null, selectedSprintId: null,
             sprint: null, issues: [], viewIssues: [], extraIssues: [],
             loading: false, isFullscreen: false,
@@ -220,7 +220,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         var $cont = $content.find(".ujg-sprint-health");
         if ($cont.length === 0) { $cont = $('<div class="ujg-sprint-health"></div>'); $content.append($cont); }
 
-        var $boardSelect, $sprintInput, $sprintDropdown, $refreshBtn, $fsBtn, $compareBtn;
+        var $boardInput, $boardDropdown, $sprintInput, $sprintDropdown, $refreshBtn, $fsBtn, $compareBtn;
 
         function log(msg) { if (CONFIG.debug) console.log("[UJG]", msg); }
 
@@ -345,9 +345,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function loadBoards() {
             api.getBoards().then(function(data) {
                 state.boards = data.values || [];
-                updateBoardSelect();
+                state.filteredBoards = state.boards.slice();
+                updateBoardDropdown();
                 var saved = loadSettings();
-                if (saved.boardId) { $boardSelect.val(saved.boardId); state.selectedBoardId = saved.boardId; loadSprints(saved.boardId); }
+                if (saved.boardId) {
+                    var board = state.boards.find(function(b) { return b.id == saved.boardId; });
+                    if (board) {
+                        $boardInput.val(board.name);
+                        state.selectedBoardId = saved.boardId;
+                        loadSprints(saved.boardId);
+                    }
+                }
             });
         }
 
@@ -1935,7 +1943,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var tIn = g.tasksInSprint || 0;
                 var dIn = g.doneInSprint || 0;
                 var wip = g.wipCount || 0;
-                g.alertAllDone = (tIn > 0 && dIn === tIn);
+                // "Все выполнены" не показываем для завершённого спринта (не нужен шум в истории)
+                g.alertAllDone = (!isClosed && tIn > 0 && dIn === tIn);
                 // 1) нет задач в работе (только если есть задачи спринта И не все выполнены)
                 g.alertNoWip = (tIn > 0 && !g.alertAllDone && wip === 0);
                 // 3) нет трудозатрат/списаний > 3 раб.дн. (только текущий спринт)
@@ -1966,9 +1975,34 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             state.metrics.loggedOutSprintSec = totalLoggedOutSprintSec;
         }
 
-        function updateBoardSelect() {
-            $boardSelect.empty().append('<option value="">Доска</option>');
-            state.boards.forEach(function(b) { $boardSelect.append('<option value="' + b.id + '">' + utils.escapeHtml(b.name) + '</option>'); });
+        function updateBoardDropdown() {
+            var html = '';
+            state.filteredBoards.slice(0, 50).forEach(function(b) {
+                var cls = state.selectedBoardId == b.id ? "ujg-active" : "";
+                html += '<div class="ujg-dd-item ' + cls + '" data-id="' + b.id + '">' + utils.escapeHtml(b.name) + ' <span class="ujg-dd-id">(ID: ' + b.id + ')</span></div>';
+            });
+            if (state.filteredBoards.length > 50) html += '<div class="ujg-dd-more">...ещё ' + (state.filteredBoards.length - 50) + '</div>';
+            $boardDropdown.html(html || '<div class="ujg-dd-empty">Не найдено</div>');
+        }
+
+        function filterBoards(q) {
+            q = q.toLowerCase();
+            state.filteredBoards = state.boards.filter(function(b) {
+                return b.name.toLowerCase().indexOf(q) >= 0 || String(b.id).indexOf(q) >= 0;
+            });
+            updateBoardDropdown();
+        }
+
+        function showBoardDropdown() { $boardDropdown.addClass("ujg-show"); }
+        function hideBoardDropdown() { $boardDropdown.removeClass("ujg-show"); }
+
+        function selectBoard(id) {
+            var board = state.boards.find(function(b) { return b.id == id; });
+            if (!board) return;
+            state.selectedBoardId = id;
+            $boardInput.val(board.name);
+            hideBoardDropdown();
+            loadSprints(id);
         }
 
         function updateSprintDropdown() {
@@ -3241,9 +3275,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         function initPanel() {
             var $panel = $('<div class="ujg-panel"></div>');
             
-            $boardSelect = $('<select class="ujg-sel"><option value="">Доска</option></select>');
-            $boardSelect.on("change", function() { if ($(this).val()) loadSprints($(this).val()); });
+            // Доска с поиском
+            var $boardWrap = $('<div class="ujg-dd-wrap"></div>');
+            $boardInput = $('<input type="text" class="ujg-input" placeholder="Поиск доски...">');
+            $boardDropdown = $('<div class="ujg-dd"></div>');
             
+            $boardInput.on("focus", showBoardDropdown).on("input", function() { filterBoards($(this).val()); showBoardDropdown(); });
+            $boardInput.on("keydown", function(e) {
+                if (e.key === "Escape") { hideBoardDropdown(); $(this).blur(); }
+                if (e.key === "Enter" && state.filteredBoards[0]) selectBoard(state.filteredBoards[0].id);
+            });
+            $boardDropdown.on("click", ".ujg-dd-item", function() { selectBoard($(this).data("id")); });
+            
+            $boardWrap.append($boardInput, $boardDropdown);
+            
+            // Спринт с поиском
             var $sprintWrap = $('<div class="ujg-dd-wrap"></div>');
             $sprintInput = $('<input type="text" class="ujg-input" placeholder="Поиск спринта...">');
             $sprintDropdown = $('<div class="ujg-dd"></div>');
@@ -3254,7 +3300,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (e.key === "Enter" && state.filteredSprints[0]) selectSprint(state.filteredSprints[0].id);
             });
             $sprintDropdown.on("click", ".ujg-dd-item", function() { selectSprint($(this).data("id")); });
-            $(document).on("click", function(e) { if (!$(e.target).closest(".ujg-dd-wrap").length) hideSprintDropdown(); });
+            
+            // Закрытие dropdown при клике вне
+            $(document).on("click", function(e) {
+                if (!$(e.target).closest(".ujg-dd-wrap").length) {
+                    hideBoardDropdown();
+                    hideSprintDropdown();
+                }
+            });
             
             $sprintWrap.append($sprintInput, $sprintDropdown);
             
@@ -3273,7 +3326,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             // topbar layout (как на 1-м скрине: слева селекты, справа иконки)
             var $left = $('<div class="ujg-top-left"></div>');
             var $right = $('<div class="ujg-top-right"></div>');
-            $left.append($boardSelect, $sprintWrap);
+            $left.append($boardWrap, $sprintWrap);
             $right.append($compareBtn, $refreshBtn, $fsBtn);
             $panel.append($left, $right);
 
