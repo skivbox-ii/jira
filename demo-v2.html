@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Print v2 — Светлая тема</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --success: #22c55e;
+      --warning: #f59e0b;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .badge {
+      padding: 4px 10px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--primary);
+    }
+
+    /* Main Layout */
+    .main {
+      display: flex;
+      min-height: calc(100vh - 57px);
+    }
+
+    /* Viewer */
+    .viewer {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: #f1f5f9;
+    }
+
+    .viewer canvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 90%;
+      max-height: 90%;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      border-radius: 4px;
+    }
+
+    .canvas-info {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      padding: 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 280px;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      padding: 20px;
+      flex-shrink: 0;
+    }
+
+    .sidebar-section {
+      margin-bottom: 24px;
+    }
+
+    .sidebar-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      letter-spacing: 0.5px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      border-color: var(--border);
+      color: var(--text);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg);
+    }
+
+    /* Grid Options */
+    .grid-options {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .grid-btn {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+    }
+
+    .grid-btn:hover {
+      border-color: var(--primary);
+      background: #eff6ff;
+    }
+
+    .grid-btn svg {
+      width: 16px;
+      height: 16px;
+      color: var(--text-muted);
+    }
+
+    /* Info Box */
+    .info-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .info-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .info-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .info-icon.blue { background: #eff6ff; color: var(--primary); }
+    .info-icon.green { background: #f0fdf4; color: var(--success); }
+    .info-icon.orange { background: #fff7ed; color: var(--warning); }
+    .info-icon.purple { background: #faf5ff; color: #a855f7; }
+
+    .info-icon svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .info-content h4 {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .info-content p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Code Block */
+    .code-block {
+      background: #1e293b;
+      border-radius: 6px;
+      padding: 14px;
+      font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+      font-size: 12px;
+      color: #94a3b8;
+      overflow-x: auto;
+    }
+
+    .code-block .keyword { color: #c084fc; }
+    .code-block .string { color: #4ade80; }
+    .code-block .comment { color: #64748b; }
+    .code-block .function { color: #60a5fa; }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .main {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid var(--border);
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
+        <rect x="6" y="14" width="12" height="8"/>
+      </svg>
+      Canvas Print v2
+    </div>
+    <div class="badge">Light Theme</div>
+  </header>
+
+  <main class="main">
+    <!-- Viewer -->
+    <div class="viewer">
+      <canvas id="demo-canvas" width="2000" height="1400"></canvas>
+      <div class="canvas-info" id="canvas-info">2000 × 1400 px</div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-title">Действия</div>
+        <button class="btn btn-primary" onclick="openPrintDialog()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
+            <rect x="6" y="14" width="12" height="8"/>
+          </svg>
+          Печать и экспорт
+        </button>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-title">Демо контент</div>
+        <div class="grid-options">
+          <button class="grid-btn" onclick="generateSchematic()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18M9 21V9"/>
+            </svg>
+            Сетевая схема
+          </button>
+          <button class="grid-btn" onclick="generateChart()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 20V10M12 20V4M6 20v-6"/>
+            </svg>
+            График
+          </button>
+          <button class="grid-btn" onclick="generateFloorPlan()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="20" rx="2"/>
+              <path d="M2 12h20M12 2v20"/>
+            </svg>
+            План офиса
+          </button>
+          <button class="grid-btn" onclick="loadImage()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            Загрузить
+          </button>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-title">Возможности</div>
+        <div class="info-box">
+          <div class="info-row">
+            <div class="info-icon blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+            </div>
+            <div class="info-content">
+              <h4>Выбор бумаги</h4>
+              <p>A0–A4, Letter, Legal, Tabloid</p>
+            </div>
+          </div>
+          <div class="info-row">
+            <div class="info-icon green">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <path d="M3 9h18M9 21V9"/>
+              </svg>
+            </div>
+            <div class="info-content">
+              <h4>Сетка страниц</h4>
+              <p>Визуальная разметка</p>
+            </div>
+          </div>
+          <div class="info-row">
+            <div class="info-icon orange">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/>
+              </svg>
+            </div>
+            <div class="info-content">
+              <h4>Масштабирование</h4>
+              <p>Drag & zoom навигация</p>
+            </div>
+          </div>
+          <div class="info-row">
+            <div class="info-icon purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+            </div>
+            <div class="info-content">
+              <h4>Экспорт</h4>
+              <p>PDF, PNG, JPEG, WebP</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-title">Использование</div>
+        <div class="code-block">
+<span class="comment">// Подключение</span>
+&lt;<span class="keyword">script</span> <span class="string">src="canvas-print-v2.js"</span>&gt;&lt;/<span class="keyword">script</span>&gt;
+
+<span class="comment">// Использование</span>
+<span class="keyword">const</span> canvas = document.<span class="function">getElementById</span>(<span class="string">'myCanvas'</span>);
+CanvasPrint.<span class="function">print</span>(canvas);
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <input type="file" id="file-input" accept="image/*" hidden>
+
+  <!-- Подключаем библиотеку v2 (светлая тема) -->
+  <script src="canvas-print-v2.js"></script>
+  
+  <script>
+    const canvas = document.getElementById('demo-canvas');
+    const ctx = canvas.getContext('2d');
+
+    // Генерация демо-схемы при загрузке
+    generateSchematic();
+
+    function openPrintDialog() {
+      CanvasPrint.print(canvas);
+    }
+
+    function updateCanvasInfo() {
+      document.getElementById('canvas-info').textContent = `${canvas.width} × ${canvas.height} px`;
+    }
+
+    // Генератор сетевой схемы
+    function generateSchematic() {
+      canvas.width = 2000;
+      canvas.height = 1400;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Заголовок
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 36px -apple-system, sans-serif';
+      ctx.fillText('Сетевая инфраструктура предприятия', 60, 70);
+      ctx.font = '18px -apple-system, sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText('Версия 2.1 — Декабрь 2024', 60, 100);
+
+      // Рисуем зоны
+      const zones = [
+        { x: 50, y: 140, w: 400, h: 300, label: 'DMZ', color: '#fef3c7', border: '#f59e0b' },
+        { x: 480, y: 140, w: 700, h: 500, label: 'Внутренняя сеть', color: '#dbeafe', border: '#3b82f6' },
+        { x: 1210, y: 140, w: 350, h: 350, label: 'Облако', color: '#dcfce7', border: '#22c55e' },
+        { x: 1590, y: 140, w: 350, h: 350, label: 'Мониторинг', color: '#fee2e2', border: '#ef4444' },
+        { x: 50, y: 470, w: 400, h: 250, label: 'Wi-Fi', color: '#f3e8ff', border: '#a855f7' },
+        { x: 480, y: 680, w: 500, h: 200, label: 'IoT устройства', color: '#ccfbf1', border: '#14b8a6' },
+        { x: 1010, y: 540, w: 550, h: 340, label: 'Разработка', color: '#e0e7ff', border: '#6366f1' },
+        { x: 1590, y: 540, w: 350, h: 340, label: 'Резервное копирование', color: '#fae8ff', border: '#d946ef' },
+      ];
+
+      zones.forEach(zone => {
+        ctx.fillStyle = zone.color;
+        ctx.strokeStyle = zone.border;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]);
+        roundRect(ctx, zone.x, zone.y, zone.w, zone.h, 12);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = zone.border;
+        ctx.font = 'bold 14px -apple-system, sans-serif';
+        ctx.fillText(zone.label, zone.x + 16, zone.y + 28);
+      });
+
+      // Серверы/устройства
+      const servers = [
+        { x: 80, y: 180, w: 150, h: 60, label: 'Web Server 1', ip: '192.168.1.10', type: 'server' },
+        { x: 260, y: 180, w: 150, h: 60, label: 'Web Server 2', ip: '192.168.1.11', type: 'server' },
+        { x: 170, y: 270, w: 150, h: 60, label: 'Mail Server', ip: '192.168.1.20', type: 'server' },
+        { x: 170, y: 360, w: 150, h: 60, label: 'Firewall', ip: 'Cisco ASA', type: 'firewall' },
+        
+        { x: 510, y: 180, w: 180, h: 70, label: 'Core Switch', ip: 'Catalyst 9500', type: 'switch' },
+        { x: 720, y: 180, w: 140, h: 60, label: 'Switch IT', ip: 'VLAN 10', type: 'switch' },
+        { x: 890, y: 180, w: 140, h: 60, label: 'Switch HR', ip: 'VLAN 20', type: 'switch' },
+        
+        { x: 520, y: 290, w: 120, h: 50, label: 'AD Server', ip: '10.0.0.10', type: 'server' },
+        { x: 660, y: 290, w: 120, h: 50, label: 'DNS', ip: '10.0.0.11', type: 'server' },
+        { x: 800, y: 290, w: 120, h: 50, label: 'DHCP', ip: '10.0.0.12', type: 'server' },
+        { x: 940, y: 290, w: 120, h: 50, label: 'File Server', ip: '10.0.0.20', type: 'server' },
+        
+        { x: 520, y: 370, w: 100, h: 50, label: 'SQL', ip: '10.0.0.30', type: 'db' },
+        { x: 640, y: 370, w: 100, h: 50, label: 'PostgreSQL', ip: '10.0.0.31', type: 'db' },
+        { x: 760, y: 370, w: 100, h: 50, label: 'MongoDB', ip: '10.0.0.32', type: 'db' },
+        { x: 880, y: 370, w: 100, h: 50, label: 'Redis', ip: '10.0.0.33', type: 'db' },
+        
+        { x: 1240, y: 180, w: 140, h: 60, label: 'AWS', ip: 'us-east-1', type: 'cloud' },
+        { x: 1400, y: 180, w: 140, h: 60, label: 'Azure', ip: 'West EU', type: 'cloud' },
+        { x: 1240, y: 270, w: 140, h: 60, label: 'GCP', ip: 'europe-west', type: 'cloud' },
+        { x: 1400, y: 270, w: 140, h: 60, label: 'VPN Gateway', ip: 'Site-to-Site', type: 'firewall' },
+        
+        { x: 1620, y: 180, w: 140, h: 60, label: 'SIEM', ip: 'Splunk', type: 'server' },
+        { x: 1780, y: 180, w: 140, h: 60, label: 'IDS/IPS', ip: 'Suricata', type: 'firewall' },
+        { x: 1620, y: 270, w: 140, h: 60, label: 'Zabbix', ip: 'Monitoring', type: 'server' },
+        { x: 1780, y: 270, w: 140, h: 60, label: 'ELK Stack', ip: 'Logs', type: 'db' },
+        
+        { x: 80, y: 510, w: 150, h: 60, label: 'Wi-Fi Controller', ip: 'Cisco WLC', type: 'switch' },
+        { x: 260, y: 510, w: 80, h: 50, label: 'AP-1F', ip: '', type: 'ap' },
+        { x: 350, y: 510, w: 80, h: 50, label: 'AP-2F', ip: '', type: 'ap' },
+        
+        { x: 510, y: 720, w: 120, h: 50, label: 'IoT Gateway', ip: 'VLAN 50', type: 'firewall' },
+        { x: 660, y: 720, w: 90, h: 45, label: 'HVAC', ip: '', type: 'iot' },
+        { x: 770, y: 720, w: 90, h: 45, label: 'Lights', ip: '', type: 'iot' },
+        { x: 880, y: 720, w: 90, h: 45, label: 'Sensors', ip: '', type: 'iot' },
+        
+        { x: 1040, y: 580, w: 150, h: 60, label: 'Jenkins', ip: 'CI/CD', type: 'server' },
+        { x: 1210, y: 580, w: 150, h: 60, label: 'GitLab', ip: 'Git Server', type: 'server' },
+        { x: 1380, y: 580, w: 150, h: 60, label: 'Harbor', ip: 'Registry', type: 'server' },
+        { x: 1040, y: 670, w: 490, h: 100, label: 'Kubernetes Cluster (3 Masters + 6 Workers)', ip: 'Dev / Staging / Prod', type: 'cluster' },
+        
+        { x: 1620, y: 580, w: 140, h: 60, label: 'Backup Server', ip: 'Veeam', type: 'server' },
+        { x: 1780, y: 580, w: 140, h: 60, label: 'NAS Storage', ip: '100 TB', type: 'db' },
+        { x: 1620, y: 670, w: 140, h: 60, label: 'Tape Library', ip: 'LTO-8', type: 'db' },
+        { x: 1780, y: 670, w: 140, h: 60, label: 'DR Site', ip: 'Remote', type: 'firewall' },
+      ];
+
+      const typeColors = {
+        server: { bg: '#dbeafe', border: '#3b82f6' },
+        firewall: { bg: '#fef3c7', border: '#f59e0b' },
+        switch: { bg: '#e2e8f0', border: '#64748b' },
+        db: { bg: '#fae8ff', border: '#a855f7' },
+        cloud: { bg: '#dcfce7', border: '#22c55e' },
+        pc: { bg: '#f1f5f9', border: '#94a3b8' },
+        ap: { bg: '#f3e8ff', border: '#8b5cf6' },
+        iot: { bg: '#ccfbf1', border: '#14b8a6' },
+        cluster: { bg: '#e0f2fe', border: '#0ea5e9' },
+      };
+
+      servers.forEach(s => {
+        const colors = typeColors[s.type] || typeColors.server;
+        ctx.fillStyle = colors.bg;
+        ctx.strokeStyle = colors.border;
+        ctx.lineWidth = 2;
+        roundRect(ctx, s.x, s.y, s.w, s.h, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#1e293b';
+        ctx.font = 'bold 12px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(s.label, s.x + s.w/2, s.y + s.h/2 - (s.ip ? 4 : 0));
+        
+        if (s.ip) {
+          ctx.font = '10px -apple-system, sans-serif';
+          ctx.fillStyle = '#64748b';
+          ctx.fillText(s.ip, s.x + s.w/2, s.y + s.h/2 + 12);
+        }
+        ctx.textAlign = 'left';
+      });
+
+      // Internet
+      ctx.fillStyle = '#dcfce7';
+      ctx.strokeStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.ellipse(245, 50, 80, 35, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#166534';
+      ctx.font = 'bold 14px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Internet', 245, 55);
+      ctx.textAlign = 'left';
+
+      // Легенда
+      ctx.fillStyle = '#f8fafc';
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      roundRect(ctx, 60, 950, 300, 200, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 14px -apple-system, sans-serif';
+      ctx.fillText('Легенда', 80, 980);
+
+      const legend = [
+        { color: '#dbeafe', label: 'Сервер' },
+        { color: '#fef3c7', label: 'Firewall / Security' },
+        { color: '#dcfce7', label: 'Cloud / Internet' },
+        { color: '#fae8ff', label: 'Database / Storage' },
+        { color: '#e2e8f0', label: 'Сетевое оборудование' },
+      ];
+
+      legend.forEach((item, i) => {
+        ctx.fillStyle = item.color;
+        ctx.strokeStyle = '#94a3b8';
+        roundRect(ctx, 80, 1000 + i * 28, 24, 18, 4);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.fillStyle = '#475569';
+        ctx.font = '13px -apple-system, sans-serif';
+        ctx.fillText(item.label, 114, 1014 + i * 28);
+      });
+
+      updateCanvasInfo();
+    }
+
+    // Генератор графика
+    function generateChart() {
+      canvas.width = 1600;
+      canvas.height = 1000;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 28px -apple-system, sans-serif';
+      ctx.fillText('Статистика использования ресурсов', 60, 60);
+      ctx.font = '14px -apple-system, sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText('Период: Январь — Декабрь 2024', 60, 85);
+
+      const data = [
+        [65, 72, 80, 75, 85, 90, 88, 92, 95, 89, 91, 94],
+        [40, 45, 52, 58, 55, 60, 65, 70, 68, 72, 75, 78],
+        [30, 35, 32, 38, 42, 45, 50, 48, 52, 55, 58, 60],
+      ];
+      const colors = ['#3b82f6', '#22c55e', '#f59e0b'];
+      const labels = ['CPU Usage (%)', 'Memory Usage (%)', 'Storage Usage (%)'];
+      const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+
+      const chartX = 80;
+      const chartY = 130;
+      const chartW = 1200;
+      const chartH = 400;
+
+      // Сетка
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 10; i++) {
+        const y = chartY + chartH - (i * chartH / 10);
+        ctx.beginPath();
+        ctx.moveTo(chartX, y);
+        ctx.lineTo(chartX + chartW, y);
+        ctx.stroke();
+        
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '12px -apple-system, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(i * 10 + '%', chartX - 10, y + 4);
+      }
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#64748b';
+      const stepX = chartW / 11;
+      months.forEach((m, i) => {
+        ctx.fillText(m, chartX + i * stepX, chartY + chartH + 25);
+      });
+
+      // Линии данных
+      data.forEach((series, si) => {
+        ctx.strokeStyle = colors[si];
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        series.forEach((val, i) => {
+          const x = chartX + i * stepX;
+          const y = chartY + chartH - (val / 100 * chartH);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        ctx.fillStyle = colors[si];
+        series.forEach((val, i) => {
+          const x = chartX + i * stepX;
+          const y = chartY + chartH - (val / 100 * chartH);
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      });
+
+      // Легенда
+      ctx.textAlign = 'left';
+      labels.forEach((label, i) => {
+        ctx.fillStyle = colors[i];
+        ctx.fillRect(chartX + i * 180, chartY + chartH + 60, 16, 12);
+        ctx.fillStyle = '#475569';
+        ctx.font = '13px -apple-system, sans-serif';
+        ctx.fillText(label, chartX + i * 180 + 24, chartY + chartH + 71);
+      });
+
+      // Bar chart
+      const barX = 80;
+      const barY = 680;
+      const barW = 600;
+      const barH = 250;
+      const barData = [85, 92, 78, 95, 88, 72];
+      const barLabels = ['Server A', 'Server B', 'Server C', 'Server D', 'Server E', 'Server F'];
+
+      ctx.font = 'bold 18px -apple-system, sans-serif';
+      ctx.fillStyle = '#1e293b';
+      ctx.fillText('Доступность серверов (%)', barX, barY);
+
+      const barWidth = barW / barData.length - 16;
+      barData.forEach((val, i) => {
+        const x = barX + i * (barWidth + 16);
+        const h = (val / 100) * (barH - 50);
+        const y = barY + barH - h;
+        
+        ctx.fillStyle = '#3b82f6';
+        roundRect(ctx, x, y, barWidth, h, 4);
+        ctx.fill();
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(val + '%', x + barWidth/2, y + 20);
+        
+        ctx.fillStyle = '#64748b';
+        ctx.font = '11px -apple-system, sans-serif';
+        ctx.fillText(barLabels[i], x + barWidth/2, barY + barH + 18);
+      });
+      ctx.textAlign = 'left';
+
+      updateCanvasInfo();
+    }
+
+    // Генератор плана помещения
+    function generateFloorPlan() {
+      canvas.width = 1400;
+      canvas.height = 1000;
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 24px -apple-system, sans-serif';
+      ctx.fillText('План офиса — 2 этаж', 50, 50);
+
+      // Внешние стены
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(50, 90, 1300, 800);
+
+      // Комнаты
+      const rooms = [
+        { x: 50, y: 90, w: 350, h: 280, label: 'Конференц-зал', color: '#dbeafe' },
+        { x: 50, y: 370, w: 350, h: 280, label: 'Отдел разработки', color: '#dcfce7' },
+        { x: 50, y: 650, w: 350, h: 240, label: 'Серверная', color: '#fef3c7' },
+        { x: 400, y: 90, w: 500, h: 200, label: 'Open Space', color: '#f1f5f9' },
+        { x: 400, y: 290, w: 250, h: 160, label: 'HR', color: '#fae8ff' },
+        { x: 650, y: 290, w: 250, h: 160, label: 'Финансы', color: '#fee2e2' },
+        { x: 400, y: 450, w: 500, h: 220, label: 'Кухня / Зона отдыха', color: '#ccfbf1' },
+        { x: 400, y: 670, w: 500, h: 220, label: 'Склад', color: '#e2e8f0' },
+        { x: 900, y: 90, w: 450, h: 280, label: 'Директор', color: '#e0e7ff' },
+        { x: 900, y: 370, w: 225, h: 200, label: 'Переговорная 1', color: '#fdf4ff' },
+        { x: 1125, y: 370, w: 225, h: 200, label: 'Переговорная 2', color: '#fdf4ff' },
+        { x: 900, y: 570, w: 450, h: 320, label: 'Отдел продаж', color: '#fff7ed' },
+      ];
+
+      rooms.forEach(room => {
+        ctx.fillStyle = room.color;
+        ctx.fillRect(room.x, room.y, room.w, room.h);
+        ctx.strokeStyle = '#64748b';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(room.x, room.y, room.w, room.h);
+
+        ctx.fillStyle = '#374151';
+        ctx.font = 'bold 14px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(room.label, room.x + room.w/2, room.y + room.h/2);
+        ctx.textAlign = 'left';
+      });
+
+      // Масштаб
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(1100, 920);
+      ctx.lineTo(1300, 920);
+      ctx.stroke();
+      ctx.fillStyle = '#1e293b';
+      ctx.font = '12px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('10 м', 1200, 940);
+      ctx.textAlign = 'left';
+
+      updateCanvasInfo();
+    }
+
+    // Загрузка изображения
+    function loadImage() {
+      document.getElementById('file-input').click();
+    }
+
+    document.getElementById('file-input').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const img = new Image();
+      img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        updateCanvasInfo();
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // Хелпер для скругленных прямоугольников
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+  </script>
+</body>
+</html>
+
