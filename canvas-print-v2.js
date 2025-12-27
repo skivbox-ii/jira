@@ -494,6 +494,88 @@
       color: #64748b;
       font-size: 14px;
     }
+
+    /* Crop selection styles */
+    .cp-crop-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      cursor: crosshair;
+      z-index: 50;
+      display: none;
+    }
+
+    .cp-crop-overlay.active {
+      display: block;
+    }
+
+    .cp-crop-canvas {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .cp-crop-hint {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 16px 24px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #1e293b;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      pointer-events: none;
+    }
+
+    .cp-crop-hint code {
+      background: #eff6ff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: #2563eb;
+      font-size: 12px;
+    }
+
+    .cp-crop-badge {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      padding: 6px 12px;
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #92400e;
+      display: none;
+      z-index: 20;
+    }
+
+    .cp-crop-badge.show {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .cp-ctrl-btn.crop-active {
+      background: #dbeafe;
+      color: #2563eb;
+    }
+
+    .cp-viewport.selecting {
+      cursor: crosshair;
+    }
+
+    .cp-selection-rect {
+      position: absolute;
+      border: 2px dashed #2563eb;
+      background: rgba(37, 99, 235, 0.1);
+      pointer-events: none;
+      z-index: 51;
+    }
   `;
 
   // Иконки SVG
@@ -509,6 +591,8 @@
     pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
     image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>',
+    crop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2v4H2M18 22v-4h4M2 6h16v12M22 18V6H6"/></svg>',
+    cropReset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>',
   };
 
   class CanvasPrint {
@@ -538,6 +622,11 @@
         gridRows: 1,
         gridStartCol: 0,
         gridStartRow: 0,
+        // Crop selection state
+        cropRect: null,           // { x, y, width, height } в координатах исходного канваса
+        isSelectingCrop: false,   // режим выделения активен
+        selectionStart: null,     // { x, y } начало выделения
+        selectionCurrent: null,   // { x, y } текущая позиция при выделении
       };
 
       this.elements = {};
@@ -600,6 +689,10 @@
         loadingText: overlay.querySelector('.cp-loading-text'),
         exportDropdown: overlay.querySelector('.cp-dropdown-menu'),
         hint: overlay.querySelector('.cp-hint'),
+        cropOverlay: overlay.querySelector('.cp-crop-overlay'),
+        cropBadge: overlay.querySelector('.cp-crop-badge'),
+        cropSelectBtn: overlay.querySelector('[data-action="crop-select"]'),
+        cropResetBtn: overlay.querySelector('[data-action="crop-reset"]'),
       };
 
       const canvasCopy = document.createElement('canvas');
@@ -692,12 +785,28 @@
                 <button class="cp-ctrl-btn" data-action="fit-one" title="Вписать в 1 страницу" style="border-top: 1px solid #e2e8f0;">${ICONS.fit}</button>
                 <button class="cp-ctrl-btn" data-action="fit-max" title="Вписать максимально">${ICONS.fitMax}</button>
                 <button class="cp-ctrl-btn" data-action="reset" title="Сбросить позицию">${ICONS.reset}</button>
+                <button class="cp-ctrl-btn" data-action="crop-select" title="Выбрать область (Ctrl)" style="border-top: 1px solid #e2e8f0;">${ICONS.crop}</button>
+                <button class="cp-ctrl-btn" data-action="crop-reset" title="Сбросить выделение">${ICONS.cropReset}</button>
+              </div>
+              
+              <div class="cp-crop-badge">
+                ${ICONS.crop}
+                <span>Выбрана область</span>
               </div>
 
               <div class="cp-hint">
                 <strong>Управление:</strong><br>
                 <code>Колесо мыши</code> — масштаб печати<br>
-                <code>Перетаскивание</code> — позиция схемы
+                <code>Перетаскивание</code> — позиция схемы<br>
+                <code>Ctrl</code> — выбрать область
+              </div>
+              
+              <div class="cp-crop-overlay">
+                <div class="cp-crop-hint">
+                  <strong>Режим выбора области</strong><br>
+                  Выделите мышкой нужную часть схемы<br>
+                  <code>Esc</code> — отмена
+                </div>
               </div>
 
               <div class="cp-loading">
@@ -763,9 +872,24 @@
       });
 
       this.boundHandlers.keydown = (e) => {
-        if (e.key === 'Escape') this.close();
+        if (e.key === 'Escape') {
+          if (this.state.isSelectingCrop) {
+            this._exitCropMode();
+          } else {
+            this.close();
+          }
+        }
+        if (e.key === 'Control' && !this.state.isSelectingCrop) {
+          this._enterCropMode();
+        }
       };
+      
+      this.boundHandlers.keyup = (e) => {
+        // На keyup Ctrl - ничего не делаем, выход только по Escape или по завершению выделения
+      };
+      
       document.addEventListener('keydown', this.boundHandlers.keydown);
+      document.addEventListener('keyup', this.boundHandlers.keyup);
 
       paperSelect.addEventListener('change', () => {
         this.options.paperSize = paperSelect.value;
@@ -801,6 +925,10 @@
       overlay.querySelector('[data-action="fit-one"]').addEventListener('click', () => this._fitSchemaToOnePage());
       overlay.querySelector('[data-action="fit-max"]').addEventListener('click', () => this._fitSchemaMaxToTop());
       overlay.querySelector('[data-action="reset"]').addEventListener('click', () => this._resetPosition());
+      
+      // Crop selection buttons
+      this.elements.cropSelectBtn.addEventListener('click', () => this._enterCropMode());
+      this.elements.cropResetBtn.addEventListener('click', () => this._resetCrop());
 
       this.boundHandlers.wheel = (e) => {
         e.preventDefault();
@@ -853,6 +981,58 @@
       viewport.addEventListener('mousedown', this.boundHandlers.mousedown);
       document.addEventListener('mousemove', this.boundHandlers.mousemove);
       document.addEventListener('mouseup', this.boundHandlers.mouseup);
+      
+      // Crop selection mouse handlers
+      this.boundHandlers.cropMousedown = (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const rect = this.elements.cropOverlay.getBoundingClientRect();
+        this.state.selectionStart = {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        };
+        this.state.selectionCurrent = { ...this.state.selectionStart };
+        
+        // Create selection rectangle
+        const selRect = document.createElement('div');
+        selRect.className = 'cp-selection-rect';
+        this.elements.cropOverlay.appendChild(selRect);
+        this.elements.selectionRect = selRect;
+        
+        // Hide the hint when starting selection
+        const cropHint = this.elements.cropOverlay.querySelector('.cp-crop-hint');
+        if (cropHint) cropHint.style.display = 'none';
+      };
+      
+      this.boundHandlers.cropMousemove = (e) => {
+        if (!this.state.selectionStart || !this.state.isSelectingCrop) return;
+        
+        const rect = this.elements.cropOverlay.getBoundingClientRect();
+        this.state.selectionCurrent = {
+          x: Math.max(0, Math.min(rect.width, e.clientX - rect.left)),
+          y: Math.max(0, Math.min(rect.height, e.clientY - rect.top))
+        };
+        
+        this._updateSelectionRect();
+      };
+      
+      this.boundHandlers.cropMouseup = (e) => {
+        if (!this.state.selectionStart || !this.state.isSelectingCrop) return;
+        
+        const rect = this.elements.cropOverlay.getBoundingClientRect();
+        this.state.selectionCurrent = {
+          x: Math.max(0, Math.min(rect.width, e.clientX - rect.left)),
+          y: Math.max(0, Math.min(rect.height, e.clientY - rect.top))
+        };
+        
+        this._applyCropSelection();
+      };
+      
+      this.elements.cropOverlay.addEventListener('mousedown', this.boundHandlers.cropMousedown);
+      document.addEventListener('mousemove', this.boundHandlers.cropMousemove);
+      document.addEventListener('mouseup', this.boundHandlers.cropMouseup);
 
       overlay.querySelector('[data-action="export-toggle"]').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -878,11 +1058,20 @@
       if (this.boundHandlers.keydown) {
         document.removeEventListener('keydown', this.boundHandlers.keydown);
       }
+      if (this.boundHandlers.keyup) {
+        document.removeEventListener('keyup', this.boundHandlers.keyup);
+      }
       if (this.boundHandlers.mousemove) {
         document.removeEventListener('mousemove', this.boundHandlers.mousemove);
       }
       if (this.boundHandlers.mouseup) {
         document.removeEventListener('mouseup', this.boundHandlers.mouseup);
+      }
+      if (this.boundHandlers.cropMousemove) {
+        document.removeEventListener('mousemove', this.boundHandlers.cropMousemove);
+      }
+      if (this.boundHandlers.cropMouseup) {
+        document.removeEventListener('mouseup', this.boundHandlers.cropMouseup);
       }
     }
 
@@ -909,14 +1098,17 @@
     }
 
     _fitSchemaToOnePage() {
-      const canvas = this.elements.canvas;
-      const { pageSizeMm } = this.state;
+      const { pageSizeMm, cropRect } = this.state;
       
-      const canvasAspect = canvas.width / canvas.height;
+      // Use cropRect dimensions if set, otherwise full canvas
+      const sourceW = cropRect ? cropRect.width : this.elements.canvas.width;
+      const sourceH = cropRect ? cropRect.height : this.elements.canvas.height;
+      
+      const canvasAspect = sourceW / sourceH;
       const pageAspect = pageSizeMm.width / pageSizeMm.height;
       
-      const schemaWidthMm = canvas.width / MM_TO_PX;
-      const schemaHeightMm = canvas.height / MM_TO_PX;
+      const schemaWidthMm = sourceW / MM_TO_PX;
+      const schemaHeightMm = sourceH / MM_TO_PX;
       
       let fitScale;
       if (canvasAspect > pageAspect) {
@@ -938,9 +1130,192 @@
       this._render();
     }
 
+    // ==================== Crop Selection Methods ====================
+    
+    _enterCropMode() {
+      this.state.isSelectingCrop = true;
+      this.state.selectionStart = null;
+      this.state.selectionCurrent = null;
+      
+      this.elements.cropOverlay.classList.add('active');
+      this.elements.cropSelectBtn.classList.add('crop-active');
+      this.elements.viewport.classList.add('selecting');
+      
+      // Show the hint
+      const cropHint = this.elements.cropOverlay.querySelector('.cp-crop-hint');
+      if (cropHint) cropHint.style.display = 'block';
+      
+      // Render the full schema on the overlay (without crop)
+      this._renderCropOverlay();
+    }
+    
+    _exitCropMode() {
+      this.state.isSelectingCrop = false;
+      this.state.selectionStart = null;
+      this.state.selectionCurrent = null;
+      
+      this.elements.cropOverlay.classList.remove('active');
+      this.elements.cropSelectBtn.classList.remove('crop-active');
+      this.elements.viewport.classList.remove('selecting');
+      
+      // Remove selection rectangle if exists
+      if (this.elements.selectionRect) {
+        this.elements.selectionRect.remove();
+        this.elements.selectionRect = null;
+      }
+      
+      // Clear the crop canvas
+      const cropCanvas = this.elements.cropOverlay.querySelector('.cp-crop-canvas');
+      if (cropCanvas) cropCanvas.remove();
+    }
+    
+    _resetCrop() {
+      this.state.cropRect = null;
+      this.elements.cropBadge.classList.remove('show');
+      this._fitSchemaToOnePage();
+      this._render();
+    }
+    
+    _renderCropOverlay() {
+      // Remove existing crop canvas
+      let cropCanvas = this.elements.cropOverlay.querySelector('.cp-crop-canvas');
+      if (cropCanvas) cropCanvas.remove();
+      
+      // Create new canvas for crop overlay
+      cropCanvas = document.createElement('canvas');
+      cropCanvas.className = 'cp-crop-canvas';
+      
+      const overlayRect = this.elements.cropOverlay.getBoundingClientRect();
+      cropCanvas.width = overlayRect.width;
+      cropCanvas.height = overlayRect.height;
+      
+      const ctx = cropCanvas.getContext('2d');
+      
+      // Fill with semi-transparent background
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+      
+      // Draw the full original canvas (scaled to fit)
+      const sourceCanvas = this.elements.canvas;
+      const padding = 40;
+      const availW = cropCanvas.width - padding * 2;
+      const availH = cropCanvas.height - padding * 2;
+      
+      const scaleX = availW / sourceCanvas.width;
+      const scaleY = availH / sourceCanvas.height;
+      const scale = Math.min(scaleX, scaleY);
+      
+      const drawW = sourceCanvas.width * scale;
+      const drawH = sourceCanvas.height * scale;
+      const drawX = (cropCanvas.width - drawW) / 2;
+      const drawY = (cropCanvas.height - drawH) / 2;
+      
+      // Store these for coordinate conversion
+      this._cropOverlayParams = { drawX, drawY, drawW, drawH, scale };
+      
+      // Clear the area where we'll draw the schema
+      ctx.clearRect(drawX, drawY, drawW, drawH);
+      
+      // Draw the schema
+      ctx.drawImage(sourceCanvas, drawX, drawY, drawW, drawH);
+      
+      // Draw existing cropRect if present
+      if (this.state.cropRect) {
+        const crop = this.state.cropRect;
+        const rectX = drawX + crop.x * scale;
+        const rectY = drawY + crop.y * scale;
+        const rectW = crop.width * scale;
+        const rectH = crop.height * scale;
+        
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(rectX, rectY, rectW, rectH);
+        ctx.setLineDash([]);
+      }
+      
+      this.elements.cropOverlay.insertBefore(cropCanvas, this.elements.cropOverlay.firstChild);
+    }
+    
+    _updateSelectionRect() {
+      if (!this.elements.selectionRect || !this.state.selectionStart) return;
+      
+      const start = this.state.selectionStart;
+      const current = this.state.selectionCurrent;
+      
+      const x = Math.min(start.x, current.x);
+      const y = Math.min(start.y, current.y);
+      const w = Math.abs(current.x - start.x);
+      const h = Math.abs(current.y - start.y);
+      
+      this.elements.selectionRect.style.left = x + 'px';
+      this.elements.selectionRect.style.top = y + 'px';
+      this.elements.selectionRect.style.width = w + 'px';
+      this.elements.selectionRect.style.height = h + 'px';
+    }
+    
+    _applyCropSelection() {
+      if (!this.state.selectionStart || !this.state.selectionCurrent) {
+        this._exitCropMode();
+        return;
+      }
+      
+      const start = this.state.selectionStart;
+      const current = this.state.selectionCurrent;
+      
+      // Calculate selection rectangle in overlay coordinates
+      const selX = Math.min(start.x, current.x);
+      const selY = Math.min(start.y, current.y);
+      const selW = Math.abs(current.x - start.x);
+      const selH = Math.abs(current.y - start.y);
+      
+      // Minimum selection size
+      if (selW < 10 || selH < 10) {
+        this._exitCropMode();
+        return;
+      }
+      
+      // Convert to canvas coordinates
+      const params = this._cropOverlayParams;
+      if (!params) {
+        this._exitCropMode();
+        return;
+      }
+      
+      // Calculate crop rect in source canvas coordinates
+      const cropX = (selX - params.drawX) / params.scale;
+      const cropY = (selY - params.drawY) / params.scale;
+      const cropW = selW / params.scale;
+      const cropH = selH / params.scale;
+      
+      // Clamp to canvas bounds
+      const sourceCanvas = this.elements.canvas;
+      const clampedX = Math.max(0, Math.min(sourceCanvas.width, cropX));
+      const clampedY = Math.max(0, Math.min(sourceCanvas.height, cropY));
+      const clampedW = Math.max(10, Math.min(sourceCanvas.width - clampedX, cropW));
+      const clampedH = Math.max(10, Math.min(sourceCanvas.height - clampedY, cropH));
+      
+      // Set crop rect
+      this.state.cropRect = {
+        x: clampedX,
+        y: clampedY,
+        width: clampedW,
+        height: clampedH
+      };
+      
+      this.elements.cropBadge.classList.add('show');
+      
+      this._exitCropMode();
+      this._fitSchemaToOnePage();
+      this._render();
+    }
+
     _fitSchemaMaxToTop() {
-      const canvas = this.elements.canvas;
-      const { pageSizeMm, gridCols, gridRows } = this.state;
+      const { pageSizeMm, gridCols, gridRows, cropRect } = this.state;
+      
+      // Use cropRect dimensions if set, otherwise full canvas
+      const sourceW = cropRect ? cropRect.width : this.elements.canvas.width;
+      const sourceH = cropRect ? cropRect.height : this.elements.canvas.height;
       
       const cols = gridCols || 1;
       const rows = gridRows || 1;
@@ -948,8 +1323,8 @@
       const totalWidthMm = pageSizeMm.width * cols;
       const totalHeightMm = pageSizeMm.height * rows;
       
-      const schemaWidthMm = canvas.width / MM_TO_PX;
-      const schemaHeightMm = canvas.height / MM_TO_PX;
+      const schemaWidthMm = sourceW / MM_TO_PX;
+      const schemaHeightMm = sourceH / MM_TO_PX;
       
       const scaleX = totalWidthMm / schemaWidthMm;
       const scaleY = totalHeightMm / schemaHeightMm;
@@ -1002,11 +1377,14 @@
     }
 
     _calculateActivePages() {
-      const canvas = this.elements.canvas;
-      const { schemaScale, schemaX, schemaY, pageSizeMm } = this.state;
+      const { schemaScale, schemaX, schemaY, pageSizeMm, cropRect } = this.state;
       
-      const schemaWidthMm = (canvas.width / MM_TO_PX) * schemaScale;
-      const schemaHeightMm = (canvas.height / MM_TO_PX) * schemaScale;
+      // Use cropRect dimensions if set, otherwise full canvas
+      const sourceW = cropRect ? cropRect.width : this.elements.canvas.width;
+      const sourceH = cropRect ? cropRect.height : this.elements.canvas.height;
+      
+      const schemaWidthMm = (sourceW / MM_TO_PX) * schemaScale;
+      const schemaHeightMm = (sourceH / MM_TO_PX) * schemaScale;
       
       const schemaLeftPage = schemaX;
       const schemaTopPage = schemaY;
@@ -1036,17 +1414,21 @@
 
     _render() {
       const { viewport, printArea, canvas, scaleDisplay, pagesIndicator, infoPages, infoSize, infoScale, footerInfo } = this.elements;
-      const { schemaScale, schemaX, schemaY, pageSizeMm } = this.state;
+      const { schemaScale, schemaX, schemaY, pageSizeMm, cropRect } = this.state;
       
       this._calculateActivePages();
       const { activePages, gridCols, gridRows, gridStartCol, gridStartRow } = this.state;
+      
+      // Use cropRect dimensions if set, otherwise full canvas
+      const sourceW = cropRect ? cropRect.width : canvas.width;
+      const sourceH = cropRect ? cropRect.height : canvas.height;
       
       const totalPages = activePages.length;
       
       scaleDisplay.textContent = Math.round(schemaScale * 100) + '%';
       pagesIndicator.textContent = totalPages;
       infoPages.textContent = `${totalPages} (${gridCols}×${gridRows})`;
-      infoSize.textContent = `${canvas.width} × ${canvas.height} px`;
+      infoSize.textContent = `${Math.round(sourceW)} × ${Math.round(sourceH)} px`;
       infoScale.textContent = Math.round(schemaScale * 100) + '%';
       footerInfo.innerHTML = `Схема будет разбита на <strong>${totalPages}</strong> страниц(ы)`;
       
@@ -1102,8 +1484,8 @@
       const schemaContainer = document.createElement('div');
       schemaContainer.className = 'cp-schema-container';
       
-      const schemaWidthMm = (canvas.width / MM_TO_PX) * schemaScale;
-      const schemaHeightMm = (canvas.height / MM_TO_PX) * schemaScale;
+      const schemaWidthMm = (sourceW / MM_TO_PX) * schemaScale;
+      const schemaHeightMm = (sourceH / MM_TO_PX) * schemaScale;
       const schemaDisplayW = (schemaWidthMm / pageSizeMm.width) * pageDisplayW;
       const schemaDisplayH = (schemaHeightMm / pageSizeMm.height) * pageDisplayH;
       
@@ -1115,12 +1497,27 @@
       schemaContainer.style.width = schemaDisplayW + 'px';
       schemaContainer.style.height = schemaDisplayH + 'px';
       
-      const canvasClone = this.elements.canvas.cloneNode();
-      const ctx = canvasClone.getContext('2d');
-      ctx.drawImage(this.elements.canvas, 0, 0);
-      canvasClone.style.width = '100%';
-      canvasClone.style.height = '100%';
-      schemaContainer.appendChild(canvasClone);
+      // Create canvas showing only the cropped region (or full canvas)
+      const displayCanvas = document.createElement('canvas');
+      displayCanvas.width = sourceW;
+      displayCanvas.height = sourceH;
+      const ctx = displayCanvas.getContext('2d');
+      
+      if (cropRect) {
+        // Draw only the cropped region
+        ctx.drawImage(
+          this.elements.canvas,
+          cropRect.x, cropRect.y, cropRect.width, cropRect.height,
+          0, 0, sourceW, sourceH
+        );
+      } else {
+        // Draw full canvas
+        ctx.drawImage(this.elements.canvas, 0, 0);
+      }
+      
+      displayCanvas.style.width = '100%';
+      displayCanvas.style.height = '100%';
+      schemaContainer.appendChild(displayCanvas);
       
       printArea.appendChild(schemaContainer);
     }
@@ -1136,12 +1533,18 @@
 
     _getPageCanvases() {
       const { canvas } = this.elements;
-      const { schemaScale, schemaX, schemaY, pageSizeMm, activePages, gridStartCol, gridStartRow } = this.state;
+      const { schemaScale, schemaX, schemaY, pageSizeMm, activePages, gridStartCol, gridStartRow, cropRect } = this.state;
       
       const pages = [];
       
-      const schemaWidthMm = (canvas.width / MM_TO_PX) * schemaScale;
-      const schemaHeightMm = (canvas.height / MM_TO_PX) * schemaScale;
+      // Use cropRect dimensions if set, otherwise full canvas
+      const sourceX = cropRect ? cropRect.x : 0;
+      const sourceY = cropRect ? cropRect.y : 0;
+      const sourceW = cropRect ? cropRect.width : canvas.width;
+      const sourceH = cropRect ? cropRect.height : canvas.height;
+      
+      const schemaWidthMm = (sourceW / MM_TO_PX) * schemaScale;
+      const schemaHeightMm = (sourceH / MM_TO_PX) * schemaScale;
       
       const pageWidthPx = pageSizeMm.width * MM_TO_PX;
       const pageHeightPx = pageSizeMm.height * MM_TO_PX;
@@ -1173,7 +1576,7 @@
         
         ctx.drawImage(
           canvas,
-          0, 0, canvas.width, canvas.height,
+          sourceX, sourceY, sourceW, sourceH,
           offsetXPx, offsetYPx, schemaOnPageW, schemaOnPageH
         );
         
@@ -1284,7 +1687,25 @@
       this.elements.exportDropdown.classList.remove('show');
 
       try {
-        const blob = await new Promise(resolve => this.elements.canvas.toBlob(resolve, 'image/png'));
+        const { cropRect } = this.state;
+        let exportCanvas;
+        
+        if (cropRect) {
+          // Export only cropped region
+          exportCanvas = document.createElement('canvas');
+          exportCanvas.width = cropRect.width;
+          exportCanvas.height = cropRect.height;
+          const ctx = exportCanvas.getContext('2d');
+          ctx.drawImage(
+            this.elements.canvas,
+            cropRect.x, cropRect.y, cropRect.width, cropRect.height,
+            0, 0, cropRect.width, cropRect.height
+          );
+        } else {
+          exportCanvas = this.elements.canvas;
+        }
+        
+        const blob = await new Promise(resolve => exportCanvas.toBlob(resolve, 'image/png'));
         
         const link = document.createElement('a');
         link.download = 'schema.png';
