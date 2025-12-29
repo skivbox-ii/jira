@@ -594,13 +594,20 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var inCurrentSprint = false;
                 if (state.sprint) {
                     var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
-                    var sprintNames = utils.parseSprintNames(sprintFieldVal);
                     var curId = String(state.sprint.id || "");
-                    var curName = state.sprint.name || "";
-                    inCurrentSprint = sprintNames.some(function(s) {
-                        if (!s) return false;
-                        return (curId && s.indexOf("id=" + curId) !== -1) || (curName && s.indexOf(curName) !== -1);
-                    });
+                    if (curId && Array.isArray(sprintFieldVal)) {
+                        inCurrentSprint = sprintFieldVal.some(function(s) {
+                            if (!s) return false;
+                            // Проверяем ID в строке формата "id=123,name=..." или в объекте
+                            if (typeof s === "string") {
+                                return s.indexOf("id=" + curId) !== -1;
+                            }
+                            if (s.id) {
+                                return String(s.id) === curId;
+                            }
+                            return false;
+                        });
+                    }
                 }
                 
                 var prob = null;
@@ -1868,13 +1875,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
                 var sprintNames = utils.parseSprintNames(sprintFieldVal);
                 var inCurrentSprint = false;
-                if (state.sprint && sprintNames.length) {
+                if (state.sprint) {
                     var curId = String(state.sprint.id || "");
-                    var curName = state.sprint.name || "";
-                    inCurrentSprint = sprintNames.some(function(s) {
-                        if (!s) return false;
-                        return (curId && s.indexOf("id=" + curId) !== -1) || (curName && s.indexOf(curName) !== -1);
-                    });
+                    if (curId && Array.isArray(sprintFieldVal)) {
+                        inCurrentSprint = sprintFieldVal.some(function(s) {
+                            if (!s) return false;
+                            // Проверяем ID в строке формата "id=123,name=..." или в объекте
+                            if (typeof s === "string") {
+                                return s.indexOf("id=" + curId) !== -1;
+                            }
+                            if (s.id) {
+                                return String(s.id) === curId;
+                            }
+                            return false;
+                        });
+                    }
                 }
 
                 var item = {
