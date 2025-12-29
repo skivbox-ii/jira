@@ -1888,7 +1888,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     });
                     workAuthors = Object.values(wlMap).sort(function(a, b) { return b.seconds - a.seconds; });
                 }
-                // История ассайнов в пределах спринта
+                // История ассайнов в пределах спринта.
                 var historyAssignees = [];
                 if (iss._changelog && Array.isArray(iss._changelog.histories)) {
                     var seen = {};
