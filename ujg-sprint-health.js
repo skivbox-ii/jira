@@ -74,7 +74,30 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return Math.max(1, Math.ceil(seconds / (hpd * 3600)));
         },
         getHealthColor: function(p) { return p >= 90 ? "#36b37e" : p >= 70 ? "#ffab00" : p >= 50 ? "#ff8b00" : "#de350b"; },
-        getHealthLabel: function(p) { return p >= 90 ? "Отлично" : p >= 70 ? "Хорошо" : p >= 50 ? "Внимание" : "Критично"; }
+        getHealthLabel: function(p) { return p >= 90 ? "Отлично" : p >= 70 ? "Хорошо" : p >= 50 ? "Внимание" : "Критично"; },
+        // Проверяет, находится ли задача СЕЙЧАС в спринте с указанным ID (не по имени!)
+        isIssueInSprintById: function(issue, sprintId) {
+            if (!issue || !sprintId) return false;
+            var f = issue.fields || {};
+            var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
+            if (!Array.isArray(sprintFieldVal)) return false;
+            var sid = String(sprintId);
+            return sprintFieldVal.some(function(s) {
+                if (!s) return false;
+                // Объект с id (новый формат Jira Cloud)
+                if (s.id) return String(s.id) === sid;
+                // Строка формата "com.atlassian.greenhopper...id=123,name=..." (Jira Server/DC)
+                // id= всегда идёт в начале значения или после [, а после числа идёт , или ]
+                if (typeof s === "string") {
+                    // Формат: [id=123,rapidViewId=... или ...id=123]
+                    return s.indexOf("[id=" + sid + ",") !== -1 || 
+                           s.indexOf(",id=" + sid + ",") !== -1 ||
+                           s.indexOf("[id=" + sid + "]") !== -1 ||
+                           s.indexOf(",id=" + sid + "]") !== -1;
+                }
+                return false;
+            });
+        }
     };
 
     function loadSettings() { try { var s = localStorage.getItem(STORAGE_KEY); return s ? JSON.parse(s) : {}; } catch(e) { return {}; } }
@@ -484,7 +507,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 );
             }).then(function(sprintResp, issuesResp) {
                 state.sprint = sprintResp[0] || sprintResp;
-                state.issues = (issuesResp[0] || issuesResp).issues || [];
+                var allLoadedIssues = (issuesResp[0] || issuesResp).issues || [];
+                var sprintId = state.sprint ? state.sprint.id : id;
+                // ВАЖНО: Jira API возвращает ВСЕ задачи, которые когда-либо были в спринте.
+                // Фильтруем, оставляя только те, которые СЕЙЧАС в этом спринте (по ID, не по имени!)
+                state.issues = allLoadedIssues.filter(function(iss) {
+                    return utils.isIssueInSprintById(iss, sprintId);
+                });
+                var filtered = allLoadedIssues.length - state.issues.length;
+                if (filtered > 0) {
+                    log("Отфильтровано задач (не в текущем спринте): " + filtered + " из " + allLoadedIssues.length);
+                }
                 state.viewIssues = state.issues.slice();
                 state.extraIssues = [];
                 updateTeamKey();
@@ -590,25 +623,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var sprintCount = Array.isArray(sprints) ? sprints.length : 0;
                 var statusTime = utils.daysDiff(utils.parseDate(f.updated), now);
 
-                // В текущем спринте?
-                var inCurrentSprint = false;
-                if (state.sprint) {
-                    var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
-                    var curId = String(state.sprint.id || "");
-                    if (curId && Array.isArray(sprintFieldVal)) {
-                        inCurrentSprint = sprintFieldVal.some(function(s) {
-                            if (!s) return false;
-                            // Проверяем ID в строке формата "id=123,name=..." или в объекте
-                            if (typeof s === "string") {
-                                return s.indexOf("id=" + curId) !== -1;
-                            }
-                            if (s.id) {
-                                return String(s.id) === curId;
-                            }
-                            return false;
-                        });
-                    }
-                }
+                // В текущем спринте? (проверка по ID, не по имени)
+                var inCurrentSprint = state.sprint ? utils.isIssueInSprintById(iss, state.sprint.id) : false;
                 
                 var prob = null;
                 if (!est && !isDone) prob = { type: "noest", label: "Без оценки" };
@@ -886,7 +902,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var rapidViewId = state.compare && state.compare.boardId ? state.compare.boardId : state.selectedBoardId;
             function fallbackLocal() {
                 api.getSprintIssues(sp.id).then(function(res) {
-                    var issues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
+                    var allIssues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
+                    // Фильтруем по ID спринта (аналогично основной загрузке)
+                    var issues = allIssues.filter(function(iss) {
+                        return utils.isIssueInSprintById(iss, sp.id);
+                    });
                     var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
                     cmp.burnCache[sp.id] = { data: bd.data, sprint: sp };
                     render();
@@ -1874,23 +1894,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var assigneeLogin = f.assignee ? (f.assignee.name || f.assignee.key || f.assignee.accountId) : null;
                 var sprintFieldVal = f[CONFIG.sprintField || "customfield_10020"] || [];
                 var sprintNames = utils.parseSprintNames(sprintFieldVal);
-                var inCurrentSprint = false;
-                if (state.sprint) {
-                    var curId = String(state.sprint.id || "");
-                    if (curId && Array.isArray(sprintFieldVal)) {
-                        inCurrentSprint = sprintFieldVal.some(function(s) {
-                            if (!s) return false;
-                            // Проверяем ID в строке формата "id=123,name=..." или в объекте
-                            if (typeof s === "string") {
-                                return s.indexOf("id=" + curId) !== -1;
-                            }
-                            if (s.id) {
-                                return String(s.id) === curId;
-                            }
-                            return false;
-                        });
-                    }
-                }
+                // Проверка по ID спринта, не по имени
+                var inCurrentSprint = state.sprint ? utils.isIssueInSprintById(iss, state.sprint.id) : false;
 
                 var item = {
                     key: iss.key,
