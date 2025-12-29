@@ -511,12 +511,21 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 var sprintId = state.sprint ? state.sprint.id : id;
                 // ВАЖНО: Jira API возвращает ВСЕ задачи, которые когда-либо были в спринте.
                 // Фильтруем, оставляя только те, которые СЕЙЧАС в этом спринте (по ID, не по имени!)
+                // И исключаем подзадачи
                 state.issues = allLoadedIssues.filter(function(iss) {
+                    // Исключаем подзадачи
+                    var f = iss.fields || {};
+                    var issueType = f.issuetype || {};
+                    if (issueType.subtask === true) return false;
+                    // Также проверяем по имени (на случай если subtask не установлен)
+                    var typeName = (issueType.name || "").toLowerCase();
+                    if (typeName.indexOf("subtask") !== -1 || typeName.indexOf("подзадача") !== -1) return false;
+                    // Проверяем, что задача в текущем спринте
                     return utils.isIssueInSprintById(iss, sprintId);
                 });
                 var filtered = allLoadedIssues.length - state.issues.length;
                 if (filtered > 0) {
-                    log("Отфильтровано задач (не в текущем спринте): " + filtered + " из " + allLoadedIssues.length);
+                    log("Отфильтровано задач (не в текущем спринте или подзадачи): " + filtered + " из " + allLoadedIssues.length);
                 }
                 state.viewIssues = state.issues.slice();
                 state.extraIssues = [];
@@ -903,8 +912,15 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             function fallbackLocal() {
                 api.getSprintIssues(sp.id).then(function(res) {
                     var allIssues = (res && res.issues) ? res.issues : (res && res[0] && res[0].issues) ? res[0].issues : [];
-                    // Фильтруем по ID спринта (аналогично основной загрузке)
+                    // Фильтруем по ID спринта и исключаем подзадачи (аналогично основной загрузке)
                     var issues = allIssues.filter(function(iss) {
+                        // Исключаем подзадачи
+                        var f = iss.fields || {};
+                        var issueType = f.issuetype || {};
+                        if (issueType.subtask === true) return false;
+                        var typeName = (issueType.name || "").toLowerCase();
+                        if (typeName.indexOf("subtask") !== -1 || typeName.indexOf("подзадача") !== -1) return false;
+                        // Проверяем, что задача в текущем спринте
                         return utils.isIssueInSprintById(iss, sp.id);
                     });
                     var bd = buildBurndown({ sprint: sp, issues: issues, mode: state.chartMode });
