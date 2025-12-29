@@ -75,6 +75,17 @@ define("_ujgSprintHealth", ["jquery"], function($) {
         },
         getHealthColor: function(p) { return p >= 90 ? "#36b37e" : p >= 70 ? "#ffab00" : p >= 50 ? "#ff8b00" : "#de350b"; },
         getHealthLabel: function(p) { return p >= 90 ? "Отлично" : p >= 70 ? "Хорошо" : p >= 50 ? "Внимание" : "Критично"; },
+        // Проверяет, является ли задача подзадачей
+        isSubtask: function(issue) {
+            if (!issue) return false;
+            var f = issue.fields || {};
+            var issueType = f.issuetype || {};
+            // Проверка по флагу (самый надежный способ)
+            if (issueType.subtask === true) return true;
+            // Проверка по имени типа задачи
+            var typeName = (issueType.name || "").toLowerCase();
+            return typeName.indexOf("subtask") !== -1 || typeName.indexOf("подзадача") !== -1;
+        },
         // Проверяет, находится ли задача СЕЙЧАС в спринте с указанным ID (не по имени!)
         isIssueInSprintById: function(issue, sprintId) {
             if (!issue || !sprintId) return false;
@@ -514,12 +525,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 // И исключаем подзадачи
                 state.issues = allLoadedIssues.filter(function(iss) {
                     // Исключаем подзадачи
-                    var f = iss.fields || {};
-                    var issueType = f.issuetype || {};
-                    if (issueType.subtask === true) return false;
-                    // Также проверяем по имени (на случай если subtask не установлен)
-                    var typeName = (issueType.name || "").toLowerCase();
-                    if (typeName.indexOf("subtask") !== -1 || typeName.indexOf("подзадача") !== -1) return false;
+                    if (utils.isSubtask(iss)) return false;
                     // Проверяем, что задача в текущем спринте
                     return utils.isIssueInSprintById(iss, sprintId);
                 });
@@ -915,11 +921,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     // Фильтруем по ID спринта и исключаем подзадачи (аналогично основной загрузке)
                     var issues = allIssues.filter(function(iss) {
                         // Исключаем подзадачи
-                        var f = iss.fields || {};
-                        var issueType = f.issuetype || {};
-                        if (issueType.subtask === true) return false;
-                        var typeName = (issueType.name || "").toLowerCase();
-                        if (typeName.indexOf("subtask") !== -1 || typeName.indexOf("подзадача") !== -1) return false;
+                        if (utils.isSubtask(iss)) return false;
                         // Проверяем, что задача в текущем спринте
                         return utils.isIssueInSprintById(iss, sp.id);
                     });
@@ -2826,7 +2828,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     else { fetchForGroup(idx + 1); return; }
                 }
                 var authorJql = authors.map(function(id) { return '"' + id + '"'; }).join(",");
-                var jql = 'worklogAuthor in (' + authorJql + ') AND worklogDate >= "' + start + '" AND worklogDate <= "' + end + '"';
+                // Исключаем подзадачи на уровне JQL запроса (стандартное название в Jira - "Sub-task")
+                // Дополнительная фильтрация будет после загрузки для надежности
+                var jql = 'worklogAuthor in (' + authorJql + ') AND worklogDate >= "' + start + '" AND worklogDate <= "' + end + '" AND issuetype != Sub-task';
 
                 $.ajax({
                     url: baseUrl + "/rest/api/2/search",
@@ -2840,7 +2844,11 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                         maxResults: 500
                     })
                 }).then(function(res) {
-                    var issues = (res && res.issues) ? res.issues : [];
+                    var allIssues = (res && res.issues) ? res.issues : [];
+                    // Дополнительная фильтрация подзадач (на случай если JQL фильтр не сработал)
+                    var issues = allIssues.filter(function(iss) {
+                        return !utils.isSubtask(iss);
+                    });
                     var dbg = { jql: jql, keys: issues.map(function(i){return i.key;}), byAuthorId: {}, byAuthorName: {} };
                     issues.forEach(function(iss) {
                         var wl = iss.fields && iss.fields.worklog && iss.fields.worklog.worklogs ? iss.fields.worklog.worklogs : [];
