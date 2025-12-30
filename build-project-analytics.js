@@ -40,38 +40,44 @@ function readModule(fileName) {
     return fs.readFileSync(filePath, 'utf8');
 }
 
-function extractModuleBody(content) {
+function extractModuleBody(content, moduleName) {
     // Ищем паттерн: define("...", [...], function(...) { ... return {...}; });
     var match = content.match(/define\([^)]+,\s*function\s*\([^)]*\)\s*\{([\s\S]*)\}\s*\)\s*;?\s*$/);
-    if (!match) return null;
+    if (!match) return { body: null, returnValue: null };
     
-    var body = match[1];
+    var fullBody = match[1];
     // Удаляем "use strict" если есть
-    body = body.replace(/^\s*"use strict";\s*/m, '');
+    fullBody = fullBody.replace(/^\s*"use strict";\s*/m, '');
     
-    // Удаляем return statement в конце модуля
-    // Ищем последний return перед закрывающей скобкой функции
-    // Сначала попробуем найти return с объектом
-    var lines = body.split('\n');
-    var returnStartIndex = -1;
-    for (var i = lines.length - 1; i >= 0; i--) {
-        if (lines[i].match(/^\s*return\s+/)) {
-            returnStartIndex = i;
-            break;
+    // Ищем последний return с объектом в конце модуля
+    // Паттерн: return { ... }; в конце (последние 20 строк)
+    var lines = fullBody.split('\n');
+    var lastLines = lines.slice(Math.max(0, lines.length - 20)).join('\n');
+    
+    // Ищем return с объектом
+    var returnMatch = lastLines.match(/return\s+(\{[\s\S]*?\})\s*;\s*$/);
+    if (!returnMatch) {
+        // Попробуем без точки с запятой
+        returnMatch = lastLines.match(/return\s+(\{[\s\S]*?\})\s*$/);
+    }
+    
+    var returnValue = null;
+    var body = fullBody;
+    
+    if (returnMatch) {
+        returnValue = returnMatch[1];
+        // Находим позицию return в полном тексте
+        var returnPos = fullBody.lastIndexOf('return');
+        if (returnPos >= 0) {
+            // Удаляем все начиная с return
+            body = fullBody.substring(0, returnPos).trim();
         }
     }
     
-    if (returnStartIndex >= 0) {
-        // Удаляем все строки начиная с return
-        body = lines.slice(0, returnStartIndex).join('\n');
-    } else {
-        // Попробуем regex подход
-        body = body.replace(/\s*return\s+\{[\s\S]*?\}\s*;\s*$/m, '');
-        body = body.replace(/\s*return\s+[^;{}]*;\s*$/m, '');
-        body = body.replace(/\s*return\s+[^;{}]*\s*$/m, '');
-    }
-    
-    return body.trim();
+    return {
+        body: body.trim(),
+        returnValue: returnValue
+    };
 }
 
 function build() {
@@ -107,24 +113,56 @@ function build() {
     ].join('\n');
     
     var modulesContent = [];
-    var moduleVars = {};
+    var moduleVars = {
+        'config.js': 'config',
+        'utils.js': 'utils',
+        'storage.js': 'storage',
+        'workflow.js': 'workflow',
+        'api-tracker.js': 'apiTracker',
+        'progress-modal.js': 'progressModal',
+        'settings-modal.js': 'settingsModal',
+        'data-collection.js': 'dataCollection',
+        'basic-analytics.js': 'basicAnalytics',
+        'dev-cycle.js': 'devCycle',
+        'developer-analytics.js': 'developerAnalytics',
+        'bottlenecks.js': 'bottlenecks',
+        'risk-assessment.js': 'riskAssessment',
+        'team-metrics.js': 'teamMetrics',
+        'velocity.js': 'velocity',
+        'rendering.js': 'rendering',
+        'main.js': null // main.js не создает переменную, он возвращает MyGadget
+    };
     
     // Читаем все модули в правильном порядке
     MODULE_ORDER.forEach(function(fileName) {
         var content = readModule(fileName);
         if (content) {
-            var moduleBody = extractModuleBody(content);
-            if (moduleBody) {
-                // Создаем переменные для модулей, которые возвращают объекты
-                if (fileName === 'config.js') {
-                    modulesContent.push('    // === Module: ' + fileName + ' ===');
-                    modulesContent.push('    var config = ' + moduleBody + ';');
-                    modulesContent.push('');
+            var extracted = extractModuleBody(content, fileName);
+            if (extracted.body !== null) {
+                modulesContent.push('    // === Module: ' + fileName + ' ===');
+                
+                // Удаляем дублирующиеся объявления переменных, которые уже есть в header
+                var cleanedBody = extracted.body;
+                cleanedBody = cleanedBody.replace(/^\s*var\s+utils\s*=\s*Common\.utils\s*;\s*$/gm, '');
+                cleanedBody = cleanedBody.replace(/^\s*var\s+baseUrl\s*=\s*Common\.baseUrl\s*\|\|\s*""\s*;\s*$/gm, '');
+                
+                // Если модуль возвращает значение, создаем переменную
+                if (extracted.returnValue && moduleVars[fileName]) {
+                    var varName = moduleVars[fileName];
+                    modulesContent.push(cleanedBody);
+                    modulesContent.push('    var ' + varName + ' = ' + extracted.returnValue + ';');
+                } else if (fileName === 'main.js') {
+                    // main.js возвращает MyGadget напрямую
+                    // Удаляем return MyGadget из body, так как он будет в footer
+                    cleanedBody = cleanedBody.replace(/\s*return\s+MyGadget\s*;\s*$/m, '');
+                    modulesContent.push(cleanedBody);
+                    // Не добавляем return здесь, он будет в footer
                 } else {
-                    modulesContent.push('    // === Module: ' + fileName + ' ===');
-                    modulesContent.push(moduleBody);
-                    modulesContent.push('');
+                    // Модуль без return или без переменной
+                    modulesContent.push(cleanedBody);
                 }
+                
+                modulesContent.push('');
             } else {
                 // Если не AMD модуль, просто добавляем содержимое
                 modulesContent.push('    // === Module: ' + fileName + ' ===');

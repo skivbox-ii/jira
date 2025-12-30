@@ -18,10 +18,56 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
     var utils = Common.utils;
     var baseUrl = Common.baseUrl || "";
     // === Module: config.js ===
-
+return {
+        CONFIG: {
+            version: "0.1.0",
+            maxPeriodDays: 365,
+            debug: true
+        },
+        
+        STORAGE_KEY: "ujg_pa_settings",
+        WORKFLOW_STORAGE_KEY: "ujg_pa_workflow_default",
+        
+        STATUS_CATEGORIES: {
+            queue: { name: "Очередь", description: "Задачи, ожидающие начала работы" },
+            work: { name: "В работе", description: "Активная разработка" },
+            review: { name: "Ревью", description: "Code Review / проверка" },
+            testing: { name: "Тестирование", description: "QA / тестирование" },
+            waiting: { name: "Ожидание", description: "Blocked / On Hold" },
+            done: { name: "Завершено", description: "Задачи, помеченные как Done" }
+        },
+        
+        DEFAULT_THRESHOLDS: {
+            ageRisk: 30,
+            noProgressRisk: 7,
+            longReviewRisk: 5,
+            longTestingRisk: 3,
+            prIterationsRisk: 3,
+            wipLimit: 5,
+            sprintChangesRisk: 2,
+            assigneeChangesRisk: 3
+        },
+        
+        DEFAULT_RISK_WEIGHTS: {
+            age: 30,
+            sprintChanges: 20,
+            assigneeChanges: 15,
+            noProgress: 25,
+            reopens: 20,
+            longReview: 15,
+            longTesting: 15,
+            prIterations: 20
+        },
+        
+        DEFAULT_CUSTOM_FIELDS: {
+            storyPoints: "",
+            epicLink: "",
+            sprint: ""
+        }
+    };
 
     // === Module: utils.js ===
-var utils = Common.utils;
+
     var CONFIG = config.CONFIG;
     
     function log() {
@@ -32,7 +78,7 @@ var utils = Common.utils;
     }
     
     function parseDateSafe(value) {
-        if (!value)
+        if (!value) return null;
         var d = utils.parseDate ? utils.parseDate(value) : new Date(value);
         if (!d || isNaN(d.getTime())) return null;
         return d;
@@ -91,6 +137,9 @@ var utils = Common.utils;
             startDate = new Date(endDate);
             startDate.setDate(endDate.getDate() - (CONFIG.maxPeriodDays - 1));
         }
+        return {
+            start: utils.getDayKey(startDate),
+            end: utils.getDayKey(endDate)
         };
     }
     
@@ -118,8 +167,7 @@ var utils = Common.utils;
         var diff = now.getTime() - (date.getTime ? date.getTime() : date);
         return Math.floor(diff / 86400000);
     }
-    
-    return {
+    var utils = {
         log: log,
         parseDateSafe: parseDateSafe,
         mergeWithDefaults: mergeWithDefaults,
@@ -143,7 +191,7 @@ var STORAGE_KEY = config.STORAGE_KEY;
     function loadSettings() {
         try {
             var stored = localStorage.getItem(STORAGE_KEY);
-            if (stored)
+            if (stored) return JSON.parse(stored);
         } catch (e) {
             utils.log("Failed to load settings", e);
         }
@@ -170,6 +218,13 @@ var STORAGE_KEY = config.STORAGE_KEY;
         } catch (e) {
             utils.log("Failed to load workflow config", e);
         }
+        return {
+            projectKey: "default",
+            lastUpdated: null,
+            allStatuses: [],
+            statusCategories: {},
+            categoryStatuses: {},
+            isManuallyConfigured: false
         };
     }
     
@@ -210,8 +265,7 @@ var STORAGE_KEY = config.STORAGE_KEY;
         settings.customFields = fields;
         saveSettings(settings);
     }
-    
-    return {
+    var storage = {
         loadSettings: loadSettings,
         saveSettings: saveSettings,
         loadWorkflowConfig: loadWorkflowConfig,
@@ -240,6 +294,7 @@ var STATUS_CATEGORIES = config.STATUS_CATEGORIES;
                 }
             });
         });
+        return categoryMap;
     }
     
     function buildStatusIndexFromCategory(categoryStatuses) {
@@ -266,6 +321,12 @@ var STATUS_CATEGORIES = config.STATUS_CATEGORIES;
         var categories = getCategoriesForStatus(statusName, workflowConfig);
         return categories.indexOf(category) >= 0;
     }
+    var workflow = {
+        buildCategoryIndexFromStatus: buildCategoryIndexFromStatus,
+        buildStatusIndexFromCategory: buildStatusIndexFromCategory,
+        getCategoriesForStatus: getCategoriesForStatus,
+        statusHasCategory: statusHasCategory,
+        STATUS_CATEGORIES: STATUS_CATEGORIES
     };
 
     // === Module: api-tracker.js ===
@@ -311,7 +372,7 @@ function createApiTracker() {
         };
         
         tracker.getProgress = function() {
-            if (!tracker.issues.total)
+            if (!tracker.issues.total) return 0;
             return Math.min(100, Math.round((tracker.issues.processed / tracker.issues.total) * 100));
         };
         
@@ -346,6 +407,8 @@ function createApiTracker() {
         tracker.reset(0);
         return tracker;
     }
+    var apiTracker = {
+        createApiTracker: createApiTracker
     };
 
     // === Module: progress-modal.js ===
@@ -409,6 +472,11 @@ var $modal, $progressBar, $progressLabel, $endpointTable, $issuesLabel, $etaLabe
             $tbody.append($row);
         });
     }
+    var progressModal = {
+        show: show,
+        hide: hide,
+        update: update
+    };
 
     // === Module: settings-modal.js ===
 var $modal, $tabs, $content;
@@ -565,6 +633,7 @@ var $modal, $tabs, $content;
             });
             inputs[key] = $input;
             $row.append('<label>' + label + ':</label>', $input);
+            return $row;
         }
         
         $form.append(createFieldRow("storyPoints", "Story Points", "customfield_10004"));
@@ -668,17 +737,20 @@ var $modal, $tabs, $content;
         $actions.append($resetBtn, $saveBtn, $cancelBtn);
         $root.append($info, $thresholdSection, $weightsSection, $actions);
     }
+    var settingsModal = {
+        open: open,
+        close: close
     };
 
     // === Module: data-collection.js ===
-var baseUrl = Common.baseUrl || "";
-    
+
     function createDataCollector(state, addRequest, isCancelled) {
         var tracker = apiTracker.createApiTracker();
         var fieldMetadataPromise = null;
         
         function loadFieldMetadata(force) {
             if (state.fieldMetadata && !force) {
+                return $.Deferred().resolve(state.fieldMetadata).promise();
             }
             if (fieldMetadataPromise && !force) return fieldMetadataPromise;
             var d = $.Deferred();
@@ -927,6 +999,21 @@ var baseUrl = Common.baseUrl || "";
                 storage.saveWorkflowConfig(cfg);
             }
         }
+        
+        return {
+            loadFieldMetadata: loadFieldMetadata,
+            fetchAllIssues: fetchAllIssues,
+            processIssuesSequentially: processIssuesSequentially,
+            updateKnownStatuses: updateKnownStatuses,
+            tracker: tracker
+        };
+    }
+    var dataCollection = {
+            loadFieldMetadata: loadFieldMetadata,
+            fetchAllIssues: fetchAllIssues,
+            processIssuesSequentially: processIssuesSequentially,
+            updateKnownStatuses: updateKnownStatuses,
+            tracker: tracker
         };
     }
     
@@ -944,6 +1031,7 @@ function createBasicAnalytics(state) {
                 start = utils.parseDateSafe(fallback.start + "T00:00:00");
                 end = utils.parseDateSafe(fallback.end + "T23:59:59");
             }
+            return { start: start, end: end };
         }
         
         function getInitialStatus(issue) {
@@ -1047,6 +1135,11 @@ function createBasicAnalytics(state) {
                     categories: categories
                 });
             });
+            
+            return {
+                statuses: statusTotals,
+                categories: categoryTotals,
+                entries: entries
             };
         }
         
@@ -1200,6 +1293,13 @@ function createBasicAnalytics(state) {
             getInitialAssignee: getInitialAssignee
         };
     }
+    var basicAnalytics = {
+            calculateAnalytics: calculateAnalytics,
+            extractFieldEvents: extractFieldEvents,
+            getInitialStatus: getInitialStatus,
+            getInitialAssignee: getInitialAssignee
+        };
+    }
     
     return {
         createBasicAnalytics: createBasicAnalytics
@@ -1210,7 +1310,7 @@ function createDevCycleAnalyzer(state) {
         var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
         
         function normalizeTimestamp(value) {
-            if (value === undefined || value === null)
+            if (value === undefined || value === null) return null;
             if (value instanceof Date) return value;
             if (typeof value === "number") {
                 if (value > 1e12) return new Date(value);
@@ -1352,6 +1452,20 @@ function createDevCycleAnalyzer(state) {
                     }
                 }
             });
+            
+            return {
+                prCount: prCount,
+                merged: merged,
+                open: open,
+                declined: declined,
+                mergedCount: mergedCount,
+                totalCycleSeconds: totalCycle,
+                reviewers: reviewers,
+                reviewerStats: reviewerStats,
+                avgCycleSeconds: mergedCount ? totalCycle / mergedCount : 0,
+                firstTimeApprovalRate: mergedCount ? firstTimeApproved / mergedCount : 0,
+                avgIterations: calculateAvgIterations(prs),
+                prs: prs
             };
         }
         
@@ -1484,6 +1598,12 @@ function createDevCycleAnalyzer(state) {
             detectPingPongPattern: detectPingPongPattern
         };
     }
+    var devCycle = {
+            calculateDevSummary: calculateDevSummary,
+            parseDevData: parseDevData,
+            detectPingPongPattern: detectPingPongPattern
+        };
+    }
     
     return {
         createDevCycleAnalyzer: createDevCycleAnalyzer
@@ -1502,6 +1622,7 @@ function createDeveloperAnalytics(state) {
                 start = utils.parseDateSafe(fallback.start + "T00:00:00");
                 end = utils.parseDateSafe(fallback.end + "T23:59:59");
             }
+            return { start: start, end: end };
         }
         
         function normalizeTimestamp(value) {
@@ -1707,6 +1828,17 @@ function createDeveloperAnalytics(state) {
                 if (metrics.wentToWorkAfterCommit) wentToWorkAfterCommit += 1;
                 if (metrics.commitsPerDay) commitsPerDayCount += 1;
             });
+            
+            return {
+                totalIssues: totalIssues,
+                avgDaysToFirstCommit: totalIssues > 0 ? totalDaysToFirstCommit / totalIssues : 0,
+                avgCommitsPerIssue: totalIssues > 0 ? totalCommitsPerIssue / totalIssues : 0,
+                avgDaysToClose: wentToDone > 0 ? totalDaysToClose / wentToDone : 0,
+                stableClosed: stableClosed,
+                returnedToWork: returnedToWork,
+                wentToDone: wentToDone,
+                wentToWorkAfterCommit: wentToWorkAfterCommit,
+                commitsPerDayIssues: commitsPerDayCount
             };
         }
         
@@ -1818,6 +1950,10 @@ function createDeveloperAnalytics(state) {
             calculateDeveloperAnalytics: calculateDeveloperAnalytics
         };
     }
+    var developerAnalytics = {
+            calculateDeveloperAnalytics: calculateDeveloperAnalytics
+        };
+    }
     
     return {
         createDeveloperAnalytics: createDeveloperAnalytics
@@ -1883,7 +2019,18 @@ var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
             
             state.bottlenecks = result;
         }
+        
+        return {
+            detectBottlenecks: detectBottlenecks
+        };
     }
+    var bottlenecks = {
+            detectBottlenecks: detectBottlenecks
+        };
+    }
+    
+    return {
+        createBottleneckDetector: createBottleneckDetector
     };
 
     // === Module: risk-assessment.js ===
@@ -1937,7 +2084,18 @@ var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
                 issue.analytics = analytics;
             });
         }
+        
+        return {
+            calculateRiskScores: calculateRiskScores
+        };
     }
+    var riskAssessment = {
+            calculateRiskScores: calculateRiskScores
+        };
+    }
+    
+    return {
+        createRiskAssessor: createRiskAssessor
     };
 
     // === Module: team-metrics.js ===
@@ -1969,10 +2127,25 @@ function createTeamMetricsCalculator(state) {
             });
             state.teamMetrics = Object.keys(metrics).map(function(name) {
                 var m = metrics[name];
+                return {
+                    name: name,
+                    issues: m.issues,
+                    closed: m.closed,
+                    reopenRate: m.issues ? m.reopenCount / m.issues : 0,
+                    avgLeadSeconds: m.issues ? m.totalLead / m.issues : 0,
+                    avgCycleSeconds: m.issues ? m.totalCycle / m.issues : 0
+                };
             }).sort(function(a, b) {
                 return (b.closed || 0) - (a.closed || 0);
             });
         }
+        
+        return {
+            calculateTeamMetrics: calculateTeamMetrics
+        };
+    }
+    var teamMetrics = {
+            calculateTeamMetrics: calculateTeamMetrics
         };
     }
     
@@ -1990,6 +2163,7 @@ function createVelocityCalculator(state) {
                 start = utils.parseDateSafe(fallback.start + "T00:00:00");
                 end = utils.parseDateSafe(fallback.end + "T23:59:59");
             }
+            return { start: start, end: end };
         }
         
         function getStoryPoints(issue) {
@@ -2019,6 +2193,13 @@ function createVelocityCalculator(state) {
             summary.avgPointsPerIssue = summary.closedIssues ? summary.totalPoints / summary.closedIssues : 0;
             state.velocity = summary;
         }
+        
+        return {
+            calculateVelocity: calculateVelocity
+        };
+    }
+    var velocity = {
+            calculateVelocity: calculateVelocity
         };
     }
     
@@ -2027,9 +2208,10 @@ function createVelocityCalculator(state) {
     };
 
     // === Module: rendering.js ===
-var baseUrl = Common.baseUrl || "";
+
     var STATUS_CATEGORIES = workflow.STATUS_CATEGORIES;
-    var escapeHtml = utils.utils && utils.utils.escapeHtml ? utils.utils.escapeHtml : function(str) {
+    var escapeHtml = utils.utils && utils.utils.escapeHtml ? utils.utils.escapeHtml : function(str) { return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
+    
     function createRenderer(state) {
         function formatDuration(seconds) {
             if (!seconds || seconds <= 0) return "0ч";
@@ -2160,6 +2342,10 @@ var baseUrl = Common.baseUrl || "";
                 var $reviewers = $('<div class="ujg-pa-reviewers-section"><h4>Нагрузка на ревьюеров</h4></div>');
                 var reviewers = Object.keys(devSummary.reviewerStats).map(function(name) {
                     var stats = devSummary.reviewerStats[name];
+                    return {
+                        name: name,
+                        reviews: stats.reviews || 0,
+                        avgTime: stats.reviewCount ? stats.totalTimeSeconds / stats.reviewCount : 0
                     };
                 }).sort(function(a, b) { return b.reviews - a.reviews; });
                 
@@ -2322,6 +2508,11 @@ var baseUrl = Common.baseUrl || "";
             formatDuration: formatDuration
         };
     }
+    var rendering = {
+            renderAnalyticsTable: renderAnalyticsTable,
+            formatDuration: formatDuration
+        };
+    }
     
     return {
         createRenderer: createRenderer
@@ -2404,7 +2595,7 @@ var CONFIG = config.CONFIG;
         state.riskWeights = storage.getRiskWeights(settings);
         state.customFields = storage.getCustomFields(settings);
         
-        var dataCollector = dataCollection.createDataCollector(state, addRequest, function() {
+        var dataCollector = dataCollection.createDataCollector(state, addRequest, function() { return !state.loading; });
         var basicAnalyticsCalc = basicAnalytics.createBasicAnalytics(state);
         var devCycleAnalyzer = devCycle.createDevCycleAnalyzer(state);
         var developerAnalyticsCalc = developerAnalytics.createDeveloperAnalytics(state);
@@ -2585,6 +2776,7 @@ var CONFIG = config.CONFIG;
                     dataCollector.tracker.setTotalIssues(issues.length);
                     dataCollector.updateKnownStatuses(issues);
                     progressModal.update(dataCollector.tracker);
+                    return dataCollector.processIssuesSequentially(issues).then(function() {
                         basicAnalyticsCalc.calculateAnalytics(issues);
                         calculateAdvancedInsights(issues);
                         renderer.renderAnalyticsTable($resultsContainer);
@@ -2634,8 +2826,6 @@ var CONFIG = config.CONFIG;
             }
         }
     }
-    
-    return MyGadget;
 
     return MyGadget;
 });
