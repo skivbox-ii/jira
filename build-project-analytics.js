@@ -49,28 +49,90 @@ function extractModuleBody(content, moduleName) {
     // Удаляем "use strict" если есть
     fullBody = fullBody.replace(/^\s*"use strict";\s*/m, '');
     
-    // Ищем последний return с объектом в конце модуля
-    // Паттерн: return { ... }; в конце (последние 20 строк)
+    // Ищем последний return на верхнем уровне модуля
+    // Ищем return, который находится ПОСЛЕ закрывающей скобки функции и пустой строки
     var lines = fullBody.split('\n');
-    var lastLines = lines.slice(Math.max(0, lines.length - 20)).join('\n');
+    var returnLineIndex = -1;
     
-    // Ищем return с объектом
-    var returnMatch = lastLines.match(/return\s+(\{[\s\S]*?\})\s*;\s*$/);
-    if (!returnMatch) {
-        // Попробуем без точки с запятой
-        returnMatch = lastLines.match(/return\s+(\{[\s\S]*?\})\s*$/);
+    // Находим все закрывающие скобки функций на верхнем уровне (4 пробела отступа)
+    var functionCloses = [];
+    var braceDepth = 0;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var openBraces = (line.match(/\{/g) || []).length;
+        var closeBraces = (line.match(/\}/g) || []).length;
+        braceDepth += (openBraces - closeBraces);
+        
+        // Закрывающая скобка функции на верхнем уровне (4 пробела)
+        if (line.match(/^    \}\s*$/) && braceDepth === 0) {
+            // Проверяем, что перед ней есть function
+            for (var j = i - 1; j >= Math.max(0, i - 50); j--) {
+                if (lines[j].match(/^\s*function\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*\(/)) {
+                    functionCloses.push(i);
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Ищем return ПОСЛЕ последней закрывающей скобки функции и пустой строки
+    if (functionCloses.length > 0) {
+        var lastFunctionClose = functionCloses[functionCloses.length - 1];
+        // Ищем пустую строку после закрывающей скобки
+        var emptyLineAfter = -1;
+        for (var i = lastFunctionClose + 1; i < lines.length; i++) {
+            if (lines[i].match(/^\s*$/)) {
+                emptyLineAfter = i;
+                break;
+            }
+        }
+        
+        // Ищем return после пустой строки
+        var searchStart = emptyLineAfter >= 0 ? emptyLineAfter + 1 : lastFunctionClose + 1;
+        for (var i = searchStart; i < lines.length; i++) {
+            var line = lines[i];
+            // return с отступом 4 пробела после функции и пустой строки - это return модуля
+            if (line.match(/^    return\s+/)) {
+                returnLineIndex = i;
+                break;
+            }
+        }
+    }
+    
+    // Если не нашли, используем простой подход - последний return с отступом 4 пробела в последних 3 строках
+    if (returnLineIndex === -1) {
+        for (var i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
+            var line = lines[i];
+            if (line.match(/^    return\s+/)) {
+                returnLineIndex = i;
+                break;
+            }
+        }
     }
     
     var returnValue = null;
     var body = fullBody;
     
-    if (returnMatch) {
-        returnValue = returnMatch[1];
-        // Находим позицию return в полном тексте
-        var returnPos = fullBody.lastIndexOf('return');
-        if (returnPos >= 0) {
-            // Удаляем все начиная с return
-            body = fullBody.substring(0, returnPos).trim();
+    if (returnLineIndex >= 0) {
+        // Извлекаем return value - может быть многострочным
+        var returnLines = lines.slice(returnLineIndex);
+        var returnText = returnLines.join('\n');
+        
+        // Ищем return с объектом
+        var returnMatch = returnText.match(/return\s+(\{[\s\S]*?\})\s*;\s*$/);
+        if (!returnMatch) {
+            // Попробуем без точки с запятой
+            returnMatch = returnText.match(/return\s+(\{[\s\S]*?\})\s*$/);
+        }
+        if (!returnMatch) {
+            // Попробуем просто return что-то
+            returnMatch = returnText.match(/return\s+([^;]+)\s*;\s*$/);
+        }
+        
+        if (returnMatch) {
+            returnValue = returnMatch[1];
+            // Удаляем все строки начиная с return
+            body = lines.slice(0, returnLineIndex).join('\n');
         }
     }
     
@@ -145,6 +207,73 @@ function build() {
                 var cleanedBody = extracted.body;
                 cleanedBody = cleanedBody.replace(/^\s*var\s+utils\s*=\s*Common\.utils\s*;\s*$/gm, '');
                 cleanedBody = cleanedBody.replace(/^\s*var\s+baseUrl\s*=\s*Common\.baseUrl\s*\|\|\s*""\s*;\s*$/gm, '');
+                
+                // Убеждаемся, что первая строка имеет правильный отступ (4 пробела)
+                var lines = cleanedBody.split('\n');
+                if (lines.length > 0 && lines[0].trim() && !lines[0].match(/^\s{4}/)) {
+                    // Если первая строка не имеет отступа 4 пробела, добавляем его
+                    lines[0] = '    ' + lines[0].trimLeft();
+                    cleanedBody = lines.join('\n');
+                }
+                
+                // Удаляем return из функций, которые находятся перед return модуля
+                // Но сохраняем return внутри функций - они нужны для работы
+                // Ищем последний return с отступом 4 пробела (return модуля)
+                var lines = cleanedBody.split('\n');
+                var moduleReturnIndex = -1;
+                
+                // Находим return модуля (с отступом 4 пробела в последних строках)
+                for (var i = lines.length - 1; i >= Math.max(0, lines.length - 10); i--) {
+                    var line = lines[i];
+                    if (line.match(/^    return\s+/)) {
+                        moduleReturnIndex = i;
+                        break;
+                    }
+                }
+                
+                // Если нашли return модуля, удаляем все return с большим отступом после последней функции
+                if (moduleReturnIndex >= 0) {
+                    var cleanedLines = [];
+                    var lastFunctionEnd = -1;
+                    var braceDepth = 0;
+                    
+                    // Находим последнюю закрывающую скобку функции на верхнем уровне
+                    for (var i = 0; i < moduleReturnIndex; i++) {
+                        var line = lines[i];
+                        var openBraces = (line.match(/\{/g) || []).length;
+                        var closeBraces = (line.match(/\}/g) || []).length;
+                        braceDepth += (openBraces - closeBraces);
+                        
+                        if (line.match(/^    \}\s*$/) && braceDepth === 0) {
+                            lastFunctionEnd = i;
+                        }
+                    }
+                    
+                    // Удаляем return из функции createDataCollector, если он находится перед return модуля
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i];
+                        var indent = line.match(/^(\s*)/)[1].length;
+                        
+                        // Если это return с отступом 8 пробелов и он находится после последней функции, но перед return модуля
+                        if (line.match(/^        return\s+/) && i > lastFunctionEnd && i < moduleReturnIndex) {
+                            // Пропускаем этот return и следующие строки до закрывающей скобки объекта
+                            var returnStart = i;
+                            var foundClose = false;
+                            for (var j = i + 1; j < moduleReturnIndex; j++) {
+                                if (lines[j].match(/^        \}\s*;\s*$/)) {
+                                    i = j;
+                                    foundClose = true;
+                                    break;
+                                }
+                            }
+                            if (foundClose) continue;
+                        }
+                        
+                        cleanedLines.push(line);
+                    }
+                    
+                    cleanedBody = cleanedLines.join('\n');
+                }
                 
                 // Если модуль возвращает значение, создаем переменную
                 if (extracted.returnValue && moduleVars[fileName]) {

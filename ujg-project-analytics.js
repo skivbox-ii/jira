@@ -18,7 +18,7 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
     var utils = Common.utils;
     var baseUrl = Common.baseUrl || "";
     // === Module: config.js ===
-return {
+    return {
         CONFIG: {
             version: "0.1.0",
             maxPeriodDays: 365,
@@ -182,7 +182,7 @@ return {
     };
 
     // === Module: storage.js ===
-var STORAGE_KEY = config.STORAGE_KEY;
+    var STORAGE_KEY = config.STORAGE_KEY;
     var WORKFLOW_STORAGE_KEY = config.WORKFLOW_STORAGE_KEY;
     var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
     var DEFAULT_RISK_WEIGHTS = config.DEFAULT_RISK_WEIGHTS;
@@ -279,7 +279,7 @@ var STORAGE_KEY = config.STORAGE_KEY;
     };
 
     // === Module: workflow.js ===
-var STATUS_CATEGORIES = config.STATUS_CATEGORIES;
+    var STATUS_CATEGORIES = config.STATUS_CATEGORIES;
     
     function buildCategoryIndexFromStatus(statusCategories) {
         var categoryMap = {};
@@ -330,7 +330,7 @@ var STATUS_CATEGORIES = config.STATUS_CATEGORIES;
     };
 
     // === Module: api-tracker.js ===
-function createApiTracker() {
+    function createApiTracker() {
         var tracker = {};
         var endpointNames = ["search", "changelog", "worklog", "dev-status"];
         
@@ -407,12 +407,13 @@ function createApiTracker() {
         tracker.reset(0);
         return tracker;
     }
-    var apiTracker = {
+    
+    return {
         createApiTracker: createApiTracker
     };
 
     // === Module: progress-modal.js ===
-var $modal, $progressBar, $progressLabel, $endpointTable, $issuesLabel, $etaLabel, $cancelBtn;
+    var $modal, $progressBar, $progressLabel, $endpointTable, $issuesLabel, $etaLabel, $cancelBtn;
     var cancelHandler = null;
     
     function ensureModal() {
@@ -479,7 +480,7 @@ var $modal, $progressBar, $progressLabel, $endpointTable, $issuesLabel, $etaLabe
     };
 
     // === Module: settings-modal.js ===
-var $modal, $tabs, $content;
+    var $modal, $tabs, $content;
     var currentTab = "workflow";
     var ctx = null;
     var TAB_DEFS = [
@@ -1009,20 +1010,11 @@ var $modal, $tabs, $content;
         };
     }
     var dataCollection = {
-            loadFieldMetadata: loadFieldMetadata,
-            fetchAllIssues: fetchAllIssues,
-            processIssuesSequentially: processIssuesSequentially,
-            updateKnownStatuses: updateKnownStatuses,
-            tracker: tracker
-        };
-    }
-    
-    return {
         createDataCollector: createDataCollector
     };
 
     // === Module: basic-analytics.js ===
-function createBasicAnalytics(state) {
+    function createBasicAnalytics(state) {
         function getPeriodBounds() {
             var start = utils.parseDateSafe(state.period.start + "T00:00:00");
             var end = utils.parseDateSafe(state.period.end + "T23:59:59");
@@ -1294,19 +1286,11 @@ function createBasicAnalytics(state) {
         };
     }
     var basicAnalytics = {
-            calculateAnalytics: calculateAnalytics,
-            extractFieldEvents: extractFieldEvents,
-            getInitialStatus: getInitialStatus,
-            getInitialAssignee: getInitialAssignee
-        };
-    }
-    
-    return {
         createBasicAnalytics: createBasicAnalytics
     };
 
     // === Module: dev-cycle.js ===
-function createDevCycleAnalyzer(state) {
+    function createDevCycleAnalyzer(state) {
         var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
         
         function normalizeTimestamp(value) {
@@ -1598,19 +1582,13 @@ function createDevCycleAnalyzer(state) {
             detectPingPongPattern: detectPingPongPattern
         };
     }
-    var devCycle = {
-            calculateDevSummary: calculateDevSummary,
-            parseDevData: parseDevData,
-            detectPingPongPattern: detectPingPongPattern
-        };
-    }
     
     return {
         createDevCycleAnalyzer: createDevCycleAnalyzer
     };
 
     // === Module: developer-analytics.js ===
-function createDeveloperAnalytics(state) {
+    function createDeveloperAnalytics(state) {
         var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
         var parseDevData = devCycle.createDevCycleAnalyzer(state).parseDevData;
         
@@ -1950,17 +1928,13 @@ function createDeveloperAnalytics(state) {
             calculateDeveloperAnalytics: calculateDeveloperAnalytics
         };
     }
-    var developerAnalytics = {
-            calculateDeveloperAnalytics: calculateDeveloperAnalytics
-        };
-    }
     
     return {
         createDeveloperAnalytics: createDeveloperAnalytics
     };
 
     // === Module: bottlenecks.js ===
-var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
+    var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
     
     function createBottleneckDetector(state) {
         var getInitialAssignee = basicAnalytics.createBasicAnalytics(state).getInitialAssignee;
@@ -2024,17 +1998,13 @@ var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
             detectBottlenecks: detectBottlenecks
         };
     }
-    var bottlenecks = {
-            detectBottlenecks: detectBottlenecks
-        };
-    }
     
     return {
         createBottleneckDetector: createBottleneckDetector
     };
 
     // === Module: risk-assessment.js ===
-var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
+    var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
     var DEFAULT_RISK_WEIGHTS = config.DEFAULT_RISK_WEIGHTS;
     
     function createRiskAssessor(state) {
@@ -2090,16 +2060,11 @@ var DEFAULT_THRESHOLDS = config.DEFAULT_THRESHOLDS;
         };
     }
     var riskAssessment = {
-            calculateRiskScores: calculateRiskScores
-        };
-    }
-    
-    return {
         createRiskAssessor: createRiskAssessor
     };
 
     // === Module: team-metrics.js ===
-function createTeamMetricsCalculator(state) {
+    function createTeamMetricsCalculator(state) {
         var getInitialAssignee = basicAnalytics.createBasicAnalytics(state).getInitialAssignee;
         
         function calculateTeamMetrics(issues) {
@@ -2145,16 +2110,11 @@ function createTeamMetricsCalculator(state) {
         };
     }
     var teamMetrics = {
-            calculateTeamMetrics: calculateTeamMetrics
-        };
-    }
-    
-    return {
         createTeamMetricsCalculator: createTeamMetricsCalculator
     };
 
     // === Module: velocity.js ===
-function createVelocityCalculator(state) {
+    function createVelocityCalculator(state) {
         function getPeriodBounds() {
             var start = utils.parseDateSafe(state.period.start + "T00:00:00");
             var end = utils.parseDateSafe(state.period.end + "T23:59:59");
@@ -2199,11 +2159,6 @@ function createVelocityCalculator(state) {
         };
     }
     var velocity = {
-            calculateVelocity: calculateVelocity
-        };
-    }
-    
-    return {
         createVelocityCalculator: createVelocityCalculator
     };
 
@@ -2508,18 +2463,13 @@ function createVelocityCalculator(state) {
             formatDuration: formatDuration
         };
     }
-    var rendering = {
-            renderAnalyticsTable: renderAnalyticsTable,
-            formatDuration: formatDuration
-        };
-    }
     
     return {
         createRenderer: createRenderer
     };
 
     // === Module: main.js ===
-var CONFIG = config.CONFIG;
+    var CONFIG = config.CONFIG;
     var STATUS_CATEGORIES = workflow.STATUS_CATEGORIES;
     
     function MyGadget(API) {
