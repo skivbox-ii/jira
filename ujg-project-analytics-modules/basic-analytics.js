@@ -221,6 +221,82 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 summary.assigneeTotals[name] += metrics.totals[name];
             });
         }
+
+        function normalizeStatusLabel(name) {
+            return (name || "Unknown").trim() || "Unknown";
+        }
+
+        function pickPrimaryCategory(statusName) {
+            var cats = workflow.getCategoriesForStatus(statusName, state.workflowConfig) || [];
+            // стабильный порядок важен для "цепочек"
+            var order = ["queue", "work", "review", "testing", "waiting", "done"];
+            for (var i = 0; i < order.length; i++) {
+                if (cats.indexOf(order[i]) >= 0) return order[i];
+            }
+            // fallback: если категорий нет — используем имя статуса
+            return normalizeStatusLabel(statusName);
+        }
+
+        function computeTransitionStats(issues) {
+            var transitions = {}; // from -> to -> count
+            var statusSet = {};
+            var categoryPaths = {}; // "A→B→C" -> count
+            var examplePaths = {};  // "A→B→C" -> example key
+
+            (issues || []).forEach(function(issue) {
+                var events = extractFieldEvents(issue, "status") || [];
+                if (events.length === 0) return;
+
+                // transition matrix (по статусам)
+                events.forEach(function(evt) {
+                    var from = normalizeStatusLabel(evt.from);
+                    var to = normalizeStatusLabel(evt.to);
+                    if (!transitions[from]) transitions[from] = {};
+                    if (!transitions[from][to]) transitions[from][to] = 0;
+                    transitions[from][to] += 1;
+                    statusSet[from] = true;
+                    statusSet[to] = true;
+                });
+
+                // цепочка по категориям (сжатая, чтобы не было A→A→A)
+                var initialStatus = getInitialStatus(issue);
+                var seq = [];
+                seq.push(pickPrimaryCategory(initialStatus));
+                events.forEach(function(evt) {
+                    seq.push(pickPrimaryCategory(evt.to));
+                });
+                // compress consecutive duplicates
+                var compressed = [];
+                seq.forEach(function(x) {
+                    if (compressed.length === 0 || compressed[compressed.length - 1] !== x) compressed.push(x);
+                });
+
+                // ограничим длину, чтобы не плодить шум
+                if (compressed.length > 10) {
+                    compressed = compressed.slice(0, 10);
+                    compressed.push("…");
+                }
+
+                var path = compressed.join("→");
+                if (!categoryPaths[path]) categoryPaths[path] = 0;
+                categoryPaths[path] += 1;
+                if (!examplePaths[path] && issue && issue.key) examplePaths[path] = issue.key;
+            });
+
+            var statuses = Object.keys(statusSet).sort(function(a, b) {
+                return a.localeCompare(b);
+            });
+
+            var topPaths = Object.keys(categoryPaths).map(function(k) {
+                return { path: k, count: categoryPaths[k], example: examplePaths[k] || "" };
+            }).sort(function(a, b) { return b.count - a.count; });
+
+            return {
+                statuses: statuses,
+                transitions: transitions,
+                topPaths: topPaths
+            };
+        }
         
         function calculateAnalytics(issues) {
             if (!issues || issues.length === 0) {
@@ -234,7 +310,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 assigneeTotals: {},
                 totalLeadSeconds: 0,
                 totalCycleSeconds: 0,
-                totalWaitSeconds: 0
+                totalWaitSeconds: 0,
+                transitionsSummary: null
             };
             issues.forEach(function(issue) {
                 var analytics = issue.analytics || {};
@@ -263,6 +340,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 
                 issue.analytics = analytics;
             });
+
+            summary.transitionsSummary = computeTransitionStats(issues);
             state.analyticsSummary = summary;
         }
         

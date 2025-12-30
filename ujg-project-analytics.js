@@ -1345,6 +1345,82 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 summary.assigneeTotals[name] += metrics.totals[name];
             });
         }
+
+        function normalizeStatusLabel(name) {
+            return (name || "Unknown").trim() || "Unknown";
+        }
+
+        function pickPrimaryCategory(statusName) {
+            var cats = workflow.getCategoriesForStatus(statusName, state.workflowConfig) || [];
+            // стабильный порядок важен для "цепочек"
+            var order = ["queue", "work", "review", "testing", "waiting", "done"];
+            for (var i = 0; i < order.length; i++) {
+                if (cats.indexOf(order[i]) >= 0) return order[i];
+            }
+            // fallback: если категорий нет — используем имя статуса
+            return normalizeStatusLabel(statusName);
+        }
+
+        function computeTransitionStats(issues) {
+            var transitions = {}; // from -> to -> count
+            var statusSet = {};
+            var categoryPaths = {}; // "A→B→C" -> count
+            var examplePaths = {};  // "A→B→C" -> example key
+
+            (issues || []).forEach(function(issue) {
+                var events = extractFieldEvents(issue, "status") || [];
+                if (events.length === 0) return;
+
+                // transition matrix (по статусам)
+                events.forEach(function(evt) {
+                    var from = normalizeStatusLabel(evt.from);
+                    var to = normalizeStatusLabel(evt.to);
+                    if (!transitions[from]) transitions[from] = {};
+                    if (!transitions[from][to]) transitions[from][to] = 0;
+                    transitions[from][to] += 1;
+                    statusSet[from] = true;
+                    statusSet[to] = true;
+                });
+
+                // цепочка по категориям (сжатая, чтобы не было A→A→A)
+                var initialStatus = getInitialStatus(issue);
+                var seq = [];
+                seq.push(pickPrimaryCategory(initialStatus));
+                events.forEach(function(evt) {
+                    seq.push(pickPrimaryCategory(evt.to));
+                });
+                // compress consecutive duplicates
+                var compressed = [];
+                seq.forEach(function(x) {
+                    if (compressed.length === 0 || compressed[compressed.length - 1] !== x) compressed.push(x);
+                });
+
+                // ограничим длину, чтобы не плодить шум
+                if (compressed.length > 10) {
+                    compressed = compressed.slice(0, 10);
+                    compressed.push("…");
+                }
+
+                var path = compressed.join("→");
+                if (!categoryPaths[path]) categoryPaths[path] = 0;
+                categoryPaths[path] += 1;
+                if (!examplePaths[path] && issue && issue.key) examplePaths[path] = issue.key;
+            });
+
+            var statuses = Object.keys(statusSet).sort(function(a, b) {
+                return a.localeCompare(b);
+            });
+
+            var topPaths = Object.keys(categoryPaths).map(function(k) {
+                return { path: k, count: categoryPaths[k], example: examplePaths[k] || "" };
+            }).sort(function(a, b) { return b.count - a.count; });
+
+            return {
+                statuses: statuses,
+                transitions: transitions,
+                topPaths: topPaths
+            };
+        }
         
         function calculateAnalytics(issues) {
             if (!issues || issues.length === 0) {
@@ -1358,7 +1434,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 assigneeTotals: {},
                 totalLeadSeconds: 0,
                 totalCycleSeconds: 0,
-                totalWaitSeconds: 0
+                totalWaitSeconds: 0,
+                transitionsSummary: null
             };
             issues.forEach(function(issue) {
                 var analytics = issue.analytics || {};
@@ -1387,6 +1464,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 
                 issue.analytics = analytics;
             });
+
+            summary.transitionsSummary = computeTransitionStats(issues);
             state.analyticsSummary = summary;
         }
         
@@ -2828,6 +2907,69 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             $section.append("<p>Исторические данные появятся после нескольких запусков виджета. Они будут сохранены локально для расчёта графиков.</p>");
             $parent.append($section);
         }
+
+        function renderStatusTransitionMatrix($parent) {
+            var summary = state.analyticsSummary;
+            if (!summary || !summary.transitionsSummary) return;
+            var ts = summary.transitionsSummary;
+            if (!ts.transitions) return;
+
+            var statuses = ts.statuses || [];
+            if (statuses.length === 0) return;
+
+            // Ограничим размеры таблицы, чтобы UI не умер
+            var MAX = 18;
+            if (statuses.length > MAX) {
+                statuses = statuses.slice(0, MAX);
+            }
+
+            var $section = $('<div class="ujg-pa-section"><h3>Переходы статусов (из → в)</h3></div>');
+            $section.append('<div class="ujg-pa-note">Счётчики переходов взяты из changelog задач за выбранный период (возможны ограничения Jira по истории).</div>');
+
+            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Из \\ В</th></tr></thead><tbody></tbody></table>');
+            statuses.forEach(function(to) {
+                $table.find("thead tr").append("<th>" + escapeHtml(to) + "</th>");
+            });
+
+            statuses.forEach(function(from) {
+                var $row = $("<tr></tr>");
+                $row.append("<td><strong>" + escapeHtml(from) + "</strong></td>");
+                statuses.forEach(function(to) {
+                    var cnt = (ts.transitions[from] && ts.transitions[from][to]) ? ts.transitions[from][to] : 0;
+                    $row.append("<td>" + (cnt ? cnt : "—") + "</td>");
+                });
+                $table.find("tbody").append($row);
+            });
+
+            $section.append($table);
+            $parent.append($section);
+        }
+
+        function renderTopTransitionPaths($parent) {
+            var summary = state.analyticsSummary;
+            if (!summary || !summary.transitionsSummary) return;
+            var ts = summary.transitionsSummary;
+            var top = ts.topPaths || [];
+            if (top.length === 0) return;
+
+            var $section = $('<div class="ujg-pa-section"><h3>Типовые цепочки переходов</h3></div>');
+            $section.append('<div class="ujg-pa-note">Цепочки построены по категориям workflow (queue/work/review/testing/waiting/done). Повторы подряд сжимаются.</div>');
+
+            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>Пример</th></tr></thead><tbody></tbody></table>');
+            top.slice(0, 12).forEach(function(item) {
+                var $row = $("<tr></tr>");
+                $row.append("<td>" + escapeHtml(item.path) + "</td>");
+                $row.append("<td>" + (item.count || 0) + "</td>");
+                if (item.example) {
+                    $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
+                } else {
+                    $row.append("<td>—</td>");
+                }
+                $table.find("tbody").append($row);
+            });
+            $section.append($table);
+            $parent.append($section);
+        }
         
         function renderAnalyticsTable($resultsContainer) {
             if (!$resultsContainer) {
@@ -2880,6 +3022,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             renderDevCycleSection($resultsContainer);
             renderDeveloperAnalyticsSection($resultsContainer);
             renderBottlenecksSection($resultsContainer);
+            renderTopTransitionPaths($resultsContainer);
+            renderStatusTransitionMatrix($resultsContainer);
             renderTrendPlaceholder($resultsContainer);
         }
         
