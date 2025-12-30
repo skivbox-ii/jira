@@ -40,6 +40,40 @@ function readModule(fileName) {
     return fs.readFileSync(filePath, 'utf8');
 }
 
+function extractModuleBody(content) {
+    // Ищем паттерн: define("...", [...], function(...) { ... return {...}; });
+    var match = content.match(/define\([^)]+,\s*function\s*\([^)]*\)\s*\{([\s\S]*)\}\s*\)\s*;?\s*$/);
+    if (!match) return null;
+    
+    var body = match[1];
+    // Удаляем "use strict" если есть
+    body = body.replace(/^\s*"use strict";\s*/m, '');
+    
+    // Удаляем return statement в конце модуля
+    // Ищем последний return перед закрывающей скобкой функции
+    // Сначала попробуем найти return с объектом
+    var lines = body.split('\n');
+    var returnStartIndex = -1;
+    for (var i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].match(/^\s*return\s+/)) {
+            returnStartIndex = i;
+            break;
+        }
+    }
+    
+    if (returnStartIndex >= 0) {
+        // Удаляем все строки начиная с return
+        body = lines.slice(0, returnStartIndex).join('\n');
+    } else {
+        // Попробуем regex подход
+        body = body.replace(/\s*return\s+\{[\s\S]*?\}\s*;\s*$/m, '');
+        body = body.replace(/\s*return\s+[^;{}]*;\s*$/m, '');
+        body = body.replace(/\s*return\s+[^;{}]*\s*$/m, '');
+    }
+    
+    return body.trim();
+}
+
 function build() {
     console.log('Building ujg-project-analytics.js from modules...');
     
@@ -73,27 +107,24 @@ function build() {
     ].join('\n');
     
     var modulesContent = [];
+    var moduleVars = {};
     
     // Читаем все модули в правильном порядке
     MODULE_ORDER.forEach(function(fileName) {
         var content = readModule(fileName);
         if (content) {
-            // Извлекаем содержимое из AMD define() обёртки
-            // Ищем паттерн: define("...", [...], function(...) { ... return {...}; });
-            var match = content.match(/define\([^)]+,\s*function\s*\([^)]*\)\s*\{([\s\S]*)\}\s*\)\s*;?\s*$/);
-            if (match) {
-                var moduleBody = match[1];
-                // Удаляем "use strict" если есть
-                moduleBody = moduleBody.replace(/^\s*"use strict";\s*/m, '');
-                // Удаляем return в конце если есть (более гибкий паттерн)
-                // Ищем последний return statement перед закрывающей скобкой
-                moduleBody = moduleBody.replace(/\s*return\s+[\s\S]*?\s*;\s*$/m, '');
-                // Если остался только return без точки с запятой
-                moduleBody = moduleBody.replace(/\s*return\s+[^;]*\s*$/m, '');
-                
-                modulesContent.push('    // === Module: ' + fileName + ' ===');
-                modulesContent.push(moduleBody.trim());
-                modulesContent.push('');
+            var moduleBody = extractModuleBody(content);
+            if (moduleBody) {
+                // Создаем переменные для модулей, которые возвращают объекты
+                if (fileName === 'config.js') {
+                    modulesContent.push('    // === Module: ' + fileName + ' ===');
+                    modulesContent.push('    var config = ' + moduleBody + ';');
+                    modulesContent.push('');
+                } else {
+                    modulesContent.push('    // === Module: ' + fileName + ' ===');
+                    modulesContent.push(moduleBody);
+                    modulesContent.push('');
+                }
             } else {
                 // Если не AMD модуль, просто добавляем содержимое
                 modulesContent.push('    // === Module: ' + fileName + ' ===');
