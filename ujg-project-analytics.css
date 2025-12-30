@@ -630,3 +630,58 @@
     font-size: 14px;
     color: #974f0c;
 }
+
+/* Developer Analytics Section */
+.ujg-pa-developer-block {
+    margin-bottom: 30px;
+    padding: 20px;
+    background: #f9fafb;
+    border: 1px solid #dfe1e6;
+    border-radius: 3px;
+}
+
+.ujg-pa-developer-block h4 {
+    margin: 0 0 15px 0;
+    font-size: 16px;
+    color: #172b4d;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #0052cc;
+}
+
+.ujg-pa-dev-stats {
+    margin-bottom: 20px;
+}
+
+.ujg-pa-dev-stats p {
+    margin: 10px 0 5px 0;
+    font-size: 13px;
+    color: #42526e;
+    font-weight: 600;
+}
+
+.ujg-pa-dev-stats ul {
+    margin: 0 0 15px 0;
+    padding-left: 20px;
+    list-style-type: disc;
+}
+
+.ujg-pa-dev-stats li {
+    margin-bottom: 5px;
+    font-size: 13px;
+    color: #172b4d;
+}
+
+.ujg-pa-dev-stats li strong {
+    color: #0052cc;
+}
+
+.ujg-pa-dev-details {
+    margin-top: 20px;
+}
+
+.ujg-pa-dev-details p {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    color: #42526e;
+    font-weight: 600;
+}
