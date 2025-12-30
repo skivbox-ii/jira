@@ -66,7 +66,7 @@ define("_ujgCommon", ["jquery"], function($) {
         var d = $.Deferred();
         var dayKey = utils.getDayKey(day);
         
-        // JQL для поиска задач с worklog за этот день (без фильтра по пользователю!)
+        //  JQL для поиска задач с worklog за этот день (без фильтра по пользователю!)
         var jql = 'worklogDate = "' + dayKey + '"';
         if (jqlFilter) jql += " AND (" + jqlFilter + ")";
         
