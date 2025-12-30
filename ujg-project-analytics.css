@@ -588,3 +588,45 @@
     color: #6b778c;
     font-style: italic;
 }
+
+/* Dev Cycle Section */
+.ujg-pa-dev-overview {
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f4f5f7;
+    border-radius: 3px;
+}
+
+.ujg-pa-dev-overview p {
+    margin: 5px 0;
+    font-size: 13px;
+}
+
+.ujg-pa-reviewers-section,
+.ujg-pa-authors-section {
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.ujg-pa-reviewers-section h4,
+.ujg-pa-authors-section h4 {
+    margin: 0 0 15px 0;
+    font-size: 14px;
+    color: #172b4d;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #dfe1e6;
+}
+
+.ujg-pa-pingpong-section {
+    margin-top: 20px;
+    padding: 15px;
+    background: #fff4e5;
+    border-left: 3px solid #ffab00;
+    border-radius: 3px;
+}
+
+.ujg-pa-pingpong-section h4 {
+    margin: 0 0 15px 0;
+    font-size: 14px;
+    color: #974f0c;
+}
