@@ -133,9 +133,19 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 issueData.commits.sort(function(a, b) { return a.date - b.date; });
                 metrics.firstCommit = issueData.commits[0].date;
                 metrics.lastCommit = issueData.commits[issueData.commits.length - 1].date;
-                
-                if (metrics.firstWorklog && metrics.firstCommit) {
-                    metrics.daysToFirstCommit = (metrics.firstCommit - metrics.firstWorklog) / 86400000;
+
+                // "Взял задачу" — сначала worklog, если нет, fallback:
+                // 1) первое назначение на этого разработчика (assignee) по changelog
+                // 2) первый переход в категорию work по changelog
+                var tookAt = metrics.firstWorklog;
+                if (!tookAt && issueData.assigneeEvents && issueData.assigneeEvents.length > 0) {
+                    tookAt = issueData.assigneeEvents[0].at;
+                }
+                if (!tookAt && issueData.firstWorkTransitionAt) {
+                    tookAt = issueData.firstWorkTransitionAt;
+                }
+                if (tookAt && metrics.firstCommit) {
+                    metrics.daysToFirstCommit = (metrics.firstCommit - tookAt) / 86400000;
                 }
                 
                 var commitDays = {};
@@ -152,16 +162,42 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 var doneAfterCommit = false;
                 var stableClose = true;
                 
+                function isDone(statusName) {
+                    if (!statusName) return false;
+                    if (workflow.statusHasCategory(statusName, "done", state.workflowConfig)) return true;
+                    // fallback по названию, если workflow не настроен
+                    var s = String(statusName).toLowerCase();
+                    return s.indexOf("done") >= 0 || s.indexOf("closed") >= 0 || s.indexOf("resolved") >= 0 || s.indexOf("закры") >= 0 || s.indexOf("готов") >= 0;
+                }
+                function isWork(statusName) {
+                    if (!statusName) return false;
+                    if (workflow.statusHasCategory(statusName, "work", state.workflowConfig)) return true;
+                    var s = String(statusName).toLowerCase();
+                    return s.indexOf("in progress") >= 0 || s.indexOf("в работе") >= 0 || s.indexOf("разработ") >= 0 || s.indexOf("work") >= 0;
+                }
+                function isTesting(statusName) {
+                    if (!statusName) return false;
+                    if (workflow.statusHasCategory(statusName, "testing", state.workflowConfig)) return true;
+                    var s = String(statusName).toLowerCase();
+                    return s.indexOf("test") >= 0 || s.indexOf("qa") >= 0 || s.indexOf("тест") >= 0;
+                }
+                function isReview(statusName) {
+                    if (!statusName) return false;
+                    if (workflow.statusHasCategory(statusName, "review", state.workflowConfig)) return true;
+                    var s = String(statusName).toLowerCase();
+                    return s.indexOf("review") >= 0 || s.indexOf("ревью") >= 0 || s.indexOf("code review") >= 0;
+                }
+
                 statusEvents.forEach(function(evt) {
                     var evtTime = evt.at;
                     if (evtTime < lastCommitTime) return;
                     
-                    var toIsDone = workflow.statusHasCategory(evt.to, "done", state.workflowConfig);
-                    var toIsWork = workflow.statusHasCategory(evt.to, "work", state.workflowConfig);
-                    var fromIsDone = workflow.statusHasCategory(evt.from, "done", state.workflowConfig);
-                    var fromIsWork = workflow.statusHasCategory(evt.from, "work", state.workflowConfig);
-                    var fromIsTesting = workflow.statusHasCategory(evt.from, "testing", state.workflowConfig);
-                    var fromIsReview = workflow.statusHasCategory(evt.from, "review", state.workflowConfig);
+                    var toIsDone = isDone(evt.to);
+                    var toIsWork = isWork(evt.to);
+                    var fromIsDone = isDone(evt.from);
+                    var fromIsWork = isWork(evt.from);
+                    var fromIsTesting = isTesting(evt.from);
+                    var fromIsReview = isReview(evt.from);
                     
                     if (toIsDone && !doneAfterCommit) {
                         doneAfterCommit = true;
@@ -342,6 +378,23 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     
                     issueData.worklogs = extractWorklogsForDeveloper(issue, author, bounds);
                     issueData.statusEvents = extractFieldEvents(issue, "status");
+                    // события назначения на разработчика (fallback для "Взял")
+                    issueData.assigneeEvents = (extractFieldEvents(issue, "assignee") || []).filter(function(e) {
+                        return e && e.to && String(e.to) === String(author);
+                    }).map(function(e) {
+                        return { at: e.at, from: e.from, to: e.to };
+                    });
+                    if (issueData.assigneeEvents.length > 0) {
+                        issueData.assigneeEvents.sort(function(a, b) { return a.at - b.at; });
+                    }
+                    // первый переход в work
+                    issueData.firstWorkTransitionAt = null;
+                    (issueData.statusEvents || []).forEach(function(e) {
+                        if (issueData.firstWorkTransitionAt) return;
+                        if (e && e.at && workflow.statusHasCategory(e.to, "work", state.workflowConfig)) {
+                            issueData.firstWorkTransitionAt = e.at;
+                        }
+                    });
                     
                     var metrics = calculateDeveloperIssueMetrics(issueData, issue, bounds);
                     issueData.metrics = metrics;

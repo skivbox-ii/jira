@@ -78,10 +78,82 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             var reviewers = {};
             var reviewerStats = {};
             var prs = [];
+
+            function getPullRequestsFromRepo(repo) {
+                if (!repo) return [];
+                // Atlassian может вернуть разные имена полей в зависимости от интеграции/версии
+                return (repo.pullRequests && Array.isArray(repo.pullRequests) ? repo.pullRequests :
+                    repo.pullrequests && Array.isArray(repo.pullrequests) ? repo.pullrequests :
+                    repo.pullRequest && Array.isArray(repo.pullRequest) ? repo.pullRequest :
+                    repo.pullrequest && Array.isArray(repo.pullrequest) ? repo.pullrequest :
+                    []);
+            }
+
+            function getPullRequestsFromDetail(detail) {
+                if (!detail) return [];
+                return (detail.pullRequests && Array.isArray(detail.pullRequests) ? detail.pullRequests :
+                    detail.pullrequests && Array.isArray(detail.pullrequests) ? detail.pullrequests :
+                    []);
+            }
             
             devStatus.detail.forEach(function(detail) {
+                // Иногда PR приходят напрямую на detail, без repositories
+                getPullRequestsFromDetail(detail).forEach(function(pr) {
+                    prCount += 1;
+                    var status = (pr.status || "").toLowerCase();
+                    var prInfo = {
+                        id: pr.id || pr.key || "",
+                        status: status,
+                        author: extractAuthorName(pr.author),
+                        created: normalizeTimestamp(pr.createdDate),
+                        updated: normalizeTimestamp(pr.updatedDate),
+                        merged: normalizeTimestamp(pr.mergedDate || pr.completedDate || pr.closedDate),
+                        reviewers: [],
+                        iterations: 0,
+                        firstTimeApproved: false
+                    };
+
+                    if (status === "open" || status === "new") {
+                        open += 1;
+                    } else if (status === "declined" || status === "rejected") {
+                        declined += 1;
+                    } else if (status === "merged" || status === "completed") {
+                        merged += 1;
+                        if (prInfo.created && prInfo.merged && prInfo.merged >= prInfo.created) {
+                            totalCycle += (prInfo.merged - prInfo.created) / 1000;
+                            mergedCount += 1;
+                        }
+                    }
+
+                    (pr.reviewers || []).forEach(function(reviewer) {
+                        var name = extractReviewerName(reviewer);
+                        if (!name) return;
+                        prInfo.reviewers.push(name);
+
+                        if (!reviewers[name]) reviewers[name] = 0;
+                        reviewers[name] += 1;
+
+                        if (!reviewerStats[name]) {
+                            reviewerStats[name] = {
+                                reviews: 0,
+                                totalTimeSeconds: 0,
+                                reviewCount: 0
+                            };
+                        }
+                        reviewerStats[name].reviews += 1;
+
+                        var reviewTime = normalizeTimestamp(reviewer.lastReviewedDate || reviewer.approvedDate);
+                        if (reviewTime && prInfo.created && reviewTime >= prInfo.created) {
+                            reviewerStats[name].totalTimeSeconds += (reviewTime - prInfo.created) / 1000;
+                            reviewerStats[name].reviewCount += 1;
+                        }
+                    });
+
+                    prs.push(prInfo);
+                });
+
                 (detail.repositories || []).forEach(function(repo) {
-                    (repo.pullRequests || []).forEach(function(pr) {
+                    getPullRequestsFromRepo(repo).forEach(function(pr) {
                         prCount += 1;
                         var status = (pr.status || "").toLowerCase();
                         var prInfo = {

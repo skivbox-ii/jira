@@ -51,6 +51,43 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             var $section = $('<div class="ujg-pa-section"><h3>👨‍💻 Аналитика по разработчикам</h3></div>');
             $section.append('<div class="ujg-pa-note">Фильтр: показаны только разработчики, которые делали коммиты за период</div>');
 
+            // Итоговая таблица (одной таблицей): ФИО, Коммиты, PR, Мержи, Задачи, Показатели, Качество
+            var $summaryTable = $('<table class="ujg-pa-table"><thead><tr>' +
+                '<th>ФИО</th>' +
+                '<th>Коммитов</th>' +
+                '<th>PR</th>' +
+                '<th>Мержей</th>' +
+                '<th>Задач</th>' +
+                '<th>Взял→Коммит</th>' +
+                '<th>Коммит/задачу</th>' +
+                '<th>Коммит→Закрытие</th>' +
+                '<th>Стабильно</th>' +
+                '<th>Возврат</th>' +
+                '<th>Коммит→Done</th>' +
+                '<th>Коммит→Work</th>' +
+                '</tr></thead><tbody></tbody></table>');
+
+            devs.forEach(function(dev) {
+                var s = dev.summary || {};
+                var tasks = (s.issuesWithCommits !== undefined ? s.issuesWithCommits : s.totalIssues) || 0;
+                var $row = $("<tr></tr>");
+                $row.append("<td>" + escapeHtml(dev.name || "—") + "</td>");
+                $row.append("<td>" + (dev.totalCommits || 0) + "</td>");
+                $row.append("<td>" + (dev.totalPRs || 0) + "</td>");
+                $row.append("<td>" + (dev.totalMerged || 0) + "</td>");
+                $row.append("<td>" + tasks + "</td>");
+                $row.append("<td>" + formatDays(s.avgDaysToFirstCommit) + "</td>");
+                $row.append("<td>" + (s.avgCommitsPerIssue ? (Math.round(s.avgCommitsPerIssue * 10) / 10).toFixed(1) : "0.0") + "</td>");
+                $row.append("<td>" + formatDays(s.avgDaysToClose) + "</td>");
+                $row.append("<td>" + (s.stableClosed || 0) + "</td>");
+                $row.append("<td>" + (s.returnedToWork || 0) + "</td>");
+                $row.append("<td>" + (s.wentToDone || 0) + "</td>");
+                $row.append("<td>" + (s.wentToWorkAfterCommit || 0) + "</td>");
+                $summaryTable.find("tbody").append($row);
+            });
+            $section.append('<div style="margin:8px 0;"><strong>Итоги по разработчикам</strong></div>');
+            $section.append($summaryTable);
+
             devs.forEach(function(dev) {
                 var summary = dev.summary || {};
                 var $card = $('<div class="ujg-pa-dev-card" style="border:1px solid #dfe1e6;border-radius:3px;padding:12px;margin:12px 0;background:#fff;"></div>');
