@@ -1562,6 +1562,8 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             var totalCycle = 0;
             var reviewers = {};
             var reviewerStats = {};
+            var reviewerDecisionStats = {}; // {name:{approved,needsWork,reviewed}}
+            var authorRework = {}; // {author:{needsWorkPrs,totalPrs}}
             var prs = [];
 
             function getPullRequestsFromRepo(repo) {
@@ -1582,20 +1584,33 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             }
             
             devStatus.detail.forEach(function(detail) {
-                // Иногда PR приходят напрямую на detail, без repositories
-                getPullRequestsFromDetail(detail).forEach(function(pr) {
+                function getReviewerDecision(reviewer) {
+                    if (!reviewer) return "unknown";
+                    // разные интеграции: approved/status/approvalStatus
+                    if (reviewer.approved === true) return "approved";
+                    var st = (reviewer.status || reviewer.approvalStatus || "").toString().toUpperCase();
+                    if (st.indexOf("APPROV") >= 0) return "approved";
+                    if (st.indexOf("NEEDS") >= 0 || st.indexOf("WORK") >= 0 || st.indexOf("CHANGES") >= 0) return "needs_work";
+                    if (reviewer.approvedDate) return "approved";
+                    return st ? "reviewed" : "unknown";
+                }
+
+                function processPR(pr) {
                     prCount += 1;
                     var status = (pr.status || "").toLowerCase();
+                    var authorName = extractAuthorName(pr.author);
+
                     var prInfo = {
                         id: pr.id || pr.key || "",
                         status: status,
-                        author: extractAuthorName(pr.author),
+                        author: authorName,
                         created: normalizeTimestamp(pr.createdDate),
                         updated: normalizeTimestamp(pr.updatedDate),
                         merged: normalizeTimestamp(pr.mergedDate || pr.completedDate || pr.closedDate),
                         reviewers: [],
                         iterations: 0,
-                        firstTimeApproved: false
+                        firstTimeApproved: false,
+                        needsWork: false
                     };
 
                     if (status === "open" || status === "new") {
@@ -1609,6 +1624,9 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                             mergedCount += 1;
                         }
                     }
+
+                    if (!authorRework[authorName]) authorRework[authorName] = { needsWorkPrs: 0, totalPrs: 0 };
+                    authorRework[authorName].totalPrs += 1;
 
                     (pr.reviewers || []).forEach(function(reviewer) {
                         var name = extractReviewerName(reviewer);
@@ -1627,6 +1645,18 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                         }
                         reviewerStats[name].reviews += 1;
 
+                        if (!reviewerDecisionStats[name]) {
+                            reviewerDecisionStats[name] = { approved: 0, needsWork: 0, reviewed: 0 };
+                        }
+                        var decision = getReviewerDecision(reviewer);
+                        if (decision === "approved") reviewerDecisionStats[name].approved += 1;
+                        else if (decision === "needs_work") reviewerDecisionStats[name].needsWork += 1;
+                        else reviewerDecisionStats[name].reviewed += 1;
+
+                        if (decision === "needs_work") {
+                            prInfo.needsWork = true;
+                        }
+
                         var reviewTime = normalizeTimestamp(reviewer.lastReviewedDate || reviewer.approvedDate);
                         if (reviewTime && prInfo.created && reviewTime >= prInfo.created) {
                             reviewerStats[name].totalTimeSeconds += (reviewTime - prInfo.created) / 1000;
@@ -1634,63 +1664,18 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                         }
                     });
 
+                    if (prInfo.needsWork) {
+                        authorRework[authorName].needsWorkPrs += 1;
+                    }
+
                     prs.push(prInfo);
-                });
+                }
+
+                // Иногда PR приходят напрямую на detail, без repositories
+                getPullRequestsFromDetail(detail).forEach(processPR);
 
                 (detail.repositories || []).forEach(function(repo) {
-                    getPullRequestsFromRepo(repo).forEach(function(pr) {
-                        prCount += 1;
-                        var status = (pr.status || "").toLowerCase();
-                        var prInfo = {
-                            id: pr.id || pr.key || "",
-                            status: status,
-                            author: extractAuthorName(pr.author),
-                            created: normalizeTimestamp(pr.createdDate),
-                            updated: normalizeTimestamp(pr.updatedDate),
-                            merged: normalizeTimestamp(pr.mergedDate || pr.completedDate || pr.closedDate),
-                            reviewers: [],
-                            iterations: 0,
-                            firstTimeApproved: false
-                        };
-                        
-                        if (status === "open" || status === "new") {
-                            open += 1;
-                        } else if (status === "declined" || status === "rejected") {
-                            declined += 1;
-                        } else if (status === "merged" || status === "completed") {
-                            merged += 1;
-                            if (prInfo.created && prInfo.merged && prInfo.merged >= prInfo.created) {
-                                totalCycle += (prInfo.merged - prInfo.created) / 1000;
-                                mergedCount += 1;
-                            }
-                        }
-                        
-                        (pr.reviewers || []).forEach(function(reviewer) {
-                            var name = extractReviewerName(reviewer);
-                            if (!name) return;
-                            prInfo.reviewers.push(name);
-                            
-                            if (!reviewers[name]) reviewers[name] = 0;
-                            reviewers[name] += 1;
-                            
-                            if (!reviewerStats[name]) {
-                                reviewerStats[name] = {
-                                    reviews: 0,
-                                    totalTimeSeconds: 0,
-                                    reviewCount: 0
-                                };
-                            }
-                            reviewerStats[name].reviews += 1;
-                            
-                            var reviewTime = normalizeTimestamp(reviewer.lastReviewedDate || reviewer.approvedDate);
-                            if (reviewTime && prInfo.created && reviewTime >= prInfo.created) {
-                                reviewerStats[name].totalTimeSeconds += (reviewTime - prInfo.created) / 1000;
-                                reviewerStats[name].reviewCount += 1;
-                            }
-                        });
-                        
-                        prs.push(prInfo);
-                    });
+                    getPullRequestsFromRepo(repo).forEach(processPR);
                 });
             });
             
@@ -1715,6 +1700,8 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                 totalCycleSeconds: totalCycle,
                 reviewers: reviewers,
                 reviewerStats: reviewerStats,
+                reviewerDecisionStats: reviewerDecisionStats,
+                authorRework: authorRework,
                 avgCycleSeconds: mergedCount ? totalCycle / mergedCount : 0,
                 firstTimeApprovalRate: mergedCount ? firstTimeApproved / mergedCount : 0,
                 avgIterations: calculateAvgIterations(prs),
@@ -1759,6 +1746,8 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                 firstTimeApprovalRate: 0,
                 reviewers: {},
                 reviewerStats: {},
+                reviewerDecisionStats: {},
+                authorRework: {},
                 authorStats: {},
                 pingPongIssues: []
             };
@@ -1797,6 +1786,22 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                     summary.reviewerStats[name].totalTimeSeconds += stats.totalTimeSeconds;
                     summary.reviewerStats[name].reviewCount += stats.reviewCount;
                 });
+
+                Object.keys(devInfo.reviewerDecisionStats || {}).forEach(function(name) {
+                    if (!summary.reviewerDecisionStats[name]) {
+                        summary.reviewerDecisionStats[name] = { approved: 0, needsWork: 0, reviewed: 0 };
+                    }
+                    var ds = devInfo.reviewerDecisionStats[name];
+                    summary.reviewerDecisionStats[name].approved += ds.approved || 0;
+                    summary.reviewerDecisionStats[name].needsWork += ds.needsWork || 0;
+                    summary.reviewerDecisionStats[name].reviewed += ds.reviewed || 0;
+                });
+
+                Object.keys(devInfo.authorRework || {}).forEach(function(author) {
+                    if (!summary.authorRework[author]) summary.authorRework[author] = { needsWorkPrs: 0, totalPrs: 0 };
+                    summary.authorRework[author].needsWorkPrs += devInfo.authorRework[author].needsWorkPrs || 0;
+                    summary.authorRework[author].totalPrs += devInfo.authorRework[author].totalPrs || 0;
+                });
                 
                 (devInfo.prs || []).forEach(function(pr) {
                     if (pr.firstTimeApproved) firstTimeApproved += 1;
@@ -1807,7 +1812,8 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                                 prs: 0,
                                 merged: 0,
                                 firstTimeApproved: 0,
-                                totalIterations: 0
+                                totalIterations: 0,
+                                needsWorkPrs: 0
                             };
                         }
                         summary.authorStats[author].prs += 1;
@@ -1817,6 +1823,9 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                             if (pr.firstTimeApproved) {
                                 summary.authorStats[author].firstTimeApproved += 1;
                             }
+                        }
+                        if (pr.needsWork) {
+                            summary.authorStats[author].needsWorkPrs += 1;
                         }
                     }
                 });
@@ -2820,6 +2829,33 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 });
                 $section.append($reviewers);
             }
+
+            // Статистика ревью: кто сколько аппрувил / кто сколько раз отправлял на доработку
+            if (devSummary.reviewerDecisionStats && Object.keys(devSummary.reviewerDecisionStats).length > 0) {
+                var $reviewTableWrap = $('<div class="ujg-pa-reviewers-section"><h4>Результаты ревью (Approve / Needs work)</h4></div>');
+                var rows = Object.keys(devSummary.reviewerDecisionStats).map(function(name) {
+                    var st = devSummary.reviewerDecisionStats[name] || {};
+                    return {
+                        name: name,
+                        approved: st.approved || 0,
+                        needsWork: st.needsWork || 0,
+                        reviewed: st.reviewed || 0
+                    };
+                }).sort(function(a, b) {
+                    return (b.approved + b.needsWork + b.reviewed) - (a.approved + a.needsWork + a.reviewed);
+                });
+                var $tbl = $('<table class="ujg-pa-table"><thead><tr><th>Ревьюер</th><th>Approve</th><th>Needs work</th><th>Other</th></tr></thead><tbody></tbody></table>');
+                rows.forEach(function(r) {
+                    var $row = $("<tr></tr>");
+                    $row.append("<td>" + escapeHtml(r.name) + "</td>");
+                    $row.append("<td>" + r.approved + "</td>");
+                    $row.append("<td>" + r.needsWork + "</td>");
+                    $row.append("<td>" + r.reviewed + "</td>");
+                    $tbl.find("tbody").append($row);
+                });
+                $reviewTableWrap.append($tbl);
+                $section.append($reviewTableWrap);
+            }
             
             if (devSummary.authorStats && Object.keys(devSummary.authorStats).length > 0) {
                 var $authors = $('<div class="ujg-pa-authors-section"><h4>Качество по разработчикам (First-time Approval Rate)</h4></div>');
@@ -2849,6 +2885,27 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     $authors.append($row);
                 });
                 $section.append($authors);
+            }
+
+            // Кому отправляли на доработку (по авторам PR)
+            if (devSummary.authorRework && Object.keys(devSummary.authorRework).length > 0) {
+                var $rework = $('<div class="ujg-pa-authors-section"><h4>Отправлено на доработку (Needs work) по авторам PR</h4></div>');
+                var authors = Object.keys(devSummary.authorRework).map(function(name) {
+                    var st = devSummary.authorRework[name] || { needsWorkPrs: 0, totalPrs: 0 };
+                    var rate = st.totalPrs ? st.needsWorkPrs / st.totalPrs : 0;
+                    return { name: name, needsWork: st.needsWorkPrs || 0, total: st.totalPrs || 0, rate: rate };
+                }).sort(function(a, b) { return b.needsWork - a.needsWork; });
+                var $tbl = $('<table class="ujg-pa-table"><thead><tr><th>Автор</th><th>Needs work</th><th>Всего PR</th><th>%</th></tr></thead><tbody></tbody></table>');
+                authors.forEach(function(a) {
+                    var $row = $("<tr></tr>");
+                    $row.append("<td>" + escapeHtml(a.name) + "</td>");
+                    $row.append("<td>" + a.needsWork + "</td>");
+                    $row.append("<td>" + a.total + "</td>");
+                    $row.append("<td>" + Math.round(a.rate * 100) + "%</td>");
+                    $tbl.find("tbody").append($row);
+                });
+                $rework.append($tbl);
+                $section.append($rework);
             }
             
             if (devSummary.pingPongIssues && devSummary.pingPongIssues.length > 0) {
@@ -2992,29 +3049,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $summary.append('<div class="ujg-pa-summary-item"><span>Avg Wait Time</span><strong>' + formatDuration(avgWait) + '</strong></div>');
                 $resultsContainer.append($summary);
             }
-            
-            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Key</th><th>Summary</th><th>Lead</th><th>Cycle</th><th>Top Status</th><th>Risk</th></tr></thead><tbody></tbody></table>');
-            var maxRows = Math.min(50, state.issues.length);
-            for (var i = 0; i < maxRows; i++) {
-                var issue = state.issues[i];
-                var analytics = issue.analytics || {};
-                var dominant = getDominantStatus(analytics);
-                var $row = $("<tr></tr>");
-                var issueUrl = baseUrl + "/browse/" + issue.key;
-                $row.append('<td><a href="' + issueUrl + '" target="_blank">' + issue.key + "</a></td>");
-                var summary = issue.fields && issue.fields.summary ? issue.fields.summary : "";
-                $row.append('<td>' + escapeHtml(summary) + "</td>");
-                $row.append('<td>' + formatDuration(analytics.leadTimeSeconds) + "</td>");
-                $row.append('<td>' + formatDuration(analytics.cycleTimeSeconds) + "</td>");
-                $row.append('<td>' + dominant.name + "</td>");
-                var riskScore = analytics.risk ? analytics.risk.score + "%" : "—";
-                $row.append("<td>" + riskScore + "</td>");
-                $table.find("tbody").append($row);
-            }
-            if (state.issues.length > maxRows) {
-                $resultsContainer.append('<div class="ujg-pa-note">Показаны первые ' + maxRows + " из " + state.issues.length + " задач</div>");
-            }
-            $resultsContainer.append($table);
+
+            // По просьбе: общий список задач (таблица Key/Summary/Lead/Cycle/...) не выводим
             renderCategoryHeatmap($resultsContainer);
             renderRiskMatrixSection($resultsContainer);
             renderTeamMetricsSection($resultsContainer);

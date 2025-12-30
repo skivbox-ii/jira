@@ -288,6 +288,33 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 });
                 $section.append($reviewers);
             }
+
+            // Статистика ревью: кто сколько аппрувил / кто сколько раз отправлял на доработку
+            if (devSummary.reviewerDecisionStats && Object.keys(devSummary.reviewerDecisionStats).length > 0) {
+                var $reviewTableWrap = $('<div class="ujg-pa-reviewers-section"><h4>Результаты ревью (Approve / Needs work)</h4></div>');
+                var rows = Object.keys(devSummary.reviewerDecisionStats).map(function(name) {
+                    var st = devSummary.reviewerDecisionStats[name] || {};
+                    return {
+                        name: name,
+                        approved: st.approved || 0,
+                        needsWork: st.needsWork || 0,
+                        reviewed: st.reviewed || 0
+                    };
+                }).sort(function(a, b) {
+                    return (b.approved + b.needsWork + b.reviewed) - (a.approved + a.needsWork + a.reviewed);
+                });
+                var $tbl = $('<table class="ujg-pa-table"><thead><tr><th>Ревьюер</th><th>Approve</th><th>Needs work</th><th>Other</th></tr></thead><tbody></tbody></table>');
+                rows.forEach(function(r) {
+                    var $row = $("<tr></tr>");
+                    $row.append("<td>" + escapeHtml(r.name) + "</td>");
+                    $row.append("<td>" + r.approved + "</td>");
+                    $row.append("<td>" + r.needsWork + "</td>");
+                    $row.append("<td>" + r.reviewed + "</td>");
+                    $tbl.find("tbody").append($row);
+                });
+                $reviewTableWrap.append($tbl);
+                $section.append($reviewTableWrap);
+            }
             
             if (devSummary.authorStats && Object.keys(devSummary.authorStats).length > 0) {
                 var $authors = $('<div class="ujg-pa-authors-section"><h4>Качество по разработчикам (First-time Approval Rate)</h4></div>');
@@ -317,6 +344,27 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     $authors.append($row);
                 });
                 $section.append($authors);
+            }
+
+            // Кому отправляли на доработку (по авторам PR)
+            if (devSummary.authorRework && Object.keys(devSummary.authorRework).length > 0) {
+                var $rework = $('<div class="ujg-pa-authors-section"><h4>Отправлено на доработку (Needs work) по авторам PR</h4></div>');
+                var authors = Object.keys(devSummary.authorRework).map(function(name) {
+                    var st = devSummary.authorRework[name] || { needsWorkPrs: 0, totalPrs: 0 };
+                    var rate = st.totalPrs ? st.needsWorkPrs / st.totalPrs : 0;
+                    return { name: name, needsWork: st.needsWorkPrs || 0, total: st.totalPrs || 0, rate: rate };
+                }).sort(function(a, b) { return b.needsWork - a.needsWork; });
+                var $tbl = $('<table class="ujg-pa-table"><thead><tr><th>Автор</th><th>Needs work</th><th>Всего PR</th><th>%</th></tr></thead><tbody></tbody></table>');
+                authors.forEach(function(a) {
+                    var $row = $("<tr></tr>");
+                    $row.append("<td>" + escapeHtml(a.name) + "</td>");
+                    $row.append("<td>" + a.needsWork + "</td>");
+                    $row.append("<td>" + a.total + "</td>");
+                    $row.append("<td>" + Math.round(a.rate * 100) + "%</td>");
+                    $tbl.find("tbody").append($row);
+                });
+                $rework.append($tbl);
+                $section.append($rework);
             }
             
             if (devSummary.pingPongIssues && devSummary.pingPongIssues.length > 0) {
@@ -460,29 +508,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $summary.append('<div class="ujg-pa-summary-item"><span>Avg Wait Time</span><strong>' + formatDuration(avgWait) + '</strong></div>');
                 $resultsContainer.append($summary);
             }
-            
-            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Key</th><th>Summary</th><th>Lead</th><th>Cycle</th><th>Top Status</th><th>Risk</th></tr></thead><tbody></tbody></table>');
-            var maxRows = Math.min(50, state.issues.length);
-            for (var i = 0; i < maxRows; i++) {
-                var issue = state.issues[i];
-                var analytics = issue.analytics || {};
-                var dominant = getDominantStatus(analytics);
-                var $row = $("<tr></tr>");
-                var issueUrl = baseUrl + "/browse/" + issue.key;
-                $row.append('<td><a href="' + issueUrl + '" target="_blank">' + issue.key + "</a></td>");
-                var summary = issue.fields && issue.fields.summary ? issue.fields.summary : "";
-                $row.append('<td>' + escapeHtml(summary) + "</td>");
-                $row.append('<td>' + formatDuration(analytics.leadTimeSeconds) + "</td>");
-                $row.append('<td>' + formatDuration(analytics.cycleTimeSeconds) + "</td>");
-                $row.append('<td>' + dominant.name + "</td>");
-                var riskScore = analytics.risk ? analytics.risk.score + "%" : "—";
-                $row.append("<td>" + riskScore + "</td>");
-                $table.find("tbody").append($row);
-            }
-            if (state.issues.length > maxRows) {
-                $resultsContainer.append('<div class="ujg-pa-note">Показаны первые ' + maxRows + " из " + state.issues.length + " задач</div>");
-            }
-            $resultsContainer.append($table);
+
+            // По просьбе: общий список задач (таблица Key/Summary/Lead/Cycle/...) не выводим
             renderCategoryHeatmap($resultsContainer);
             renderRiskMatrixSection($resultsContainer);
             renderTeamMetricsSection($resultsContainer);
