@@ -1,4 +1,4 @@
-define("ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
+define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
     "use strict";
 
     var utils = Common.utils;
