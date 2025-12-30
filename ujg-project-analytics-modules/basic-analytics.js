@@ -242,6 +242,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
             var statusSet = {};
             var categoryPaths = {}; // "A→B→C" -> count
             var examplePaths = {};  // "A→B→C" -> example key
+            var statusPaths = {};   // "Status1→Status2→..." -> count
+            var exampleStatusPaths = {}; // path -> example key
 
             (issues || []).forEach(function(issue) {
                 var events = extractFieldEvents(issue, "status") || [];
@@ -281,6 +283,25 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 if (!categoryPaths[path]) categoryPaths[path] = 0;
                 categoryPaths[path] += 1;
                 if (!examplePaths[path] && issue && issue.key) examplePaths[path] = issue.key;
+
+                // цепочка по исходным статусам (реальные названия статусов Jira)
+                var seqS = [];
+                seqS.push(normalizeStatusLabel(initialStatus));
+                events.forEach(function(evt) {
+                    seqS.push(normalizeStatusLabel(evt.to));
+                });
+                var compressedS = [];
+                seqS.forEach(function(x) {
+                    if (compressedS.length === 0 || compressedS[compressedS.length - 1] !== x) compressedS.push(x);
+                });
+                if (compressedS.length > 10) {
+                    compressedS = compressedS.slice(0, 10);
+                    compressedS.push("…");
+                }
+                var pathS = compressedS.join("→");
+                if (!statusPaths[pathS]) statusPaths[pathS] = 0;
+                statusPaths[pathS] += 1;
+                if (!exampleStatusPaths[pathS] && issue && issue.key) exampleStatusPaths[pathS] = issue.key;
             });
 
             var statuses = Object.keys(statusSet).sort(function(a, b) {
@@ -291,10 +312,15 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 return { path: k, count: categoryPaths[k], example: examplePaths[k] || "" };
             }).sort(function(a, b) { return b.count - a.count; });
 
+            var topStatusPaths = Object.keys(statusPaths).map(function(k) {
+                return { path: k, count: statusPaths[k], example: exampleStatusPaths[k] || "" };
+            }).sort(function(a, b) { return b.count - a.count; });
+
             return {
                 statuses: statuses,
                 transitions: transitions,
-                topPaths: topPaths
+                topPaths: topPaths,
+                topStatusPaths: topStatusPaths
             };
         }
         

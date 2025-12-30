@@ -469,13 +469,20 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             if (top.length === 0) return;
 
             var $section = $('<div class="ujg-pa-section"><h3>Типовые цепочки переходов</h3></div>');
-            $section.append('<div class="ujg-pa-note">Цепочки построены по категориям workflow (queue/work/review/testing/waiting/done). Повторы подряд сжимаются.</div>');
+            $section.append('<div class="ujg-pa-note">Ниже две таблицы: по категориям workflow и по исходным статусам Jira. Повторы подряд сжимаются.</div>');
 
-            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>Пример</th></tr></thead><tbody></tbody></table>');
-            top.slice(0, 12).forEach(function(item) {
+            $section.append("<h4>По категориям (queue/work/review/testing/waiting/done)</h4>");
+            var topCat = top.slice(0, 12);
+            var totalCat = 0;
+            topCat.forEach(function(item) { totalCat += (item.count || 0); });
+            if (!totalCat) totalCat = 0;
+            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>%</th><th>Пример</th></tr></thead><tbody></tbody></table>');
+            topCat.forEach(function(item) {
                 var $row = $("<tr></tr>");
                 $row.append("<td>" + escapeHtml(item.path) + "</td>");
                 $row.append("<td>" + (item.count || 0) + "</td>");
+                var pct = totalCat ? (((item.count || 0) / totalCat) * 100) : 0;
+                $row.append("<td>" + (Math.round(pct * 10) / 10).toFixed(1) + "%</td>");
                 if (item.example) {
                     $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
                 } else {
@@ -484,6 +491,30 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $table.find("tbody").append($row);
             });
             $section.append($table);
+
+            var topS = ts.topStatusPaths || [];
+            if (topS.length > 0) {
+                $section.append("<h4>По исходным статусам Jira</h4>");
+                var topStatus = topS.slice(0, 12);
+                var totalStatus = 0;
+                topStatus.forEach(function(item) { totalStatus += (item.count || 0); });
+                if (!totalStatus) totalStatus = 0;
+                var $tableS = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>%</th><th>Пример</th></tr></thead><tbody></tbody></table>');
+                topStatus.forEach(function(item) {
+                    var $row = $("<tr></tr>");
+                    $row.append("<td>" + escapeHtml(item.path) + "</td>");
+                    $row.append("<td>" + (item.count || 0) + "</td>");
+                    var pctS = totalStatus ? (((item.count || 0) / totalStatus) * 100) : 0;
+                    $row.append("<td>" + (Math.round(pctS * 10) / 10).toFixed(1) + "%</td>");
+                    if (item.example) {
+                        $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
+                    } else {
+                        $row.append("<td>—</td>");
+                    }
+                    $tableS.find("tbody").append($row);
+                });
+                $section.append($tableS);
+            }
             $parent.append($section);
         }
         

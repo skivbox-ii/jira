@@ -1366,6 +1366,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
             var statusSet = {};
             var categoryPaths = {}; // "A→B→C" -> count
             var examplePaths = {};  // "A→B→C" -> example key
+            var statusPaths = {};   // "Status1→Status2→..." -> count
+            var exampleStatusPaths = {}; // path -> example key
 
             (issues || []).forEach(function(issue) {
                 var events = extractFieldEvents(issue, "status") || [];
@@ -1405,6 +1407,25 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 if (!categoryPaths[path]) categoryPaths[path] = 0;
                 categoryPaths[path] += 1;
                 if (!examplePaths[path] && issue && issue.key) examplePaths[path] = issue.key;
+
+                // цепочка по исходным статусам (реальные названия статусов Jira)
+                var seqS = [];
+                seqS.push(normalizeStatusLabel(initialStatus));
+                events.forEach(function(evt) {
+                    seqS.push(normalizeStatusLabel(evt.to));
+                });
+                var compressedS = [];
+                seqS.forEach(function(x) {
+                    if (compressedS.length === 0 || compressedS[compressedS.length - 1] !== x) compressedS.push(x);
+                });
+                if (compressedS.length > 10) {
+                    compressedS = compressedS.slice(0, 10);
+                    compressedS.push("…");
+                }
+                var pathS = compressedS.join("→");
+                if (!statusPaths[pathS]) statusPaths[pathS] = 0;
+                statusPaths[pathS] += 1;
+                if (!exampleStatusPaths[pathS] && issue && issue.key) exampleStatusPaths[pathS] = issue.key;
             });
 
             var statuses = Object.keys(statusSet).sort(function(a, b) {
@@ -1415,10 +1436,15 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 return { path: k, count: categoryPaths[k], example: examplePaths[k] || "" };
             }).sort(function(a, b) { return b.count - a.count; });
 
+            var topStatusPaths = Object.keys(statusPaths).map(function(k) {
+                return { path: k, count: statusPaths[k], example: exampleStatusPaths[k] || "" };
+            }).sort(function(a, b) { return b.count - a.count; });
+
             return {
                 statuses: statuses,
                 transitions: transitions,
-                topPaths: topPaths
+                topPaths: topPaths,
+                topStatusPaths: topStatusPaths
             };
         }
         
@@ -3010,13 +3036,20 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             if (top.length === 0) return;
 
             var $section = $('<div class="ujg-pa-section"><h3>Типовые цепочки переходов</h3></div>');
-            $section.append('<div class="ujg-pa-note">Цепочки построены по категориям workflow (queue/work/review/testing/waiting/done). Повторы подряд сжимаются.</div>');
+            $section.append('<div class="ujg-pa-note">Ниже две таблицы: по категориям workflow и по исходным статусам Jira. Повторы подряд сжимаются.</div>');
 
-            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>Пример</th></tr></thead><tbody></tbody></table>');
-            top.slice(0, 12).forEach(function(item) {
+            $section.append("<h4>По категориям (queue/work/review/testing/waiting/done)</h4>");
+            var topCat = top.slice(0, 12);
+            var totalCat = 0;
+            topCat.forEach(function(item) { totalCat += (item.count || 0); });
+            if (!totalCat) totalCat = 0;
+            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>%</th><th>Пример</th></tr></thead><tbody></tbody></table>');
+            topCat.forEach(function(item) {
                 var $row = $("<tr></tr>");
                 $row.append("<td>" + escapeHtml(item.path) + "</td>");
                 $row.append("<td>" + (item.count || 0) + "</td>");
+                var pct = totalCat ? (((item.count || 0) / totalCat) * 100) : 0;
+                $row.append("<td>" + (Math.round(pct * 10) / 10).toFixed(1) + "%</td>");
                 if (item.example) {
                     $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
                 } else {
@@ -3025,6 +3058,30 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $table.find("tbody").append($row);
             });
             $section.append($table);
+
+            var topS = ts.topStatusPaths || [];
+            if (topS.length > 0) {
+                $section.append("<h4>По исходным статусам Jira</h4>");
+                var topStatus = topS.slice(0, 12);
+                var totalStatus = 0;
+                topStatus.forEach(function(item) { totalStatus += (item.count || 0); });
+                if (!totalStatus) totalStatus = 0;
+                var $tableS = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>%</th><th>Пример</th></tr></thead><tbody></tbody></table>');
+                topStatus.forEach(function(item) {
+                    var $row = $("<tr></tr>");
+                    $row.append("<td>" + escapeHtml(item.path) + "</td>");
+                    $row.append("<td>" + (item.count || 0) + "</td>");
+                    var pctS = totalStatus ? (((item.count || 0) / totalStatus) * 100) : 0;
+                    $row.append("<td>" + (Math.round(pctS * 10) / 10).toFixed(1) + "%</td>");
+                    if (item.example) {
+                        $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
+                    } else {
+                        $row.append("<td>—</td>");
+                    }
+                    $tableS.find("tbody").append($row);
+                });
+                $section.append($tableS);
+            }
             $parent.append($section);
         }
         
