@@ -1,5 +1,15 @@
 define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
     "use strict";
+    
+    if (typeof $ === "undefined" || !$) {
+        console.error("[UJG-ProjectAnalytics] jQuery is not loaded!");
+        return function() { console.error("jQuery required"); };
+    }
+    
+    if (!Common || !Common.utils) {
+        console.error("[UJG-ProjectAnalytics] _ujgCommon is not loaded!");
+        return function() { console.error("_ujgCommon required"); };
+    }
 
     var utils = Common.utils;
     var baseUrl = Common.baseUrl || "";
@@ -640,9 +650,40 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
     })();
 
     function MyGadget(API) {
+        if (!API) {
+            console.error("[UJG-ProjectAnalytics] API object is missing!");
+            return;
+        }
+        
         var $content = API.getGadgetContentEl();
-        var $container = $('<div class="ujg-project-analytics"></div>');
-        $content.append($container);
+        if (!$content || $content.length === 0) {
+            console.error("[UJG-ProjectAnalytics] getGadgetContentEl() returned empty");
+            return;
+        }
+        
+        log("Content element found:", $content.length, "elements");
+        
+        var $container = $content.find(".ujg-project-analytics");
+        if ($container.length === 0) {
+            if ($content.hasClass("ujg-project-analytics")) {
+                $container = $content;
+                log("Using content element as container");
+            } else {
+                log("Container not found, creating new one");
+                $container = $('<div class="ujg-project-analytics"></div>');
+                $content.append($container);
+            }
+        } else {
+            log("Found existing container:", $container.length);
+        }
+        
+        if ($container.length === 0) {
+            console.error("[UJG-ProjectAnalytics] Failed to create/find container!");
+            $content.html('<div style="padding:20px;color:red;">Ошибка: не удалось создать контейнер виджета</div>');
+            return;
+        }
+        
+        log("Using container with", $container.length, "element(s)");
 
         var state = {
             jqlFilter: "",
@@ -683,6 +724,8 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
         state.customFields = getCustomFields(settings);
 
         var $panel, $jqlInput, $startInput, $endInput, $loadBtn, $statusBox, $resultsContainer;
+        
+        log("MyGadget initialized, container:", $container.length);
 
         function handleWorkflowChange(cfg) {
             state.workflowConfig = cfg;
@@ -715,6 +758,11 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         function initPanel() {
+            log("initPanel called");
+            if (!$container || $container.length === 0) {
+                log("ERROR: container not found!");
+                return;
+            }
             $panel = $('<div class="ujg-pa-panel"></div>');
 
             var $jqlRow = $('<div class="ujg-pa-row"></div>');
@@ -754,9 +802,23 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
 
             $panel.append($jqlRow, $dateRow, $statusBox);
             $container.append($panel);
+            log("Panel appended to container, panel children:", $panel.children().length);
+            
+            if ($panel.parent().length === 0) {
+                console.error("[UJG-ProjectAnalytics] Panel was not added to DOM!");
+            } else {
+                log("Panel is in DOM, parent:", $panel.parent().length);
+            }
+            
             $resultsContainer = $('<div class="ujg-pa-results"></div>');
             $container.append($resultsContainer);
             renderAnalyticsTable();
+            
+            log("initPanel completed, container HTML length:", $container.html().length);
+            
+            if ($container.html().length < 100) {
+                console.warn("[UJG-ProjectAnalytics] Container seems empty after init!");
+            }
         }
 
         function updateStatus(text) {
@@ -1346,10 +1408,13 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         function renderAnalyticsTable() {
-            if (!$resultsContainer) return;
+            if (!$resultsContainer) {
+                log("WARNING: $resultsContainer not initialized");
+                return;
+            }
             $resultsContainer.empty();
             if (!state.issues || state.issues.length === 0) {
-                $resultsContainer.append('<div class="ujg-pa-empty">Данные не загружены</div>');
+                $resultsContainer.append('<div class="ujg-pa-empty">Данные не загружены. Укажите JQL фильтр и нажмите "Загрузить".</div>');
                 return;
             }
             if (state.analyticsSummary) {
@@ -1825,8 +1890,32 @@ define("_ujgProjectAnalytics", ["jquery", "_ujgCommon"], function($, Common) {
             return parseDateSafe(value);
         }
 
-        initPanel();
-        updateStatus("Готово к запуску. Версия " + CONFIG.version);
+        try {
+            initPanel();
+            updateStatus("Готово к запуску. Версия " + CONFIG.version);
+            log("Gadget initialization completed successfully");
+            
+            if (typeof API.resize === "function") {
+                API.resize();
+                log("API.resize() called");
+            }
+            
+            setTimeout(function() {
+                if ($container && $container.children().length === 0) {
+                    log("WARNING: Container is empty after init, adding fallback message");
+                    $container.html('<div class="ujg-pa-panel" style="padding:20px;"><div class="ujg-pa-status">Виджет загружен. Если панель не отображается, проверьте консоль браузера (F12).</div></div>');
+                    if (typeof API.resize === "function") API.resize();
+                } else {
+                    log("Container has", $container.children().length, "children after init");
+                }
+            }, 500);
+        } catch (e) {
+            log("ERROR during initialization:", e);
+            console.error("[UJG-ProjectAnalytics] Initialization error:", e);
+            if ($container) {
+                $container.html('<div style="padding:20px;color:red;background:#ffebe6;border:1px solid #de350b;border-radius:3px;"><strong>Ошибка инициализации:</strong><br>' + utils.escapeHtml(e.message || String(e)) + '<br><small>Проверьте консоль браузера (F12) для подробностей.</small></div>');
+            }
+        }
     }
 
     return MyGadget;
