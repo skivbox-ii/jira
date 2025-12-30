@@ -217,7 +217,67 @@ define("_ujgPA_dataCollection", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA
         function loadIssueDevStatus(issue) {
             var d = $.Deferred();
             var started = Date.now();
-            var req = $.ajax({
+
+            function mergeDevStatus(repoResp, prResp) {
+                // Объединяем ответы dev-status для repository и pullrequest в одну структуру
+                var base = repoResp && typeof repoResp === "object" ? repoResp : {};
+                var add = prResp && typeof prResp === "object" ? prResp : {};
+                if (!base.detail || !Array.isArray(base.detail)) base.detail = [];
+                if (!add.detail || !Array.isArray(add.detail)) return base;
+
+                function detailKey(dtl) {
+                    if (!dtl) return "";
+                    return (dtl.applicationLinkId || "") + "|" + (dtl.instanceId || "") + "|" + (dtl.type || dtl.typeName || "") + "|" + (dtl.name || "");
+                }
+                function repoKey(repo) {
+                    if (!repo) return "";
+                    return (repo.url || "") + "|" + (repo.name || "") + "|" + (repo.id || "");
+                }
+
+                add.detail.forEach(function(addDetail) {
+                    var key = detailKey(addDetail);
+                    var targetDetail = null;
+                    for (var i = 0; i < base.detail.length; i++) {
+                        if (detailKey(base.detail[i]) === key) {
+                            targetDetail = base.detail[i];
+                            break;
+                        }
+                    }
+                    if (!targetDetail) {
+                        base.detail.push(addDetail);
+                        return;
+                    }
+                    if (!targetDetail.repositories || !Array.isArray(targetDetail.repositories)) targetDetail.repositories = [];
+                    (addDetail.repositories || []).forEach(function(addRepo) {
+                        var rKey = repoKey(addRepo);
+                        var targetRepo = null;
+                        for (var j = 0; j < targetDetail.repositories.length; j++) {
+                            if (repoKey(targetDetail.repositories[j]) === rKey) {
+                                targetRepo = targetDetail.repositories[j];
+                                break;
+                            }
+                        }
+                        if (!targetRepo) {
+                            targetDetail.repositories.push(addRepo);
+                            return;
+                        }
+                        // Мержим PR-данные и/или другие поля
+                        if (addRepo.pullRequests && Array.isArray(addRepo.pullRequests)) {
+                            targetRepo.pullRequests = addRepo.pullRequests;
+                        }
+                        if (addRepo.branches && Array.isArray(addRepo.branches)) {
+                            targetRepo.branches = addRepo.branches;
+                        }
+                        if (addRepo.commits && Array.isArray(addRepo.commits)) {
+                            targetRepo.commits = addRepo.commits;
+                        }
+                    });
+                });
+
+                return base;
+            }
+
+            var reqRepo = $.ajax({
                 url: baseUrl + "/rest/dev-status/1.0/issue/detail",
                 type: "GET",
                 dataType: "json",
@@ -227,10 +287,26 @@ define("_ujgPA_dataCollection", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA
                     dataType: "repository"
                 }
             });
-            addRequest(req);
-            req.done(function(resp) {
+            var reqPR = $.ajax({
+                url: baseUrl + "/rest/dev-status/1.0/issue/detail",
+                type: "GET",
+                dataType: "json",
+                data: {
+                    issueId: issue.id,
+                    applicationType: "stash",
+                    dataType: "pullrequest"
+                }
+            });
+
+            addRequest(reqRepo);
+            addRequest(reqPR);
+
+            $.when(reqRepo, reqPR).done(function(repoResp, prResp) {
+                // jQuery ajax + when -> массивы [data, statusText, jqXHR]
+                var repoData = repoResp && repoResp[0] ? repoResp[0] : repoResp;
+                var prData = prResp && prResp[0] ? prResp[0] : prResp;
                 tracker.track("dev-status", "done", Date.now() - started);
-                issue.devStatus = resp || {};
+                issue.devStatus = mergeDevStatus(repoData, prData) || {};
                 d.resolve(issue.devStatus);
             }).fail(function(jqXHR, textStatus) {
                 tracker.track("dev-status", "error", Date.now() - started);

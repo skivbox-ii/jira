@@ -150,9 +150,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             if (statusEvents.length > 0 && metrics.lastCommit) {
                 var lastCommitTime = metrics.lastCommit;
                 var doneAfterCommit = false;
-                var workAfterCommit = false;
                 var stableClose = true;
-                var lastDoneTime = null;
                 
                 statusEvents.forEach(function(evt) {
                     var evtTime = evt.at;
@@ -161,22 +159,23 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     var toIsDone = workflow.statusHasCategory(evt.to, "done", state.workflowConfig);
                     var toIsWork = workflow.statusHasCategory(evt.to, "work", state.workflowConfig);
                     var fromIsDone = workflow.statusHasCategory(evt.from, "done", state.workflowConfig);
+                    var fromIsWork = workflow.statusHasCategory(evt.from, "work", state.workflowConfig);
                     var fromIsTesting = workflow.statusHasCategory(evt.from, "testing", state.workflowConfig);
+                    var fromIsReview = workflow.statusHasCategory(evt.from, "review", state.workflowConfig);
                     
                     if (toIsDone && !doneAfterCommit) {
                         doneAfterCommit = true;
                         metrics.wentToDone = true;
-                        lastDoneTime = evtTime;
                         metrics.daysToClose = (evtTime - lastCommitTime) / 86400000;
                     }
                     
-                    if (fromIsTesting && toIsWork) {
-                        metrics.returnedToWork = true;
-                    }
-                    
-                    if (toIsWork && evtTime > lastCommitTime) {
-                        workAfterCommit = true;
+                    // Возврат "на доработку" после коммита: переход в work из НЕ-work (review/testing/done/и т.п.)
+                    if (toIsWork && !fromIsWork) {
                         metrics.wentToWorkAfterCommit = true;
+                        // Более строгий "возврат": из review/testing/done -> work
+                        if (fromIsDone || fromIsTesting || fromIsReview) {
+                            metrics.returnedToWork = true;
+                        }
                     }
                     
                     if (fromIsDone && !toIsDone) {
@@ -194,6 +193,8 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
         function calculateDeveloperSummary(dev) {
             var issues = Object.keys(dev.issues);
             var totalIssues = issues.length;
+            var issuesWithCommits = 0;
+            var issuesWithFirstCommit = 0;
             var totalDaysToFirstCommit = 0;
             var totalCommitsPerIssue = 0;
             var totalDaysToClose = 0;
@@ -202,13 +203,19 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var wentToDone = 0;
             var wentToWorkAfterCommit = 0;
             var commitsPerDayCount = 0;
+            var tasksInWork = 0;
             
             issues.forEach(function(issueKey) {
                 var issueData = dev.issues[issueKey];
                 var metrics = issueData.metrics || {};
+
+                if ((issueData.commits || []).length > 0) {
+                    issuesWithCommits += 1;
+                }
                 
                 if (metrics.daysToFirstCommit !== null) {
                     totalDaysToFirstCommit += metrics.daysToFirstCommit;
+                    issuesWithFirstCommit += 1;
                 }
                 totalCommitsPerIssue += metrics.commitCount || 0;
                 if (metrics.daysToClose !== null) {
@@ -219,12 +226,18 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 if (metrics.wentToDone) wentToDone += 1;
                 if (metrics.wentToWorkAfterCommit) wentToWorkAfterCommit += 1;
                 if (metrics.commitsPerDay) commitsPerDayCount += 1;
+
+                if (issueData.currentStatusIsWork) {
+                    tasksInWork += 1;
+                }
             });
             
             return {
                 totalIssues: totalIssues,
-                avgDaysToFirstCommit: totalIssues > 0 ? totalDaysToFirstCommit / totalIssues : 0,
-                avgCommitsPerIssue: totalIssues > 0 ? totalCommitsPerIssue / totalIssues : 0,
+                issuesWithCommits: issuesWithCommits,
+                tasksInWork: tasksInWork,
+                avgDaysToFirstCommit: issuesWithFirstCommit > 0 ? totalDaysToFirstCommit / issuesWithFirstCommit : 0,
+                avgCommitsPerIssue: issuesWithCommits > 0 ? totalCommitsPerIssue / issuesWithCommits : 0,
                 avgDaysToClose: wentToDone > 0 ? totalDaysToClose / wentToDone : 0,
                 stableClosed: stableClosed,
                 returnedToWork: returnedToWork,
@@ -323,6 +336,9 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     if (!issue) return;
                     
                     var issueData = dev.issues[issueKey];
+                    var currentStatusName = issue && issue.fields && issue.fields.status && issue.fields.status.name ? issue.fields.status.name : "";
+                    issueData.currentStatusName = currentStatusName;
+                    issueData.currentStatusIsWork = currentStatusName ? workflow.statusHasCategory(currentStatusName, "work", state.workflowConfig) : false;
                     
                     issueData.worklogs = extractWorklogsForDeveloper(issue, author, bounds);
                     issueData.statusEvents = extractFieldEvents(issue, "status");

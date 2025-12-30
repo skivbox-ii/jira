@@ -31,6 +31,101 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             });
             return result;
         }
+
+        function formatDays(days) {
+            if (days === null || days === undefined || isNaN(days)) return "—";
+            return (Math.round(days * 10) / 10) + " дн.";
+        }
+
+        function renderDeveloperAnalyticsSection($parent) {
+            var devsMap = state.developerAnalytics;
+            if (!devsMap) return;
+
+            var devs = Object.keys(devsMap).map(function(name) { return devsMap[name]; });
+            // По спеку: показываем только разработчиков, у кого были коммиты за период
+            devs = devs.filter(function(d) { return (d.totalCommits || 0) > 0; });
+            if (devs.length === 0) return;
+
+            devs.sort(function(a, b) { return (b.totalCommits || 0) - (a.totalCommits || 0); });
+
+            var $section = $('<div class="ujg-pa-section"><h3>👨‍💻 Аналитика по разработчикам</h3></div>');
+            $section.append('<div class="ujg-pa-note">Фильтр: показаны только разработчики, которые делали коммиты за период</div>');
+
+            devs.forEach(function(dev) {
+                var summary = dev.summary || {};
+                var $card = $('<div class="ujg-pa-dev-card" style="border:1px solid #dfe1e6;border-radius:3px;padding:12px;margin:12px 0;background:#fff;"></div>');
+                $card.append('<h4 style="margin:0 0 8px 0;">' + escapeHtml(dev.name || "—") + "</h4>");
+
+                var totalIssuesInDev = summary.issuesWithCommits !== undefined ? summary.issuesWithCommits : (summary.totalIssues || 0);
+
+                var $stats = $('<div class="ujg-pa-dev-stats"></div>');
+                $stats.append('<p><strong>📊 Общая статистика:</strong> ' +
+                    'Коммитов: <strong>' + (dev.totalCommits || 0) + '</strong> | ' +
+                    'Pull Requests: <strong>' + (dev.totalPRs || 0) + '</strong> | ' +
+                    'Мержей: <strong>' + (dev.totalMerged || 0) + '</strong> | ' +
+                    'Задач в работе: <strong>' + (summary.tasksInWork || 0) + '</strong>' +
+                    '</p>');
+
+                $stats.append('<p><strong>⏱️ Средние показатели:</strong> ' +
+                    'Взял → первый коммит: <strong>' + formatDays(summary.avgDaysToFirstCommit) + '</strong> | ' +
+                    'Коммитов на задачу: <strong>' + (summary.avgCommitsPerIssue ? (Math.round(summary.avgCommitsPerIssue * 10) / 10).toFixed(1) : "0.0") + '</strong> | ' +
+                    'Последний коммит → закрытие: <strong>' + formatDays(summary.avgDaysToClose) + '</strong>' +
+                    '</p>');
+
+                $stats.append('<p><strong>✅ Качество:</strong> ' +
+                    'Стабильно закрыто: <strong>' + (summary.stableClosed || 0) + '</strong> | ' +
+                    'Вернулось на доработку: <strong>' + (summary.returnedToWork || 0) + '</strong> | ' +
+                    'После коммита → done: <strong>' + (summary.wentToDone || 0) + '</strong> | ' +
+                    'После коммита → work: <strong>' + (summary.wentToWorkAfterCommit || 0) + '</strong>' +
+                    '</p>');
+
+                $card.append($stats);
+
+                // Детали по задачам (только задачи с коммитами)
+                var issues = Object.keys(dev.issues || {}).map(function(k) { return dev.issues[k]; })
+                    .filter(function(issueData) { return issueData && issueData.commits && issueData.commits.length > 0; });
+
+                if (issues.length > 0) {
+                    issues.sort(function(a, b) {
+                        var ad = a.metrics && a.metrics.daysToFirstCommit !== null ? a.metrics.daysToFirstCommit : 999999;
+                        var bd = b.metrics && b.metrics.daysToFirstCommit !== null ? b.metrics.daysToFirstCommit : 999999;
+                        return ad - bd;
+                    });
+
+                    var $table = $('<table class="ujg-pa-table"><thead><tr>' +
+                        '<th>Задача</th>' +
+                        '<th>Взял → Коммит</th>' +
+                        '<th>Комм</th>' +
+                        '<th>Комм/день</th>' +
+                        '<th>Закрыто</th>' +
+                        '<th>Возврат</th>' +
+                        '</tr></thead><tbody></tbody></table>');
+
+                    issues.forEach(function(issueData) {
+                        var m = issueData.metrics || {};
+                        var issueKey = issueData.key || "—";
+                        var issueUrl = baseUrl + "/browse/" + issueKey;
+                        var $row = $("<tr></tr>");
+                        $row.append('<td><a href="' + issueUrl + '" target="_blank">' + escapeHtml(issueKey) + "</a></td>");
+                        $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
+                        $row.append("<td>" + (m.commitCount || 0) + "</td>");
+                        $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + (m.wentToDone ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + ((m.returnedToWork || m.wentToWorkAfterCommit) ? "✓" : "—") + "</td>");
+                        $table.find("tbody").append($row);
+                    });
+
+                    $card.append('<div style="margin-top:8px;"><strong>📋 Детали по задачам:</strong></div>');
+                    $card.append($table);
+                } else {
+                    $card.append('<div class="ujg-pa-note">Нет задач с коммитами за выбранный период.</div>');
+                }
+
+                $section.append($card);
+            });
+
+            $parent.append($section);
+        }
         
         function renderCategoryHeatmap($parent) {
             var summary = state.analyticsSummary;
@@ -293,6 +388,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             renderTeamMetricsSection($resultsContainer);
             renderVelocitySection($resultsContainer);
             renderDevCycleSection($resultsContainer);
+            renderDeveloperAnalyticsSection($resultsContainer);
             renderBottlenecksSection($resultsContainer);
             renderTrendPlaceholder($resultsContainer);
         }

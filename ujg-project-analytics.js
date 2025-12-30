@@ -988,7 +988,67 @@ define("_ujgPA_dataCollection", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA
         function loadIssueDevStatus(issue) {
             var d = $.Deferred();
             var started = Date.now();
-            var req = $.ajax({
+
+            function mergeDevStatus(repoResp, prResp) {
+                // Объединяем ответы dev-status для repository и pullrequest в одну структуру
+                var base = repoResp && typeof repoResp === "object" ? repoResp : {};
+                var add = prResp && typeof prResp === "object" ? prResp : {};
+                if (!base.detail || !Array.isArray(base.detail)) base.detail = [];
+                if (!add.detail || !Array.isArray(add.detail)) return base;
+
+                function detailKey(dtl) {
+                    if (!dtl) return "";
+                    return (dtl.applicationLinkId || "") + "|" + (dtl.instanceId || "") + "|" + (dtl.type || dtl.typeName || "") + "|" + (dtl.name || "");
+                }
+                function repoKey(repo) {
+                    if (!repo) return "";
+                    return (repo.url || "") + "|" + (repo.name || "") + "|" + (repo.id || "");
+                }
+
+                add.detail.forEach(function(addDetail) {
+                    var key = detailKey(addDetail);
+                    var targetDetail = null;
+                    for (var i = 0; i < base.detail.length; i++) {
+                        if (detailKey(base.detail[i]) === key) {
+                            targetDetail = base.detail[i];
+                            break;
+                        }
+                    }
+                    if (!targetDetail) {
+                        base.detail.push(addDetail);
+                        return;
+                    }
+                    if (!targetDetail.repositories || !Array.isArray(targetDetail.repositories)) targetDetail.repositories = [];
+                    (addDetail.repositories || []).forEach(function(addRepo) {
+                        var rKey = repoKey(addRepo);
+                        var targetRepo = null;
+                        for (var j = 0; j < targetDetail.repositories.length; j++) {
+                            if (repoKey(targetDetail.repositories[j]) === rKey) {
+                                targetRepo = targetDetail.repositories[j];
+                                break;
+                            }
+                        }
+                        if (!targetRepo) {
+                            targetDetail.repositories.push(addRepo);
+                            return;
+                        }
+                        // Мержим PR-данные и/или другие поля
+                        if (addRepo.pullRequests && Array.isArray(addRepo.pullRequests)) {
+                            targetRepo.pullRequests = addRepo.pullRequests;
+                        }
+                        if (addRepo.branches && Array.isArray(addRepo.branches)) {
+                            targetRepo.branches = addRepo.branches;
+                        }
+                        if (addRepo.commits && Array.isArray(addRepo.commits)) {
+                            targetRepo.commits = addRepo.commits;
+                        }
+                    });
+                });
+
+                return base;
+            }
+
+            var reqRepo = $.ajax({
                 url: baseUrl + "/rest/dev-status/1.0/issue/detail",
                 type: "GET",
                 dataType: "json",
@@ -998,10 +1058,26 @@ define("_ujgPA_dataCollection", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA
                     dataType: "repository"
                 }
             });
-            addRequest(req);
-            req.done(function(resp) {
+            var reqPR = $.ajax({
+                url: baseUrl + "/rest/dev-status/1.0/issue/detail",
+                type: "GET",
+                dataType: "json",
+                data: {
+                    issueId: issue.id,
+                    applicationType: "stash",
+                    dataType: "pullrequest"
+                }
+            });
+
+            addRequest(reqRepo);
+            addRequest(reqPR);
+
+            $.when(reqRepo, reqPR).done(function(repoResp, prResp) {
+                // jQuery ajax + when -> массивы [data, statusText, jqXHR]
+                var repoData = repoResp && repoResp[0] ? repoResp[0] : repoResp;
+                var prData = prResp && prResp[0] ? prResp[0] : prResp;
                 tracker.track("dev-status", "done", Date.now() - started);
-                issue.devStatus = resp || {};
+                issue.devStatus = mergeDevStatus(repoData, prData) || {};
                 d.resolve(issue.devStatus);
             }).fail(function(jqXHR, textStatus) {
                 tracker.track("dev-status", "error", Date.now() - started);
@@ -1783,9 +1859,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             if (statusEvents.length > 0 && metrics.lastCommit) {
                 var lastCommitTime = metrics.lastCommit;
                 var doneAfterCommit = false;
-                var workAfterCommit = false;
                 var stableClose = true;
-                var lastDoneTime = null;
                 
                 statusEvents.forEach(function(evt) {
                     var evtTime = evt.at;
@@ -1794,22 +1868,23 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     var toIsDone = workflow.statusHasCategory(evt.to, "done", state.workflowConfig);
                     var toIsWork = workflow.statusHasCategory(evt.to, "work", state.workflowConfig);
                     var fromIsDone = workflow.statusHasCategory(evt.from, "done", state.workflowConfig);
+                    var fromIsWork = workflow.statusHasCategory(evt.from, "work", state.workflowConfig);
                     var fromIsTesting = workflow.statusHasCategory(evt.from, "testing", state.workflowConfig);
+                    var fromIsReview = workflow.statusHasCategory(evt.from, "review", state.workflowConfig);
                     
                     if (toIsDone && !doneAfterCommit) {
                         doneAfterCommit = true;
                         metrics.wentToDone = true;
-                        lastDoneTime = evtTime;
                         metrics.daysToClose = (evtTime - lastCommitTime) / 86400000;
                     }
                     
-                    if (fromIsTesting && toIsWork) {
-                        metrics.returnedToWork = true;
-                    }
-                    
-                    if (toIsWork && evtTime > lastCommitTime) {
-                        workAfterCommit = true;
+                    // Возврат "на доработку" после коммита: переход в work из НЕ-work (review/testing/done/и т.п.)
+                    if (toIsWork && !fromIsWork) {
                         metrics.wentToWorkAfterCommit = true;
+                        // Более строгий "возврат": из review/testing/done -> work
+                        if (fromIsDone || fromIsTesting || fromIsReview) {
+                            metrics.returnedToWork = true;
+                        }
                     }
                     
                     if (fromIsDone && !toIsDone) {
@@ -1827,6 +1902,8 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
         function calculateDeveloperSummary(dev) {
             var issues = Object.keys(dev.issues);
             var totalIssues = issues.length;
+            var issuesWithCommits = 0;
+            var issuesWithFirstCommit = 0;
             var totalDaysToFirstCommit = 0;
             var totalCommitsPerIssue = 0;
             var totalDaysToClose = 0;
@@ -1835,13 +1912,19 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var wentToDone = 0;
             var wentToWorkAfterCommit = 0;
             var commitsPerDayCount = 0;
+            var tasksInWork = 0;
             
             issues.forEach(function(issueKey) {
                 var issueData = dev.issues[issueKey];
                 var metrics = issueData.metrics || {};
+
+                if ((issueData.commits || []).length > 0) {
+                    issuesWithCommits += 1;
+                }
                 
                 if (metrics.daysToFirstCommit !== null) {
                     totalDaysToFirstCommit += metrics.daysToFirstCommit;
+                    issuesWithFirstCommit += 1;
                 }
                 totalCommitsPerIssue += metrics.commitCount || 0;
                 if (metrics.daysToClose !== null) {
@@ -1852,12 +1935,18 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 if (metrics.wentToDone) wentToDone += 1;
                 if (metrics.wentToWorkAfterCommit) wentToWorkAfterCommit += 1;
                 if (metrics.commitsPerDay) commitsPerDayCount += 1;
+
+                if (issueData.currentStatusIsWork) {
+                    tasksInWork += 1;
+                }
             });
             
             return {
                 totalIssues: totalIssues,
-                avgDaysToFirstCommit: totalIssues > 0 ? totalDaysToFirstCommit / totalIssues : 0,
-                avgCommitsPerIssue: totalIssues > 0 ? totalCommitsPerIssue / totalIssues : 0,
+                issuesWithCommits: issuesWithCommits,
+                tasksInWork: tasksInWork,
+                avgDaysToFirstCommit: issuesWithFirstCommit > 0 ? totalDaysToFirstCommit / issuesWithFirstCommit : 0,
+                avgCommitsPerIssue: issuesWithCommits > 0 ? totalCommitsPerIssue / issuesWithCommits : 0,
                 avgDaysToClose: wentToDone > 0 ? totalDaysToClose / wentToDone : 0,
                 stableClosed: stableClosed,
                 returnedToWork: returnedToWork,
@@ -1956,6 +2045,9 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     if (!issue) return;
                     
                     var issueData = dev.issues[issueKey];
+                    var currentStatusName = issue && issue.fields && issue.fields.status && issue.fields.status.name ? issue.fields.status.name : "";
+                    issueData.currentStatusName = currentStatusName;
+                    issueData.currentStatusIsWork = currentStatusName ? workflow.statusHasCategory(currentStatusName, "work", state.workflowConfig) : false;
                     
                     issueData.worklogs = extractWorklogsForDeveloper(issue, author, bounds);
                     issueData.statusEvents = extractFieldEvents(issue, "status");
@@ -2267,6 +2359,101 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             });
             return result;
         }
+
+        function formatDays(days) {
+            if (days === null || days === undefined || isNaN(days)) return "—";
+            return (Math.round(days * 10) / 10) + " дн.";
+        }
+
+        function renderDeveloperAnalyticsSection($parent) {
+            var devsMap = state.developerAnalytics;
+            if (!devsMap) return;
+
+            var devs = Object.keys(devsMap).map(function(name) { return devsMap[name]; });
+            // По спеку: показываем только разработчиков, у кого были коммиты за период
+            devs = devs.filter(function(d) { return (d.totalCommits || 0) > 0; });
+            if (devs.length === 0) return;
+
+            devs.sort(function(a, b) { return (b.totalCommits || 0) - (a.totalCommits || 0); });
+
+            var $section = $('<div class="ujg-pa-section"><h3>👨‍💻 Аналитика по разработчикам</h3></div>');
+            $section.append('<div class="ujg-pa-note">Фильтр: показаны только разработчики, которые делали коммиты за период</div>');
+
+            devs.forEach(function(dev) {
+                var summary = dev.summary || {};
+                var $card = $('<div class="ujg-pa-dev-card" style="border:1px solid #dfe1e6;border-radius:3px;padding:12px;margin:12px 0;background:#fff;"></div>');
+                $card.append('<h4 style="margin:0 0 8px 0;">' + escapeHtml(dev.name || "—") + "</h4>");
+
+                var totalIssuesInDev = summary.issuesWithCommits !== undefined ? summary.issuesWithCommits : (summary.totalIssues || 0);
+
+                var $stats = $('<div class="ujg-pa-dev-stats"></div>');
+                $stats.append('<p><strong>📊 Общая статистика:</strong> ' +
+                    'Коммитов: <strong>' + (dev.totalCommits || 0) + '</strong> | ' +
+                    'Pull Requests: <strong>' + (dev.totalPRs || 0) + '</strong> | ' +
+                    'Мержей: <strong>' + (dev.totalMerged || 0) + '</strong> | ' +
+                    'Задач в работе: <strong>' + (summary.tasksInWork || 0) + '</strong>' +
+                    '</p>');
+
+                $stats.append('<p><strong>⏱️ Средние показатели:</strong> ' +
+                    'Взял → первый коммит: <strong>' + formatDays(summary.avgDaysToFirstCommit) + '</strong> | ' +
+                    'Коммитов на задачу: <strong>' + (summary.avgCommitsPerIssue ? (Math.round(summary.avgCommitsPerIssue * 10) / 10).toFixed(1) : "0.0") + '</strong> | ' +
+                    'Последний коммит → закрытие: <strong>' + formatDays(summary.avgDaysToClose) + '</strong>' +
+                    '</p>');
+
+                $stats.append('<p><strong>✅ Качество:</strong> ' +
+                    'Стабильно закрыто: <strong>' + (summary.stableClosed || 0) + '</strong> | ' +
+                    'Вернулось на доработку: <strong>' + (summary.returnedToWork || 0) + '</strong> | ' +
+                    'После коммита → done: <strong>' + (summary.wentToDone || 0) + '</strong> | ' +
+                    'После коммита → work: <strong>' + (summary.wentToWorkAfterCommit || 0) + '</strong>' +
+                    '</p>');
+
+                $card.append($stats);
+
+                // Детали по задачам (только задачи с коммитами)
+                var issues = Object.keys(dev.issues || {}).map(function(k) { return dev.issues[k]; })
+                    .filter(function(issueData) { return issueData && issueData.commits && issueData.commits.length > 0; });
+
+                if (issues.length > 0) {
+                    issues.sort(function(a, b) {
+                        var ad = a.metrics && a.metrics.daysToFirstCommit !== null ? a.metrics.daysToFirstCommit : 999999;
+                        var bd = b.metrics && b.metrics.daysToFirstCommit !== null ? b.metrics.daysToFirstCommit : 999999;
+                        return ad - bd;
+                    });
+
+                    var $table = $('<table class="ujg-pa-table"><thead><tr>' +
+                        '<th>Задача</th>' +
+                        '<th>Взял → Коммит</th>' +
+                        '<th>Комм</th>' +
+                        '<th>Комм/день</th>' +
+                        '<th>Закрыто</th>' +
+                        '<th>Возврат</th>' +
+                        '</tr></thead><tbody></tbody></table>');
+
+                    issues.forEach(function(issueData) {
+                        var m = issueData.metrics || {};
+                        var issueKey = issueData.key || "—";
+                        var issueUrl = baseUrl + "/browse/" + issueKey;
+                        var $row = $("<tr></tr>");
+                        $row.append('<td><a href="' + issueUrl + '" target="_blank">' + escapeHtml(issueKey) + "</a></td>");
+                        $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
+                        $row.append("<td>" + (m.commitCount || 0) + "</td>");
+                        $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + (m.wentToDone ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + ((m.returnedToWork || m.wentToWorkAfterCommit) ? "✓" : "—") + "</td>");
+                        $table.find("tbody").append($row);
+                    });
+
+                    $card.append('<div style="margin-top:8px;"><strong>📋 Детали по задачам:</strong></div>');
+                    $card.append($table);
+                } else {
+                    $card.append('<div class="ujg-pa-note">Нет задач с коммитами за выбранный период.</div>');
+                }
+
+                $section.append($card);
+            });
+
+            $parent.append($section);
+        }
         
         function renderCategoryHeatmap($parent) {
             var summary = state.analyticsSummary;
@@ -2529,6 +2716,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             renderTeamMetricsSection($resultsContainer);
             renderVelocitySection($resultsContainer);
             renderDevCycleSection($resultsContainer);
+            renderDeveloperAnalyticsSection($resultsContainer);
             renderBottlenecksSection($resultsContainer);
             renderTrendPlaceholder($resultsContainer);
         }
