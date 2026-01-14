@@ -422,18 +422,22 @@
     display: inline-block;
     padding: 2px 8px;
     border-radius: 999px;
-    border: 1px solid rgba(9, 30, 66, 0.13);
+    border: none;
     font-size: 12px;
     line-height: 18px;
     white-space: nowrap;
 }
 
-.ujg-pa-issue-pill {
+.ujg-pa-issue-link {
     text-decoration: none;
 }
 
-.ujg-pa-issue-pill:hover {
+.ujg-pa-issue-link:hover .ujg-pa-issue-summary {
     text-decoration: underline;
+}
+
+.ujg-pa-issue-key {
+    font-weight: 700;
 }
 
 .ujg-pa-status-pill {

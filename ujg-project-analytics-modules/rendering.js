@@ -48,11 +48,18 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             if (!key) return "—";
             ensureIssueIndex();
             var cat = issueIndex[key] && issueIndex[key].primaryCat ? issueIndex[key].primaryCat : "";
-            var label = formatIssueLabel(key);
+            var summary = issueIndex[key] && issueIndex[key].summary ? String(issueIndex[key].summary) : "";
             var issueUrl = baseUrl + "/browse/" + encodeURIComponent(key);
-            var cls = "ujg-pa-pill ujg-pa-issue-pill";
-            if (cat) cls += " ujg-pa-cat-" + cat;
-            return '<a class="' + cls + '" href="' + issueUrl + '" target="_blank">' + escapeHtml(label) + "</a>";
+            var pillCls = "ujg-pa-pill ujg-pa-issue-key";
+            if (cat) pillCls += " ujg-pa-cat-" + cat;
+            var title = formatIssueLabel(key);
+            var html = '<a class="ujg-pa-issue-link" href="' + issueUrl + '" target="_blank" title="' + escapeHtml(title) + '">';
+            html += '<span class="' + pillCls + '">' + escapeHtml(key) + "</span>";
+            if (summary) {
+                html += '<span class="ujg-pa-issue-summary"> — ' + escapeHtml(summary) + "</span>";
+            }
+            html += "</a>";
+            return html;
         }
 
         function renderStatusPill(statusName) {
