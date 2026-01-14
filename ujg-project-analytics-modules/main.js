@@ -1,5 +1,5 @@
 // Главный класс MyGadget и инициализация
-define("_ujgPA_main", ["jquery", "_ujgCommon", "_ujgPA_config", "_ujgPA_utils", "_ujgPA_storage", "_ujgPA_workflow", "_ujgPA_apiTracker", "_ujgPA_progressModal", "_ujgPA_settingsModal", "_ujgPA_dataCollection", "_ujgPA_basicAnalytics", "_ujgPA_devCycle", "_ujgPA_developerAnalytics", "_ujgPA_bottlenecks", "_ujgPA_riskAssessment", "_ujgPA_teamMetrics", "_ujgPA_velocity", "_ujgPA_rendering"], function($, Common, config, utils, storage, workflow, apiTracker, progressModal, settingsModal, dataCollection, basicAnalytics, devCycle, developerAnalytics, bottlenecks, riskAssessment, teamMetrics, velocity, rendering) {
+define("_ujgPA_main", ["jquery", "_ujgCommon", "_ujgPA_config", "_ujgPA_utils", "_ujgPA_storage", "_ujgPA_workflow", "_ujgPA_apiTracker", "_ujgPA_progressModal", "_ujgPA_settingsModal", "_ujgPA_dataCollection", "_ujgPA_basicAnalytics", "_ujgPA_devCycle", "_ujgPA_developerAnalytics", "_ujgPA_testerAnalytics", "_ujgPA_bottlenecks", "_ujgPA_riskAssessment", "_ujgPA_teamMetrics", "_ujgPA_velocity", "_ujgPA_rendering"], function($, Common, config, utils, storage, workflow, apiTracker, progressModal, settingsModal, dataCollection, basicAnalytics, devCycle, developerAnalytics, testerAnalytics, bottlenecks, riskAssessment, teamMetrics, velocity, rendering) {
     "use strict";
     
     var CONFIG = config.CONFIG;
@@ -82,6 +82,7 @@ define("_ujgPA_main", ["jquery", "_ujgCommon", "_ujgPA_config", "_ujgPA_utils", 
         var basicAnalyticsCalc = basicAnalytics.createBasicAnalytics(state);
         var devCycleAnalyzer = devCycle.createDevCycleAnalyzer(state);
         var developerAnalyticsCalc = developerAnalytics.createDeveloperAnalytics(state);
+        var testerAnalyticsCalc = testerAnalytics.createTesterAnalytics(state);
         var bottleneckDetector = bottlenecks.createBottleneckDetector(state);
         var riskAssessor = riskAssessment.createRiskAssessor(state);
         var teamMetricsCalc = teamMetrics.createTeamMetricsCalculator(state);
@@ -243,6 +244,7 @@ define("_ujgPA_main", ["jquery", "_ujgCommon", "_ujgPA_config", "_ujgPA_utils", 
             bottleneckDetector.detectBottlenecks(issues);
             devCycleAnalyzer.calculateDevSummary(issues);
             developerAnalyticsCalc.calculateDeveloperAnalytics(issues);
+            testerAnalyticsCalc.calculateTesterAnalytics(issues);
             riskAssessor.calculateRiskScores(issues);
             teamMetricsCalc.calculateTeamMetrics(issues);
             velocityCalc.calculateVelocity(issues);

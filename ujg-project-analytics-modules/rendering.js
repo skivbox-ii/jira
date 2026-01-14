@@ -274,6 +274,93 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
 
             $parent.append($section);
         }
+
+        function renderTesterAnalyticsSection($parent) {
+            var map = state.testerAnalytics;
+            if (!map) return;
+            var testers = Object.keys(map).map(function(k) { return map[k]; });
+            if (!testers.length) return;
+
+            testers.sort(function(a, b) {
+                return (b.tested || 0) - (a.tested || 0);
+            });
+
+            var $section = $('<div class="ujg-pa-section"><h3>🧪 Аналитика по тестировщикам</h3></div>');
+            $section.append('<div class="ujg-pa-note">Считается по переходам из категории testing (changelog.author). Учитываются только задачи с коммитами за период.</div>');
+
+            var $table = $('<table class="ujg-pa-table"><thead><tr>' +
+                '<th>QA</th>' +
+                '<th>Задач</th>' +
+                '<th>Пройдено</th>' +
+                '<th>Возврат</th>' +
+                '<th>Pass %</th>' +
+                '<th>Avg время теста</th>' +
+                '<th>Пропущено</th>' +
+                '</tr></thead><tbody></tbody></table>');
+
+            testers.forEach(function(t) {
+                var passPct = t.tested ? Math.round((t.passed || 0) / t.tested * 100) : 0;
+                var $row = $("<tr></tr>");
+                $row.append("<td>" + escapeHtml(t.name || "—") + "</td>");
+                $row.append("<td>" + (t.tested || 0) + "</td>");
+                $row.append("<td>" + (t.passed || 0) + "</td>");
+                $row.append("<td>" + (t.returned || 0) + "</td>");
+                $row.append("<td>" + passPct + "%</td>");
+                $row.append("<td>" + formatDuration(t.avgTestSeconds || 0) + "</td>");
+                $row.append("<td>" + (t.escapedBugs || 0) + "</td>");
+                $table.find("tbody").append($row);
+            });
+
+            $section.append($table);
+
+            // Детали по топ QA
+            testers.slice(0, 6).forEach(function(t) {
+                var $card = $('<div class="ujg-pa-dev-card" style="border:1px solid #dfe1e6;border-radius:3px;padding:12px;margin:12px 0;background:#fff;"></div>');
+                $card.append('<h4 style="margin:0 0 8px 0;">' + escapeHtml(t.name || "—") + "</h4>");
+                var passPct = t.tested ? Math.round((t.passed || 0) / t.tested * 100) : 0;
+                $card.append('<p style="margin:6px 0;">' +
+                    'Задач: <strong>' + (t.tested || 0) + '</strong> | ' +
+                    'Пройдено: <strong>' + (t.passed || 0) + '</strong> | ' +
+                    'Возврат: <strong>' + (t.returned || 0) + '</strong> | ' +
+                    'Pass: <strong>' + passPct + '%</strong> | ' +
+                    'Avg тест: <strong>' + formatDuration(t.avgTestSeconds || 0) + '</strong> | ' +
+                    'Пропущено: <strong>' + (t.escapedBugs || 0) + '</strong>' +
+                    '</p>');
+
+                // кому чаще возвращает
+                var devs = Object.keys(t.byDeveloper || {}).map(function(name) {
+                    var st = t.byDeveloper[name] || {};
+                    return { name: name, tested: st.tested || 0, returned: st.returned || 0 };
+                }).sort(function(a, b) { return b.returned - a.returned; });
+                if (devs.length) {
+                    var top = devs.slice(0, 5).map(function(d) {
+                        return escapeHtml(d.name) + ": " + d.returned + "/" + d.tested;
+                    }).join(", ");
+                    $card.append('<div class="ujg-pa-note">Кому возвращает чаще: ' + top + "</div>");
+                }
+
+                var details = (t.issues || []).slice(0, 12);
+                if (details.length) {
+                    var $dt = $('<table class="ujg-pa-table"><thead><tr>' +
+                        '<th>Задача</th><th>Из</th><th>В</th><th>Время</th><th>Dev</th>' +
+                        '</tr></thead><tbody></tbody></table>');
+                    details.forEach(function(it) {
+                        var $r = $("<tr></tr>");
+                        $r.append("<td>" + renderIssueLink(it.key) + "</td>");
+                        $r.append("<td>" + renderStatusPill(it.from) + "</td>");
+                        $r.append("<td>" + renderStatusPill(it.to) + "</td>");
+                        $r.append("<td>" + formatDuration(it.testSeconds || 0) + "</td>");
+                        $r.append("<td>" + escapeHtml(it.developer || "—") + "</td>");
+                        $dt.find("tbody").append($r);
+                    });
+                    $card.append($dt);
+                }
+
+                $section.append($card);
+            });
+
+            $parent.append($section);
+        }
         
         function renderCategoryHeatmap($parent) {
             var summary = state.analyticsSummary;
@@ -636,6 +723,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             renderVelocitySection($resultsContainer);
             renderDevCycleSection($resultsContainer);
             renderDeveloperAnalyticsSection($resultsContainer);
+            renderTesterAnalyticsSection($resultsContainer);
             renderBottlenecksSection($resultsContainer);
             renderTopTransitionPaths($resultsContainer);
             renderStatusTransitionMatrix($resultsContainer);

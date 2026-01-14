@@ -23,6 +23,7 @@ var MODULE_ORDER = [
     'basic-analytics.js',
     'dev-cycle.js',
     'developer-analytics.js',
+    'tester-analytics.js',
     'bottlenecks.js',
     'risk-assessment.js',
     'team-metrics.js',
