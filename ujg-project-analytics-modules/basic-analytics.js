@@ -45,6 +45,16 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
             events.sort(function(a, b) { return a.at - b.at; });
             return events;
         }
+
+        // События по полю, отфильтрованные по выбранному диапазону (inclusive).
+        // Важно: для расчётов "время в статусах" нужен полный таймлайн, поэтому
+        // это отдельная функция, а не изменение extractFieldEvents().
+        function extractFieldEventsInPeriod(issue, fieldName, bounds) {
+            var b = bounds || getPeriodBounds();
+            return (extractFieldEvents(issue, fieldName) || []).filter(function(e) {
+                return e && e.at && e.at >= b.start && e.at <= b.end;
+            });
+        }
         
         function buildTimelineSegments(issue, fieldName, initialValue) {
             var events = extractFieldEvents(issue, fieldName);
@@ -244,9 +254,10 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
             var examplePaths = {};  // "A→B→C" -> example key
             var statusPaths = {};   // "Status1→Status2→..." -> count
             var exampleStatusPaths = {}; // path -> example key
+            var bounds = getPeriodBounds();
 
             (issues || []).forEach(function(issue) {
-                var events = extractFieldEvents(issue, "status") || [];
+                var events = extractFieldEventsInPeriod(issue, "status", bounds) || [];
                 if (events.length === 0) return;
 
                 // transition matrix (по статусам)
@@ -261,7 +272,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 });
 
                 // цепочка по категориям (сжатая, чтобы не было A→A→A)
-                var initialStatus = getInitialStatus(issue);
+                // стартовое состояние для периода — статус перед первым событием в периоде
+                var initialStatus = normalizeStatusLabel(events[0].from || events[0].to || getInitialStatus(issue));
                 var seq = [];
                 seq.push(pickPrimaryCategory(initialStatus));
                 events.forEach(function(evt) {
@@ -354,10 +366,11 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 analytics.cycleTimeSeconds = timing.cycleSeconds;
                 analytics.waitTimeSeconds = timing.waitSeconds;
                 
-                var statusEvents = extractFieldEvents(issue, "status");
+                var bounds = getPeriodBounds();
+                var statusEvents = extractFieldEventsInPeriod(issue, "status", bounds);
                 analytics.reopenCount = countReopens(statusEvents);
-                analytics.sprintChanges = extractFieldEvents(issue, "sprint").length;
-                analytics.assigneeChanges = extractFieldEvents(issue, "assignee").length;
+                analytics.sprintChanges = extractFieldEventsInPeriod(issue, "sprint", bounds).length;
+                analytics.assigneeChanges = extractFieldEventsInPeriod(issue, "assignee", bounds).length;
                 analytics.lastActivity = getLastActivityDate(issue);
                 
                 summary.totalLeadSeconds += timing.leadSeconds;
@@ -374,6 +387,7 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
         return {
             calculateAnalytics: calculateAnalytics,
             extractFieldEvents: extractFieldEvents,
+            extractFieldEventsInPeriod: extractFieldEventsInPeriod,
             getInitialStatus: getInitialStatus,
             getInitialAssignee: getInitialAssignee
         };

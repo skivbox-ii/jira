@@ -3,7 +3,18 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
     "use strict";
     
     function createDevCycleAnalyzer(state) {
-        var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
+        var extractFieldEventsInPeriod = basicAnalytics.createBasicAnalytics(state).extractFieldEventsInPeriod;
+
+        function getPeriodBounds() {
+            var start = utils.parseDateSafe(state.period.start + "T00:00:00");
+            var end = utils.parseDateSafe(state.period.end + "T23:59:59");
+            if (!start || !end || end < start) {
+                var fallback = utils.getDefaultPeriod();
+                start = utils.parseDateSafe(fallback.start + "T00:00:00");
+                end = utils.parseDateSafe(fallback.end + "T23:59:59");
+            }
+            return { start: start, end: end };
+        }
         
         function normalizeTimestamp(value) {
             if (value === undefined || value === null) return null;
@@ -67,7 +78,7 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             return true;
         }
         
-        function parseDevData(devStatus) {
+        function parseDevData(devStatus, bounds) {
             if (!devStatus || !devStatus.detail || !devStatus.detail.length) return null;
             var prCount = 0;
             var merged = 0;
@@ -80,6 +91,18 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             var reviewerDecisionStats = {}; // {name:{approved,needsWork,reviewed}}
             var authorRework = {}; // {author:{needsWorkPrs,totalPrs}}
             var prs = [];
+            var b = bounds || getPeriodBounds();
+
+            function touchesPeriod(prInfo) {
+                if (!prInfo) return false;
+                // включаем PR, если любая из ключевых дат попадает в период
+                var dates = [prInfo.created, prInfo.updated, prInfo.merged];
+                for (var i = 0; i < dates.length; i++) {
+                    var dt = dates[i];
+                    if (dt && dt >= b.start && dt <= b.end) return true;
+                }
+                return false;
+            }
 
             function getPullRequestsFromRepo(repo) {
                 if (!repo) return [];
@@ -127,6 +150,10 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                         firstTimeApproved: false,
                         needsWork: false
                     };
+
+                    // Фильтрация по диапазону (по созданию/обновлению/мерджу).
+                    // Если PR никак не затрагивал выбранный период — не учитываем его в статистике.
+                    if (!touchesPeriod(prInfo)) return;
 
                     if (status === "open" || status === "new") {
                         open += 1;
@@ -225,7 +252,7 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
         }
         
         function detectPingPongPattern(issue) {
-            var statusEvents = extractFieldEvents(issue, "status");
+            var statusEvents = extractFieldEventsInPeriod(issue, "status");
             if (!statusEvents || statusEvents.length === 0) {
                 return { detected: false, iterations: 0 };
             }

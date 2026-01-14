@@ -290,6 +290,20 @@
     margin-bottom: 20px;
 }
 
+.ujg-pa-status-pool-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 8px 0;
+    color: #42526e;
+    font-size: 12px;
+}
+
+.ujg-pa-status-pool-count {
+    color: #6b778c;
+    font-weight: 500;
+}
+
 .ujg-pa-status-list {
     display: flex;
     flex-wrap: wrap;
@@ -308,6 +322,70 @@
     border: 1px solid #dfe1e6;
     border-radius: 3px;
     font-size: 12px;
+    color: #172b4d;
+    position: relative;
+}
+
+.ujg-pa-status-chip-draggable {
+    cursor: grab;
+    user-select: none;
+}
+
+.ujg-pa-status-chip-draggable.ujg-pa-dragging {
+    opacity: 0.6;
+}
+
+.ujg-pa-dropzone {
+    border: 1px dashed transparent;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ujg-pa-dropzone-over {
+    border-color: #0052cc;
+    background: #deebff;
+}
+
+.ujg-pa-category-dropzone {
+    min-height: 72px;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid #dfe1e6;
+    border-radius: 3px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ujg-pa-dropzone-empty {
+    color: #6b778c;
+    font-style: italic;
+    font-size: 12px;
+}
+
+.ujg-pa-status-filter {
+    margin: 8px 0 0 0;
+}
+
+.ujg-pa-status-chip-in-category {
+    padding-right: 24px;
+}
+
+.ujg-pa-chip-remove {
+    position: absolute;
+    top: 0;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    border: none;
+    background: transparent;
+    color: #6b778c;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+}
+
+.ujg-pa-chip-remove:hover {
     color: #172b4d;
 }
 

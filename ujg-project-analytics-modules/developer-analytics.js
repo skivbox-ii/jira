@@ -3,7 +3,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
     "use strict";
     
     function createDeveloperAnalytics(state) {
-        var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
+        var extractFieldEventsInPeriod = basicAnalytics.createBasicAnalytics(state).extractFieldEventsInPeriod;
         var parseDevData = devCycle.createDevCycleAnalyzer(state).parseDevData;
         
         function getPeriodBounds() {
@@ -288,7 +288,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var developers = {};
             
             (issues || []).forEach(function(issue) {
-                var devInfo = parseDevData(issue.devStatus);
+                var devInfo = parseDevData(issue.devStatus, bounds);
                 if (!devInfo) return;
                 
                 var commits = extractCommits(issue.devStatus, bounds);
@@ -377,9 +377,9 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     issueData.currentStatusIsWork = currentStatusName ? workflow.statusHasCategory(currentStatusName, "work", state.workflowConfig) : false;
                     
                     issueData.worklogs = extractWorklogsForDeveloper(issue, author, bounds);
-                    issueData.statusEvents = extractFieldEvents(issue, "status");
+                    issueData.statusEvents = extractFieldEventsInPeriod(issue, "status", bounds);
                     // события назначения на разработчика (fallback для "Взял")
-                    issueData.assigneeEvents = (extractFieldEvents(issue, "assignee") || []).filter(function(e) {
+                    issueData.assigneeEvents = (extractFieldEventsInPeriod(issue, "assignee", bounds) || []).filter(function(e) {
                         return e && e.to && String(e.to) === String(author);
                     }).map(function(e) {
                         return { at: e.at, from: e.from, to: e.to };

@@ -64,23 +64,132 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         cfg.categoryStatuses = cfg.categoryStatuses || {};
         cfg.allStatuses = cfg.allStatuses || [];
         
-        var localStatuses = cfg.allStatuses.slice();
-        var textareas = {};
+        // Нормализуем структуру (на случай старых сохранений)
+        Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
+            if (!cfg.categoryStatuses[cat]) cfg.categoryStatuses[cat] = [];
+        });
+        if (!cfg.statusCategories) {
+            cfg.statusCategories = workflow.buildStatusIndexFromCategory(cfg.categoryStatuses);
+        }
         
-        var $info = $('<p>Распределите статусы Jira по аналитическим категориям. Указывайте по одному статусу на строку.</p>');
+        var allStatuses = utils.uniqueList(cfg.allStatuses
+            .concat(Object.keys(cfg.statusCategories || {}))
+            .concat([].concat.apply([], Object.keys(cfg.categoryStatuses || {}).map(function(cat) { return cfg.categoryStatuses[cat] || []; })))
+        );
+        
+        // Локальное состояние для UI
+        var categoryLists = {};
+        Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
+            categoryLists[cat] = utils.uniqueList(cfg.categoryStatuses[cat] || []);
+        });
+        
+        function computeAssignedSet() {
+            var assigned = {};
+            Object.keys(categoryLists).forEach(function(cat) {
+                (categoryLists[cat] || []).forEach(function(s) {
+                    var name = utils.normalizeStatusName(s);
+                    if (!name) return;
+                    assigned[name] = true;
+                });
+            });
+            return assigned;
+        }
+        
+        function computePoolStatuses() {
+            var assigned = computeAssignedSet();
+            return allStatuses.filter(function(s) { return !assigned[s]; });
+        }
+        
+        function removeFromAllCategories(status) {
+            Object.keys(categoryLists).forEach(function(cat) {
+                categoryLists[cat] = (categoryLists[cat] || []).filter(function(s) { return s !== status; });
+            });
+        }
+        
+        function ensureInAllStatuses(status) {
+            if (allStatuses.indexOf(status) === -1) allStatuses.push(status);
+        }
+        
+        function moveStatus(status, targetCat) {
+            var name = utils.normalizeStatusName(status);
+            if (!name) return;
+            ensureInAllStatuses(name);
+            
+            // По умолчанию один статус = одна категория.
+            // Перетаскивание в категорию удаляет из других категорий.
+            removeFromAllCategories(name);
+            
+            if (targetCat) {
+                if (!categoryLists[targetCat]) categoryLists[targetCat] = [];
+                if (categoryLists[targetCat].indexOf(name) === -1) categoryLists[targetCat].push(name);
+            }
+        }
+        
+        function removeStatusToPool(status) {
+            var name = utils.normalizeStatusName(status);
+            if (!name) return;
+            ensureInAllStatuses(name);
+            removeFromAllCategories(name);
+        }
+        
+        function getDragPayload(e) {
+            var dt = e && e.originalEvent && e.originalEvent.dataTransfer;
+            if (!dt) return null;
+            var raw = "";
+            try { raw = dt.getData("application/x-ujg-pa-status") || ""; } catch (err) {}
+            if (raw) {
+                try { return JSON.parse(raw); } catch (err2) {}
+            }
+            // fallback
+            try {
+                var txt = dt.getData("text/plain") || "";
+                txt = utils.normalizeStatusName(txt);
+                if (!txt) return null;
+                return { status: txt };
+            } catch (err3) {}
+            return null;
+        }
+        
+        function setDragPayload(e, payload) {
+            var dt = e && e.originalEvent && e.originalEvent.dataTransfer;
+            if (!dt) return;
+            try {
+                dt.setData("application/x-ujg-pa-status", JSON.stringify(payload || {}));
+                dt.setData("text/plain", payload && payload.status ? payload.status : "");
+            } catch (err) {}
+        }
+        
+        var $info = $('<p>Распределите статусы Jira по аналитическим категориям. Перетаскивайте статусы мышкой из «Нераспределённых» в нужный блок. Статус может быть только в одной категории.</p>');
         var $statusManager = $('<div class="ujg-pa-status-manager"></div>');
-        var $statusList = $('<div class="ujg-pa-status-list"></div>');
+        var $poolHeader = $('<div class="ujg-pa-status-pool-header"></div>');
+        var $poolCount = $('<span class="ujg-pa-status-pool-count"></span>');
+        $poolHeader.append('<strong>Нераспределённые</strong> ', $poolCount);
+        var $statusList = $('<div class="ujg-pa-status-list ujg-pa-dropzone" data-zone="pool"></div>');
         var $statusInput = $('<input type="text" class="ujg-pa-status-input" placeholder="Новый статус...">');
         var $addStatusBtn = $('<button class="aui-button">Добавить</button>');
         
-        function renderStatusList() {
+        function renderStatusList(filterText) {
             $statusList.empty();
-            if (localStatuses.length === 0) {
-                $statusList.append('<span class="ujg-pa-status-chip ujg-pa-status-chip-empty">Статусы пока не заданы</span>');
+            var pool = computePoolStatuses();
+            var q = utils.normalizeStatusName(filterText || "").toLowerCase();
+            if (q) {
+                pool = pool.filter(function(s) { return s.toLowerCase().indexOf(q) >= 0; });
+            }
+            $poolCount.text("(" + computePoolStatuses().length + ")");
+            if (pool.length === 0) {
+                $statusList.append('<span class="ujg-pa-status-chip ujg-pa-status-chip-empty">Нет нераспределённых статусов</span>');
                 return;
             }
-            localStatuses.forEach(function(status) {
-                var $chip = $('<span class="ujg-pa-status-chip"></span>').text(status);
+            pool.forEach(function(status) {
+                var $chip = $('<span class="ujg-pa-status-chip ujg-pa-status-chip-draggable" draggable="true" data-status=""></span>');
+                $chip.attr("data-status", status).text(status);
+                $chip.on("dragstart", function(e) {
+                    $(this).addClass("ujg-pa-dragging");
+                    setDragPayload(e, { status: status, from: "pool" });
+                });
+                $chip.on("dragend", function() {
+                    $(this).removeClass("ujg-pa-dragging");
+                });
                 $statusList.append($chip);
             });
         }
@@ -88,28 +197,101 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         $addStatusBtn.on("click", function() {
             var value = utils.normalizeStatusName($statusInput.val());
             if (!value) return;
-            if (localStatuses.indexOf(value) === -1) {
-                localStatuses.push(value);
-                renderStatusList();
-            }
+            ensureInAllStatuses(value);
+            renderStatusList();
             $statusInput.val("");
         });
         
-        $statusManager.append($statusList, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
+        var $filterRow = $('<div class="ujg-pa-status-filter"></div>');
+        var $filterInput = $('<input type="text" class="ujg-pa-status-input" placeholder="Фильтр статусов...">');
+        $filterInput.on("input", function() { renderStatusList($filterInput.val()); });
+        $filterRow.append($filterInput);
+        
+        $statusManager.append($poolHeader, $statusList, $filterRow, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
         renderStatusList();
         
         var $categories = $('<div class="ujg-pa-categories-grid"></div>');
+        
+        function renderCategory(cat, $dropzone) {
+            $dropzone.empty();
+            var items = categoryLists[cat] || [];
+            if (!items.length) {
+                $dropzone.append('<div class="ujg-pa-dropzone-empty">Перетащите статус сюда</div>');
+                return;
+            }
+            items.forEach(function(status) {
+                var $chip = $('<span class="ujg-pa-status-chip ujg-pa-status-chip-draggable ujg-pa-status-chip-in-category" draggable="true"></span>');
+                $chip.text(status);
+                $chip.attr("data-status", status);
+                var $rm = $('<button type="button" class="ujg-pa-chip-remove" title="Убрать">×</button>');
+                $rm.on("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    removeStatusToPool(status);
+                    renderAll();
+                });
+                $chip.append($rm);
+                $chip.on("dragstart", function(e) {
+                    $(this).addClass("ujg-pa-dragging");
+                    setDragPayload(e, { status: status, from: "cat", cat: cat });
+                });
+                $chip.on("dragend", function() {
+                    $(this).removeClass("ujg-pa-dragging");
+                });
+                $dropzone.append($chip);
+            });
+        }
+        
+        function wireDropzone($dz) {
+            $dz.on("dragover", function(e) {
+                e.preventDefault();
+                $(this).addClass("ujg-pa-dropzone-over");
+                try { e.originalEvent.dataTransfer.dropEffect = "move"; } catch (err) {}
+            });
+            $dz.on("dragleave", function() {
+                $(this).removeClass("ujg-pa-dropzone-over");
+            });
+            $dz.on("drop", function(e) {
+                e.preventDefault();
+                $(this).removeClass("ujg-pa-dropzone-over");
+                var payload = getDragPayload(e);
+                if (!payload || !payload.status) return;
+                var zone = $(this).data("zone");
+                var cat = $(this).data("cat");
+                
+                if (zone === "pool") {
+                    removeStatusToPool(payload.status);
+                } else if (zone === "cat" && cat) {
+                    moveStatus(payload.status, cat);
+                }
+                renderAll();
+            });
+        }
+        
+        var categoryDropzones = {};
+        
         Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
             var categoryInfo = STATUS_CATEGORIES[cat];
             var $section = $('<div class="ujg-pa-category-section"></div>');
             $section.append('<h4>' + categoryInfo.name + '</h4>');
             $section.append('<p class="ujg-pa-category-desc">' + categoryInfo.description + '</p>');
-            var $textarea = $('<textarea class="ujg-pa-category-textarea" rows="4" data-cat="' + cat + '"></textarea>');
-            $textarea.val((cfg.categoryStatuses[cat] || []).join("\n"));
-            textareas[cat] = $textarea;
-            $section.append($textarea);
+            var $dropzone = $('<div class="ujg-pa-category-dropzone ujg-pa-dropzone" data-zone="cat" data-cat="' + cat + '"></div>');
+            categoryDropzones[cat] = $dropzone;
+            wireDropzone($dropzone);
+            $section.append($dropzone);
             $categories.append($section);
         });
+        
+        // Пул тоже dropzone (возврат в нераспределённые)
+        wireDropzone($statusList);
+        
+        function renderAll() {
+            renderStatusList($filterInput.val());
+            Object.keys(categoryDropzones).forEach(function(cat) {
+                renderCategory(cat, categoryDropzones[cat]);
+            });
+        }
+        renderAll();
         
         var $actions = $('<div class="ujg-pa-settings-actions"></div>');
         var $saveBtn = $('<button class="aui-button aui-button-primary">Сохранить</button>');
@@ -117,12 +299,11 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         
         $saveBtn.on("click", function() {
             var newCategoryMap = {};
-            Object.keys(textareas).forEach(function(cat) {
-                var values = textareas[cat].val().split(/\n|,/);
-                newCategoryMap[cat] = utils.uniqueList(values);
+            Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
+                newCategoryMap[cat] = utils.uniqueList((categoryLists[cat] || []).slice());
             });
             var statusFromCategories = workflow.buildStatusIndexFromCategory(newCategoryMap);
-            var mergedStatuses = utils.uniqueList(localStatuses.concat(Object.keys(statusFromCategories)));
+            var mergedStatuses = utils.uniqueList(allStatuses.concat(Object.keys(statusFromCategories)));
             
             cfg.categoryStatuses = newCategoryMap;
             cfg.statusCategories = statusFromCategories;

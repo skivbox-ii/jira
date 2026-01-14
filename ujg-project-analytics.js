@@ -565,23 +565,132 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         cfg.categoryStatuses = cfg.categoryStatuses || {};
         cfg.allStatuses = cfg.allStatuses || [];
         
-        var localStatuses = cfg.allStatuses.slice();
-        var textareas = {};
+        // Нормализуем структуру (на случай старых сохранений)
+        Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
+            if (!cfg.categoryStatuses[cat]) cfg.categoryStatuses[cat] = [];
+        });
+        if (!cfg.statusCategories) {
+            cfg.statusCategories = workflow.buildStatusIndexFromCategory(cfg.categoryStatuses);
+        }
         
-        var $info = $('<p>Распределите статусы Jira по аналитическим категориям. Указывайте по одному статусу на строку.</p>');
+        var allStatuses = utils.uniqueList(cfg.allStatuses
+            .concat(Object.keys(cfg.statusCategories || {}))
+            .concat([].concat.apply([], Object.keys(cfg.categoryStatuses || {}).map(function(cat) { return cfg.categoryStatuses[cat] || []; })))
+        );
+        
+        // Локальное состояние для UI
+        var categoryLists = {};
+        Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
+            categoryLists[cat] = utils.uniqueList(cfg.categoryStatuses[cat] || []);
+        });
+        
+        function computeAssignedSet() {
+            var assigned = {};
+            Object.keys(categoryLists).forEach(function(cat) {
+                (categoryLists[cat] || []).forEach(function(s) {
+                    var name = utils.normalizeStatusName(s);
+                    if (!name) return;
+                    assigned[name] = true;
+                });
+            });
+            return assigned;
+        }
+        
+        function computePoolStatuses() {
+            var assigned = computeAssignedSet();
+            return allStatuses.filter(function(s) { return !assigned[s]; });
+        }
+        
+        function removeFromAllCategories(status) {
+            Object.keys(categoryLists).forEach(function(cat) {
+                categoryLists[cat] = (categoryLists[cat] || []).filter(function(s) { return s !== status; });
+            });
+        }
+        
+        function ensureInAllStatuses(status) {
+            if (allStatuses.indexOf(status) === -1) allStatuses.push(status);
+        }
+        
+        function moveStatus(status, targetCat) {
+            var name = utils.normalizeStatusName(status);
+            if (!name) return;
+            ensureInAllStatuses(name);
+            
+            // По умолчанию один статус = одна категория.
+            // Перетаскивание в категорию удаляет из других категорий.
+            removeFromAllCategories(name);
+            
+            if (targetCat) {
+                if (!categoryLists[targetCat]) categoryLists[targetCat] = [];
+                if (categoryLists[targetCat].indexOf(name) === -1) categoryLists[targetCat].push(name);
+            }
+        }
+        
+        function removeStatusToPool(status) {
+            var name = utils.normalizeStatusName(status);
+            if (!name) return;
+            ensureInAllStatuses(name);
+            removeFromAllCategories(name);
+        }
+        
+        function getDragPayload(e) {
+            var dt = e && e.originalEvent && e.originalEvent.dataTransfer;
+            if (!dt) return null;
+            var raw = "";
+            try { raw = dt.getData("application/x-ujg-pa-status") || ""; } catch (err) {}
+            if (raw) {
+                try { return JSON.parse(raw); } catch (err2) {}
+            }
+            // fallback
+            try {
+                var txt = dt.getData("text/plain") || "";
+                txt = utils.normalizeStatusName(txt);
+                if (!txt) return null;
+                return { status: txt };
+            } catch (err3) {}
+            return null;
+        }
+        
+        function setDragPayload(e, payload) {
+            var dt = e && e.originalEvent && e.originalEvent.dataTransfer;
+            if (!dt) return;
+            try {
+                dt.setData("application/x-ujg-pa-status", JSON.stringify(payload || {}));
+                dt.setData("text/plain", payload && payload.status ? payload.status : "");
+            } catch (err) {}
+        }
+        
+        var $info = $('<p>Распределите статусы Jira по аналитическим категориям. Перетаскивайте статусы мышкой из «Нераспределённых» в нужный блок. Статус может быть только в одной категории.</p>');
         var $statusManager = $('<div class="ujg-pa-status-manager"></div>');
-        var $statusList = $('<div class="ujg-pa-status-list"></div>');
+        var $poolHeader = $('<div class="ujg-pa-status-pool-header"></div>');
+        var $poolCount = $('<span class="ujg-pa-status-pool-count"></span>');
+        $poolHeader.append('<strong>Нераспределённые</strong> ', $poolCount);
+        var $statusList = $('<div class="ujg-pa-status-list ujg-pa-dropzone" data-zone="pool"></div>');
         var $statusInput = $('<input type="text" class="ujg-pa-status-input" placeholder="Новый статус...">');
         var $addStatusBtn = $('<button class="aui-button">Добавить</button>');
         
-        function renderStatusList() {
+        function renderStatusList(filterText) {
             $statusList.empty();
-            if (localStatuses.length === 0) {
-                $statusList.append('<span class="ujg-pa-status-chip ujg-pa-status-chip-empty">Статусы пока не заданы</span>');
+            var pool = computePoolStatuses();
+            var q = utils.normalizeStatusName(filterText || "").toLowerCase();
+            if (q) {
+                pool = pool.filter(function(s) { return s.toLowerCase().indexOf(q) >= 0; });
+            }
+            $poolCount.text("(" + computePoolStatuses().length + ")");
+            if (pool.length === 0) {
+                $statusList.append('<span class="ujg-pa-status-chip ujg-pa-status-chip-empty">Нет нераспределённых статусов</span>');
                 return;
             }
-            localStatuses.forEach(function(status) {
-                var $chip = $('<span class="ujg-pa-status-chip"></span>').text(status);
+            pool.forEach(function(status) {
+                var $chip = $('<span class="ujg-pa-status-chip ujg-pa-status-chip-draggable" draggable="true" data-status=""></span>');
+                $chip.attr("data-status", status).text(status);
+                $chip.on("dragstart", function(e) {
+                    $(this).addClass("ujg-pa-dragging");
+                    setDragPayload(e, { status: status, from: "pool" });
+                });
+                $chip.on("dragend", function() {
+                    $(this).removeClass("ujg-pa-dragging");
+                });
                 $statusList.append($chip);
             });
         }
@@ -589,28 +698,101 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         $addStatusBtn.on("click", function() {
             var value = utils.normalizeStatusName($statusInput.val());
             if (!value) return;
-            if (localStatuses.indexOf(value) === -1) {
-                localStatuses.push(value);
-                renderStatusList();
-            }
+            ensureInAllStatuses(value);
+            renderStatusList();
             $statusInput.val("");
         });
         
-        $statusManager.append($statusList, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
+        var $filterRow = $('<div class="ujg-pa-status-filter"></div>');
+        var $filterInput = $('<input type="text" class="ujg-pa-status-input" placeholder="Фильтр статусов...">');
+        $filterInput.on("input", function() { renderStatusList($filterInput.val()); });
+        $filterRow.append($filterInput);
+        
+        $statusManager.append($poolHeader, $statusList, $filterRow, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
         renderStatusList();
         
         var $categories = $('<div class="ujg-pa-categories-grid"></div>');
+        
+        function renderCategory(cat, $dropzone) {
+            $dropzone.empty();
+            var items = categoryLists[cat] || [];
+            if (!items.length) {
+                $dropzone.append('<div class="ujg-pa-dropzone-empty">Перетащите статус сюда</div>');
+                return;
+            }
+            items.forEach(function(status) {
+                var $chip = $('<span class="ujg-pa-status-chip ujg-pa-status-chip-draggable ujg-pa-status-chip-in-category" draggable="true"></span>');
+                $chip.text(status);
+                $chip.attr("data-status", status);
+                var $rm = $('<button type="button" class="ujg-pa-chip-remove" title="Убрать">×</button>');
+                $rm.on("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    removeStatusToPool(status);
+                    renderAll();
+                });
+                $chip.append($rm);
+                $chip.on("dragstart", function(e) {
+                    $(this).addClass("ujg-pa-dragging");
+                    setDragPayload(e, { status: status, from: "cat", cat: cat });
+                });
+                $chip.on("dragend", function() {
+                    $(this).removeClass("ujg-pa-dragging");
+                });
+                $dropzone.append($chip);
+            });
+        }
+        
+        function wireDropzone($dz) {
+            $dz.on("dragover", function(e) {
+                e.preventDefault();
+                $(this).addClass("ujg-pa-dropzone-over");
+                try { e.originalEvent.dataTransfer.dropEffect = "move"; } catch (err) {}
+            });
+            $dz.on("dragleave", function() {
+                $(this).removeClass("ujg-pa-dropzone-over");
+            });
+            $dz.on("drop", function(e) {
+                e.preventDefault();
+                $(this).removeClass("ujg-pa-dropzone-over");
+                var payload = getDragPayload(e);
+                if (!payload || !payload.status) return;
+                var zone = $(this).data("zone");
+                var cat = $(this).data("cat");
+                
+                if (zone === "pool") {
+                    removeStatusToPool(payload.status);
+                } else if (zone === "cat" && cat) {
+                    moveStatus(payload.status, cat);
+                }
+                renderAll();
+            });
+        }
+        
+        var categoryDropzones = {};
+        
         Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
             var categoryInfo = STATUS_CATEGORIES[cat];
             var $section = $('<div class="ujg-pa-category-section"></div>');
             $section.append('<h4>' + categoryInfo.name + '</h4>');
             $section.append('<p class="ujg-pa-category-desc">' + categoryInfo.description + '</p>');
-            var $textarea = $('<textarea class="ujg-pa-category-textarea" rows="4" data-cat="' + cat + '"></textarea>');
-            $textarea.val((cfg.categoryStatuses[cat] || []).join("\n"));
-            textareas[cat] = $textarea;
-            $section.append($textarea);
+            var $dropzone = $('<div class="ujg-pa-category-dropzone ujg-pa-dropzone" data-zone="cat" data-cat="' + cat + '"></div>');
+            categoryDropzones[cat] = $dropzone;
+            wireDropzone($dropzone);
+            $section.append($dropzone);
             $categories.append($section);
         });
+        
+        // Пул тоже dropzone (возврат в нераспределённые)
+        wireDropzone($statusList);
+        
+        function renderAll() {
+            renderStatusList($filterInput.val());
+            Object.keys(categoryDropzones).forEach(function(cat) {
+                renderCategory(cat, categoryDropzones[cat]);
+            });
+        }
+        renderAll();
         
         var $actions = $('<div class="ujg-pa-settings-actions"></div>');
         var $saveBtn = $('<button class="aui-button aui-button-primary">Сохранить</button>');
@@ -618,12 +800,11 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         
         $saveBtn.on("click", function() {
             var newCategoryMap = {};
-            Object.keys(textareas).forEach(function(cat) {
-                var values = textareas[cat].val().split(/\n|,/);
-                newCategoryMap[cat] = utils.uniqueList(values);
+            Object.keys(STATUS_CATEGORIES).forEach(function(cat) {
+                newCategoryMap[cat] = utils.uniqueList((categoryLists[cat] || []).slice());
             });
             var statusFromCategories = workflow.buildStatusIndexFromCategory(newCategoryMap);
-            var mergedStatuses = utils.uniqueList(localStatuses.concat(Object.keys(statusFromCategories)));
+            var mergedStatuses = utils.uniqueList(allStatuses.concat(Object.keys(statusFromCategories)));
             
             cfg.categoryStatuses = newCategoryMap;
             cfg.statusCategories = statusFromCategories;
@@ -1169,6 +1350,16 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
             events.sort(function(a, b) { return a.at - b.at; });
             return events;
         }
+
+        // События по полю, отфильтрованные по выбранному диапазону (inclusive).
+        // Важно: для расчётов "время в статусах" нужен полный таймлайн, поэтому
+        // это отдельная функция, а не изменение extractFieldEvents().
+        function extractFieldEventsInPeriod(issue, fieldName, bounds) {
+            var b = bounds || getPeriodBounds();
+            return (extractFieldEvents(issue, fieldName) || []).filter(function(e) {
+                return e && e.at && e.at >= b.start && e.at <= b.end;
+            });
+        }
         
         function buildTimelineSegments(issue, fieldName, initialValue) {
             var events = extractFieldEvents(issue, fieldName);
@@ -1368,9 +1559,10 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
             var examplePaths = {};  // "A→B→C" -> example key
             var statusPaths = {};   // "Status1→Status2→..." -> count
             var exampleStatusPaths = {}; // path -> example key
+            var bounds = getPeriodBounds();
 
             (issues || []).forEach(function(issue) {
-                var events = extractFieldEvents(issue, "status") || [];
+                var events = extractFieldEventsInPeriod(issue, "status", bounds) || [];
                 if (events.length === 0) return;
 
                 // transition matrix (по статусам)
@@ -1385,7 +1577,8 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 });
 
                 // цепочка по категориям (сжатая, чтобы не было A→A→A)
-                var initialStatus = getInitialStatus(issue);
+                // стартовое состояние для периода — статус перед первым событием в периоде
+                var initialStatus = normalizeStatusLabel(events[0].from || events[0].to || getInitialStatus(issue));
                 var seq = [];
                 seq.push(pickPrimaryCategory(initialStatus));
                 events.forEach(function(evt) {
@@ -1478,10 +1671,11 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
                 analytics.cycleTimeSeconds = timing.cycleSeconds;
                 analytics.waitTimeSeconds = timing.waitSeconds;
                 
-                var statusEvents = extractFieldEvents(issue, "status");
+                var bounds = getPeriodBounds();
+                var statusEvents = extractFieldEventsInPeriod(issue, "status", bounds);
                 analytics.reopenCount = countReopens(statusEvents);
-                analytics.sprintChanges = extractFieldEvents(issue, "sprint").length;
-                analytics.assigneeChanges = extractFieldEvents(issue, "assignee").length;
+                analytics.sprintChanges = extractFieldEventsInPeriod(issue, "sprint", bounds).length;
+                analytics.assigneeChanges = extractFieldEventsInPeriod(issue, "assignee", bounds).length;
                 analytics.lastActivity = getLastActivityDate(issue);
                 
                 summary.totalLeadSeconds += timing.leadSeconds;
@@ -1498,6 +1692,7 @@ define("_ujgPA_basicAnalytics", ["_ujgPA_utils", "_ujgPA_workflow"], function(ut
         return {
             calculateAnalytics: calculateAnalytics,
             extractFieldEvents: extractFieldEvents,
+            extractFieldEventsInPeriod: extractFieldEventsInPeriod,
             getInitialStatus: getInitialStatus,
             getInitialAssignee: getInitialAssignee
         };
@@ -1514,7 +1709,18 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
     "use strict";
     
     function createDevCycleAnalyzer(state) {
-        var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
+        var extractFieldEventsInPeriod = basicAnalytics.createBasicAnalytics(state).extractFieldEventsInPeriod;
+
+        function getPeriodBounds() {
+            var start = utils.parseDateSafe(state.period.start + "T00:00:00");
+            var end = utils.parseDateSafe(state.period.end + "T23:59:59");
+            if (!start || !end || end < start) {
+                var fallback = utils.getDefaultPeriod();
+                start = utils.parseDateSafe(fallback.start + "T00:00:00");
+                end = utils.parseDateSafe(fallback.end + "T23:59:59");
+            }
+            return { start: start, end: end };
+        }
         
         function normalizeTimestamp(value) {
             if (value === undefined || value === null) return null;
@@ -1578,7 +1784,7 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             return true;
         }
         
-        function parseDevData(devStatus) {
+        function parseDevData(devStatus, bounds) {
             if (!devStatus || !devStatus.detail || !devStatus.detail.length) return null;
             var prCount = 0;
             var merged = 0;
@@ -1591,6 +1797,18 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
             var reviewerDecisionStats = {}; // {name:{approved,needsWork,reviewed}}
             var authorRework = {}; // {author:{needsWorkPrs,totalPrs}}
             var prs = [];
+            var b = bounds || getPeriodBounds();
+
+            function touchesPeriod(prInfo) {
+                if (!prInfo) return false;
+                // включаем PR, если любая из ключевых дат попадает в период
+                var dates = [prInfo.created, prInfo.updated, prInfo.merged];
+                for (var i = 0; i < dates.length; i++) {
+                    var dt = dates[i];
+                    if (dt && dt >= b.start && dt <= b.end) return true;
+                }
+                return false;
+            }
 
             function getPullRequestsFromRepo(repo) {
                 if (!repo) return [];
@@ -1638,6 +1856,10 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
                         firstTimeApproved: false,
                         needsWork: false
                     };
+
+                    // Фильтрация по диапазону (по созданию/обновлению/мерджу).
+                    // Если PR никак не затрагивал выбранный период — не учитываем его в статистике.
+                    if (!touchesPeriod(prInfo)) return;
 
                     if (status === "open" || status === "new") {
                         open += 1;
@@ -1736,7 +1958,7 @@ define("_ujgPA_devCycle", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_basicAnaly
         }
         
         function detectPingPongPattern(issue) {
-            var statusEvents = extractFieldEvents(issue, "status");
+            var statusEvents = extractFieldEventsInPeriod(issue, "status");
             if (!statusEvents || statusEvents.length === 0) {
                 return { detected: false, iterations: 0 };
             }
@@ -1898,7 +2120,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
     "use strict";
     
     function createDeveloperAnalytics(state) {
-        var extractFieldEvents = basicAnalytics.createBasicAnalytics(state).extractFieldEvents;
+        var extractFieldEventsInPeriod = basicAnalytics.createBasicAnalytics(state).extractFieldEventsInPeriod;
         var parseDevData = devCycle.createDevCycleAnalyzer(state).parseDevData;
         
         function getPeriodBounds() {
@@ -2183,7 +2405,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var developers = {};
             
             (issues || []).forEach(function(issue) {
-                var devInfo = parseDevData(issue.devStatus);
+                var devInfo = parseDevData(issue.devStatus, bounds);
                 if (!devInfo) return;
                 
                 var commits = extractCommits(issue.devStatus, bounds);
@@ -2272,9 +2494,9 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     issueData.currentStatusIsWork = currentStatusName ? workflow.statusHasCategory(currentStatusName, "work", state.workflowConfig) : false;
                     
                     issueData.worklogs = extractWorklogsForDeveloper(issue, author, bounds);
-                    issueData.statusEvents = extractFieldEvents(issue, "status");
+                    issueData.statusEvents = extractFieldEventsInPeriod(issue, "status", bounds);
                     // события назначения на разработчика (fallback для "Взял")
-                    issueData.assigneeEvents = (extractFieldEvents(issue, "assignee") || []).filter(function(e) {
+                    issueData.assigneeEvents = (extractFieldEventsInPeriod(issue, "assignee", bounds) || []).filter(function(e) {
                         return e && e.to && String(e.to) === String(author);
                     }).map(function(e) {
                         return { at: e.at, from: e.from, to: e.to };
