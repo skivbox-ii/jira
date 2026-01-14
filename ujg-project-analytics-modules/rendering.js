@@ -141,6 +141,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 '<th>PR</th>' +
                 '<th>Мержей</th>' +
                 '<th>Задач</th>' +
+                '<th>Закрыл</th>' +
+                '<th>Часы (WL)</th>' +
                 '<th>Взял→Коммит</th>' +
                 '<th>Коммит/задачу</th>' +
                 '<th>Коммит→Закрытие</th>' +
@@ -159,6 +161,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $row.append("<td>" + (dev.totalPRs || 0) + "</td>");
                 $row.append("<td>" + (dev.totalMerged || 0) + "</td>");
                 $row.append("<td>" + tasks + "</td>");
+                $row.append("<td>" + (s.closedIssuesInPeriod || 0) + "</td>");
+                $row.append("<td>" + formatDuration(s.totalWorklogSeconds || 0) + "</td>");
                 $row.append("<td>" + formatDays(s.avgDaysToFirstCommit) + "</td>");
                 $row.append("<td>" + (s.avgCommitsPerIssue ? (Math.round(s.avgCommitsPerIssue * 10) / 10).toFixed(1) : "0.0") + "</td>");
                 $row.append("<td>" + formatDays(s.avgDaysToClose) + "</td>");
@@ -183,6 +187,9 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     'Коммитов: <strong>' + (dev.totalCommits || 0) + '</strong> | ' +
                     'Pull Requests: <strong>' + (dev.totalPRs || 0) + '</strong> | ' +
                     'Мержей: <strong>' + (dev.totalMerged || 0) + '</strong> | ' +
+                    'Закрыл (в периоде): <strong>' + (summary.closedIssuesInPeriod || 0) + '</strong> | ' +
+                    'Списано (WL): <strong>' + formatDuration(summary.totalWorklogSeconds || 0) + '</strong> | ' +
+                    'Задач со списанием: <strong>' + (summary.issuesWithWorklogs || 0) + '</strong> | ' +
                     'Задач в работе: <strong>' + (summary.tasksInWork || 0) + '</strong>' +
                     '</p>');
 
@@ -241,6 +248,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                         '<th>Взял → Коммит</th>' +
                         '<th>Вперёд</th>' +
                         '<th>Комм</th>' +
+                        '<th>WL</th>' +
                         '<th>Комм/день</th>' +
                         '<th>Закрыто</th>' +
                         '<th>Возврат</th>' +
@@ -259,8 +267,9 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                         $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
                         $row.append("<td>" + (m.workAheadDays ? formatDays(m.workAheadDays) : "—") + "</td>");
                         $row.append("<td>" + (m.commitCount || 0) + "</td>");
+                        $row.append("<td>" + (m.worklogSeconds ? formatDuration(m.worklogSeconds) : "—") + "</td>");
                         $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
-                        $row.append("<td>" + (m.wentToDone ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + (m.resolvedInPeriod ? "✓" : "—") + "</td>");
                         $row.append("<td>" + ((m.returnedToWork || m.wentToWorkAfterCommit) ? "✓" : "—") + "</td>");
                         $row.append("<td>" + (m.dueDate ? (m.isOverdue ? ("⚠ " + (m.overdueDays || 0) + "д") : "✓") : "—") + "</td>");
                         $row.append("<td>" + (m.sprintChanges ? m.sprintChanges : "—") + "</td>");

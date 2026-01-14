@@ -2298,6 +2298,8 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 daysToFirstCommit: null,
                 workAheadDays: 0,
                 commitCount: issueData.commits.length,
+                worklogSeconds: 0,
+                hasWorklogs: false,
                 commitsPerDay: false,
                 lastCommit: null,
                 closedAfterCommit: null,
@@ -2307,6 +2309,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 returnCount: 0,
                 wentToDone: false,
                 wentToWorkAfterCommit: false,
+                resolvedInPeriod: false,
 
                 // сроки
                 dueDate: null,
@@ -2329,6 +2332,18 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             
             if (issueData.worklogs.length > 0) {
                 metrics.firstWorklog = issueData.worklogs[0].date;
+                issueData.worklogs.forEach(function(wl) {
+                    metrics.worklogSeconds += wl.timeSpent || 0;
+                });
+                metrics.hasWorklogs = metrics.worklogSeconds > 0;
+            }
+
+            // Закрытие в периоде (по resolutiondate)
+            if (bounds) {
+                var resolvedAt0 = parseResolutionDate(issue);
+                if (resolvedAt0 && resolvedAt0 >= bounds.start && resolvedAt0 <= bounds.end) {
+                    metrics.resolvedInPeriod = true;
+                }
             }
             
             if (issueData.commits.length > 0) {
@@ -2516,11 +2531,14 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var issues = Object.keys(dev.issues);
             var totalIssues = issues.length;
             var issuesWithCommits = 0;
+            var issuesWithWorklogs = 0;
             var issuesWithFirstCommit = 0;
             var totalDaysToFirstCommit = 0;
             var workAheadCount = 0;
             var totalWorkAheadDays = 0;
             var totalCommitsPerIssue = 0;
+            var totalWorklogSeconds = 0;
+            var closedIssuesInPeriod = 0;
             var totalDaysToClose = 0;
             var stableClosed = 0;
             var returnedToWork = 0;
@@ -2539,6 +2557,10 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
 
                 if ((issueData.commits || []).length > 0) {
                     issuesWithCommits += 1;
+                }
+                if (metrics.hasWorklogs) {
+                    issuesWithWorklogs += 1;
+                    totalWorklogSeconds += metrics.worklogSeconds || 0;
                 }
                 
                 if (metrics.daysToFirstCommit !== null) {
@@ -2562,6 +2584,12 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 if (issueData.currentStatusIsWork) {
                     tasksInWork += 1;
                 }
+                
+                // "Закрыл" — задача закрыта в периоде, при этом разработчик по ней участвовал
+                // (есть коммиты или ворклоги за период).
+                if (metrics.resolvedInPeriod && ((metrics.commitCount || 0) > 0 || metrics.hasWorklogs)) {
+                    closedIssuesInPeriod += 1;
+                }
 
                 // good/bad
                 if (metrics.isOverdue) bad.overdue += 1;
@@ -2582,6 +2610,10 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             return {
                 totalIssues: totalIssues,
                 issuesWithCommits: issuesWithCommits,
+                issuesWithWorklogs: issuesWithWorklogs,
+                totalWorklogSeconds: totalWorklogSeconds,
+                avgWorklogSecondsPerIssue: issuesWithWorklogs ? (totalWorklogSeconds / issuesWithWorklogs) : 0,
+                closedIssuesInPeriod: closedIssuesInPeriod,
                 tasksInWork: tasksInWork,
                 avgDaysToFirstCommit: issuesWithFirstCommit > 0 ? totalDaysToFirstCommit / issuesWithFirstCommit : 0,
                 workAheadCount: workAheadCount,
@@ -3363,6 +3395,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 '<th>PR</th>' +
                 '<th>Мержей</th>' +
                 '<th>Задач</th>' +
+                '<th>Закрыл</th>' +
+                '<th>Часы (WL)</th>' +
                 '<th>Взял→Коммит</th>' +
                 '<th>Коммит/задачу</th>' +
                 '<th>Коммит→Закрытие</th>' +
@@ -3381,6 +3415,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $row.append("<td>" + (dev.totalPRs || 0) + "</td>");
                 $row.append("<td>" + (dev.totalMerged || 0) + "</td>");
                 $row.append("<td>" + tasks + "</td>");
+                $row.append("<td>" + (s.closedIssuesInPeriod || 0) + "</td>");
+                $row.append("<td>" + formatDuration(s.totalWorklogSeconds || 0) + "</td>");
                 $row.append("<td>" + formatDays(s.avgDaysToFirstCommit) + "</td>");
                 $row.append("<td>" + (s.avgCommitsPerIssue ? (Math.round(s.avgCommitsPerIssue * 10) / 10).toFixed(1) : "0.0") + "</td>");
                 $row.append("<td>" + formatDays(s.avgDaysToClose) + "</td>");
@@ -3405,6 +3441,9 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     'Коммитов: <strong>' + (dev.totalCommits || 0) + '</strong> | ' +
                     'Pull Requests: <strong>' + (dev.totalPRs || 0) + '</strong> | ' +
                     'Мержей: <strong>' + (dev.totalMerged || 0) + '</strong> | ' +
+                    'Закрыл (в периоде): <strong>' + (summary.closedIssuesInPeriod || 0) + '</strong> | ' +
+                    'Списано (WL): <strong>' + formatDuration(summary.totalWorklogSeconds || 0) + '</strong> | ' +
+                    'Задач со списанием: <strong>' + (summary.issuesWithWorklogs || 0) + '</strong> | ' +
                     'Задач в работе: <strong>' + (summary.tasksInWork || 0) + '</strong>' +
                     '</p>');
 
@@ -3463,6 +3502,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                         '<th>Взял → Коммит</th>' +
                         '<th>Вперёд</th>' +
                         '<th>Комм</th>' +
+                        '<th>WL</th>' +
                         '<th>Комм/день</th>' +
                         '<th>Закрыто</th>' +
                         '<th>Возврат</th>' +
@@ -3481,8 +3521,9 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                         $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
                         $row.append("<td>" + (m.workAheadDays ? formatDays(m.workAheadDays) : "—") + "</td>");
                         $row.append("<td>" + (m.commitCount || 0) + "</td>");
+                        $row.append("<td>" + (m.worklogSeconds ? formatDuration(m.worklogSeconds) : "—") + "</td>");
                         $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
-                        $row.append("<td>" + (m.wentToDone ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + (m.resolvedInPeriod ? "✓" : "—") + "</td>");
                         $row.append("<td>" + ((m.returnedToWork || m.wentToWorkAfterCommit) ? "✓" : "—") + "</td>");
                         $row.append("<td>" + (m.dueDate ? (m.isOverdue ? ("⚠ " + (m.overdueDays || 0) + "д") : "✓") : "—") + "</td>");
                         $row.append("<td>" + (m.sprintChanges ? m.sprintChanges : "—") + "</td>");

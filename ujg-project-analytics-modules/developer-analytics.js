@@ -159,6 +159,8 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 daysToFirstCommit: null,
                 workAheadDays: 0,
                 commitCount: issueData.commits.length,
+                worklogSeconds: 0,
+                hasWorklogs: false,
                 commitsPerDay: false,
                 lastCommit: null,
                 closedAfterCommit: null,
@@ -168,6 +170,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 returnCount: 0,
                 wentToDone: false,
                 wentToWorkAfterCommit: false,
+                resolvedInPeriod: false,
 
                 // сроки
                 dueDate: null,
@@ -190,6 +193,18 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             
             if (issueData.worklogs.length > 0) {
                 metrics.firstWorklog = issueData.worklogs[0].date;
+                issueData.worklogs.forEach(function(wl) {
+                    metrics.worklogSeconds += wl.timeSpent || 0;
+                });
+                metrics.hasWorklogs = metrics.worklogSeconds > 0;
+            }
+
+            // Закрытие в периоде (по resolutiondate)
+            if (bounds) {
+                var resolvedAt0 = parseResolutionDate(issue);
+                if (resolvedAt0 && resolvedAt0 >= bounds.start && resolvedAt0 <= bounds.end) {
+                    metrics.resolvedInPeriod = true;
+                }
             }
             
             if (issueData.commits.length > 0) {
@@ -377,11 +392,14 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var issues = Object.keys(dev.issues);
             var totalIssues = issues.length;
             var issuesWithCommits = 0;
+            var issuesWithWorklogs = 0;
             var issuesWithFirstCommit = 0;
             var totalDaysToFirstCommit = 0;
             var workAheadCount = 0;
             var totalWorkAheadDays = 0;
             var totalCommitsPerIssue = 0;
+            var totalWorklogSeconds = 0;
+            var closedIssuesInPeriod = 0;
             var totalDaysToClose = 0;
             var stableClosed = 0;
             var returnedToWork = 0;
@@ -400,6 +418,10 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
 
                 if ((issueData.commits || []).length > 0) {
                     issuesWithCommits += 1;
+                }
+                if (metrics.hasWorklogs) {
+                    issuesWithWorklogs += 1;
+                    totalWorklogSeconds += metrics.worklogSeconds || 0;
                 }
                 
                 if (metrics.daysToFirstCommit !== null) {
@@ -423,6 +445,12 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 if (issueData.currentStatusIsWork) {
                     tasksInWork += 1;
                 }
+                
+                // "Закрыл" — задача закрыта в периоде, при этом разработчик по ней участвовал
+                // (есть коммиты или ворклоги за период).
+                if (metrics.resolvedInPeriod && ((metrics.commitCount || 0) > 0 || metrics.hasWorklogs)) {
+                    closedIssuesInPeriod += 1;
+                }
 
                 // good/bad
                 if (metrics.isOverdue) bad.overdue += 1;
@@ -443,6 +471,10 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             return {
                 totalIssues: totalIssues,
                 issuesWithCommits: issuesWithCommits,
+                issuesWithWorklogs: issuesWithWorklogs,
+                totalWorklogSeconds: totalWorklogSeconds,
+                avgWorklogSecondsPerIssue: issuesWithWorklogs ? (totalWorklogSeconds / issuesWithWorklogs) : 0,
+                closedIssuesInPeriod: closedIssuesInPeriod,
                 tasksInWork: tasksInWork,
                 avgDaysToFirstCommit: issuesWithFirstCommit > 0 ? totalDaysToFirstCommit / issuesWithFirstCommit : 0,
                 workAheadCount: workAheadCount,
