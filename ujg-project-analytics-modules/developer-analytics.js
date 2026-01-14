@@ -162,42 +162,60 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 var doneAfterCommit = false;
                 var stableClose = true;
                 
-                function isDone(statusName) {
+                // Возвраты и стабильность считаем по категориям workflow из настроек.
+                // Fallback по названию используем только если статус не размечен ни в одну категорию.
+                function hasAnyCategory(statusName) {
                     if (!statusName) return false;
-                    if (workflow.statusHasCategory(statusName, "done", state.workflowConfig)) return true;
-                    // fallback по названию, если workflow не настроен
-                    var s = String(statusName).toLowerCase();
-                    return s.indexOf("done") >= 0 || s.indexOf("closed") >= 0 || s.indexOf("resolved") >= 0 || s.indexOf("закры") >= 0 || s.indexOf("готов") >= 0;
+                    var cats = workflow.getCategoriesForStatus(statusName, state.workflowConfig) || [];
+                    return cats.length > 0;
                 }
-                function isWork(statusName) {
+                function fallbackMatch(statusName, kind) {
                     if (!statusName) return false;
-                    if (workflow.statusHasCategory(statusName, "work", state.workflowConfig)) return true;
                     var s = String(statusName).toLowerCase();
-                    return s.indexOf("in progress") >= 0 || s.indexOf("в работе") >= 0 || s.indexOf("разработ") >= 0 || s.indexOf("work") >= 0;
+                    if (kind === "done") {
+                        return s.indexOf("done") >= 0 || s.indexOf("closed") >= 0 || s.indexOf("resolved") >= 0 || s.indexOf("complete") >= 0 ||
+                            s.indexOf("закры") >= 0 || s.indexOf("готов") >= 0 || s.indexOf("снят") >= 0 || s.indexOf("отмен") >= 0;
+                    }
+                    if (kind === "work") {
+                        return s.indexOf("in progress") >= 0 || s.indexOf("в работе") >= 0 || s.indexOf("разработ") >= 0 ||
+                            s.indexOf("реализац") >= 0 || s.indexOf("исправ") >= 0 || s.indexOf("доработ") >= 0 || s.indexOf("work") >= 0;
+                    }
+                    if (kind === "testing") {
+                        return s.indexOf("test") >= 0 || s.indexOf("qa") >= 0 || s.indexOf("тест") >= 0 || s.indexOf("провер") >= 0 ||
+                            s.indexOf("accept") >= 0 || s.indexOf("подтверж") >= 0;
+                    }
+                    if (kind === "review") {
+                        return s.indexOf("review") >= 0 || s.indexOf("code review") >= 0 || s.indexOf("ревью") >= 0 || s.indexOf("на ревью") >= 0;
+                    }
+                    if (kind === "waiting") {
+                        return s.indexOf("blocked") >= 0 || s.indexOf("hold") >= 0 || s.indexOf("waiting") >= 0 || s.indexOf("ожидан") >= 0 || s.indexOf("запрос") >= 0;
+                    }
+                    if (kind === "queue") {
+                        return s.indexOf("open") >= 0 || s.indexOf("new") >= 0 || s.indexOf("to do") >= 0 || s.indexOf("todo") >= 0 ||
+                            s.indexOf("очеред") >= 0 || s.indexOf("принят") >= 0 || s.indexOf("выдан") >= 0;
+                    }
+                    return false;
                 }
-                function isTesting(statusName) {
+                function isCat(statusName, categoryKey) {
                     if (!statusName) return false;
-                    if (workflow.statusHasCategory(statusName, "testing", state.workflowConfig)) return true;
-                    var s = String(statusName).toLowerCase();
-                    return s.indexOf("test") >= 0 || s.indexOf("qa") >= 0 || s.indexOf("тест") >= 0;
-                }
-                function isReview(statusName) {
-                    if (!statusName) return false;
-                    if (workflow.statusHasCategory(statusName, "review", state.workflowConfig)) return true;
-                    var s = String(statusName).toLowerCase();
-                    return s.indexOf("review") >= 0 || s.indexOf("ревью") >= 0 || s.indexOf("code review") >= 0;
+                    if (workflow.statusHasCategory(statusName, categoryKey, state.workflowConfig)) return true;
+                    // только если вообще не размечено — подстрахуемся
+                    if (!hasAnyCategory(statusName)) return fallbackMatch(statusName, categoryKey);
+                    return false;
                 }
 
                 statusEvents.forEach(function(evt) {
                     var evtTime = evt.at;
                     if (evtTime < lastCommitTime) return;
                     
-                    var toIsDone = isDone(evt.to);
-                    var toIsWork = isWork(evt.to);
-                    var fromIsDone = isDone(evt.from);
-                    var fromIsWork = isWork(evt.from);
-                    var fromIsTesting = isTesting(evt.from);
-                    var fromIsReview = isReview(evt.from);
+                    var toIsDone = isCat(evt.to, "done");
+                    var toIsWork = isCat(evt.to, "work");
+                    var toIsQueue = isCat(evt.to, "queue");
+                    var fromIsDone = isCat(evt.from, "done");
+                    var fromIsWork = isCat(evt.from, "work");
+                    var fromIsTesting = isCat(evt.from, "testing");
+                    var fromIsReview = isCat(evt.from, "review");
+                    var fromIsWaiting = isCat(evt.from, "waiting");
                     
                     if (toIsDone && !doneAfterCommit) {
                         doneAfterCommit = true;
@@ -205,11 +223,14 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                         metrics.daysToClose = (evtTime - lastCommitTime) / 86400000;
                     }
                     
-                    // Возврат "на доработку" после коммита: переход в work из НЕ-work (review/testing/done/и т.п.)
+                    // Переход "после коммита -> work" (любой возврат/продолжение работы)
                     if (toIsWork && !fromIsWork) {
                         metrics.wentToWorkAfterCommit = true;
-                        // Более строгий "возврат": из review/testing/done -> work
-                        if (fromIsDone || fromIsTesting || fromIsReview) {
+                    }
+                    
+                    // Возврат (строго по категориям): из testing/review/done/waiting -> work ИЛИ queue
+                    if ((toIsWork || toIsQueue) && !fromIsWork) {
+                        if (fromIsDone || fromIsTesting || fromIsReview || fromIsWaiting) {
                             metrics.returnedToWork = true;
                         }
                     }

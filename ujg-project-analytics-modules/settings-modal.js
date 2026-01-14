@@ -238,7 +238,8 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
                 return;
             }
             items.forEach(function(status) {
-                var $chip = $('<span class="ujg-pa-status-chip ujg-pa-status-chip-draggable ujg-pa-status-chip-in-category" draggable="true"></span>');
+                var $chip = $('<span class="ujg-pa-status-chip ujg-pa-status-chip-draggable ujg-pa-status-chip-in-category ujg-pa-status-chip-cat" draggable="true"></span>');
+                $chip.addClass("ujg-pa-status-chip-cat-" + cat);
                 $chip.text(status);
                 $chip.attr("data-status", status);
                 var $rm = $('<button type="button" class="ujg-pa-chip-remove" title="Убрать">×</button>');
