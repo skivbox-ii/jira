@@ -573,10 +573,18 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
             cfg.statusCategories = workflow.buildStatusIndexFromCategory(cfg.categoryStatuses);
         }
         
-        var allStatuses = utils.uniqueList(cfg.allStatuses
+        // Полный набор статусов для сохранения (исторический/конфиг)
+        var allStatusesForSave = utils.uniqueList(cfg.allStatuses
             .concat(Object.keys(cfg.statusCategories || {}))
             .concat([].concat.apply([], Object.keys(cfg.categoryStatuses || {}).map(function(cat) { return cfg.categoryStatuses[cat] || []; })))
         );
+
+        // Набор статусов для отображения в пуле "Нераспределённые".
+        // Если виджет уже загружал данные за период — используем только реальные статусы из текущей выборки,
+        // чтобы не показывать "гипотетические" статусы из прошлых запусков.
+        var visibleStatuses = (ctx && ctx.availableStatuses && ctx.availableStatuses.length)
+            ? utils.uniqueList(ctx.availableStatuses)
+            : allStatusesForSave.slice();
         
         // Локальное состояние для UI
         var categoryLists = {};
@@ -598,7 +606,7 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         
         function computePoolStatuses() {
             var assigned = computeAssignedSet();
-            return allStatuses.filter(function(s) { return !assigned[s]; });
+            return visibleStatuses.filter(function(s) { return !assigned[s]; });
         }
         
         function removeFromAllCategories(status) {
@@ -608,7 +616,11 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         }
         
         function ensureInAllStatuses(status) {
-            if (allStatuses.indexOf(status) === -1) allStatuses.push(status);
+            if (allStatusesForSave.indexOf(status) === -1) allStatusesForSave.push(status);
+            // показываем в пуле только если UI работает не от ctx.availableStatuses
+            if (!ctx || !ctx.availableStatuses || !ctx.availableStatuses.length) {
+                if (visibleStatuses.indexOf(status) === -1) visibleStatuses.push(status);
+            }
         }
         
         function moveStatus(status, targetCat) {
@@ -708,7 +720,13 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         $filterInput.on("input", function() { renderStatusList($filterInput.val()); });
         $filterRow.append($filterInput);
         
-        $statusManager.append($poolHeader, $statusList, $filterRow, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
+        // Если есть реальные статусы из текущей выборки — убираем ручное добавление, чтобы не плодить "гипотетические"
+        var hasAvailable = ctx && ctx.availableStatuses && ctx.availableStatuses.length;
+        if (hasAvailable) {
+            $statusManager.append($poolHeader, $statusList, $filterRow);
+        } else {
+            $statusManager.append($poolHeader, $statusList, $filterRow, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
+        }
         renderStatusList();
         
         var $categories = $('<div class="ujg-pa-categories-grid"></div>');
@@ -804,7 +822,7 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
                 newCategoryMap[cat] = utils.uniqueList((categoryLists[cat] || []).slice());
             });
             var statusFromCategories = workflow.buildStatusIndexFromCategory(newCategoryMap);
-            var mergedStatuses = utils.uniqueList(allStatuses.concat(Object.keys(statusFromCategories)));
+            var mergedStatuses = utils.uniqueList(allStatusesForSave.concat(Object.keys(statusFromCategories)));
             
             cfg.categoryStatuses = newCategoryMap;
             cfg.statusCategories = statusFromCategories;
@@ -2796,6 +2814,34 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
     var escapeHtml = utils.utils && utils.utils.escapeHtml ? utils.utils.escapeHtml : function(str) { return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
     
     function createRenderer(state) {
+        var issueSummaryIndex = null; // { KEY: summary }
+
+        function ensureIssueSummaryIndex() {
+            if (issueSummaryIndex) return;
+            issueSummaryIndex = {};
+            (state.issues || []).forEach(function(issue) {
+                if (!issue || !issue.key) return;
+                var summary = issue.fields && issue.fields.summary ? String(issue.fields.summary) : "";
+                issueSummaryIndex[issue.key] = summary;
+            });
+        }
+
+        function formatIssueLabel(issueKey) {
+            var key = issueKey ? String(issueKey) : "";
+            if (!key) return "—";
+            ensureIssueSummaryIndex();
+            var summary = issueSummaryIndex[key] ? String(issueSummaryIndex[key]) : "";
+            return summary ? (key + " — " + summary) : key;
+        }
+
+        function renderIssueLink(issueKey) {
+            var key = issueKey ? String(issueKey) : "";
+            if (!key) return "—";
+            var label = formatIssueLabel(key);
+            var issueUrl = baseUrl + "/browse/" + encodeURIComponent(key);
+            return '<a href="' + issueUrl + '" target="_blank">' + escapeHtml(label) + "</a>";
+        }
+
         function formatDuration(seconds) {
             if (!seconds || seconds <= 0) return "0ч";
             var hours = seconds / 3600;
@@ -2930,9 +2976,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     issues.forEach(function(issueData) {
                         var m = issueData.metrics || {};
                         var issueKey = issueData.key || "—";
-                        var issueUrl = baseUrl + "/browse/" + issueKey;
                         var $row = $("<tr></tr>");
-                        $row.append('<td><a href="' + issueUrl + '" target="_blank">' + escapeHtml(issueKey) + "</a></td>");
+                        $row.append("<td>" + renderIssueLink(issueKey) + "</td>");
                         $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
                         $row.append("<td>" + (m.commitCount || 0) + "</td>");
                         $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
@@ -2984,12 +3029,12 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             }).slice(0, 8);
             if (issues.length === 0) return;
             var $section = $('<div class="ujg-pa-section"><h3>Risk Matrix</h3></div>');
-            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Key</th><th>Risk</th><th>Факторы</th></tr></thead><tbody></tbody></table>');
+            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Задача</th><th>Risk</th><th>Факторы</th></tr></thead><tbody></tbody></table>');
             issues.forEach(function(issue) {
                 var risk = issue.analytics.risk;
                 var factors = (risk.factors || []).map(function(f) { return f.message; }).join(", ");
                 var $row = $("<tr></tr>");
-                $row.append('<td><a href="' + baseUrl + "/browse/" + issue.key + '" target="_blank">' + issue.key + "</a></td>");
+                $row.append("<td>" + renderIssueLink(issue.key) + "</td>");
                 $row.append("<td>" + risk.score + "%</td>");
                 $row.append("<td>" + escapeHtml(factors || "—") + "</td>");
                 $table.find("tbody").append($row);
@@ -3161,7 +3206,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 var $table = $('<table class="ujg-pa-table"><thead><tr><th>Задача</th><th>PR</th><th>Iterations</th><th>Автор</th></tr></thead><tbody></tbody></table>');
                 devSummary.pingPongIssues.slice(0, 10).forEach(function(item) {
                     var $row = $("<tr></tr>");
-                    $row.append('<td><a href="' + baseUrl + "/browse/" + item.key + '" target="_blank">' + item.key + "</a></td>");
+                    $row.append("<td>" + renderIssueLink(item.key) + "</td>");
                     $row.append("<td>—</td>");
                     $row.append("<td>" + item.iterations + "</td>");
                     $row.append("<td>" + escapeHtml(item.author) + "</td>");
@@ -3189,16 +3234,16 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $section.append($block);
             }
             listItems("Долгое ревью", state.bottlenecks.longReview, function(item) {
-                return item.key + " (" + formatDuration(item.seconds) + ")";
+                return formatIssueLabel(item.key) + " (" + formatDuration(item.seconds) + ")";
             });
             listItems("Долгое тестирование", state.bottlenecks.longTesting, function(item) {
-                return item.key + " (" + formatDuration(item.seconds) + ")";
+                return formatIssueLabel(item.key) + " (" + formatDuration(item.seconds) + ")";
             });
             listItems("Путешествующие задачи", state.bottlenecks.travellers, function(item) {
-                return item.key + " (" + item.changes + " спринтов)";
+                return formatIssueLabel(item.key) + " (" + item.changes + " спринтов)";
             });
             listItems("Старые задачи", state.bottlenecks.stale, function(item) {
-                return item.key + " (" + item.days + " дн. без активности)";
+                return formatIssueLabel(item.key) + " (" + item.days + " дн. без активности)";
             });
             listItems("WIP перегруз", state.bottlenecks.wipOverload, function(item) {
                 return item.assignee + ": " + item.count + " задач";
@@ -3275,7 +3320,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 var pctS = totalStatus ? (((item.count || 0) / totalStatus) * 100) : 0;
                 $row.append("<td>" + (Math.round(pctS * 10) / 10).toFixed(1) + "%</td>");
                 if (item.example) {
-                    $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
+                    $row.append("<td>" + renderIssueLink(item.example) + "</td>");
                 } else {
                     $row.append("<td>—</td>");
                 }
@@ -3481,8 +3526,28 @@ define("_ujgPA_main", ["jquery", "_ujgCommon", "_ujgPA_config", "_ujgPA_utils", 
             $startInput.val(state.period.start);
             $endInput.val(state.period.end);
             var $settingsBtn = $('<button class="aui-button">Настройки</button>').on("click", function() {
+                function computeAvailableStatusesForPeriod() {
+                    var set = {};
+                    (state.issues || []).forEach(function(issue) {
+                        var current = issue && issue.fields && issue.fields.status && issue.fields.status.name;
+                        if (current) set[current] = true;
+                        // Берём только события за выбранный период
+                        var events = (basicAnalyticsCalc.extractFieldEventsInPeriod ?
+                            basicAnalyticsCalc.extractFieldEventsInPeriod(issue, "status") :
+                            basicAnalyticsCalc.extractFieldEvents(issue, "status")) || [];
+                        events.forEach(function(e) {
+                            if (e && e.from) set[e.from] = true;
+                            if (e && e.to) set[e.to] = true;
+                        });
+                    });
+                    return Object.keys(set).sort(function(a, b) { return a.localeCompare(b); });
+                }
+
                 settingsModal.open({
                     workflowConfig: state.workflowConfig,
+                    // Для UI workflow-настроек: показываем только статусы из текущей выборки за период,
+                    // чтобы не копить "гипотетические" статусы из старых запусков.
+                    availableStatuses: computeAvailableStatusesForPeriod(),
                     customFields: state.customFields,
                     thresholds: state.thresholds,
                     riskWeights: state.riskWeights,

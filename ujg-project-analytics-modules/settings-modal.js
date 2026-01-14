@@ -72,10 +72,18 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
             cfg.statusCategories = workflow.buildStatusIndexFromCategory(cfg.categoryStatuses);
         }
         
-        var allStatuses = utils.uniqueList(cfg.allStatuses
+        // Полный набор статусов для сохранения (исторический/конфиг)
+        var allStatusesForSave = utils.uniqueList(cfg.allStatuses
             .concat(Object.keys(cfg.statusCategories || {}))
             .concat([].concat.apply([], Object.keys(cfg.categoryStatuses || {}).map(function(cat) { return cfg.categoryStatuses[cat] || []; })))
         );
+
+        // Набор статусов для отображения в пуле "Нераспределённые".
+        // Если виджет уже загружал данные за период — используем только реальные статусы из текущей выборки,
+        // чтобы не показывать "гипотетические" статусы из прошлых запусков.
+        var visibleStatuses = (ctx && ctx.availableStatuses && ctx.availableStatuses.length)
+            ? utils.uniqueList(ctx.availableStatuses)
+            : allStatusesForSave.slice();
         
         // Локальное состояние для UI
         var categoryLists = {};
@@ -97,7 +105,7 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         
         function computePoolStatuses() {
             var assigned = computeAssignedSet();
-            return allStatuses.filter(function(s) { return !assigned[s]; });
+            return visibleStatuses.filter(function(s) { return !assigned[s]; });
         }
         
         function removeFromAllCategories(status) {
@@ -107,7 +115,11 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         }
         
         function ensureInAllStatuses(status) {
-            if (allStatuses.indexOf(status) === -1) allStatuses.push(status);
+            if (allStatusesForSave.indexOf(status) === -1) allStatusesForSave.push(status);
+            // показываем в пуле только если UI работает не от ctx.availableStatuses
+            if (!ctx || !ctx.availableStatuses || !ctx.availableStatuses.length) {
+                if (visibleStatuses.indexOf(status) === -1) visibleStatuses.push(status);
+            }
         }
         
         function moveStatus(status, targetCat) {
@@ -207,7 +219,13 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
         $filterInput.on("input", function() { renderStatusList($filterInput.val()); });
         $filterRow.append($filterInput);
         
-        $statusManager.append($poolHeader, $statusList, $filterRow, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
+        // Если есть реальные статусы из текущей выборки — убираем ручное добавление, чтобы не плодить "гипотетические"
+        var hasAvailable = ctx && ctx.availableStatuses && ctx.availableStatuses.length;
+        if (hasAvailable) {
+            $statusManager.append($poolHeader, $statusList, $filterRow);
+        } else {
+            $statusManager.append($poolHeader, $statusList, $filterRow, $('<div class="ujg-pa-status-add"></div>').append($statusInput, $addStatusBtn));
+        }
         renderStatusList();
         
         var $categories = $('<div class="ujg-pa-categories-grid"></div>');
@@ -303,7 +321,7 @@ define("_ujgPA_settingsModal", ["jquery", "_ujgPA_config", "_ujgPA_utils", "_ujg
                 newCategoryMap[cat] = utils.uniqueList((categoryLists[cat] || []).slice());
             });
             var statusFromCategories = workflow.buildStatusIndexFromCategory(newCategoryMap);
-            var mergedStatuses = utils.uniqueList(allStatuses.concat(Object.keys(statusFromCategories)));
+            var mergedStatuses = utils.uniqueList(allStatusesForSave.concat(Object.keys(statusFromCategories)));
             
             cfg.categoryStatuses = newCategoryMap;
             cfg.statusCategories = statusFromCategories;

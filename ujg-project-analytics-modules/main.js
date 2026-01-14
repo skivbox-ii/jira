@@ -147,8 +147,28 @@ define("_ujgPA_main", ["jquery", "_ujgCommon", "_ujgPA_config", "_ujgPA_utils", 
             $startInput.val(state.period.start);
             $endInput.val(state.period.end);
             var $settingsBtn = $('<button class="aui-button">Настройки</button>').on("click", function() {
+                function computeAvailableStatusesForPeriod() {
+                    var set = {};
+                    (state.issues || []).forEach(function(issue) {
+                        var current = issue && issue.fields && issue.fields.status && issue.fields.status.name;
+                        if (current) set[current] = true;
+                        // Берём только события за выбранный период
+                        var events = (basicAnalyticsCalc.extractFieldEventsInPeriod ?
+                            basicAnalyticsCalc.extractFieldEventsInPeriod(issue, "status") :
+                            basicAnalyticsCalc.extractFieldEvents(issue, "status")) || [];
+                        events.forEach(function(e) {
+                            if (e && e.from) set[e.from] = true;
+                            if (e && e.to) set[e.to] = true;
+                        });
+                    });
+                    return Object.keys(set).sort(function(a, b) { return a.localeCompare(b); });
+                }
+
                 settingsModal.open({
                     workflowConfig: state.workflowConfig,
+                    // Для UI workflow-настроек: показываем только статусы из текущей выборки за период,
+                    // чтобы не копить "гипотетические" статусы из старых запусков.
+                    availableStatuses: computeAvailableStatusesForPeriod(),
                     customFields: state.customFields,
                     thresholds: state.thresholds,
                     riskWeights: state.riskWeights,

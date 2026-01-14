@@ -7,6 +7,34 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
     var escapeHtml = utils.utils && utils.utils.escapeHtml ? utils.utils.escapeHtml : function(str) { return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
     
     function createRenderer(state) {
+        var issueSummaryIndex = null; // { KEY: summary }
+
+        function ensureIssueSummaryIndex() {
+            if (issueSummaryIndex) return;
+            issueSummaryIndex = {};
+            (state.issues || []).forEach(function(issue) {
+                if (!issue || !issue.key) return;
+                var summary = issue.fields && issue.fields.summary ? String(issue.fields.summary) : "";
+                issueSummaryIndex[issue.key] = summary;
+            });
+        }
+
+        function formatIssueLabel(issueKey) {
+            var key = issueKey ? String(issueKey) : "";
+            if (!key) return "—";
+            ensureIssueSummaryIndex();
+            var summary = issueSummaryIndex[key] ? String(issueSummaryIndex[key]) : "";
+            return summary ? (key + " — " + summary) : key;
+        }
+
+        function renderIssueLink(issueKey) {
+            var key = issueKey ? String(issueKey) : "";
+            if (!key) return "—";
+            var label = formatIssueLabel(key);
+            var issueUrl = baseUrl + "/browse/" + encodeURIComponent(key);
+            return '<a href="' + issueUrl + '" target="_blank">' + escapeHtml(label) + "</a>";
+        }
+
         function formatDuration(seconds) {
             if (!seconds || seconds <= 0) return "0ч";
             var hours = seconds / 3600;
@@ -141,9 +169,8 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     issues.forEach(function(issueData) {
                         var m = issueData.metrics || {};
                         var issueKey = issueData.key || "—";
-                        var issueUrl = baseUrl + "/browse/" + issueKey;
                         var $row = $("<tr></tr>");
-                        $row.append('<td><a href="' + issueUrl + '" target="_blank">' + escapeHtml(issueKey) + "</a></td>");
+                        $row.append("<td>" + renderIssueLink(issueKey) + "</td>");
                         $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
                         $row.append("<td>" + (m.commitCount || 0) + "</td>");
                         $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
@@ -195,12 +222,12 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             }).slice(0, 8);
             if (issues.length === 0) return;
             var $section = $('<div class="ujg-pa-section"><h3>Risk Matrix</h3></div>');
-            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Key</th><th>Risk</th><th>Факторы</th></tr></thead><tbody></tbody></table>');
+            var $table = $('<table class="ujg-pa-table"><thead><tr><th>Задача</th><th>Risk</th><th>Факторы</th></tr></thead><tbody></tbody></table>');
             issues.forEach(function(issue) {
                 var risk = issue.analytics.risk;
                 var factors = (risk.factors || []).map(function(f) { return f.message; }).join(", ");
                 var $row = $("<tr></tr>");
-                $row.append('<td><a href="' + baseUrl + "/browse/" + issue.key + '" target="_blank">' + issue.key + "</a></td>");
+                $row.append("<td>" + renderIssueLink(issue.key) + "</td>");
                 $row.append("<td>" + risk.score + "%</td>");
                 $row.append("<td>" + escapeHtml(factors || "—") + "</td>");
                 $table.find("tbody").append($row);
@@ -372,7 +399,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 var $table = $('<table class="ujg-pa-table"><thead><tr><th>Задача</th><th>PR</th><th>Iterations</th><th>Автор</th></tr></thead><tbody></tbody></table>');
                 devSummary.pingPongIssues.slice(0, 10).forEach(function(item) {
                     var $row = $("<tr></tr>");
-                    $row.append('<td><a href="' + baseUrl + "/browse/" + item.key + '" target="_blank">' + item.key + "</a></td>");
+                    $row.append("<td>" + renderIssueLink(item.key) + "</td>");
                     $row.append("<td>—</td>");
                     $row.append("<td>" + item.iterations + "</td>");
                     $row.append("<td>" + escapeHtml(item.author) + "</td>");
@@ -400,16 +427,16 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 $section.append($block);
             }
             listItems("Долгое ревью", state.bottlenecks.longReview, function(item) {
-                return item.key + " (" + formatDuration(item.seconds) + ")";
+                return formatIssueLabel(item.key) + " (" + formatDuration(item.seconds) + ")";
             });
             listItems("Долгое тестирование", state.bottlenecks.longTesting, function(item) {
-                return item.key + " (" + formatDuration(item.seconds) + ")";
+                return formatIssueLabel(item.key) + " (" + formatDuration(item.seconds) + ")";
             });
             listItems("Путешествующие задачи", state.bottlenecks.travellers, function(item) {
-                return item.key + " (" + item.changes + " спринтов)";
+                return formatIssueLabel(item.key) + " (" + item.changes + " спринтов)";
             });
             listItems("Старые задачи", state.bottlenecks.stale, function(item) {
-                return item.key + " (" + item.days + " дн. без активности)";
+                return formatIssueLabel(item.key) + " (" + item.days + " дн. без активности)";
             });
             listItems("WIP перегруз", state.bottlenecks.wipOverload, function(item) {
                 return item.assignee + ": " + item.count + " задач";
@@ -486,7 +513,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                 var pctS = totalStatus ? (((item.count || 0) / totalStatus) * 100) : 0;
                 $row.append("<td>" + (Math.round(pctS * 10) / 10).toFixed(1) + "%</td>");
                 if (item.example) {
-                    $row.append('<td><a href="' + baseUrl + "/browse/" + item.example + '" target="_blank">' + escapeHtml(item.example) + "</a></td>");
+                    $row.append("<td>" + renderIssueLink(item.example) + "</td>");
                 } else {
                     $row.append("<td>—</td>");
                 }
