@@ -375,40 +375,78 @@
 }
 
 /* Категорийные цвета (как в Jira): очередь=серый, в работе=синий, завершено=зелёный */
-.ujg-pa-status-chip-cat-queue {
+.ujg-pa-status-chip-cat-queue,
+.ujg-pa-cat-queue {
     background: #f4f5f7;
     color: #42526e;
 }
 
-.ujg-pa-status-chip-cat-work {
+.ujg-pa-status-chip-cat-work,
+.ujg-pa-cat-work {
     background: #deebff;
     color: #0747a6;
     border-color: rgba(0, 82, 204, 0.25);
 }
 
-.ujg-pa-status-chip-cat-done {
+.ujg-pa-status-chip-cat-done,
+.ujg-pa-cat-done {
     background: #e3fcef;
     color: #006644;
     border-color: rgba(0, 102, 68, 0.25);
 }
 
 /* Доп. категории для читаемости */
-.ujg-pa-status-chip-cat-review {
+.ujg-pa-status-chip-cat-review,
+.ujg-pa-cat-review {
     background: #eae6ff;
     color: #403294;
     border-color: rgba(64, 50, 148, 0.25);
 }
 
-.ujg-pa-status-chip-cat-testing {
+.ujg-pa-status-chip-cat-testing,
+.ujg-pa-cat-testing {
     background: #fff0b3;
     color: #974f0c;
     border-color: rgba(151, 79, 12, 0.25);
 }
 
-.ujg-pa-status-chip-cat-waiting {
+.ujg-pa-status-chip-cat-waiting,
+.ujg-pa-cat-waiting {
     background: #fffae6;
     color: #7a5a00;
     border-color: rgba(122, 90, 0, 0.25);
+}
+
+/* Плашки для ключей задач и статусов в отчёте */
+.ujg-pa-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(9, 30, 66, 0.13);
+    font-size: 12px;
+    line-height: 18px;
+    white-space: nowrap;
+}
+
+.ujg-pa-issue-pill {
+    text-decoration: none;
+}
+
+.ujg-pa-issue-pill:hover {
+    text-decoration: underline;
+}
+
+.ujg-pa-status-pill {
+    font-weight: 600;
+}
+
+.ujg-pa-chain-arrow {
+    color: #6b778c;
+    font-weight: 600;
+}
+
+.ujg-pa-chain-ellipsis {
+    color: #6b778c;
 }
 
 .ujg-pa-chip-remove {

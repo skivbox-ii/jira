@@ -26,6 +26,49 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             }
             return utils.parseDateSafe(value);
         }
+
+        function daysBetween(a, b) {
+            if (!a || !b) return null;
+            return (b.getTime() - a.getTime()) / 86400000;
+        }
+
+        function safeNumber(v) {
+            if (v === null || v === undefined) return null;
+            if (typeof v === "number") return isNaN(v) ? null : v;
+            var n = parseFloat(v);
+            return isNaN(n) ? null : n;
+        }
+
+        function parseDueDate(issue) {
+            var raw = issue && issue.fields && issue.fields.duedate;
+            if (!raw) return null;
+            // Jira duedate обычно в формате YYYY-MM-DD (без времени)
+            return utils.parseDateSafe(String(raw) + "T23:59:59");
+        }
+
+        function parseResolutionDate(issue) {
+            return utils.parseDateSafe(issue && issue.fields && issue.fields.resolutiondate);
+        }
+
+        function normalizeSprintValue(v) {
+            if (!v) return "";
+            if (Array.isArray(v)) {
+                if (v.length === 0) return "";
+                // берём последний спринт как "текущий/последний"
+                return normalizeSprintValue(v[v.length - 1]);
+            }
+            if (typeof v === "object") {
+                return (v.name || v.id || "").toString();
+            }
+            var s = String(v);
+            // иногда toString содержит структуру с name=..., id=...
+            var mName = s.match(/name=([^,}\]]+)/i);
+            if (mName && mName[1]) return mName[1].trim();
+            var mId = s.match(/id=(\d+)/i);
+            if (mId && mId[1]) return "id:" + mId[1];
+            // fallback: короткая строка
+            return s.trim();
+        }
         
         function extractAuthorName(author) {
             if (!author) return "Unknown";
@@ -114,6 +157,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 firstWorklog: null,
                 firstCommit: null,
                 daysToFirstCommit: null,
+                workAheadDays: 0,
                 commitCount: issueData.commits.length,
                 commitsPerDay: false,
                 lastCommit: null,
@@ -121,8 +165,27 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 daysToClose: null,
                 stableClose: false,
                 returnedToWork: false,
+                returnCount: 0,
                 wentToDone: false,
-                wentToWorkAfterCommit: false
+                wentToWorkAfterCommit: false,
+
+                // сроки
+                dueDate: null,
+                isOverdue: false,
+                overdueDays: 0,
+                sprintChanges: 0,
+                closedInOriginalSprint: null,
+
+                // оценки
+                originalEstimateSeconds: null,
+                timeSpentSeconds: null,
+                estimateAccuracy: null,
+                isOverspent: false,
+
+                // качество
+                isStale: false,
+                isPingPong: false,
+                isCleanClose: false
             };
             
             if (issueData.worklogs.length > 0) {
@@ -145,7 +208,13 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     tookAt = issueData.firstWorkTransitionAt;
                 }
                 if (tookAt && metrics.firstCommit) {
-                    metrics.daysToFirstCommit = (metrics.firstCommit - tookAt) / 86400000;
+                    var d = (metrics.firstCommit - tookAt) / 86400000;
+                    if (d < 0) {
+                        metrics.workAheadDays = Math.abs(d);
+                        metrics.daysToFirstCommit = 0;
+                    } else {
+                        metrics.daysToFirstCommit = d;
+                    }
                 }
                 
                 var commitDays = {};
@@ -232,6 +301,7 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                     if ((toIsWork || toIsQueue) && !fromIsWork) {
                         if (fromIsDone || fromIsTesting || fromIsReview || fromIsWaiting) {
                             metrics.returnedToWork = true;
+                            metrics.returnCount += 1;
                         }
                     }
                     
@@ -243,6 +313,62 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 metrics.stableClose = doneAfterCommit && stableClose;
                 metrics.closedAfterCommit = doneAfterCommit;
             }
+
+            // --- сроки / спринты ---
+            var due = parseDueDate(issue);
+            var resolvedAt = parseResolutionDate(issue);
+            metrics.dueDate = due;
+            if (due) {
+                var ref = resolvedAt || (bounds && bounds.end) || null;
+                if (ref && ref > due) {
+                    metrics.isOverdue = true;
+                    metrics.overdueDays = Math.max(0, Math.ceil(daysBetween(due, ref)));
+                }
+            }
+            var sprintEvents = extractFieldEventsInPeriod(issue, "sprint", bounds) || [];
+            metrics.sprintChanges = sprintEvents.length;
+            // "закрыто в исходном спринте" считаем только если задача закрыта (есть resolutiondate)
+            if (resolvedAt) {
+                var initialSprint = "";
+                var finalSprint = "";
+                if (sprintEvents.length > 0) {
+                    initialSprint = normalizeSprintValue(sprintEvents[0].from || sprintEvents[0].to);
+                    finalSprint = normalizeSprintValue(sprintEvents[sprintEvents.length - 1].to || sprintEvents[sprintEvents.length - 1].from);
+                }
+                // fallback: берём текущее значение спринта из поля, если оно есть (кастомное поле sprint)
+                if (!finalSprint) {
+                    var sprintFieldId = state.customFields && state.customFields.sprint;
+                    if (sprintFieldId && issue && issue.fields) {
+                        finalSprint = normalizeSprintValue(issue.fields[sprintFieldId]);
+                    }
+                }
+                if (!initialSprint) initialSprint = finalSprint;
+                metrics.closedInOriginalSprint = (initialSprint && finalSprint) ? (String(initialSprint) === String(finalSprint)) : null;
+            }
+
+            // --- оценки ---
+            var orig = safeNumber(issue && issue.fields && issue.fields.timeoriginalestimate);
+            var spent = safeNumber(issue && issue.fields && issue.fields.timespent);
+            metrics.originalEstimateSeconds = orig;
+            metrics.timeSpentSeconds = spent;
+            if (orig && orig > 0 && spent !== null) {
+                metrics.estimateAccuracy = spent / orig;
+                metrics.isOverspent = metrics.estimateAccuracy > 1.2;
+            }
+
+            // --- качество ---
+            // ping-pong: много возвратов (например, review/testing -> work/queue)
+            metrics.isPingPong = metrics.returnCount > 2;
+            // stale: задача в работе и давно не было обновлений (берём updated как прокси)
+            var staleDays = state.thresholds && state.thresholds.noProgressRisk ? (state.thresholds.noProgressRisk || 0) : 0;
+            var updatedAt = utils.parseDateSafe(issue && issue.fields && issue.fields.updated);
+            if (staleDays > 0 && issueData.currentStatusIsWork && updatedAt && bounds && bounds.end) {
+                var idleDays = daysBetween(updatedAt, bounds.end);
+                if (idleDays !== null && idleDays > staleDays) {
+                    metrics.isStale = true;
+                }
+            }
+            metrics.isCleanClose = !!(metrics.wentToDone && !metrics.returnedToWork && !metrics.isOverdue);
             
             return metrics;
         }
@@ -253,6 +379,8 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var issuesWithCommits = 0;
             var issuesWithFirstCommit = 0;
             var totalDaysToFirstCommit = 0;
+            var workAheadCount = 0;
+            var totalWorkAheadDays = 0;
             var totalCommitsPerIssue = 0;
             var totalDaysToClose = 0;
             var stableClosed = 0;
@@ -261,6 +389,10 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
             var wentToWorkAfterCommit = 0;
             var commitsPerDayCount = 0;
             var tasksInWork = 0;
+            
+            // "Хорошие/Плохие истории"
+            var good = { onTime: 0, accurateEstimate: 0, cleanClose: 0, oneSprint: 0 };
+            var bad = { overdue: 0, sprintMoved: 0, overspent: 0, stale: 0, pingPong: 0 };
             
             issues.forEach(function(issueKey) {
                 var issueData = dev.issues[issueKey];
@@ -273,6 +405,10 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 if (metrics.daysToFirstCommit !== null) {
                     totalDaysToFirstCommit += metrics.daysToFirstCommit;
                     issuesWithFirstCommit += 1;
+                }
+                if (metrics.workAheadDays && metrics.workAheadDays > 0) {
+                    workAheadCount += 1;
+                    totalWorkAheadDays += metrics.workAheadDays;
                 }
                 totalCommitsPerIssue += metrics.commitCount || 0;
                 if (metrics.daysToClose !== null) {
@@ -287,6 +423,21 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 if (issueData.currentStatusIsWork) {
                     tasksInWork += 1;
                 }
+
+                // good/bad
+                if (metrics.isOverdue) bad.overdue += 1;
+                if (metrics.sprintChanges && metrics.sprintChanges > 0) bad.sprintMoved += 1;
+                if (metrics.isOverspent) bad.overspent += 1;
+                if (metrics.isStale) bad.stale += 1;
+                if (metrics.isPingPong) bad.pingPong += 1;
+
+                // Хорошие считаем по закрытым задачам (wentToDone)
+                if (metrics.wentToDone) {
+                    if (metrics.dueDate && !metrics.isOverdue) good.onTime += 1;
+                    if (metrics.estimateAccuracy !== null && metrics.estimateAccuracy >= 0.8 && metrics.estimateAccuracy <= 1.2) good.accurateEstimate += 1;
+                    if (metrics.isCleanClose) good.cleanClose += 1;
+                    if (metrics.closedInOriginalSprint === true) good.oneSprint += 1;
+                }
             });
             
             return {
@@ -294,13 +445,17 @@ define("_ujgPA_developerAnalytics", ["_ujgPA_utils", "_ujgPA_workflow", "_ujgPA_
                 issuesWithCommits: issuesWithCommits,
                 tasksInWork: tasksInWork,
                 avgDaysToFirstCommit: issuesWithFirstCommit > 0 ? totalDaysToFirstCommit / issuesWithFirstCommit : 0,
+                workAheadCount: workAheadCount,
+                avgWorkAheadDays: workAheadCount > 0 ? totalWorkAheadDays / workAheadCount : 0,
                 avgCommitsPerIssue: issuesWithCommits > 0 ? totalCommitsPerIssue / issuesWithCommits : 0,
                 avgDaysToClose: wentToDone > 0 ? totalDaysToClose / wentToDone : 0,
                 stableClosed: stableClosed,
                 returnedToWork: returnedToWork,
                 wentToDone: wentToDone,
                 wentToWorkAfterCommit: wentToWorkAfterCommit,
-                commitsPerDayIssues: commitsPerDayCount
+                commitsPerDayIssues: commitsPerDayCount,
+                goodStories: good,
+                badStories: bad
             };
         }
         

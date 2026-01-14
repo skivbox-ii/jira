@@ -7,32 +7,75 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
     var escapeHtml = utils.utils && utils.utils.escapeHtml ? utils.utils.escapeHtml : function(str) { return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
     
     function createRenderer(state) {
-        var issueSummaryIndex = null; // { KEY: summary }
+        var issueIndex = null; // { KEY: { summary, statusName, primaryCat } }
+        var issueIndexRef = null;
 
-        function ensureIssueSummaryIndex() {
-            if (issueSummaryIndex) return;
-            issueSummaryIndex = {};
+        function getPrimaryCategoryForStatus(statusName) {
+            if (!statusName) return "";
+            var cats = workflow.getCategoriesForStatus(statusName, state.workflowConfig) || [];
+            // стабильный порядок важен для читаемости и единых цветов
+            var order = ["queue", "work", "review", "testing", "waiting", "done"];
+            for (var i = 0; i < order.length; i++) {
+                if (cats.indexOf(order[i]) >= 0) return order[i];
+            }
+            return "";
+        }
+
+        function ensureIssueIndex() {
+            // state.issues пересоздаётся при каждой загрузке — используем ссылку как версию
+            if (issueIndex && issueIndexRef === state.issues) return;
+            issueIndexRef = state.issues;
+            issueIndex = {};
             (state.issues || []).forEach(function(issue) {
                 if (!issue || !issue.key) return;
                 var summary = issue.fields && issue.fields.summary ? String(issue.fields.summary) : "";
-                issueSummaryIndex[issue.key] = summary;
+                var statusName = issue.fields && issue.fields.status && issue.fields.status.name ? String(issue.fields.status.name) : "";
+                var primaryCat = getPrimaryCategoryForStatus(statusName);
+                issueIndex[issue.key] = { summary: summary, statusName: statusName, primaryCat: primaryCat };
             });
         }
 
         function formatIssueLabel(issueKey) {
             var key = issueKey ? String(issueKey) : "";
             if (!key) return "—";
-            ensureIssueSummaryIndex();
-            var summary = issueSummaryIndex[key] ? String(issueSummaryIndex[key]) : "";
+            ensureIssueIndex();
+            var summary = issueIndex[key] && issueIndex[key].summary ? String(issueIndex[key].summary) : "";
             return summary ? (key + " — " + summary) : key;
         }
 
         function renderIssueLink(issueKey) {
             var key = issueKey ? String(issueKey) : "";
             if (!key) return "—";
+            ensureIssueIndex();
+            var cat = issueIndex[key] && issueIndex[key].primaryCat ? issueIndex[key].primaryCat : "";
             var label = formatIssueLabel(key);
             var issueUrl = baseUrl + "/browse/" + encodeURIComponent(key);
-            return '<a href="' + issueUrl + '" target="_blank">' + escapeHtml(label) + "</a>";
+            var cls = "ujg-pa-pill ujg-pa-issue-pill";
+            if (cat) cls += " ujg-pa-cat-" + cat;
+            return '<a class="' + cls + '" href="' + issueUrl + '" target="_blank">' + escapeHtml(label) + "</a>";
+        }
+
+        function renderStatusPill(statusName) {
+            var name = (statusName || "").toString();
+            if (!name) return '<span class="ujg-pa-pill ujg-pa-status-pill">—</span>';
+            var cat = getPrimaryCategoryForStatus(name);
+            var cls = "ujg-pa-pill ujg-pa-status-pill";
+            if (cat) cls += " ujg-pa-cat-" + cat;
+            return '<span class="' + cls + '">' + escapeHtml(name) + "</span>";
+        }
+
+        function renderStatusChain(path) {
+            var p = (path || "").toString();
+            if (!p) return "—";
+            var parts = p.split("→").map(function(x) { return (x || "").trim(); }).filter(function(x) { return x.length > 0; });
+            if (parts.length === 0) return escapeHtml(p);
+            var out = [];
+            parts.forEach(function(token, idx) {
+                if (idx > 0) out.push('<span class="ujg-pa-chain-arrow">→</span>');
+                if (token === "…") out.push('<span class="ujg-pa-chain-ellipsis">…</span>');
+                else out.push(renderStatusPill(token));
+            });
+            return out.join(" ");
         }
 
         function formatDuration(seconds) {
@@ -63,6 +106,11 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
         function formatDays(days) {
             if (days === null || days === undefined || isNaN(days)) return "—";
             return (Math.round(days * 10) / 10) + " дн.";
+        }
+        
+        function formatRatio(r) {
+            if (r === null || r === undefined || isNaN(r)) return "—";
+            return (Math.round(r * 10) / 10).toFixed(1) + "x";
         }
 
         function renderDeveloperAnalyticsSection($parent) {
@@ -136,6 +184,12 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     'Коммитов на задачу: <strong>' + (summary.avgCommitsPerIssue ? (Math.round(summary.avgCommitsPerIssue * 10) / 10).toFixed(1) : "0.0") + '</strong> | ' +
                     'Последний коммит → закрытие: <strong>' + formatDays(summary.avgDaysToClose) + '</strong>' +
                     '</p>');
+                
+                if ((summary.workAheadCount || 0) > 0) {
+                    $stats.append('<p><strong>⚠️ Процесс:</strong> ' +
+                        'Коммит до взятия задачи: <strong>' + (summary.workAheadCount || 0) + '</strong> ' +
+                        '(в среднем <strong>' + formatDays(summary.avgWorkAheadDays) + '</strong>)</p>');
+                }
 
                 $stats.append('<p><strong>✅ Качество:</strong> ' +
                     'Стабильно закрыто: <strong>' + (summary.stableClosed || 0) + '</strong> | ' +
@@ -143,6 +197,24 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     'После коммита → done: <strong>' + (summary.wentToDone || 0) + '</strong> | ' +
                     'После коммита → work: <strong>' + (summary.wentToWorkAfterCommit || 0) + '</strong>' +
                     '</p>');
+                
+                var good = summary.goodStories || {};
+                var bad = summary.badStories || {};
+                if (good || bad) {
+                    $stats.append('<p><strong>📗 Хорошие истории:</strong> ' +
+                        'В срок: <strong>' + (good.onTime || 0) + '</strong> | ' +
+                        'Точная оценка: <strong>' + (good.accurateEstimate || 0) + '</strong> | ' +
+                        'Чистое закрытие: <strong>' + (good.cleanClose || 0) + '</strong> | ' +
+                        'В одном спринте: <strong>' + (good.oneSprint || 0) + '</strong>' +
+                        '</p>');
+                    $stats.append('<p><strong>📕 Проблемные:</strong> ' +
+                        'Просрочено: <strong>' + (bad.overdue || 0) + '</strong> | ' +
+                        'Переносы спринтов: <strong>' + (bad.sprintMoved || 0) + '</strong> | ' +
+                        'Перерасход: <strong>' + (bad.overspent || 0) + '</strong> | ' +
+                        'Зависшие: <strong>' + (bad.stale || 0) + '</strong> | ' +
+                        'Ping-pong: <strong>' + (bad.pingPong || 0) + '</strong>' +
+                        '</p>');
+                }
 
                 $card.append($stats);
 
@@ -160,10 +232,16 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                     var $table = $('<table class="ujg-pa-table"><thead><tr>' +
                         '<th>Задача</th>' +
                         '<th>Взял → Коммит</th>' +
+                        '<th>Вперёд</th>' +
                         '<th>Комм</th>' +
                         '<th>Комм/день</th>' +
                         '<th>Закрыто</th>' +
                         '<th>Возврат</th>' +
+                        '<th>Срок</th>' +
+                        '<th>Спринты</th>' +
+                        '<th>Оценка</th>' +
+                        '<th>Stale</th>' +
+                        '<th>PingPong</th>' +
                         '</tr></thead><tbody></tbody></table>');
 
                     issues.forEach(function(issueData) {
@@ -172,10 +250,16 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
                         var $row = $("<tr></tr>");
                         $row.append("<td>" + renderIssueLink(issueKey) + "</td>");
                         $row.append("<td>" + (m.daysToFirstCommit !== null ? formatDays(m.daysToFirstCommit) : "—") + "</td>");
+                        $row.append("<td>" + (m.workAheadDays ? formatDays(m.workAheadDays) : "—") + "</td>");
                         $row.append("<td>" + (m.commitCount || 0) + "</td>");
                         $row.append("<td>" + (m.commitsPerDay ? "✓" : "—") + "</td>");
                         $row.append("<td>" + (m.wentToDone ? "✓" : "—") + "</td>");
                         $row.append("<td>" + ((m.returnedToWork || m.wentToWorkAfterCommit) ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + (m.dueDate ? (m.isOverdue ? ("⚠ " + (m.overdueDays || 0) + "д") : "✓") : "—") + "</td>");
+                        $row.append("<td>" + (m.sprintChanges ? m.sprintChanges : "—") + "</td>");
+                        $row.append("<td>" + (m.estimateAccuracy !== null ? formatRatio(m.estimateAccuracy) : "—") + "</td>");
+                        $row.append("<td>" + (m.isStale ? "✓" : "—") + "</td>");
+                        $row.append("<td>" + (m.isPingPong ? (m.returnCount || "✓") : "—") + "</td>");
                         $table.find("tbody").append($row);
                     });
 
@@ -415,31 +499,31 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
         function renderBottlenecksSection($parent) {
             if (!state.bottlenecks) return;
             var $section = $('<div class="ujg-pa-section"><h3>Узкие места</h3></div>');
-            function listItems(label, items, formatter) {
+            function listItemsHtml(label, items, formatter) {
                 if (!items || items.length === 0) return;
                 var $block = $('<div class="ujg-pa-bottleneck-block"><strong>' + label + ":</strong></div>");
                 var $list = $("<ul></ul>");
                 items.slice(0, 5).forEach(function(item) {
-                    var text = formatter(item);
-                    $list.append("<li>" + escapeHtml(text) + "</li>");
+                    var html = formatter(item);
+                    $list.append("<li>" + html + "</li>");
                 });
                 $block.append($list);
                 $section.append($block);
             }
-            listItems("Долгое ревью", state.bottlenecks.longReview, function(item) {
-                return formatIssueLabel(item.key) + " (" + formatDuration(item.seconds) + ")";
+            listItemsHtml("Долгое ревью", state.bottlenecks.longReview, function(item) {
+                return renderIssueLink(item.key) + " (" + escapeHtml(formatDuration(item.seconds)) + ")";
             });
-            listItems("Долгое тестирование", state.bottlenecks.longTesting, function(item) {
-                return formatIssueLabel(item.key) + " (" + formatDuration(item.seconds) + ")";
+            listItemsHtml("Долгое тестирование", state.bottlenecks.longTesting, function(item) {
+                return renderIssueLink(item.key) + " (" + escapeHtml(formatDuration(item.seconds)) + ")";
             });
-            listItems("Путешествующие задачи", state.bottlenecks.travellers, function(item) {
-                return formatIssueLabel(item.key) + " (" + item.changes + " спринтов)";
+            listItemsHtml("Путешествующие задачи", state.bottlenecks.travellers, function(item) {
+                return renderIssueLink(item.key) + " (" + escapeHtml(String(item.changes || 0)) + " спринтов)";
             });
-            listItems("Старые задачи", state.bottlenecks.stale, function(item) {
-                return formatIssueLabel(item.key) + " (" + item.days + " дн. без активности)";
+            listItemsHtml("Старые задачи", state.bottlenecks.stale, function(item) {
+                return renderIssueLink(item.key) + " (" + escapeHtml(String(item.days || 0)) + " дн. без активности)";
             });
-            listItems("WIP перегруз", state.bottlenecks.wipOverload, function(item) {
-                return item.assignee + ": " + item.count + " задач";
+            listItemsHtml("WIP перегруз", state.bottlenecks.wipOverload, function(item) {
+                return escapeHtml(item.assignee) + ": " + escapeHtml(String(item.count || 0)) + " задач";
             });
             $parent.append($section);
         }
@@ -471,12 +555,12 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
 
             var $table = $('<table class="ujg-pa-table"><thead><tr><th>Из \\ В</th></tr></thead><tbody></tbody></table>');
             statuses.forEach(function(to) {
-                $table.find("thead tr").append("<th>" + escapeHtml(to) + "</th>");
+                $table.find("thead tr").append("<th>" + renderStatusPill(to) + "</th>");
             });
 
             statuses.forEach(function(from) {
                 var $row = $("<tr></tr>");
-                $row.append("<td><strong>" + escapeHtml(from) + "</strong></td>");
+                $row.append("<td><strong>" + renderStatusPill(from) + "</strong></td>");
                 statuses.forEach(function(to) {
                     var cnt = (ts.transitions[from] && ts.transitions[from][to]) ? ts.transitions[from][to] : 0;
                     $row.append("<td>" + (cnt ? cnt : "—") + "</td>");
@@ -508,7 +592,7 @@ define("_ujgPA_rendering", ["jquery", "_ujgCommon", "_ujgPA_utils", "_ujgPA_conf
             var $tableS = $('<table class="ujg-pa-table"><thead><tr><th>Цепочка</th><th>Кол-во задач</th><th>%</th><th>Пример</th></tr></thead><tbody></tbody></table>');
             topStatus.forEach(function(item) {
                 var $row = $("<tr></tr>");
-                $row.append("<td>" + escapeHtml(item.path) + "</td>");
+                $row.append("<td>" + renderStatusChain(item.path) + "</td>");
                 $row.append("<td>" + (item.count || 0) + "</td>");
                 var pctS = totalStatus ? (((item.count || 0) / totalStatus) * 100) : 0;
                 $row.append("<td>" + (Math.round(pctS * 10) / 10).toFixed(1) + "%</td>");
