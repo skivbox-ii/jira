@@ -117,29 +117,6 @@ RowFail:
 
 ' ====== JIRA API ======
 
-Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As String) As Object
-    Dim fieldsParam As String
-    fieldsParam = "fields=status,assignee,comment,updated,subtasks,issuetype," & SPRINT_FIELD_ID
-
-    Dim url As String
-    url = BASE_URL & "/rest/api/2/issue/" & UrlEncode(issueKey) & "?" & fieldsParam
-
-    Dim http As Object
-    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-    http.Open "GET", url, False
-    http.setRequestHeader "Authorization", authHeader
-    http.setRequestHeader "Accept", "application/json"
-    http.send
-
-    If http.Status < 200 Or http.Status >= 300 Then
-        Err.Raise 5, , "JiraGetIssue HTTP " & http.Status & ": " & Left$(CStr(http.responseText), 500)
-    End If
-
-    Dim root As Variant
-    root = JsonConverter.ParseJson(CStr(http.responseText))
-    Set JiraGetIssue = root
-End Function
-
 Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As String, ByVal sprintFieldId As String) As Object
     Dim fieldsParam As String
     fieldsParam = "fields=status,assignee,comment,updated,subtasks,issuetype," & sprintFieldId
