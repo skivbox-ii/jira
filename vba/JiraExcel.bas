@@ -2,7 +2,7 @@ Attribute VB_Name = "JiraExcel"
 Option Explicit
 
 ' ====== НАСТРОЙКИ (под себя) ======
-Private Const BASE_URL As String = "https://jira.dc-prod.tn.corp"
+Private Const BASE_URL As String = ""
 
 ' В Jira поле "Sprint" почти всегда customfield_XXXXX.
 ' В JS-виджете `ujg-sprint-health.js` поле Sprint резолвится автоматически через /rest/api/2/field,
