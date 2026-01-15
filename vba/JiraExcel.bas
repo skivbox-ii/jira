@@ -109,11 +109,13 @@ CleanFail:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
     MsgBox "Ошибка: " & Err.Description, vbCritical
-End Sub
+    GoTo CleanExit
 
 RowFail:
     ws.Cells(i, colErr).Value = Err.Description
     Resume ContinueRow
+
+End Sub
 
 ' ====== JIRA API ======
 
