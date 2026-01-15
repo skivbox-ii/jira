@@ -66,55 +66,51 @@ Public Sub jira(login As String, password As String)
     Application.EnableEvents = False
     Application.Calculation = xlCalculationManual
 
-    On Error GoTo CleanFail
-
     Dim i As Long
+    Dim key As String
+    Dim issue As Object
+    
     For i = FIRST_DATA_ROW To lastRow
-        Dim key As String
         key = Trim(CStr(ws.Cells(i, KEY_COL).Value))
 
-        If Len(key) = 0 Then
-            ' пустая строка — ничего не делаем
-        Else
-            On Error GoTo RowFail
+        If Len(key) > 0 Then
             ws.Cells(i, colErr).Value = vbNullString
-
-            Dim issue As Variant
+            
+            On Error Resume Next
+            Err.Clear
+            
+            Set issue = Nothing
             Set issue = JiraGetIssue(authHeader, key, sprintFieldId)
+            
+            If Err.Number <> 0 Then
+                ws.Cells(i, colErr).Value = Err.Description
+                Err.Clear
+            ElseIf issue Is Nothing Then
+                ws.Cells(i, colErr).Value = "Не удалось загрузить задачу"
+            Else
+                ' Достаём основные поля
+                ws.Cells(i, colStatus).Value = Nz(GetPath(issue, "fields.status.name"), "-")
+                ws.Cells(i, colAssignee).Value = Nz(GetPath(issue, "fields.assignee.displayName"), "-")
+                ws.Cells(i, colUpdated).Value = Nz(GetPath(issue, "fields.updated"), "-")
+                ws.Cells(i, colSprint).Value = SprintToText(GetField(issue, "fields." & sprintFieldId))
+                ws.Cells(i, colComments).Value = CommentsToText(GetField(issue, "fields.comment.comments"))
 
-            ' Достаём основные поля
-            ws.Cells(i, colStatus).Value = Nz(GetPath(issue, "fields.status.name"), "-")
-            ws.Cells(i, colAssignee).Value = Nz(GetPath(issue, "fields.assignee.displayName"), "-")
-            ws.Cells(i, colUpdated).Value = Nz(GetPath(issue, "fields.updated"), "-")
-            ws.Cells(i, colSprint).Value = SprintToText(GetField(issue, "fields." & sprintFieldId))
-            ws.Cells(i, colComments).Value = CommentsToText(GetField(issue, "fields.comment.comments"))
-
-            ' Деток тянем только если они есть
-            ws.Cells(i, colSubtasks).Value = SubtasksToTextIfAny(authHeader, key, GetField(issue, "fields.subtasks"))
-
+                ' Деток тянем только если они есть
+                ws.Cells(i, colSubtasks).Value = SubtasksToTextIfAny(authHeader, key, GetField(issue, "fields.subtasks"))
+                
+                If Err.Number <> 0 Then
+                    ws.Cells(i, colErr).Value = Err.Description
+                    Err.Clear
+                End If
+            End If
+            
             On Error GoTo 0
         End If
-ContinueRow:
     Next i
 
-CleanExit:
     Application.Calculation = prevCalc
     Application.EnableEvents = True
     Application.ScreenUpdating = True
-    Exit Sub
-
-CleanFail:
-    ' Если упали в середине — восстановим Excel и покажем ошибку
-    Application.Calculation = prevCalc
-    Application.EnableEvents = True
-    Application.ScreenUpdating = True
-    MsgBox "Ошибка: " & Err.Description, vbCritical
-    GoTo CleanExit
-
-RowFail:
-    ws.Cells(i, colErr).Value = Err.Description
-    Resume ContinueRow
-
 End Sub
 
 ' ====== JIRA API ======
