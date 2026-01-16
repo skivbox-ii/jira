@@ -118,43 +118,13 @@ Public Sub jira(login As String, password As String)
 
     Dim i As Long
     Dim key As String
-    Dim issue As Object
     
     For i = FIRST_DATA_ROW To lastRow
         key = Trim(CStr(ws.Cells(i, KEY_COL).Value))
-
         If Len(key) > 0 Then
-            ws.Cells(i, colErr).Value = vbNullString
-            
-            On Error Resume Next
-            Err.Clear
-            
-            Set issue = Nothing
-            Set issue = JiraGetIssue(authHeader, key, sprintFieldId)
-            
-            If Err.Number <> 0 Then
-                ws.Cells(i, colErr).Value = Err.Description
-                Err.Clear
-            ElseIf issue Is Nothing Then
-                ws.Cells(i, colErr).Value = "Не удалось загрузить задачу"
-            Else
-                ' Достаём основные поля
-                ws.Cells(i, colStatus).Value = Nz(GetPath(issue, "fields.status.name"), "-")
-                ws.Cells(i, colAssignee).Value = Nz(GetPath(issue, "fields.assignee.displayName"), "-")
-                ws.Cells(i, colUpdated).Value = Nz(GetPath(issue, "fields.updated"), "-")
-                ws.Cells(i, colSprint).Value = SprintToText(GetField(issue, "fields." & sprintFieldId))
-                ws.Cells(i, colComments).Value = CommentsToText(GetField(issue, "fields.comment.comments"))
-
-                ' Деток тянем только если они есть
-                ws.Cells(i, colSubtasks).Value = SubtasksToTextIfAny(authHeader, key, GetField(issue, "fields.subtasks"))
-                
-                If Err.Number <> 0 Then
-                    ws.Cells(i, colErr).Value = Err.Description
-                    Err.Clear
-                End If
-            End If
-            
-            On Error GoTo 0
+            ws.Cells(i, colErr).Value = ProcessIssueRow(ws, i, key, authHeader, sprintFieldId, _
+                                                        colStatus, colAssignee, colUpdated, colSprint, _
+                                                        colComments, colSubtasks)
         End If
     Next i
 
@@ -747,6 +717,48 @@ Private Function NzText(ByVal v As String, ByVal fallback As String) As String
     Else
         NzText = v
     End If
+End Function
+
+Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, ByVal key As String, _
+                                 ByVal authHeader As String, ByVal sprintFieldId As String, _
+                                 ByVal colStatus As Long, ByVal colAssignee As Long, ByVal colUpdated As Long, _
+                                 ByVal colSprint As Long, ByVal colComments As Long, ByVal colSubtasks As Long) As String
+    On Error GoTo Fail
+
+    Dim stepName As String
+    Dim issue As Object
+
+    stepName = "JiraGetIssue"
+    Set issue = JiraGetIssue(authHeader, key, sprintFieldId)
+
+    If issue Is Nothing Then
+        ProcessIssueRow = "Не удалось загрузить задачу"
+        Exit Function
+    End If
+
+    stepName = "fields.status.name"
+    ws.Cells(rowIndex, colStatus).Value = Nz(GetPath(issue, "fields.status.name"), "-")
+
+    stepName = "fields.assignee.displayName"
+    ws.Cells(rowIndex, colAssignee).Value = Nz(GetPath(issue, "fields.assignee.displayName"), "-")
+
+    stepName = "fields.updated"
+    ws.Cells(rowIndex, colUpdated).Value = Nz(GetPath(issue, "fields.updated"), "-")
+
+    stepName = "fields.sprint"
+    ws.Cells(rowIndex, colSprint).Value = SprintToText(GetField(issue, "fields." & sprintFieldId))
+
+    stepName = "fields.comment.comments"
+    ws.Cells(rowIndex, colComments).Value = CommentsToText(GetField(issue, "fields.comment.comments"))
+
+    stepName = "fields.subtasks"
+    ws.Cells(rowIndex, colSubtasks).Value = SubtasksToTextIfAny(authHeader, key, GetField(issue, "fields.subtasks"))
+
+    ProcessIssueRow = vbNullString
+    Exit Function
+
+Fail:
+    ProcessIssueRow = "ERR " & Err.Number & " @ " & stepName & ": " & Err.Description
 End Function
 
 Private Function GetField(ByVal root As Variant, ByVal path As String) As Variant
