@@ -6,7 +6,7 @@ Option Explicit
 Private Const BASE_URL As String = ""
 
 ' Версия скрипта для отладки
-Private Const SCRIPT_VERSION As String = "2026-01-16.5"
+Private Const SCRIPT_VERSION As String = "2026-01-16.6"
 ' Включить доп.лог в таблицу
 Private Const DEBUG_LOG As Boolean = True
 
@@ -37,6 +37,7 @@ Private gLastRequestUrl As String
 Private gLastRequestName As String
 Private gLastRequestStatus As Long
 Private gLastResponseSnippet As String
+Private gLastResponseFull As String
 
 ' Заголовки создаваемых/ищущихся колонок:
 Private Const H_STATUS As String = "Jira: Статус"
@@ -46,7 +47,8 @@ Private Const H_SPRINT As String = "Jira: Спринт"
 Private Const H_COMMENTS As String = "Jira: Комментарии (время | автор | текст)"
 Private Const H_SUBTASKS As String = "Jira: Детки (key / summary / status)"
 Private Const H_ERROR As String = "Jira: Ошибка"
-Private Const H_DEBUG As String = "Jira: Debug"
+Private Const H_DEBUG As String = "Jira: Debug (запрос)"
+Private Const H_RESPONSE As String = "Jira: Response (ответ)"
 
 ' ====== ПУБЛИЧНЫЕ ТОЧКИ ВХОДА ======
 
@@ -98,7 +100,7 @@ Public Sub jira(login As String, password As String)
     lastRow = ws.Cells(ws.Rows.Count, KEY_COL).End(xlUp).Row
     If lastRow < FIRST_DATA_ROW Then Exit Sub
 
-    Dim colStatus As Long, colAssignee As Long, colUpdated As Long, colSprint As Long, colComments As Long, colSubtasks As Long, colErr As Long, colDebug As Long
+    Dim colStatus As Long, colAssignee As Long, colUpdated As Long, colSprint As Long, colComments As Long, colSubtasks As Long, colErr As Long, colDebug As Long, colResponse As Long
     colStatus = EnsureColumn(ws, H_STATUS)
     colAssignee = EnsureColumn(ws, H_ASSIGNEE)
     colUpdated = EnsureColumn(ws, H_UPDATED)
@@ -108,8 +110,10 @@ Public Sub jira(login As String, password As String)
     colErr = EnsureColumn(ws, H_ERROR)
     If DEBUG_LOG Then
         colDebug = EnsureColumn(ws, H_DEBUG)
+        colResponse = EnsureColumn(ws, H_RESPONSE)
     Else
         colDebug = 0
+        colResponse = 0
     End If
 
     Dim authHeader As String
@@ -139,7 +143,7 @@ Public Sub jira(login As String, password As String)
         If Len(key) > 0 Then
             ws.Cells(i, colErr).Value = ProcessIssueRow(ws, i, key, authHeader, sprintFieldId, _
                                                         colStatus, colAssignee, colUpdated, colSprint, _
-                                                        colComments, colSubtasks, colDebug)
+                                                        colComments, colSubtasks, colDebug, colResponse)
         End If
     Next i
 
@@ -648,17 +652,25 @@ Private Sub SetLastRequestInfo(ByVal name As String, ByVal url As String)
     gLastRequestUrl = url
     gLastRequestStatus = 0
     gLastResponseSnippet = ""
+    gLastResponseFull = ""
 End Sub
 
 Private Sub SetLastResponseInfo(ByVal status As Long, ByVal responseText As String)
     gLastRequestStatus = status
+    ' Полный ответ для колонки Response
+    gLastResponseFull = CStr(responseText)
+    ' Краткий snippet для колонки Debug
     Dim s As String
-    s = Left$(CStr(responseText), 200)
+    s = Left$(CStr(responseText), 500)
     s = Replace(s, vbCrLf, " ")
     s = Replace(s, vbCr, " ")
     s = Replace(s, vbLf, " ")
     gLastResponseSnippet = s
 End Sub
+
+Private Function GetLastResponseFull() As String
+    GetLastResponseFull = gLastResponseFull
+End Function
 
 Private Function FormatLastRequestDebug() As String
     Dim s As String
@@ -796,7 +808,7 @@ Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, 
                                  ByVal authHeader As String, ByVal sprintFieldId As String, _
                                  ByVal colStatus As Long, ByVal colAssignee As Long, ByVal colUpdated As Long, _
                                  ByVal colSprint As Long, ByVal colComments As Long, ByVal colSubtasks As Long, _
-                                 ByVal colDebug As Long) As String
+                                 ByVal colDebug As Long, ByVal colResponse As Long) As String
     On Error GoTo Fail
 
     Dim stepName As String
@@ -804,8 +816,13 @@ Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, 
 
     stepName = "JiraGetIssue"
     Set issue = JiraGetIssue(authHeader, key, sprintFieldId)
+    
+    ' Всегда записываем запрос и ответ (для отладки)
     If colDebug > 0 Then
-        ws.Cells(rowIndex, colDebug).Value = FormatLastRequestDebug()
+        ws.Cells(rowIndex, colDebug).Value = gLastRequestName & " " & gLastRequestUrl & " [HTTP " & gLastRequestStatus & "]"
+    End If
+    If colResponse > 0 Then
+        ws.Cells(rowIndex, colResponse).Value = GetLastResponseFull()
     End If
 
     If issue Is Nothing Then
@@ -831,16 +848,22 @@ Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, 
     stepName = "fields.subtasks"
     ws.Cells(rowIndex, colSubtasks).Value = SubtasksToTextIfAny(authHeader, key, GetField(issue, "fields.subtasks"))
 
+    ' Успех - очищаем колонки debug/response чтобы не путать
+    If colDebug > 0 Then ws.Cells(rowIndex, colDebug).Value = "OK: " & gLastRequestUrl
+    If colResponse > 0 Then ws.Cells(rowIndex, colResponse).Value = ""
+
     ProcessIssueRow = vbNullString
     Exit Function
 
 Fail:
-    Dim dbg As String
-    dbg = ""
+    ' При ошибке обязательно записываем запрос и полный ответ
     If colDebug > 0 Then
-        dbg = " | " & FormatLastRequestDebug()
+        ws.Cells(rowIndex, colDebug).Value = "FAIL @ " & stepName & ": " & gLastRequestName & " " & gLastRequestUrl & " [HTTP " & gLastRequestStatus & "]"
     End If
-    ProcessIssueRow = "ERR " & Err.Number & " @ " & stepName & ": " & Err.Description & dbg
+    If colResponse > 0 Then
+        ws.Cells(rowIndex, colResponse).Value = GetLastResponseFull()
+    End If
+    ProcessIssueRow = "ERR " & Err.Number & " @ " & stepName & ": " & Err.Description
 End Function
 
 Private Function GetField(ByVal root As Variant, ByVal path As String) As Variant
