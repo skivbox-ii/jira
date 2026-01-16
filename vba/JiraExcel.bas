@@ -26,6 +26,8 @@ Private Const CRED_ENV_SITE As String = "JIRA_SITE"
 Private Const CRED_FILE_REL As String = "\JiraExcel\credentials.txt"
 
 Private gBaseUrl As String
+Private gBaseUrlSource As String
+Private gCredsSource As String
 
 ' Заголовки создаваемых/ищущихся колонок:
 Private Const H_STATUS As String = "Jira: Статус"
@@ -40,22 +42,29 @@ Private Const H_ERROR As String = "Jira: Ошибка"
 
 Public Sub RunJiraUpdate()
     Dim baseUrl As String
-    baseUrl = ResolveBaseUrl()
+    Dim baseUrlSource As String
+    baseUrl = ResolveBaseUrl(baseUrlSource)
     If Len(baseUrl) = 0 Then
         baseUrl = InputBox("Jira base URL (например https://jira.company.com):", "Jira")
         baseUrl = NormalizeBaseUrl(baseUrl)
         If Len(baseUrl) = 0 Then Exit Sub
+        baseUrlSource = "input"
     End If
     gBaseUrl = baseUrl
+    gBaseUrlSource = baseUrlSource
 
-    Dim login As String, token As String
-    If Not LoadCredentials(login, token) Then
+    Dim login As String, token As String, credSource As String
+    If Not LoadCredentials(login, token, credSource) Then
         login = InputBox("Jira login (username/email):", "Jira")
         If Len(login) = 0 Then Exit Sub
 
         token = InputBox("Jira API token / password:", "Jira")
         If Len(token) = 0 Then Exit Sub
+        credSource = "input"
     End If
+    gCredsSource = credSource
+
+    ShowRunInfo login
 
     jira login, token
 End Sub
@@ -63,11 +72,12 @@ End Sub
 ' Сохраняю имя процедуры как на скриншоте
 Public Sub jira(login As String, password As String)
     If Len(gBaseUrl) = 0 Then
-        gBaseUrl = ResolveBaseUrl()
+        gBaseUrl = ResolveBaseUrl(gBaseUrlSource)
         If Len(gBaseUrl) = 0 Then
             gBaseUrl = InputBox("Jira base URL (например https://jira.company.com):", "Jira")
             gBaseUrl = NormalizeBaseUrl(gBaseUrl)
             If Len(gBaseUrl) = 0 Then Exit Sub
+            gBaseUrlSource = "input"
         End If
     End If
 
@@ -89,6 +99,13 @@ Public Sub jira(login As String, password As String)
 
     Dim authHeader As String
     authHeader = "Basic " & Base64Encode(login & ":" & password)
+
+    Dim pingErr As String
+    pingErr = JiraPing(authHeader)
+    If Len(pingErr) > 0 Then
+        MsgBox "Не удалось подключиться к Jira:" & vbCrLf & pingErr, vbExclamation, "Jira"
+        Exit Sub
+    End If
 
     Dim sprintFieldId As String
     sprintFieldId = ResolveSprintFieldId(authHeader)
@@ -163,7 +180,7 @@ Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As Stri
     http.send
 
     If http.Status < 200 Or http.Status >= 300 Then
-        Err.Raise 5, , "JiraGetIssue HTTP " & http.Status & ": " & Left$(CStr(http.responseText), 500)
+        Err.Raise 5, , "JiraGetIssue HTTP " & http.Status & " (" & url & "): " & Left$(CStr(http.responseText), 500)
     End If
 
     Dim root As Variant
@@ -186,7 +203,7 @@ Private Function JiraSearchSubtasks(ByVal authHeader As String, ByVal parentKey 
     http.send
 
     If http.Status < 200 Or http.Status >= 300 Then
-        Err.Raise 5, , "JiraSearchSubtasks HTTP " & http.Status & ": " & Left$(CStr(http.responseText), 500)
+        Err.Raise 5, , "JiraSearchSubtasks HTTP " & http.Status & " (" & url & "): " & Left$(CStr(http.responseText), 500)
     End If
 
     Dim root As Variant
@@ -467,17 +484,30 @@ End Function
 
 ' ====== УТИЛИТЫ (Excel / JSON / HTTP) ======
 
-Private Function LoadCredentials(ByRef login As String, ByRef token As String) As Boolean
+Private Function LoadCredentials(ByRef login As String, ByRef token As String, ByRef source As String) As Boolean
     On Error GoTo Fail
 
+    Dim tokenEnvVar As String
     login = Trim$(Environ$(CRED_ENV_LOGIN))
     token = Trim$(Environ$(CRED_ENV_TOKEN))
-    If Len(token) = 0 Then token = Trim$(Environ$(CRED_ENV_PASSWORD))
-    If Len(token) = 0 Then token = Trim$(Environ$(CRED_ENV_PASS))
+    tokenEnvVar = CRED_ENV_TOKEN
+    If Len(token) = 0 Then
+        token = Trim$(Environ$(CRED_ENV_PASSWORD))
+        tokenEnvVar = CRED_ENV_PASSWORD
+    End If
+    If Len(token) = 0 Then
+        token = Trim$(Environ$(CRED_ENV_PASS))
+        tokenEnvVar = CRED_ENV_PASS
+    End If
     If Len(login) > 0 And Len(token) > 0 Then
+        source = "env:" & CRED_ENV_LOGIN & "+" & tokenEnvVar
         LoadCredentials = True
         Exit Function
     End If
+
+    login = ""
+    token = ""
+    source = ""
 
     Dim appData As String
     appData = Environ$("APPDATA")
@@ -485,33 +515,53 @@ Private Function LoadCredentials(ByRef login As String, ByRef token As String) A
         Dim credPath As String
         credPath = appData & CRED_FILE_REL
         If ReadCredentialsFromFile(credPath, login, token) Then
+            source = "file:" & credPath
             LoadCredentials = True
             Exit Function
         End If
     End If
 
+    source = "none"
     LoadCredentials = False
     Exit Function
 
 Fail:
+    source = "error"
     LoadCredentials = False
 End Function
 
-Private Function ResolveBaseUrl() As String
+Private Function ResolveBaseUrl(ByRef source As String) As String
     Dim url As String
     url = Trim$(Environ$(CRED_ENV_BASE_URL))
-    If Len(url) = 0 Then url = Trim$(Environ$(CRED_ENV_HOST))
-    If Len(url) = 0 Then url = Trim$(Environ$(CRED_ENV_SITE))
+    If Len(url) > 0 Then
+        source = "env:" & CRED_ENV_BASE_URL
+    Else
+        url = Trim$(Environ$(CRED_ENV_HOST))
+        If Len(url) > 0 Then
+            source = "env:" & CRED_ENV_HOST
+        Else
+            url = Trim$(Environ$(CRED_ENV_SITE))
+            If Len(url) > 0 Then source = "env:" & CRED_ENV_SITE
+        End If
+    End If
 
     If Len(url) = 0 Then
         Dim appData As String
         appData = Environ$("APPDATA")
         If Len(appData) > 0 Then
-            url = ReadBaseUrlFromFile(appData & CRED_FILE_REL)
+            Dim filePath As String
+            filePath = appData & CRED_FILE_REL
+            url = ReadBaseUrlFromFile(filePath)
+            If Len(url) > 0 Then source = "file:" & filePath
         End If
     End If
 
-    If Len(url) = 0 Then url = Trim$(BASE_URL)
+    If Len(url) = 0 Then
+        url = Trim$(BASE_URL)
+        If Len(url) > 0 Then source = "const:BASE_URL"
+    End If
+    If Len(url) = 0 Then source = "none"
+
     ResolveBaseUrl = NormalizeBaseUrl(url)
 End Function
 
@@ -576,6 +626,49 @@ Private Function NormalizeBaseUrl(ByVal raw As String) As String
     End If
 
     NormalizeBaseUrl = s
+End Function
+
+Private Sub ShowRunInfo(ByVal login As String)
+    Dim msg As String
+    msg = "Jira URL: " & gBaseUrl & vbCrLf & _
+          "Источник URL: " & NzText(gBaseUrlSource, "неизвестно") & vbCrLf & _
+          "Логин: " & login & vbCrLf & _
+          "Источник логина/пароля: " & NzText(gCredsSource, "неизвестно") & vbCrLf & _
+          "Пароль/токен: (скрыт)"
+    MsgBox msg, vbInformation, "Jira: параметры"
+End Sub
+
+Private Function JiraPing(ByVal authHeader As String) As String
+    On Error GoTo Fail
+
+    Dim url As String
+    url = gBaseUrl & "/rest/api/2/myself"
+
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.Open "GET", url, False
+    http.setRequestHeader "Authorization", authHeader
+    http.setRequestHeader "Accept", "application/json"
+    http.send
+
+    If http.Status >= 200 And http.Status < 300 Then
+        JiraPing = ""
+        Exit Function
+    End If
+
+    Dim msg As String
+    msg = "HTTP " & http.Status & " на " & url
+    If http.Status = 404 Then
+        msg = msg & vbCrLf & "Похоже, базовый URL неверный. Для Jira Server часто нужен суффикс /jira."
+    ElseIf http.Status = 401 Or http.Status = 403 Then
+        msg = msg & vbCrLf & "Проверь логин/пароль (или API token)."
+    End If
+    msg = msg & vbCrLf & Left$(CStr(http.responseText), 300)
+    JiraPing = msg
+    Exit Function
+
+Fail:
+    JiraPing = "Ошибка подключения: " & Err.Description
 End Function
 
 Private Function ReadCredentialsFromFile(ByVal path As String, ByRef login As String, ByRef token As String) As Boolean
@@ -645,6 +738,14 @@ Private Function Nz(ByVal v As Variant, ByVal fallback As String) As String
         Nz = fallback
     Else
         Nz = CStr(v)
+    End If
+End Function
+
+Private Function NzText(ByVal v As String, ByVal fallback As String) As String
+    If Len(Trim$(v)) = 0 Then
+        NzText = fallback
+    Else
+        NzText = v
     End If
 End Function
 
