@@ -5,6 +5,11 @@ Option Explicit
 ' Можно оставить пустым и задавать через env/файл/ввод при запуске.
 Private Const BASE_URL As String = ""
 
+' Версия скрипта для отладки
+Private Const SCRIPT_VERSION As String = "2026-01-16.5"
+' Включить доп.лог в таблицу
+Private Const DEBUG_LOG As Boolean = True
+
 ' В Jira поле "Sprint" почти всегда customfield_XXXXX.
 ' В JS-виджете `ujg-sprint-health.js` поле Sprint резолвится автоматически через /rest/api/2/field,
 ' а если не найдено — используется fallback customfield_10020. Здесь делаем то же.
@@ -28,6 +33,10 @@ Private Const CRED_FILE_REL As String = "\JiraExcel\credentials.txt"
 Private gBaseUrl As String
 Private gBaseUrlSource As String
 Private gCredsSource As String
+Private gLastRequestUrl As String
+Private gLastRequestName As String
+Private gLastRequestStatus As Long
+Private gLastResponseSnippet As String
 
 ' Заголовки создаваемых/ищущихся колонок:
 Private Const H_STATUS As String = "Jira: Статус"
@@ -37,6 +46,7 @@ Private Const H_SPRINT As String = "Jira: Спринт"
 Private Const H_COMMENTS As String = "Jira: Комментарии (время | автор | текст)"
 Private Const H_SUBTASKS As String = "Jira: Детки (key / summary / status)"
 Private Const H_ERROR As String = "Jira: Ошибка"
+Private Const H_DEBUG As String = "Jira: Debug"
 
 ' ====== ПУБЛИЧНЫЕ ТОЧКИ ВХОДА ======
 
@@ -88,7 +98,7 @@ Public Sub jira(login As String, password As String)
     lastRow = ws.Cells(ws.Rows.Count, KEY_COL).End(xlUp).Row
     If lastRow < FIRST_DATA_ROW Then Exit Sub
 
-    Dim colStatus As Long, colAssignee As Long, colUpdated As Long, colSprint As Long, colComments As Long, colSubtasks As Long, colErr As Long
+    Dim colStatus As Long, colAssignee As Long, colUpdated As Long, colSprint As Long, colComments As Long, colSubtasks As Long, colErr As Long, colDebug As Long
     colStatus = EnsureColumn(ws, H_STATUS)
     colAssignee = EnsureColumn(ws, H_ASSIGNEE)
     colUpdated = EnsureColumn(ws, H_UPDATED)
@@ -96,6 +106,11 @@ Public Sub jira(login As String, password As String)
     colComments = EnsureColumn(ws, H_COMMENTS)
     colSubtasks = EnsureColumn(ws, H_SUBTASKS)
     colErr = EnsureColumn(ws, H_ERROR)
+    If DEBUG_LOG Then
+        colDebug = EnsureColumn(ws, H_DEBUG)
+    Else
+        colDebug = 0
+    End If
 
     Dim authHeader As String
     authHeader = "Basic " & Base64Encode(login & ":" & password)
@@ -124,7 +139,7 @@ Public Sub jira(login As String, password As String)
         If Len(key) > 0 Then
             ws.Cells(i, colErr).Value = ProcessIssueRow(ws, i, key, authHeader, sprintFieldId, _
                                                         colStatus, colAssignee, colUpdated, colSprint, _
-                                                        colComments, colSubtasks)
+                                                        colComments, colSubtasks, colDebug)
         End If
     Next i
 
@@ -141,6 +156,7 @@ Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As Stri
 
     Dim url As String
     url = gBaseUrl & "/rest/api/2/issue/" & UrlEncode(issueKey) & "?" & fieldsParam
+    SetLastRequestInfo "GET issue", url
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
@@ -148,6 +164,7 @@ Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As Stri
     http.setRequestHeader "Authorization", authHeader
     http.setRequestHeader "Accept", "application/json"
     http.send
+    SetLastResponseInfo http.Status, CStr(http.responseText)
 
     If http.Status < 200 Or http.Status >= 300 Then
         Err.Raise 5, , "JiraGetIssue HTTP " & http.Status & " (" & url & "): " & Left$(CStr(http.responseText), 500)
@@ -164,6 +181,7 @@ Private Function JiraSearchSubtasks(ByVal authHeader As String, ByVal parentKey 
 
     Dim url As String
     url = gBaseUrl & "/rest/api/2/search?jql=" & UrlEncode(jql) & "&fields=summary,status&maxResults=100"
+    SetLastRequestInfo "GET search", url
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
@@ -171,6 +189,7 @@ Private Function JiraSearchSubtasks(ByVal authHeader As String, ByVal parentKey 
     http.setRequestHeader "Authorization", authHeader
     http.setRequestHeader "Accept", "application/json"
     http.send
+    SetLastResponseInfo http.Status, CStr(http.responseText)
 
     If http.Status < 200 Or http.Status >= 300 Then
         Err.Raise 5, , "JiraSearchSubtasks HTTP " & http.Status & " (" & url & "): " & Left$(CStr(http.responseText), 500)
@@ -410,6 +429,7 @@ Private Function ResolveSprintFieldId(ByVal authHeader As String) As String
     ' Пытаемся как в `ujg-sprint-health.js`: /rest/api/2/field → field.name==="Sprint" && field.schema.customId
     Dim url As String
     url = gBaseUrl & "/rest/api/2/field"
+    SetLastRequestInfo "GET field", url
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
@@ -417,6 +437,7 @@ Private Function ResolveSprintFieldId(ByVal authHeader As String) As String
     http.setRequestHeader "Authorization", authHeader
     http.setRequestHeader "Accept", "application/json"
     http.send
+    SetLastResponseInfo http.Status, CStr(http.responseText)
 
     If http.Status < 200 Or http.Status >= 300 Then GoTo Fallback
 
@@ -614,11 +635,40 @@ Private Sub ShowRunInfo(ByVal login As String)
     Dim msg As String
     msg = "Jira URL: " & gBaseUrl & vbCrLf & _
           "Источник URL: " & NzText(gBaseUrlSource, "неизвестно") & vbCrLf & _
+          "Версия скрипта: " & SCRIPT_VERSION & vbCrLf & _
+          "Debug: " & IIf(DEBUG_LOG, "on", "off") & vbCrLf & _
           "Логин: " & login & vbCrLf & _
           "Источник логина/пароля: " & NzText(gCredsSource, "неизвестно") & vbCrLf & _
           "Пароль/токен: (скрыт)"
     MsgBox msg, vbInformation, "Jira: параметры"
 End Sub
+
+Private Sub SetLastRequestInfo(ByVal name As String, ByVal url As String)
+    gLastRequestName = name
+    gLastRequestUrl = url
+    gLastRequestStatus = 0
+    gLastResponseSnippet = ""
+End Sub
+
+Private Sub SetLastResponseInfo(ByVal status As Long, ByVal responseText As String)
+    gLastRequestStatus = status
+    Dim s As String
+    s = Left$(CStr(responseText), 200)
+    s = Replace(s, vbCrLf, " ")
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    gLastResponseSnippet = s
+End Sub
+
+Private Function FormatLastRequestDebug() As String
+    Dim s As String
+    s = ""
+    If Len(gLastRequestName) > 0 Then s = s & gLastRequestName & " "
+    s = s & gLastRequestUrl
+    If gLastRequestStatus <> 0 Then s = s & " [HTTP " & gLastRequestStatus & "]"
+    If Len(gLastResponseSnippet) > 0 Then s = s & " | " & gLastResponseSnippet
+    FormatLastRequestDebug = Trim$(s)
+End Function
 
 Private Function JiraPing(ByVal authHeader As String) As String
     On Error GoTo Fail
@@ -716,7 +766,9 @@ Private Function EnsureColumn(ByVal ws As Worksheet, ByVal header As String) As 
 End Function
 
 Private Function Nz(ByVal v As Variant, ByVal fallback As String) As String
-    If IsNull(v) Or IsEmpty(v) Then
+    If IsObject(v) Then
+        Nz = fallback
+    ElseIf IsNull(v) Or IsEmpty(v) Then
         Nz = fallback
     Else
         Nz = CStr(v)
@@ -743,7 +795,8 @@ End Sub
 Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, ByVal key As String, _
                                  ByVal authHeader As String, ByVal sprintFieldId As String, _
                                  ByVal colStatus As Long, ByVal colAssignee As Long, ByVal colUpdated As Long, _
-                                 ByVal colSprint As Long, ByVal colComments As Long, ByVal colSubtasks As Long) As String
+                                 ByVal colSprint As Long, ByVal colComments As Long, ByVal colSubtasks As Long, _
+                                 ByVal colDebug As Long) As String
     On Error GoTo Fail
 
     Dim stepName As String
@@ -751,6 +804,9 @@ Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, 
 
     stepName = "JiraGetIssue"
     Set issue = JiraGetIssue(authHeader, key, sprintFieldId)
+    If colDebug > 0 Then
+        ws.Cells(rowIndex, colDebug).Value = FormatLastRequestDebug()
+    End If
 
     If issue Is Nothing Then
         ProcessIssueRow = "Не удалось загрузить задачу"
@@ -779,7 +835,12 @@ Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, 
     Exit Function
 
 Fail:
-    ProcessIssueRow = "ERR " & Err.Number & " @ " & stepName & ": " & Err.Description
+    Dim dbg As String
+    dbg = ""
+    If colDebug > 0 Then
+        dbg = " | " & FormatLastRequestDebug()
+    End If
+    ProcessIssueRow = "ERR " & Err.Number & " @ " & stepName & ": " & Err.Description & dbg
 End Function
 
 Private Function GetField(ByVal root As Variant, ByVal path As String) As Variant
