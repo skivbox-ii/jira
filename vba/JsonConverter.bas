@@ -19,11 +19,27 @@ Public Function ParseJson(ByVal jsonText As String) As Variant
     m_Text = jsonText
     m_Pos = 1
     SkipWs
-    ParseJson = ParseValue()
+    Dim result As Variant
+    ParseValueInto result
     SkipWs
+    If IsObject(result) Then
+        Set ParseJson = result
+    Else
+        ParseJson = result
+    End If
 End Function
 
-Private Function ParseValue() As Variant
+' Безопасный парсинг через ByRef — рекомендуется использовать вместо ParseJson
+Public Sub ParseJsonInto(ByVal jsonText As String, ByRef outVal As Variant)
+    m_Text = jsonText
+    m_Pos = 1
+    SkipWs
+    ParseValueInto outVal
+    SkipWs
+End Sub
+
+' Возвращает результат через ByRef — единственный надёжный способ в VBA
+Private Sub ParseValueInto(ByRef outVal As Variant)
     SkipWs
     If m_Pos > Len(m_Text) Then Err.Raise 5, , "JSON: unexpected end"
 
@@ -34,38 +50,37 @@ Private Function ParseValue() As Variant
         Case "{"
             Dim obj As Object
             Set obj = ParseObject()
-            Set ParseValue = obj
+            Set outVal = obj
         Case "["
             Dim arr As Collection
             Set arr = ParseArray()
-            Set ParseValue = arr
+            Set outVal = arr
         Case """"
-            ParseValue = ParseString()
+            outVal = ParseString()
         Case "t"
             ExpectLiteral "true"
-            ParseValue = True
+            outVal = True
         Case "f"
             ExpectLiteral "false"
-            ParseValue = False
+            outVal = False
         Case "n"
             ExpectLiteral "null"
-            ParseValue = Null
+            outVal = Null
         Case "-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"
-            ParseValue = ParseNumber()
+            outVal = ParseNumber()
         Case Else
             Err.Raise 5, , "JSON: unexpected token '" & ch & "' at " & m_Pos
     End Select
-End Function
+End Sub
 
 Private Function ParseObject() As Object
-    ' {
     AssertChar "{"
     m_Pos = m_Pos + 1
     SkipWs
 
     Dim dict As Object
     Set dict = CreateObject("Scripting.Dictionary")
-    dict.CompareMode = 1 ' TextCompare
+    dict.CompareMode = 1
 
     If PeekChar = "}" Then
         m_Pos = m_Pos + 1
@@ -83,8 +98,8 @@ Private Function ParseObject() As Object
         SkipWs
 
         Dim v As Variant
-        v = ParseValue()
-
+        ParseValueInto v
+        
         If dict.Exists(key) Then
             dict.Remove key
         End If
@@ -107,7 +122,6 @@ Private Function ParseObject() As Object
 End Function
 
 Private Function ParseArray() As Collection
-    ' [
     AssertChar "["
     m_Pos = m_Pos + 1
     SkipWs
@@ -122,7 +136,7 @@ Private Function ParseArray() As Collection
 
     Do
         Dim v As Variant
-        v = ParseValue()
+        ParseValueInto v
         col.Add v
 
         SkipWs
@@ -269,4 +283,3 @@ Private Sub AssertChar(ByVal ch As String)
         Err.Raise 5, , "JSON: expected '" & ch & "' at " & m_Pos
     End If
 End Sub
-

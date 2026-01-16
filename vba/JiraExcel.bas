@@ -600,7 +600,8 @@ End Function
 
 Private Function ParseJsonObject(ByVal jsonText As String, ByVal context As String) As Object
     Dim v As Variant
-    v = JsonConverter.ParseJson(jsonText)
+    ' Используем ParseJsonInto чтобы корректно получить Object или примитив
+    JsonConverter.ParseJsonInto jsonText, v
     If IsObject(v) Then
         Set ParseJsonObject = v
     Else
