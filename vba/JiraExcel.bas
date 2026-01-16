@@ -11,7 +11,7 @@ Private Const BASE_URL As String = ""
 Private Const SPRINT_FIELD_ID As String = "customfield_10020"
 
 ' Где в Excel искать ключи задач (как в твоём коде со скриншота):
-Private Const KEY_COL As Long = 11          ' колонка с ключом (K)
+Private Const KEY_COL As Long = 12          ' колонка с ключом (L)
 Private Const HEADER_ROW As Long = 9        ' строка заголовков
 Private Const FIRST_DATA_ROW As Long = 10   ' первая строка данных
 
@@ -153,8 +153,8 @@ Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As Stri
         Err.Raise 5, , "JiraGetIssue HTTP " & http.Status & " (" & url & "): " & Left$(CStr(http.responseText), 500)
     End If
 
-    Dim root As Variant
-    root = JsonConverter.ParseJson(CStr(http.responseText))
+    Dim root As Object
+    Set root = JsonConverter.ParseJson(CStr(http.responseText))
     Set JiraGetIssue = root
 End Function
 
@@ -176,8 +176,8 @@ Private Function JiraSearchSubtasks(ByVal authHeader As String, ByVal parentKey 
         Err.Raise 5, , "JiraSearchSubtasks HTTP " & http.Status & " (" & url & "): " & Left$(CStr(http.responseText), 500)
     End If
 
-    Dim root As Variant
-    root = JsonConverter.ParseJson(CStr(http.responseText))
+    Dim root As Object
+    Set root = JsonConverter.ParseJson(CStr(http.responseText))
     Set JiraSearchSubtasks = root
 End Function
 
@@ -420,8 +420,8 @@ Private Function ResolveSprintFieldId(ByVal authHeader As String) As String
 
     If http.Status < 200 Or http.Status >= 300 Then GoTo Fallback
 
-    Dim root As Variant
-    root = JsonConverter.ParseJson(CStr(http.responseText))
+    Dim root As Object
+    Set root = JsonConverter.ParseJson(CStr(http.responseText))
     If TypeName(root) <> "Collection" Then GoTo Fallback
 
     Dim fields As Collection
