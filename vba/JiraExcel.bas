@@ -2,6 +2,7 @@ Attribute VB_Name = "JiraExcel"
 Option Explicit
 
 ' ====== НАСТРОЙКИ (под себя) ======
+' Можно оставить пустым и задавать через env/файл/ввод при запуске.
 Private Const BASE_URL As String = ""
 
 ' В Jira поле "Sprint" почти всегда customfield_XXXXX.
@@ -13,6 +14,18 @@ Private Const SPRINT_FIELD_ID As String = "customfield_10020"
 Private Const KEY_COL As Long = 11          ' колонка с ключом (K)
 Private Const HEADER_ROW As Long = 9        ' строка заголовков
 Private Const FIRST_DATA_ROW As Long = 10   ' первая строка данных
+
+' Источник логина/пароля: сначала переменные окружения, потом файл в %APPDATA%
+Private Const CRED_ENV_LOGIN As String = "JIRA_LOGIN"
+Private Const CRED_ENV_TOKEN As String = "JIRA_TOKEN"
+Private Const CRED_ENV_PASSWORD As String = "JIRA_PASSWORD"
+Private Const CRED_ENV_PASS As String = "JIRA_PASS"
+Private Const CRED_ENV_BASE_URL As String = "JIRA_BASE_URL"
+Private Const CRED_ENV_HOST As String = "JIRA_HOST"
+Private Const CRED_ENV_SITE As String = "JIRA_SITE"
+Private Const CRED_FILE_REL As String = "\JiraExcel\credentials.txt"
+
+Private gBaseUrl As String
 
 ' Заголовки создаваемых/ищущихся колонок:
 Private Const H_STATUS As String = "Jira: Статус"
@@ -26,18 +39,38 @@ Private Const H_ERROR As String = "Jira: Ошибка"
 ' ====== ПУБЛИЧНЫЕ ТОЧКИ ВХОДА ======
 
 Public Sub RunJiraUpdate()
-    Dim login As String, token As String
-    login = InputBox("Jira login (username/email):", "Jira")
-    If Len(login) = 0 Then Exit Sub
+    Dim baseUrl As String
+    baseUrl = ResolveBaseUrl()
+    If Len(baseUrl) = 0 Then
+        baseUrl = InputBox("Jira base URL (например https://jira.company.com):", "Jira")
+        baseUrl = NormalizeBaseUrl(baseUrl)
+        If Len(baseUrl) = 0 Then Exit Sub
+    End If
+    gBaseUrl = baseUrl
 
-    token = InputBox("Jira API token / password:", "Jira")
-    If Len(token) = 0 Then Exit Sub
+    Dim login As String, token As String
+    If Not LoadCredentials(login, token) Then
+        login = InputBox("Jira login (username/email):", "Jira")
+        If Len(login) = 0 Then Exit Sub
+
+        token = InputBox("Jira API token / password:", "Jira")
+        If Len(token) = 0 Then Exit Sub
+    End If
 
     jira login, token
 End Sub
 
 ' Сохраняю имя процедуры как на скриншоте
 Public Sub jira(login As String, password As String)
+    If Len(gBaseUrl) = 0 Then
+        gBaseUrl = ResolveBaseUrl()
+        If Len(gBaseUrl) = 0 Then
+            gBaseUrl = InputBox("Jira base URL (например https://jira.company.com):", "Jira")
+            gBaseUrl = NormalizeBaseUrl(gBaseUrl)
+            If Len(gBaseUrl) = 0 Then Exit Sub
+        End If
+    End If
+
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Sheets(1)
 
@@ -120,7 +153,7 @@ Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As Stri
     fieldsParam = "fields=status,assignee,comment,updated,subtasks,issuetype," & sprintFieldId
 
     Dim url As String
-    url = BASE_URL & "/rest/api/2/issue/" & UrlEncode(issueKey) & "?" & fieldsParam
+    url = gBaseUrl & "/rest/api/2/issue/" & UrlEncode(issueKey) & "?" & fieldsParam
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
@@ -143,7 +176,7 @@ Private Function JiraSearchSubtasks(ByVal authHeader As String, ByVal parentKey 
     jql = "parent=" & parentKey
 
     Dim url As String
-    url = BASE_URL & "/rest/api/2/search?jql=" & UrlEncode(jql) & "&fields=summary,status&maxResults=100"
+    url = gBaseUrl & "/rest/api/2/search?jql=" & UrlEncode(jql) & "&fields=summary,status&maxResults=100"
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
@@ -389,7 +422,7 @@ Private Function ResolveSprintFieldId(ByVal authHeader As String) As String
 
     ' Пытаемся как в `ujg-sprint-health.js`: /rest/api/2/field → field.name==="Sprint" && field.schema.customId
     Dim url As String
-    url = BASE_URL & "/rest/api/2/field"
+    url = gBaseUrl & "/rest/api/2/field"
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
@@ -433,6 +466,162 @@ Fallback:
 End Function
 
 ' ====== УТИЛИТЫ (Excel / JSON / HTTP) ======
+
+Private Function LoadCredentials(ByRef login As String, ByRef token As String) As Boolean
+    On Error GoTo Fail
+
+    login = Trim$(Environ$(CRED_ENV_LOGIN))
+    token = Trim$(Environ$(CRED_ENV_TOKEN))
+    If Len(token) = 0 Then token = Trim$(Environ$(CRED_ENV_PASSWORD))
+    If Len(token) = 0 Then token = Trim$(Environ$(CRED_ENV_PASS))
+    If Len(login) > 0 And Len(token) > 0 Then
+        LoadCredentials = True
+        Exit Function
+    End If
+
+    Dim appData As String
+    appData = Environ$("APPDATA")
+    If Len(appData) > 0 Then
+        Dim credPath As String
+        credPath = appData & CRED_FILE_REL
+        If ReadCredentialsFromFile(credPath, login, token) Then
+            LoadCredentials = True
+            Exit Function
+        End If
+    End If
+
+    LoadCredentials = False
+    Exit Function
+
+Fail:
+    LoadCredentials = False
+End Function
+
+Private Function ResolveBaseUrl() As String
+    Dim url As String
+    url = Trim$(Environ$(CRED_ENV_BASE_URL))
+    If Len(url) = 0 Then url = Trim$(Environ$(CRED_ENV_HOST))
+    If Len(url) = 0 Then url = Trim$(Environ$(CRED_ENV_SITE))
+
+    If Len(url) = 0 Then
+        Dim appData As String
+        appData = Environ$("APPDATA")
+        If Len(appData) > 0 Then
+            url = ReadBaseUrlFromFile(appData & CRED_FILE_REL)
+        End If
+    End If
+
+    If Len(url) = 0 Then url = Trim$(BASE_URL)
+    ResolveBaseUrl = NormalizeBaseUrl(url)
+End Function
+
+Private Function ReadBaseUrlFromFile(ByVal path As String) As String
+    On Error GoTo Fail
+    If Len(path) = 0 Then GoTo Fail
+    If Len(Dir$(path, vbNormal)) = 0 Then GoTo Fail
+
+    Dim f As Integer
+    f = FreeFile
+    Open path For Input As #f
+
+    Dim line As String
+    Dim url As String
+    url = ""
+
+    Do While Not EOF(f)
+        Line Input #f, line
+        line = Trim$(line)
+        If Len(line) = 0 Then GoTo ContinueLoop
+        If Left$(line, 1) = "#" Or Left$(line, 1) = "'" Then GoTo ContinueLoop
+
+        Dim p As Long
+        p = InStr(1, line, "=", vbTextCompare)
+        If p > 0 Then
+            Dim k As String, v As String
+            k = LCase$(Trim$(Left$(line, p - 1)))
+            v = Trim$(Mid$(line, p + 1))
+            Select Case k
+                Case "base_url", "url", "host", "site"
+                    url = v
+            End Select
+        End If
+
+ContinueLoop:
+    Loop
+
+    Close #f
+    ReadBaseUrlFromFile = url
+    Exit Function
+
+Fail:
+    On Error Resume Next
+    If f <> 0 Then Close #f
+    ReadBaseUrlFromFile = ""
+End Function
+
+Private Function NormalizeBaseUrl(ByVal raw As String) As String
+    Dim s As String
+    s = Trim$(raw)
+    If Len(s) = 0 Then
+        NormalizeBaseUrl = ""
+        Exit Function
+    End If
+
+    Do While Right$(s, 1) = "/"
+        s = Left$(s, Len(s) - 1)
+    Loop
+
+    If InStr(1, s, "://", vbTextCompare) = 0 Then
+        s = "https://" & s
+    End If
+
+    NormalizeBaseUrl = s
+End Function
+
+Private Function ReadCredentialsFromFile(ByVal path As String, ByRef login As String, ByRef token As String) As Boolean
+    On Error GoTo Fail
+    If Len(path) = 0 Then GoTo Fail
+
+    If Len(Dir$(path, vbNormal)) = 0 Then GoTo Fail
+
+    Dim f As Integer
+    f = FreeFile
+    Open path For Input As #f
+
+    Dim line As String
+    Do While Not EOF(f)
+        Line Input #f, line
+        line = Trim$(line)
+        If Len(line) = 0 Then GoTo ContinueLoop
+        If Left$(line, 1) = "#" Or Left$(line, 1) = "'" Then GoTo ContinueLoop
+
+        Dim p As Long
+        p = InStr(1, line, "=", vbTextCompare)
+        If p > 0 Then
+            Dim k As String, v As String
+            k = LCase$(Trim$(Left$(line, p - 1)))
+            v = Trim$(Mid$(line, p + 1))
+            Select Case k
+                Case "login", "username", "user", "email"
+                    login = v
+                Case "token", "password", "pass", "api_token", "apitoken"
+                    token = v
+            End Select
+        End If
+
+ContinueLoop:
+    Loop
+
+    Close #f
+
+    ReadCredentialsFromFile = (Len(login) > 0 And Len(token) > 0)
+    Exit Function
+
+Fail:
+    On Error Resume Next
+    If f <> 0 Then Close #f
+    ReadCredentialsFromFile = False
+End Function
 
 Private Function EnsureColumn(ByVal ws As Worksheet, ByVal header As String) As Long
     Dim lastCol As Long
