@@ -204,8 +204,8 @@ Private Function CommentsToText(ByVal commentsVariant As Variant) As String
 
     Dim i As Long
     For i = 1 To col.Count
-        Dim c As Variant
-        c = col.Item(i)
+        Dim c As Object
+        Set c = col.Item(i)
 
         Dim created As String, author As String, body As String
         created = Nz(GetPath(c, "created"), "")
@@ -258,7 +258,7 @@ Private Function ExtractTextFromAdf(ByVal node As Variant) As String
 
     ' Рекурсивно обходим content[]
     Dim contentVar As Variant
-    contentVar = GetField(node, "content")
+    AssignVariant contentVar, GetField(node, "content")
     If TypeName(contentVar) = "Collection" Then
         Dim col As Collection
         Set col = contentVar
@@ -357,7 +357,7 @@ Private Function SubtasksToTextFromSearch(ByVal authHeader As String, ByVal pare
     Set searchRes = JiraSearchSubtasks(authHeader, parentKey)
 
     Dim issuesVar As Variant
-    issuesVar = GetField(searchRes, "issues")
+    AssignVariant issuesVar, GetField(searchRes, "issues")
 
     If TypeName(issuesVar) <> "Collection" Then
         SubtasksToTextFromSearch = vbNullString
@@ -377,8 +377,8 @@ Private Function SubtasksToTextFromSearch(ByVal authHeader As String, ByVal pare
 
     Dim i As Long
     For i = 1 To issues.Count
-        Dim it As Variant
-        it = issues.Item(i)
+        Dim it As Object
+        Set it = issues.Item(i)
 
         Dim k As String, summ As String, st As String
         k = Nz(GetPath(it, "key"), "")
@@ -429,8 +429,8 @@ Private Function ResolveSprintFieldId(ByVal authHeader As String) As String
 
     Dim i As Long
     For i = 1 To fields.Count
-        Dim f As Variant
-        f = fields.Item(i)
+        Dim f As Object
+        Set f = fields.Item(i)
 
         Dim nm As Variant, fid As Variant, customId As Variant
         nm = GetField(f, "name")
@@ -731,6 +731,15 @@ Private Function NzText(ByVal v As String, ByVal fallback As String) As String
     End If
 End Function
 
+' Корректное присваивание Variant: если значение - Object, использует Set
+Private Sub AssignVariant(ByRef target As Variant, ByVal source As Variant)
+    If IsObject(source) Then
+        Set target = source
+    Else
+        target = source
+    End If
+End Sub
+
 Private Function ProcessIssueRow(ByVal ws As Worksheet, ByVal rowIndex As Long, ByVal key As String, _
                                  ByVal authHeader As String, ByVal sprintFieldId As String, _
                                  ByVal colStatus As Long, ByVal colAssignee As Long, ByVal colUpdated As Long, _
@@ -779,7 +788,7 @@ Private Function GetField(ByVal root As Variant, ByVal path As String) As Varian
     parts = Split(path, ".")
 
     Dim cur As Variant
-    cur = root
+    AssignVariant cur, root
 
     Dim i As Long
     For i = LBound(parts) To UBound(parts)
@@ -790,18 +799,40 @@ Private Function GetField(ByVal root As Variant, ByVal path As String) As Varian
 
         Dim dict As Object
         Set dict = cur
-        If Not dict.Exists(parts(i)) Then
+
+        On Error Resume Next
+        Dim exists As Boolean
+        exists = dict.Exists(parts(i))
+        If Err.Number <> 0 Then
+            Err.Clear
             GetField = Empty
             Exit Function
         End If
-        cur = dict.Item(parts(i))
+        On Error GoTo 0
+
+        If Not exists Then
+            GetField = Empty
+            Exit Function
+        End If
+
+        AssignVariant cur, dict.Item(parts(i))
     Next i
 
-    GetField = cur
+    If IsObject(cur) Then
+        Set GetField = cur
+    Else
+        GetField = cur
+    End If
 End Function
 
 Private Function GetPath(ByVal root As Variant, ByVal path As String) As Variant
-    GetPath = GetField(root, path)
+    Dim v As Variant
+    AssignVariant v, GetField(root, path)
+    If IsObject(v) Then
+        Set GetPath = v
+    Else
+        GetPath = v
+    End If
 End Function
 
 Private Function Base64Encode(ByVal plainText As String) As String
