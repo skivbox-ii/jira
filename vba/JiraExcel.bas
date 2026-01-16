@@ -154,7 +154,7 @@ Private Function JiraGetIssue(ByVal authHeader As String, ByVal issueKey As Stri
     End If
 
     Dim root As Object
-    Set root = JsonConverter.ParseJson(CStr(http.responseText))
+    Set root = ParseJsonObject(CStr(http.responseText), "JiraGetIssue")
     Set JiraGetIssue = root
 End Function
 
@@ -177,7 +177,7 @@ Private Function JiraSearchSubtasks(ByVal authHeader As String, ByVal parentKey 
     End If
 
     Dim root As Object
-    Set root = JsonConverter.ParseJson(CStr(http.responseText))
+    Set root = ParseJsonObject(CStr(http.responseText), "JiraSearchSubtasks")
     Set JiraSearchSubtasks = root
 End Function
 
@@ -421,7 +421,7 @@ Private Function ResolveSprintFieldId(ByVal authHeader As String) As String
     If http.Status < 200 Or http.Status >= 300 Then GoTo Fallback
 
     Dim root As Object
-    Set root = JsonConverter.ParseJson(CStr(http.responseText))
+    Set root = ParseJsonObject(CStr(http.responseText), "ResolveSprintFieldId")
     If TypeName(root) <> "Collection" Then GoTo Fallback
 
     Dim fields As Collection
@@ -596,6 +596,17 @@ Private Function NormalizeBaseUrl(ByVal raw As String) As String
     End If
 
     NormalizeBaseUrl = s
+End Function
+
+Private Function ParseJsonObject(ByVal jsonText As String, ByVal context As String) As Object
+    Dim v As Variant
+    v = JsonConverter.ParseJson(jsonText)
+    If IsObject(v) Then
+        Set ParseJsonObject = v
+    Else
+        If Len(context) = 0 Then context = "ParseJsonObject"
+        Err.Raise 5, , context & ": unexpected JSON type " & TypeName(v)
+    End If
 End Function
 
 Private Sub ShowRunInfo(ByVal login As String)
