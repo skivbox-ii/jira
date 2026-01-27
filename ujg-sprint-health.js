@@ -978,17 +978,19 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             var now = Number(resp.now) || null;
 
             var times = Object.keys(changes).map(function(k) { return Number(k); }).filter(function(v) { return !isNaN(v); }).sort(function(a, b) { return a - b; });
+            function flagTrue(v) { return v === true || v === "true" || v === 1 || v === "1"; }
+            function flagFalse(v) { return v === false || v === "false" || v === 0 || v === "0"; }
 
             // Для issueCount_ Jira строит график по "присутствию задач" (1 задача = 1),
             // стартовый scope = задачи, которые были в спринте на старте, а не "все текущие".
-            // Берём финальный набор из issueToSummary и вычитаем те, которые были added:true после старта.
+            // Берём финальный набор из issueToSummary и вычитаем те, которые были added:true в/после старта.
             var finalKeys = resp.issueToSummary ? Object.keys(resp.issueToSummary) : [];
             var addedAfterStart = {};
             times.forEach(function(ts) {
-                if (startTime != null && ts <= startTime) return;
+                if (startTime != null && ts < startTime) return;
                 var evs = changes[String(ts)] || changes[ts] || [];
                 (evs || []).forEach(function(ev) {
-                    if (ev && ev.key && ev.added === true) addedAfterStart[ev.key] = true;
+                    if (ev && ev.key && flagTrue(ev.added)) addedAfterStart[ev.key] = true;
                 });
             });
 
@@ -1035,14 +1037,14 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                     var prevDone = doneVal;
                     var beforeIn = !!inScope[k];
                     var beforeDone = !!done[k];
-                    if (ev.removed === true || ev.deleted === true) setInScope(k, false);
-                    if (ev.added === true) setInScope(k, true);
+                    if (flagTrue(ev.removed) || flagTrue(ev.deleted)) setInScope(k, false);
+                    if (flagTrue(ev.added)) setInScope(k, true);
                     if (ev.column) {
-                        var isDone = (ev.column.done === true) || (ev.column.notDone === false) || (ev.done === true);
+                        var isDone = flagTrue(ev.column.done) || flagFalse(ev.column.notDone) || flagTrue(ev.done);
                         setDone(k, isDone);
                     }
-                    if (ev.done === true) setDone(k, true);
-                    if (ev.notDone === true) setDone(k, false);
+                    if (flagTrue(ev.done)) setDone(k, true);
+                    if (flagTrue(ev.notDone)) setDone(k, false);
 
                     if (collectMarkers) {
                         // маркер только если реально изменилась линия
