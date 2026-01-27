@@ -3233,6 +3233,160 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             return html;
         }
 
+        function truncateText(txt, maxLen) {
+            if (!txt) return "";
+            var s = String(txt);
+            if (!maxLen || s.length <= maxLen) return s;
+            return s.substring(0, Math.max(0, maxLen - 3)) + "...";
+        }
+
+        function getMarkerOpLabel(op) {
+            if (!op) return "";
+            var map = { added: "Добавлено", removed: "Убрано", deleted: "Удалено", done: "Завершено", undone: "Возврат" };
+            return map[op] || op;
+        }
+
+        function buildMarkerLabelData(marker) {
+            var item = marker && marker.key ? state.issueMap[marker.key] : null;
+            var summary = item ? item.summary : (marker ? marker.summary : "");
+            var estSec = item ? (item.estRaw || item.est || 0) : 0;
+            var delta = (marker && isFinite(marker.from) && isFinite(marker.to)) ? (marker.from + " → " + marker.to) : "";
+            var opLabel = getMarkerOpLabel(marker && marker.op);
+            return {
+                key: marker && marker.key ? String(marker.key) : "",
+                summary: truncateText(summary || "", 48),
+                kind: marker && marker.kind ? String(marker.kind) : "",
+                delta: delta,
+                est: estSec > 0 ? utils.formatHoursShort(estSec) : "",
+                op: opLabel
+            };
+        }
+
+        function buildMarkerLabelHtml(data) {
+            var html = '';
+            if (data.key) html += '<div class="ujg-chart-bubble-key">' + utils.escapeHtml(data.key) + '</div>';
+            if (data.summary) html += '<div class="ujg-chart-bubble-summary">' + utils.escapeHtml(data.summary) + '</div>';
+            if (data.kind && data.delta) {
+                html += '<div class="ujg-chart-bubble-line">' + utils.escapeHtml(data.kind) + ': <b>' + utils.escapeHtml(data.delta) + '</b></div>';
+            }
+            if (data.est) html += '<div class="ujg-chart-bubble-line">Оценка: <b>' + utils.escapeHtml(data.est) + '</b></div>';
+            if (data.op) html += '<div class="ujg-chart-bubble-line">' + utils.escapeHtml(data.op) + '</div>';
+            return html;
+        }
+
+        function layoutChartLabels($overlay, series, layout) {
+            if (!series || !layout) return;
+            var $chart = $overlay.find(".ujg-chart-fullscreen-chart");
+            var $svg = $chart.find("svg");
+            if (!$svg.length) return;
+            var svgRect = $svg[0].getBoundingClientRect();
+            if (!svgRect.width || !svgRect.height) return;
+
+            var scaleX = svgRect.width / layout.viewW;
+            var scaleY = svgRect.height / layout.viewH;
+            var plotRight = (layout.pad.left + layout.plotW) * scaleX;
+            var plotTop = layout.pad.top * scaleY;
+            var plotBottom = (layout.pad.top + layout.plotH) * scaleY;
+            var laneLeft = Math.min(plotRight + 12, svgRect.width - 160);
+            var laneWidth = Math.max(140, svgRect.width - laneLeft - 12);
+
+            var $labels = $chart.find(".ujg-chart-fullscreen-labels");
+            var $lines = $chart.find(".ujg-chart-fullscreen-lines");
+            $labels.empty();
+            $lines.empty();
+            $lines.attr("viewBox", "0 0 " + svgRect.width + " " + svgRect.height)
+                .attr("width", svgRect.width).attr("height", svgRect.height);
+
+            var markers = [];
+            function pushMarkers(list, kind) {
+                (list || []).forEach(function(m) {
+                    if (!m) return;
+                    var x = layout.xPos(m.ts) * scaleX;
+                    var y = layout.yPos(m.y) * scaleY;
+                    markers.push({
+                        x: x,
+                        y: y,
+                        key: m.key || "",
+                        summary: m.summary || "",
+                        from: Number(m.from),
+                        to: Number(m.to),
+                        op: m.op || "",
+                        kind: kind
+                    });
+                });
+            }
+            pushMarkers(series.markers && series.markers.scope, "Объём работ");
+            pushMarkers(series.markers && series.markers.done, "Завершенная работа");
+
+            markers.sort(function(a, b) { return a.y - b.y; });
+            var gap = 4;
+            var currentY = plotTop;
+
+            markers.forEach(function(m) {
+                var data = buildMarkerLabelData(m);
+                var lines = [data.key, data.summary, (data.kind && data.delta) ? (data.kind + ": " + data.delta) : "", data.est ? ("Оценка: " + data.est) : "", data.op].filter(Boolean);
+                var longest = lines.reduce(function(max, line) { return Math.max(max, String(line).length); }, 0);
+                var estW = Math.min(laneWidth, Math.max(140, Math.round(longest * 6.2 + 10)));
+                var h = Math.max(12, lines.length * 12 + 6);
+
+                var desiredY = m.y - h / 2;
+                var y = Math.max(plotTop, Math.min(plotBottom - h, desiredY));
+                if (y < currentY) y = currentY;
+                if (y + h > plotBottom) y = plotBottom - h;
+                if (y < plotTop) y = plotTop;
+                currentY = y + h + gap;
+
+                var $b = $('<div class="ujg-chart-bubble"></div>');
+                $b.css({ left: laneLeft + "px", top: y + "px", width: estW + "px" });
+                $b.html(buildMarkerLabelHtml(data));
+                $labels.append($b);
+
+                var xMid = Math.max(plotRight + 6, laneLeft - 6);
+                var yMid = y + h / 2;
+                var path = "M " + m.x + " " + m.y + " L " + xMid + " " + m.y + " L " + xMid + " " + yMid + " L " + laneLeft + " " + yMid;
+                $lines.append('<path class="ujg-bubble-line" d="' + path + '"></path>');
+            });
+        }
+
+        function closeChartFullscreen() {
+            $("#ujgChartFullscreen").remove();
+            $(window).off("resize.ujgChartFs");
+            $(document).off("keydown.ujgChartFs");
+        }
+
+        function openChartFullscreen() {
+            if (!state.jiraScope || !state.jiraScope.series) return;
+            closeChartFullscreen();
+            var $ov = $('<div class="ujg-chart-fullscreen-overlay" id="ujgChartFullscreen"></div>');
+            var $bar = $('<div class="ujg-chart-fullscreen-bar"></div>');
+            $bar.append('<div class="ujg-chart-fullscreen-title">Диаграма сгорания</div>');
+            var $close = $('<button class="ujg-btn ujg-chart-fullscreen-close" title="Закрыть">✕</button>');
+            $close.on("click", closeChartFullscreen);
+            $bar.append($close);
+
+            var svgRes = buildJiraScopeSvg(state.jiraScope.series, {
+                viewW: 1600,
+                viewH: 900,
+                pad: { top: 40, right: 260, bottom: 80, left: 80 }
+            });
+            var $body = $('<div class="ujg-chart-fullscreen-body"></div>');
+            var $chart = $('<div class="ujg-chart-fullscreen-chart"></div>');
+            $chart.html(svgRes.svg);
+            $chart.append('<svg class="ujg-chart-fullscreen-lines"></svg>');
+            $chart.append('<div class="ujg-chart-fullscreen-labels"></div>');
+            $body.append($chart);
+            $ov.append($bar).append($body);
+            $("body").append($ov);
+
+            layoutChartLabels($ov, state.jiraScope.series, svgRes.layout);
+            $(window).on("resize.ujgChartFs", function() {
+                layoutChartLabels($ov, state.jiraScope.series, svgRes.layout);
+            });
+            $(document).on("keydown.ujgChartFs", function(e) {
+                if (e.key === "Escape") closeChartFullscreen();
+            });
+        }
+
         function bindJiraChartPointEvents() {
             // закрытие по клику вне тултипа
             $(document).off("click.ujgChartTip").on("click.ujgChartTip", function(e) {
@@ -3297,6 +3451,10 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (!v || v === state.burnView) return;
                 state.burnView = v;
                 render();
+            });
+            $cont.find(".ujg-btn-chart-fs").on("click", function(e) {
+                e.preventDefault();
+                openChartFullscreen();
             });
             $cont.find(".ujg-grp").on("click", function() {
                 var aid = $(this).data("aid");
