@@ -1133,14 +1133,36 @@ define("_ujgSH_charts_canvas", ["_ujgSH_utils"], function(utils) {
 
         var width = rect.width;
         var height = rect.height;
-        var pad = { top: 40, right: 260, bottom: 60, left: 60 };
+        
+        // Динамический расчёт правого отступа под метки
+        // Считаем сколько маркеров будет
+        var sScope = series.scope || [];
+        var sComp = series.completed || [];
+        var markerCount = 0;
+        if (series.markers) {
+            markerCount = (series.markers.scope ? series.markers.scope.length : 0) +
+                         (series.markers.done ? series.markers.done.length : 0);
+        }
+        
+        // Параметры меток
+        var LABEL_HEIGHT = 18;
+        var LABEL_GAP = 2;
+        var LABEL_WIDTH = 180;
+        var COL_GAP = 8;
+        var plotHeight = height - 40 - 60; // top + bottom
+        var labelsPerCol = Math.floor(plotHeight / (LABEL_HEIGHT + LABEL_GAP)) || 1;
+        var numCols = Math.min(5, Math.ceil(markerCount / labelsPerCol));
+        if (numCols < 1) numCols = 1;
+        
+        // Правый отступ: колонки × (ширина + отступ) + margin
+        var rightPad = Math.max(260, numCols * (LABEL_WIDTH + COL_GAP) + 30);
+        
+        var pad = { top: 40, right: rightPad, bottom: 60, left: 60 };
 
         // Clear
         ctx.clearRect(0, 0, width, height);
 
-        // Data Prep
-        var sScope = series.scope || [];
-        var sComp = series.completed || [];
+        // Data Prep (sScope и sComp уже инициализированы выше для расчёта pad)
         var sGuide = series.guideline || [];
         var sProj = series.projection || [];
         var all = [].concat(sScope, sComp, sGuide, sProj);
@@ -1364,138 +1386,196 @@ define("_ujgSH_charts_canvas", ["_ujgSH_utils"], function(utils) {
         });
     }
 
+    /**
+     * Умное размещение меток для 100+ карточек
+     * - Многоколоночная лестничная раскладка
+     * - Bezier-линии связи без пересечений
+     * - Компактные метки с группировкой
+     */
     function drawSmartLabels(ctx, markers, layout) {
+        if (!markers || !markers.length) return;
+        
         var buildMarkerLabelData = layout && layout.buildMarkerLabelData;
-
+        var pad = layout.pad;
+        var plotRight = layout.width - pad.right;
+        var plotTop = pad.top;
+        var plotBottom = layout.height - pad.bottom;
+        var plotHeight = plotBottom - plotTop;
+        
+        // Параметры компактных меток
+        var LABEL_HEIGHT = 18;       // Высота одной метки
+        var LABEL_GAP = 2;           // Отступ между метками
+        var LABEL_WIDTH = 180;       // Ширина метки
+        var COL_GAP = 8;             // Отступ между колонками
+        var MARGIN_LEFT = 15;        // Отступ от графика до первой колонки
+        
+        // Вычисляем сколько меток помещается в одну колонку
+        var labelsPerColumn = Math.floor(plotHeight / (LABEL_HEIGHT + LABEL_GAP));
+        if (labelsPerColumn < 1) labelsPerColumn = 1;
+        
+        // Сколько колонок нужно
+        var numCols = Math.ceil(markers.length / labelsPerColumn);
+        if (numCols < 1) numCols = 1;
+        if (numCols > 5) numCols = 5; // Максимум 5 колонок
+        
+        // Подготовка данных меток
         function fallbackLabelData(marker) {
             return {
                 key: marker && marker.key ? String(marker.key) : "",
                 summary: marker && marker.summary ? String(marker.summary) : "",
                 kind: marker && marker.kind ? String(marker.kind) : "",
-                delta: (marker && isFinite(marker.from) && isFinite(marker.to)) ? (marker.from + " → " + marker.to) : "",
-                est: "",
+                delta: (marker && isFinite(marker.from) && isFinite(marker.to)) 
+                    ? (marker.from + "→" + marker.to) : "",
                 op: marker && marker.op ? String(marker.op) : ""
             };
         }
-
-        // Sort by Y to process top-down (or by importance)
-        markers.sort(function(a,b) { return a.y - b.y; });
-
-        var labels = markers.map(function(m) {
+        
+        // Сортируем маркеры по Y (сверху вниз)
+        var sortedMarkers = markers.slice().sort(function(a, b) { return a.y - b.y; });
+        
+        // Создаём метки с информацией о позиции
+        var labels = sortedMarkers.map(function(m, idx) {
             var data = buildMarkerLabelData ? buildMarkerLabelData(m) : fallbackLabelData(m);
-            var lines = [
-                data.key,
-                data.summary,
-                (data.kind && data.delta) ? (data.kind + ": " + data.delta) : "",
-                data.est ? ("Оценка: " + data.est) : "",
-                data.op
-            ].filter(Boolean);
-
+            
+            // Компактный текст: KEY + короткий summary
+            var summary = data.summary || "";
+            if (summary.length > 25) summary = summary.substring(0, 22) + "…";
+            
+            var text = data.key;
+            if (summary) text += " " + summary;
+            
+            // Определяем колонку и позицию в колонке
+            var col = Math.floor(idx / labelsPerColumn);
+            var row = idx % labelsPerColumn;
+            
+            // Позиция метки
+            var labelX = plotRight + MARGIN_LEFT + col * (LABEL_WIDTH + COL_GAP);
+            var labelY = plotTop + row * (LABEL_HEIGHT + LABEL_GAP);
+            
             return {
                 m: m,
-                lines: lines,
-                h: Math.max(20, lines.length * 14 + 10),
-                w: 160,
-                x: layout.width - layout.pad.right + 20, // Right lane
-                y: m.y // Initial Y
+                text: text,
+                data: data,
+                col: col,
+                row: row,
+                x: labelX,
+                y: labelY,
+                w: LABEL_WIDTH,
+                h: LABEL_HEIGHT
             };
         });
-
-        // Collision Avoidance (Simple greedy)
-        // Adjust Y positions to avoid overlap
-        var gap = 4;
-        var minY = layout.pad.top;
-        var maxY = layout.height - layout.pad.bottom;
-
-        // Multiple passes to relax positions
-        for (var iter=0; iter<5; iter++) {
-            // Sort by current Y
-            labels.sort(function(a,b){ return a.y - b.y; });
-
-            for (var i=0; i<labels.length-1; i++) {
-                var curr = labels[i];
-                var next = labels[i+1];
-                var bottom = curr.y + curr.h/2;
-                var top = next.y - next.h/2;
-
-                if (bottom + gap > top) {
-                    var overlap = (bottom + gap) - top;
-                    // Move apart
-                    curr.y -= overlap / 2;
-                    next.y += overlap / 2;
-                }
-            }
-
-            // Clamp
-            labels.forEach(function(l) {
-                var half = l.h/2;
-                if (l.y - half < minY) l.y = minY + half;
-                if (l.y + half > maxY) l.y = maxY - half;
-            });
-        }
-
-        // Draw
-        ctx.font = "10px -apple-system, sans-serif";
-        ctx.textBaseline = "top";
-
-        labels.forEach(function(l) {
-            var half = l.h/2;
-            var left = l.x;
-            var top = l.y - half;
-
-            // Connector line
+        
+        // Рисуем линии связи (bezier curves)
+        // Сначала все линии, потом все метки (чтобы метки были поверх линий)
+        ctx.save();
+        
+        // Линии связи с bezier для красивых изгибов
+        labels.forEach(function(l, idx) {
+            var startX = l.m.x;
+            var startY = l.m.y;
+            var endX = l.x;
+            var endY = l.y + l.h / 2;
+            
+            // Промежуточные точки для плавной кривой
+            var midX = plotRight + MARGIN_LEFT / 2;
+            
             ctx.beginPath();
-            ctx.strokeStyle = "#b3bac5";
+            ctx.strokeStyle = l.m.color || "#b3bac5";
+            ctx.globalAlpha = 0.4;
             ctx.lineWidth = 1;
-            ctx.setLineDash([2, 2]);
-            ctx.moveTo(l.m.x + 6, l.m.y); // from dot
-            ctx.lineTo(left - 10, l.m.y); // horizontal
-            ctx.lineTo(left - 5, l.y);    // to label
+            
+            // Bezier curve: от точки → вправо → к метке
+            ctx.moveTo(startX, startY);
+            
+            // Контрольные точки для плавного изгиба
+            var cp1x = startX + (midX - startX) * 0.7;
+            var cp1y = startY;
+            var cp2x = midX + (endX - midX) * 0.3;
+            var cp2y = endY;
+            
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
             ctx.stroke();
-            ctx.setLineDash([]);
-
-            // Bubble background
-            ctx.fillStyle = "#fff";
+        });
+        
+        ctx.globalAlpha = 1.0;
+        
+        // Рисуем метки (карточки)
+        ctx.font = "11px -apple-system, BlinkMacSystemFont, sans-serif";
+        ctx.textBaseline = "middle";
+        
+        labels.forEach(function(l) {
+            var x = l.x;
+            var y = l.y;
+            var w = l.w;
+            var h = l.h;
+            var r = 3; // border-radius
+            
+            // Фон карточки с тенью
+            ctx.shadowColor = "rgba(0,0,0,0.1)";
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+            
+            // Rounded rectangle
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+            
+            ctx.fillStyle = "#ffffff";
+            ctx.fill();
+            
+            // Цветная полоска слева (индикатор типа: scope/done)
+            ctx.shadowColor = "transparent";
+            ctx.fillStyle = l.m.color || "#5e6c84";
+            ctx.fillRect(x, y + 2, 3, h - 4);
+            
+            // Рамка
             ctx.strokeStyle = "#dfe1e6";
             ctx.lineWidth = 1;
-            // Round rect
-            var r = 4;
-            ctx.beginPath();
-            ctx.moveTo(left + r, top);
-            ctx.lineTo(left + l.w - r, top);
-            ctx.quadraticCurveTo(left + l.w, top, left + l.w, top + r);
-            ctx.lineTo(left + l.w, top + l.h - r);
-            ctx.quadraticCurveTo(left + l.w, top + l.h, left + l.w - r, top + l.h);
-            ctx.lineTo(left + r, top + l.h);
-            ctx.quadraticCurveTo(left, top + l.h, left, top + l.h - r);
-            ctx.lineTo(left, top + r);
-            ctx.quadraticCurveTo(left, top, left + r, top);
-            ctx.closePath();
-            ctx.fill();
             ctx.stroke();
-
-            // Text
-            var curY = top + 6;
-            var padX = left + 8;
-            l.lines.forEach(function(line, idx) {
-                if (idx === 0) { // Key
-                    ctx.fillStyle = "#172b4d";
-                    ctx.font = "bold 10px -apple-system, sans-serif";
-                } else if (idx === 1) { // Summary
-                    ctx.fillStyle = "#5e6c84";
-                    ctx.font = "10px -apple-system, sans-serif";
-                } else if (line.indexOf(":") > 0) { // Delta / Est
-                     ctx.fillStyle = "#172b4d";
-                     ctx.font = "10px -apple-system, sans-serif";
-                     // Simple bolding of value part is hard in canvas, just draw normal
-                } else { // Op
-                    ctx.fillStyle = "#172b4d";
-                    ctx.font = "italic 10px -apple-system, sans-serif";
+            
+            // Текст
+            ctx.shadowColor = "transparent";
+            
+            // KEY (bold)
+            var textX = x + 8;
+            var textY = y + h / 2;
+            
+            var keyText = l.data.key || "";
+            var summaryText = l.data.summary || "";
+            if (summaryText.length > 20) summaryText = summaryText.substring(0, 17) + "…";
+            
+            // Рисуем key
+            ctx.font = "bold 10px -apple-system, sans-serif";
+            ctx.fillStyle = "#172b4d";
+            ctx.fillText(keyText, textX, textY);
+            
+            // Рисуем summary рядом
+            if (summaryText) {
+                var keyWidth = ctx.measureText(keyText).width;
+                ctx.font = "10px -apple-system, sans-serif";
+                ctx.fillStyle = "#5e6c84";
+                
+                // Обрезаем summary если не помещается
+                var maxSummaryWidth = w - keyWidth - 18;
+                var actualSummary = summaryText;
+                while (ctx.measureText(actualSummary).width > maxSummaryWidth && actualSummary.length > 3) {
+                    actualSummary = actualSummary.substring(0, actualSummary.length - 4) + "…";
                 }
-                ctx.fillText(line, padX, curY);
-                curY += 14;
-            });
+                
+                ctx.fillText(actualSummary, textX + keyWidth + 5, textY);
+            }
         });
+        
+        ctx.restore();
     }
 
     return {
