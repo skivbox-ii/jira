@@ -1077,8 +1077,9 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 });
             }
 
-            // применяем события до старта, чтобы учесть закрытые до старта/удалённые до старта
-            if (startTime != null) times.filter(function(t) { return t <= startTime; }).forEach(function(t){ applyEventsAt(t, false); });
+            // применяем события ДО старта, чтобы учесть закрытые до старта/удалённые до старта
+            // ВАЖНО: используем < (не <=), чтобы события точно в момент startTime создавали маркеры
+            if (startTime != null) times.filter(function(t) { return t < startTime; }).forEach(function(t){ applyEventsAt(t, false); });
 
             var scopePts = [];
             var donePts = [];
@@ -1086,7 +1087,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 scopePts.push({ x: startTime, y: scopeVal });
                 donePts.push({ x: startTime, y: doneVal });
             }
-            times.filter(function(t) { return startTime == null ? true : t > startTime; }).forEach(function(ts) {
+            times.filter(function(t) { return startTime == null ? true : t >= startTime; }).forEach(function(ts) {
                 // маркеры собираем только в пределах спринта
                 var inSprint = (!startTime || ts >= startTime) && (!endTime || ts <= endTime);
                 applyEventsAt(ts, inSprint);
