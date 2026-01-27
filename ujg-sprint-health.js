@@ -1028,45 +1028,83 @@ define("_ujgSH_charts_svg", ["_ujgSH_utils"], function(utils) {
         var spEnd = series.endTime != null ? series.endTime : maxX;
         var sScopeBase = clipToSprint(sScopeRaw, spStart, spEnd);
         var sCompBase = clipToSprint(sCompRaw, spStart, spEnd);
-        var sGuideBase = clipToSprint(sGuideRaw, spStart, spEnd);
-        var sProjBase = clipToSprint(sProjRaw, spStart, spEnd, { noPrependStart: true });
+        var sGuide = clipToSprint(sGuideRaw, spStart, spEnd);
 
-        // Done и Scope рисуем "ступеньками"
-        var sScope = stepPoints(sScopeBase);
-        var sComp = stepPoints(sCompBase);
-        // Guideline и projection — линейные
-        var sGuide = sGuideBase;
-        var sProj = sProjBase;
+        // Обрезаем "факт" по линии сегодня (как в Jira): после Today зелёный не рисуем, красный "факт" не рисуем
+        var nowInSprint = series.now && series.startTime && series.endTime && series.now >= series.startTime && series.now <= series.endTime;
+        var sScope = nowInSprint ? clipToNow(sScopeBase, series.now) : sScopeBase;
+        var sComp = nowInSprint ? clipToNow(sCompBase, series.now) : sCompBase;
+        // Прогноз должен начинаться строго с линии "Сегодня", без "дотягивания" от старта спринта
+        var projStart = nowInSprint ? series.now : spStart;
+        var sProj = clipToSprint(sProjRaw, projStart, spEnd, { noPrependStart: true });
 
-        // Если есть now, то обрезаем done до текущего времени
-        if (series.now && isFinite(series.now)) {
-            sComp = stepPoints(clipToNow(sCompBase, series.now));
+        var out = '<svg class="ujg-svg ujg-burn-svg" width="' + VIEW_W + '" height="' + VIEW_H + '" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
+
+        // Нерабочие дни (серые полосы) как в Jira
+        if (series.workRateData && series.workRateData.rates && Array.isArray(series.workRateData.rates)) {
+            series.workRateData.rates.forEach(function(r) {
+                var rs = Number(r.start), re = Number(r.end), rate = Number(r.rate);
+                if (!isFinite(rs) || !isFinite(re) || re <= rs) return;
+                if (!isFinite(rate) || rate !== 0) return;
+                var x1 = xPos(rs);
+                var x2 = xPos(re);
+                out += '<rect class="non-working-days" x="' + x1 + '" y="' + pad.top + '" width="' + Math.max(0, x2 - x1) + '" height="' + plotH + '"/>';
+            });
         }
-
-        var html = '<div class="ujg-jira-scope-svg">';
-        html += '<svg class="ujg-svg ujg-jira-scope" viewBox="0 0 ' + VIEW_W + ' ' + VIEW_H + '" preserveAspectRatio="xMidYMid meet">';
 
         yTicks.forEach(function(v) {
             var y = yPos(v);
-            html += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
-            html += '<text class="ujg-burn-label" x="' + (pad.left - 8) + '" y="' + (y + 3) + '">' + v + '</text>';
+            out += '<line class="ujg-burn-grid" x1="' + pad.left + '" y1="' + y + '" x2="' + (VIEW_W - pad.right) + '" y2="' + y + '"/>';
+            out += '<text class="ujg-burn-label ujg-burn-y" x="' + (pad.left - 2) + '" y="' + (y + 1.2) + '">' + v + '</text>';
         });
-        html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
-        html += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+        out += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + (VIEW_H - pad.bottom) + '" x2="' + (VIEW_W - pad.right) + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+        out += '<line class="ujg-burn-axis" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+        // x ticks как Jira (примерно раз в 2 дня)
+        var dayMs = 24 * 3600 * 1000;
+        var startDay = utils.startOfDay(new Date(minX)).getTime();
+        var endDay = utils.startOfDay(new Date(maxX)).getTime();
+        for (var t = startDay; t <= endDay + 1; t += 2 * dayMs) {
+            var x = xPos(t);
+            out += '<line class="ujg-burn-grid" x1="' + x + '" y1="' + pad.top + '" x2="' + x + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+            out += '<text class="ujg-burn-label ujg-burn-x" x="' + x + '" y="' + (VIEW_H - pad.bottom + 16) + '">' + utils.escapeHtml(fmtX(t)) + '</text>';
+        }
 
-        if (sGuide && sGuide.length) html += '<path class="ujg-jira-guide" d="' + linePath(sGuide) + '"/>';
-        if (sProj && sProj.length) html += '<path class="ujg-jira-proj" d="' + linePath(sProj) + '"/>' + dottedProjection(sProj);
-        if (sScope && sScope.length) html += '<path class="ujg-jira-scope" d="' + linePath(sScope) + '"/>';
-        if (sComp && sComp.length) html += '<path class="ujg-jira-done" d="' + linePath(sComp) + '"/>';
+        // Линии/маркеры как в Jira:
+        // - guideline: только линия, без кружков
+        // - projection: рисуем точками (без линии)
+        // - scope/work: ступеньки + кружки только когда значение менялось
+        if (sGuide && sGuide.length) out += '<path class="ujg-jira-guide" d="' + linePath(sGuide) + '"/>';
+        if (sProj && sProj.length) out += dottedProjection(sProj);
+        if (sScope && sScope.length) out += '<path class="ujg-jira-scope" d="' + pathFromPoints(stepPoints(sScope)) + '"/>' +
+            eventDots((series.markers && series.markers.scope) ? series.markers.scope : [], "ujg-jira-scope-dot", "Объём работ", { excludeX: (nowInSprint ? series.now : null) });
+        if (sComp && sComp.length) out += '<path class="ujg-jira-done" d="' + pathFromPoints(stepPoints(sComp)) + '"/>' +
+            eventDots((series.markers && series.markers.done) ? series.markers.done : [], "ujg-jira-done-dot", "Завершенная работа", { excludeX: (nowInSprint ? series.now : null), skipFirstIfZero: true });
 
-        if (series.markers && series.markers.scope) html += eventDots(series.markers.scope, "ujg-jira-mk-scope", "Объём работ");
-        if (series.markers && series.markers.done) html += eventDots(series.markers.done, "ujg-jira-mk-done", "Завершено");
+        // Today line — только если "сегодня" попадает в период спринта
+        if (nowInSprint) {
+            var tx = xPos(series.now);
+            out += '<line class="ujg-burn-today" x1="' + tx + '" y1="' + pad.top + '" x2="' + tx + '" y2="' + (VIEW_H - pad.bottom) + '"/>';
+            out += '<text class="ujg-burn-label ujg-burn-x" x="' + tx + '" y="' + (pad.top - 2) + '" fill="#d7a000">Сегодня</text>';
+        }
 
-        html += "</svg></div>";
-
+        // Axis labels как в Jira
+        out += '<text class="axis-label" text-anchor="middle" transform="translate(' + ((pad.left + (VIEW_W - pad.right)) / 2) + ',' + (VIEW_H - 8) + ') rotate(0,0,0)">ВРЕМЯ</text>';
+        out += '<text class="axis-label" text-anchor="middle" transform="translate(16,' + ((pad.top + (VIEW_H - pad.bottom)) / 2) + ') rotate(270,0,0)">КОЛИЧЕСТВО ПРОБЛЕМ</text>';
+        out += '</svg>';
         return {
-            svg: html,
-            markers: series.markers || null
+            svg: out,
+            layout: {
+                viewW: VIEW_W,
+                viewH: VIEW_H,
+                pad: pad,
+                minX: minX,
+                maxX: maxX,
+                maxY: maxY,
+                plotW: plotW,
+                plotH: plotH,
+                xPos: xPos,
+                yPos: yPos
+            }
         };
     }
 
