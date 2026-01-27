@@ -2035,6 +2035,39 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
             return api.getRapidScopeChangeBurndown(rapidViewId, sprintId, "issueCount_");
         }
 
+        function ensureJiraScopeChangeForSprint() {
+            if (!state.jiraScope) state.jiraScope = { sprintId: null, mode: "tasks", loading: false, error: false, series: null };
+            var js = state.jiraScope;
+            var sid = state.selectedSprintId;
+            var mode = state.chartMode || "tasks";
+            if (js.loading) return;
+            if (js.sprintId === sid && js.mode === mode && (js.series || js.error)) return;
+            js.sprintId = sid;
+            js.mode = mode;
+            js.loading = true;
+            js.error = false;
+            js.series = null;
+
+            fetchRapidScopeChangeSeries(state.selectedBoardId, sid).then(function(resp) {
+                if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart resp", resp);
+                var series = parseScopeChangeBurndown(resp);
+                if (series && (series.scope || series.completed || series.guideline)) {
+                    js.series = series;
+                    js.loading = false;
+                    render();
+                    return;
+                }
+                js.error = true;
+                js.loading = false;
+                render();
+            }, function(err) {
+                if (CONFIG.debug) console.log("[UJG] main scopechangeburndownchart error", err, err && err.responseText);
+                js.error = true;
+                js.loading = false;
+                render();
+            });
+        }
+
         function renderJiraScopeChangeChart() {
             var js = state.jiraScope || {};
             if (!state.sprint || !state.sprint.id) return '';
