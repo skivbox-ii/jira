@@ -691,8 +691,8 @@ define("_ujgSprintHealth", ["jquery"], function($) {
                 if (k === "done") return true;
             }
             var n = (st.name || "").toLowerCase();
-            // В вашем процессе "Тестирование" считаем как выполнено
-            if (n.indexOf("тестирован") >= 0 || n.indexOf("testing") >= 0) return true;
+            // "Тестирование/Testing/QA" считаем как выполнено
+            if (n.indexOf("тест") >= 0 || n.indexOf("testing") >= 0 || n.indexOf("qa") >= 0) return true;
             return ["done","closed","resolved","готово","закрыт","завершён","выполнено"].some(function(s) { return n.indexOf(s) >= 0; });
         }
 
@@ -711,7 +711,7 @@ define("_ujgSprintHealth", ["jquery"], function($) {
             function isDoneStatusName(name) {
                 var n = (name || "").toLowerCase();
                 if (!n) return false;
-                if (n.indexOf("тестирован") >= 0 || n.indexOf("testing") >= 0) return true;
+                if (n.indexOf("тест") >= 0 || n.indexOf("testing") >= 0 || n.indexOf("qa") >= 0) return true;
                 return ["done","closed","resolved","готово","закрыт","завершён","выполнено"].some(function(s) { return n.indexOf(s) >= 0; });
             }
 
