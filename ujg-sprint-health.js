@@ -3970,6 +3970,7 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
         }
 
         initPanel();
+    }
 
     return SprintHealthGadget;
 });
