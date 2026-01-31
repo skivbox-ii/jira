@@ -199,6 +199,69 @@ define("_ujgSH_api", ["jquery", "_ujgSH_config"], function($, config) {
                 });
             });
         },
+        searchUsers: function(query, maxResults) {
+            var q = (query || "").trim();
+            var max = Number(maxResults) || 10;
+            if (!q) return $.Deferred().resolve([]).promise();
+
+            function pickAvatar(u) {
+                if (!u) return "";
+                // user/picker может вернуть avatarUrl (string|object), user/search — avatarUrls (object)
+                if (u.avatarUrl) {
+                    if (typeof u.avatarUrl === "string") return u.avatarUrl;
+                    if (u.avatarUrl["48x48"]) return u.avatarUrl["48x48"];
+                    if (u.avatarUrl["24x24"]) return u.avatarUrl["24x24"];
+                    if (u.avatarUrl["16x16"]) return u.avatarUrl["16x16"];
+                }
+                if (u.avatarUrls) {
+                    return u.avatarUrls["24x24"] || u.avatarUrls["16x16"] || u.avatarUrls["48x48"] || "";
+                }
+                return "";
+            }
+
+            function normalizeUser(u) {
+                if (!u) return null;
+                var id = u.accountId || u.key || u.name || u.username || u.userKey || "";
+                if (!id) return null;
+                return {
+                    id: id,
+                    name: u.name || u.username || u.key || "",
+                    displayName: u.displayName || u.name || u.key || u.accountId || id,
+                    avatarUrl: pickAvatar(u)
+                };
+            }
+
+            function normalizeFromPicker(resp) {
+                var users = (resp && resp.users && Array.isArray(resp.users)) ? resp.users : [];
+                var out = [];
+                users.forEach(function(u) {
+                    // Jira Server: { name, key, displayName, avatarUrl, ... }
+                    // Jira Cloud: иногда { accountId, displayName, avatarUrl, ... }
+                    var nu = normalizeUser(u);
+                    if (nu) out.push(nu);
+                });
+                return out;
+            }
+
+            // 1) user/picker — максимально “как в Jira”
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/user/picker",
+                data: { query: q, maxResults: max }
+            }).then(function(resp) {
+                return normalizeFromPicker(resp);
+            }, function() {
+                // 2) fallback: user/search
+                return $.ajax({
+                    url: baseUrl + "/rest/api/2/user/search",
+                    data: { username: q, query: q, maxResults: max }
+                }).then(function(resp) {
+                    var arr = Array.isArray(resp) ? resp : [];
+                    return arr.map(normalizeUser).filter(Boolean);
+                }, function() {
+                    return [];
+                });
+            });
+        },
         getAllSprints: function(boardId) {
             var d = $.Deferred(), all = [];
             function load(startAt) {
@@ -3089,7 +3152,10 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
             var cap = getSprintCapacity();
             var capSec = cap.capSec || 0;
             
-            var html = '<div class="ujg-asgn-wrap"><div class="ujg-section-title">👥 Распределение (' + data.length + ')</div><div class="ujg-asgn-list">';
+            var html = '<div class="ujg-asgn-wrap"><div class="ujg-section-title">' +
+                '<a href="#" class="ujg-team-settings-link" title="Настройки команды">' +
+                '👥 Распределение (' + data.length + ') <span class="ujg-team-settings-gear">⚙</span>' +
+                '</a></div><div class="ujg-asgn-list">';
             data.forEach(function(a) {
                 var barPct = Math.round(a.hours / maxH * 100);
                 var plan = a.plannedSec || 0;
@@ -3594,6 +3660,8 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
                 // перерисуем, чтобы заголовки групп и "пустые" участники получили ФИО
                 groupByAssignee();
                 render();
+                // Если открыты настройки команды — обновим список с новыми ФИО
+                if ($("#ujgTeamSettings").hasClass("ujg-show")) renderTeamSettingsList();
             });
         }
 
@@ -3629,7 +3697,10 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
         function toggleTeamMember(uid, uname) {
             var key = state.teamKey;
             if (!key || !state.selectedBoardId) return;
-            if (!state.teams[key]) state.teams[key] = [];
+            // Если команда ещё не сохранена (auto-mode: список пустой) — стартуем от текущего состава
+            if (!state.teams[key] || !Array.isArray(state.teams[key]) || state.teams[key].length === 0) {
+                state.teams[key] = (state.teamMembers && state.teamMembers.length) ? state.teamMembers.slice() : [];
+            }
             var list = state.teams[key];
             var idx = list.indexOf(uid);
             if (idx >= 0) list.splice(idx, 1);
@@ -3641,6 +3712,170 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
             }
             ensureTeamMemberNames();
             saveTeams(state.selectedBoardId, state.teams).always(function() { render(); });
+        }
+
+        // Team settings modal (управление составом команды через поиск пользователей)
+        var teamSettingsUI = { searchTimer: null, lastReqId: 0 };
+
+        function hideTeamSuggest() {
+            var $ov = $("#ujgTeamSettings");
+            if (!$ov.length) return;
+            $ov.find(".ujg-team-suggest").hide().empty();
+        }
+
+        function renderTeamSettingsList() {
+            var $ov = $("#ujgTeamSettings");
+            if (!$ov.length) return;
+
+            var key = state.teamKey || "";
+            var boardId = state.selectedBoardId || null;
+            var ids = (state.teamMembers || []).slice();
+
+            // Сортируем по отображаемому имени
+            ids.sort(function(a, b) {
+                var an = (state.teamMemberNames && state.teamMemberNames[a]) ? state.teamMemberNames[a] : a;
+                var bn = (state.teamMemberNames && state.teamMemberNames[b]) ? state.teamMemberNames[b] : b;
+                return String(an).localeCompare(String(bn));
+            });
+
+            var meta = '';
+            meta += 'Команда: <b>' + utils.escapeHtml(key || "—") + '</b>';
+            meta += ' · Участников: <b>' + ids.length + '</b>';
+            if (!boardId) meta += ' · <span class="ujg-team-warn">не выбрана доска</span>';
+            $ov.find(".ujg-team-settings-meta").html(meta);
+
+            var $input = $ov.find(".ujg-team-user-input");
+            if (!key || !boardId) {
+                $input.prop("disabled", true).attr("placeholder", "Выберите доску и спринт…");
+            } else {
+                $input.prop("disabled", false).attr("placeholder", "Добавить пользователя… (введите 2+ буквы)");
+            }
+
+            if (!ids.length) {
+                $ov.find(".ujg-team-settings-list").html('<div class="ujg-team-empty">Список команды пуст. Добавь людей через поиск выше.</div>');
+                return;
+            }
+
+            var html = '<div class="ujg-team-members">';
+            ids.forEach(function(uid) {
+                var nm = (state.teamMemberNames && state.teamMemberNames[uid]) ? state.teamMemberNames[uid] : uid;
+                html += '<div class="ujg-team-member">' +
+                    '<span class="ujg-team-member-name" title="' + utils.escapeHtml(nm) + '">' + utils.escapeHtml(nm) + '</span>' +
+                    '<span class="ujg-team-member-id" title="' + utils.escapeHtml(uid) + '">' + utils.escapeHtml(uid) + '</span>' +
+                    '<button type="button" class="ujg-team-member-remove" data-uid="' + utils.escapeHtml(uid) + '" data-uname="' + utils.escapeHtml(nm) + '" title="Убрать из команды">✕</button>' +
+                '</div>';
+            });
+            html += '</div>';
+            $ov.find(".ujg-team-settings-list").html(html);
+        }
+
+        function ensureTeamSettingsOverlay() {
+            var $existing = $("#ujgTeamSettings");
+            if ($existing.length) return $existing;
+
+            var $ov = $('<div class="ujg-team-settings-overlay" id="ujgTeamSettings"></div>');
+            var $modal = $('<div class="ujg-team-settings-modal" role="dialog" aria-modal="true"></div>');
+
+            var $hdr = $('<div class="ujg-team-settings-hdr"></div>');
+            $hdr.append('<div class="ujg-team-settings-title">Настройки команды</div>');
+            $hdr.append('<button class="ujg-btn ujg-team-settings-close" type="button" title="Закрыть">✕</button>');
+
+            var $body = $('<div class="ujg-team-settings-body"></div>');
+            $body.append('<div class="ujg-team-settings-meta"></div>');
+            var $search = $('<div class="ujg-team-settings-search"></div>');
+            $search.append('<input type="text" class="ujg-input ujg-team-user-input" placeholder="Добавить пользователя… (введите 2+ буквы)">');
+            $search.append('<div class="ujg-team-suggest" style="display:none"></div>');
+            $body.append($search);
+            $body.append('<div class="ujg-team-settings-list"></div>');
+
+            $modal.append($hdr, $body);
+            $ov.append($modal);
+            $("body").append($ov);
+
+            // Закрытие по клику по подложке
+            $ov.on("click", function(e) {
+                if (e.target === this) closeTeamSettings();
+                // клик вне области поиска — скрыть подсказки
+                if (!$(e.target).closest(".ujg-team-settings-search").length) hideTeamSuggest();
+            });
+            $ov.on("click", ".ujg-team-settings-close", function() { closeTeamSettings(); });
+
+            // Удаление участника
+            $ov.on("click", ".ujg-team-member-remove", function() {
+                var uid = $(this).data("uid");
+                var uname = $(this).data("uname");
+                if (!uid) return;
+                toggleTeamMember(uid, uname);
+                renderTeamSettingsList();
+            });
+
+            // Поиск пользователей
+            $ov.on("input", ".ujg-team-user-input", function() {
+                var q = ($(this).val() || "").trim();
+                if (teamSettingsUI.searchTimer) clearTimeout(teamSettingsUI.searchTimer);
+                if (q.length < 2) { hideTeamSuggest(); return; }
+
+                teamSettingsUI.searchTimer = setTimeout(function() {
+                    var reqId = ++teamSettingsUI.lastReqId;
+                    var $suggest = $ov.find(".ujg-team-suggest");
+                    $suggest.html('<div class="ujg-team-suggest-loading">Поиск…</div>').show();
+
+                    api.searchUsers(q, 12).then(function(users) {
+                        if (reqId !== teamSettingsUI.lastReqId) return;
+                        users = users || [];
+                        var html = "";
+                        var inTeam = state.teamMembers || [];
+                        users.forEach(function(u) {
+                            if (!u || !u.id) return;
+                            var dn = u.displayName || u.name || u.id;
+                            var already = inTeam.indexOf(u.id) >= 0;
+                            var cls = "ujg-team-suggest-item" + (already ? " is-disabled" : "");
+                            html += '<div class="' + cls + '" data-uid="' + utils.escapeHtml(u.id) + '" data-uname="' + utils.escapeHtml(dn) + '">' +
+                                (u.avatarUrl ? ('<img class="ujg-team-avatar" src="' + utils.escapeHtml(u.avatarUrl) + '" alt="">') : '') +
+                                '<div class="ujg-team-suggest-text">' +
+                                    '<div class="ujg-team-suggest-name">' + utils.escapeHtml(dn) + '</div>' +
+                                    (u.name && u.name !== dn ? ('<div class="ujg-team-suggest-login">' + utils.escapeHtml(u.name) + '</div>') : '') +
+                                '</div>' +
+                            '</div>';
+                        });
+                        if (!html) html = '<div class="ujg-team-suggest-empty">Ничего не найдено</div>';
+                        $suggest.html(html).show();
+                    }, function() {
+                        if (reqId !== teamSettingsUI.lastReqId) return;
+                        hideTeamSuggest();
+                    });
+                }, 200);
+            });
+
+            // Выбор пользователя из подсказок
+            $ov.on("click", ".ujg-team-suggest-item", function() {
+                if ($(this).hasClass("is-disabled")) return;
+                var uid = $(this).data("uid");
+                var uname = $(this).data("uname");
+                if (!uid) return;
+                toggleTeamMember(uid, uname);
+                $ov.find(".ujg-team-user-input").val("").focus();
+                hideTeamSuggest();
+                renderTeamSettingsList();
+            });
+
+            return $ov;
+        }
+
+        function openTeamSettings() {
+            var $ov = ensureTeamSettingsOverlay();
+            renderTeamSettingsList();
+            $ov.addClass("ujg-show");
+            setTimeout(function() { $ov.find(".ujg-team-user-input").focus(); }, 0);
+            $(document).off("keydown.ujgTeamSettings").on("keydown.ujgTeamSettings", function(e) {
+                if (e.key === "Escape") closeTeamSettings();
+            });
+        }
+
+        function closeTeamSettings() {
+            $("#ujgTeamSettings").removeClass("ujg-show");
+            hideTeamSuggest();
+            $(document).off("keydown.ujgTeamSettings");
         }
 
         function saveTeams(boardId, teams) {
@@ -3919,6 +4154,10 @@ define("_ujgSH_main", ["jquery", "_ujgSH_config", "_ujgSH_utils", "_ujgSH_storag
             $cont.find(".ujg-btn-chart-fs").on("click", function(e) {
                 e.preventDefault();
                 openChartFullscreen();
+            });
+            $cont.find(".ujg-team-settings-link").on("click", function(e) {
+                e.preventDefault();
+                openTeamSettings();
             });
             $cont.find(".ujg-grp").on("click", function() {
                 var aid = $(this).data("aid");

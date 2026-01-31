@@ -40,6 +40,69 @@ define("_ujgSH_api", ["jquery", "_ujgSH_config"], function($, config) {
                 });
             });
         },
+        searchUsers: function(query, maxResults) {
+            var q = (query || "").trim();
+            var max = Number(maxResults) || 10;
+            if (!q) return $.Deferred().resolve([]).promise();
+
+            function pickAvatar(u) {
+                if (!u) return "";
+                // user/picker может вернуть avatarUrl (string|object), user/search — avatarUrls (object)
+                if (u.avatarUrl) {
+                    if (typeof u.avatarUrl === "string") return u.avatarUrl;
+                    if (u.avatarUrl["48x48"]) return u.avatarUrl["48x48"];
+                    if (u.avatarUrl["24x24"]) return u.avatarUrl["24x24"];
+                    if (u.avatarUrl["16x16"]) return u.avatarUrl["16x16"];
+                }
+                if (u.avatarUrls) {
+                    return u.avatarUrls["24x24"] || u.avatarUrls["16x16"] || u.avatarUrls["48x48"] || "";
+                }
+                return "";
+            }
+
+            function normalizeUser(u) {
+                if (!u) return null;
+                var id = u.accountId || u.key || u.name || u.username || u.userKey || "";
+                if (!id) return null;
+                return {
+                    id: id,
+                    name: u.name || u.username || u.key || "",
+                    displayName: u.displayName || u.name || u.key || u.accountId || id,
+                    avatarUrl: pickAvatar(u)
+                };
+            }
+
+            function normalizeFromPicker(resp) {
+                var users = (resp && resp.users && Array.isArray(resp.users)) ? resp.users : [];
+                var out = [];
+                users.forEach(function(u) {
+                    // Jira Server: { name, key, displayName, avatarUrl, ... }
+                    // Jira Cloud: иногда { accountId, displayName, avatarUrl, ... }
+                    var nu = normalizeUser(u);
+                    if (nu) out.push(nu);
+                });
+                return out;
+            }
+
+            // 1) user/picker — максимально “как в Jira”
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/user/picker",
+                data: { query: q, maxResults: max }
+            }).then(function(resp) {
+                return normalizeFromPicker(resp);
+            }, function() {
+                // 2) fallback: user/search
+                return $.ajax({
+                    url: baseUrl + "/rest/api/2/user/search",
+                    data: { username: q, query: q, maxResults: max }
+                }).then(function(resp) {
+                    var arr = Array.isArray(resp) ? resp : [];
+                    return arr.map(normalizeUser).filter(Boolean);
+                }, function() {
+                    return [];
+                });
+            });
+        },
         getAllSprints: function(boardId) {
             var d = $.Deferred(), all = [];
             function load(startAt) {
