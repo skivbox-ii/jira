@@ -7,7 +7,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     var STORAGE_KEY_GROUPS = "ujg_timesheet_groups";
     
     var CONFIG = {
-        version: "1.5.1",
+        version: "1.6.0",
         jqlFilter: "",
         debug: true
     };
@@ -87,6 +87,47 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         };
     }
 
+    function filterDayDataByUsers(dayData, userIds) {
+        if (!userIds || userIds.length === 0) return dayData;
+        return (dayData || []).map(function(item) {
+            var worklogs = (item.worklogs || []).filter(function(w) {
+                return userIds.indexOf(w.authorId) >= 0;
+            });
+            if (!item.worklogs || item.worklogs.length === 0) {
+                if (!item.authors) return null;
+                return Object.keys(item.authors).some(function(aid) {
+                    return userIds.indexOf(aid) >= 0;
+                }) ? item : null;
+            }
+            if (worklogs.length === 0) return null;
+            var projected = {};
+            var seconds = 0;
+            var comments = [];
+            var authors = {};
+            Object.keys(item).forEach(function(key) { projected[key] = item[key]; });
+            worklogs.forEach(function(w) {
+                seconds += w.seconds || 0;
+                if (w.comment) comments.push(w.comment);
+                authors[w.authorId] = w.authorName;
+            });
+            projected.seconds = seconds;
+            projected.comments = comments;
+            projected.authors = authors;
+            projected.worklogs = worklogs;
+            return projected;
+        }).filter(Boolean);
+    }
+
+    function getCalendarUserIds(users, selectedUsers) {
+        var allUsers = users || {};
+        var ids = selectedUsers && selectedUsers.length > 0
+            ? selectedUsers.filter(function(id) { return !!allUsers[id]; })
+            : Object.keys(allUsers);
+        return ids.slice().sort(function(a, b) {
+            return (allUsers[a] || a).localeCompare(allUsers[b] || b);
+        });
+    }
+
     function MyGadget(API) {
         var state = {
             showComments: false,
@@ -111,7 +152,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $content.append($cont);
         }
 
-        var $fsBtn, $userSelect, $rangeStart, $rangeEnd, $debugBox, $debugText, $progress;
+        var $fsBtn, $userBtn, $userPanel, $userSearch, $userList, $rangeStart, $rangeEnd, $debugBox, $debugText, $progress;
         var $groupSelect, $groupSaveBtn, $separateCheck;
 
         function log(msg) {
@@ -133,25 +174,44 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             API.resize();
         }
 
+        function applyUserSelection() {
+            updateUserList();
+            updateUrlState();
+            updateDebug();
+            renderCalendar();
+        }
+
         function updateUserList() {
-            var userList = Object.keys(state.users).map(function(id) {
-                return { id: id, name: state.users[id] };
-            }).sort(function(a, b) { return a.name.localeCompare(b.name); });
-            
-            $userSelect.empty();
-            userList.forEach(function(u) {
-                var isSelected = state.selectedUsers.indexOf(u.id) >= 0;
-                $userSelect.append('<option value="' + utils.escapeHtml(u.id) + '"' + (isSelected ? ' selected' : '') + '>' + utils.escapeHtml(u.name) + '</option>');
+            if (!$userList) return;
+            var query = ($userSearch && $userSearch.val() || "").trim().toLowerCase();
+            var userIds = getCalendarUserIds(state.users, []);
+            $userList.empty();
+            userIds.forEach(function(id) {
+                var name = state.users[id];
+                if (query && name.toLowerCase().indexOf(query) < 0) return;
+                var checked = state.selectedUsers.indexOf(id) >= 0;
+                var $item = $('<label class="ujg-user-dd-item"></label>');
+                var $check = $('<input type="checkbox">').prop("checked", checked);
+                $check.on("change", function() {
+                    if ($(this).is(":checked")) {
+                        if (state.selectedUsers.indexOf(id) < 0) state.selectedUsers.push(id);
+                    } else {
+                        state.selectedUsers = state.selectedUsers.filter(function(selectedId) { return selectedId !== id; });
+                    }
+                    applyUserSelection();
+                });
+                $item.append($check, $('<span></span>').text(name));
+                $userList.append($item);
             });
-            
+            if ($userList.children().length === 0) $userList.append('<div class="ujg-user-dd-empty">Ничего не найдено</div>');
             updateUserSelectLabel();
         }
         
         function updateUserSelectLabel() {
             var count = state.selectedUsers.length;
             var total = Object.keys(state.users).length;
-            var label = count === 0 ? "Все (" + total + ")" : "Выбрано: " + count;
-            $userSelect.prev("label").text("Кто: " + label + " ");
+            var label = count === 0 ? "Все (" + total + ")" : count + " из " + total;
+            if ($userBtn) $userBtn.text(label);
         }
         
         function updateGroupSelect() {
@@ -165,16 +225,6 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             });
         }
 
-        // Фильтрует данные дня по списку пользователей
-        function filterDayDataByUsers(dayData, userIds) {
-            if (!userIds || userIds.length === 0) return dayData;
-            return dayData.filter(function(item) {
-                if (!item.authors) return false;
-                var authorIds = Object.keys(item.authors);
-                return authorIds.some(function(aid) { return userIds.indexOf(aid) >= 0; });
-            });
-        }
-        
         // Группирует недели из дней
         function groupWeeks(days) {
             var weeks = [];
@@ -286,9 +336,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     if (dayData.length > 0) cellClass += " ujg-has-data";
                     cellClass += hiddenClass;
                     
-                    html += '<div class="' + cellClass + '" data-day="' + dayKey + '">';
+                    html += '<div class="' + cellClass + '" data-day="' + dayKey + '" title="' + utils.escapeHtml(utils.formatDate(day)) + '">';
                     html += '<div class="ujg-cell-header">';
-                    html += '<span class="ujg-cell-date">' + day.getDate() + '</span>';
+                    html += '<span class="ujg-cell-date">' + utils.formatDateShort(day) + '</span>';
                     if (dayTotal > 0) {
                         html += '<span class="ujg-cell-total">' + utils.formatTime(dayTotal) + '</span>';
                     }
@@ -312,11 +362,23 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                             html += '</div>';
                             // Summary и comment НЕ перечёркиваем
                             if (item.summary) html += '<div class="ujg-issue-summary">' + utils.escapeHtml(item.summary) + '</div>';
-                            if (showAuthors && item.authors) {
+                            if (item.worklogs && item.worklogs.length > 1) {
+                                html += '<div class="ujg-worklogs">';
+                                item.worklogs.forEach(function(wl) {
+                                    html += '<div class="ujg-worklog-entry">';
+                                    html += '<span class="ujg-wl-author">' + utils.escapeHtml(wl.authorName || wl.authorId || "") + '</span>';
+                                    html += '<span class="ujg-wl-time">' + (utils.formatTime(wl.seconds) || "") + '</span>';
+                                    if (state.showComments && wl.comment) {
+                                        html += '<span class="ujg-wl-comment">' + utils.escapeHtml(wl.comment.substring(0, 60)) + '</span>';
+                                    }
+                                    html += '</div>';
+                                });
+                                html += '</div>';
+                            } else if (showAuthors && item.authors) {
                                 var names = Object.keys(item.authors).map(function(k) { return item.authors[k]; });
                                 if (names.length > 0) html += '<div class="ujg-issue-author">' + utils.escapeHtml(names.join(", ")) + '</div>';
                             }
-                            if (state.showComments && item.comments && item.comments.length > 0) {
+                            if ((!item.worklogs || item.worklogs.length <= 1) && state.showComments && item.comments && item.comments.length > 0) {
                                 html += '<div class="ujg-issue-comment">' + utils.escapeHtml(item.comments[0].substring(0, 80)) + '</div>';
                             }
                             html += '</div>';
@@ -346,12 +408,17 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var html = '';
             
             // Режим отдельных календарей для каждого пользователя
-            if (state.separateCalendars && state.selectedUsers.length > 0) {
-                html += '<div class="ujg-calendars-container">';
-                state.selectedUsers.forEach(function(userId, idx) {
-                    html += renderSingleCalendar(userId, 'cal-' + idx);
-                });
-                html += '</div>';
+            if (state.separateCalendars) {
+                var calendarUsers = getCalendarUserIds(state.users, state.selectedUsers);
+                if (calendarUsers.length > 0) {
+                    html += '<div class="ujg-calendars-container">';
+                    calendarUsers.forEach(function(userId, idx) {
+                        html += renderSingleCalendar(userId, 'cal-' + idx);
+                    });
+                    html += '</div>';
+                } else {
+                    html = renderSingleCalendar(null, 'cal-main');
+                }
             } else {
                 // Один общий календарь (с фильтром по выбранным пользователям)
                 html = renderSingleCalendar(null, 'cal-main');
@@ -544,33 +611,40 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             // Контролы - пользователи
             var $row2 = $('<div class="ujg-controls-row"></div>');
             
-            // Мультиселект пользователей
+            // Фильтр пользователей с поиском
             var $userFilter = $('<div class="ujg-user-filter"></div>');
-            var $userLabel = $('<label>Кто: Все </label>');
-            $userSelect = $('<select class="ujg-user-select" multiple size="4"></select>');
-            $userSelect.on("change", function() {
-                state.selectedUsers = [];
-                $(this).find("option:selected").each(function() {
-                    state.selectedUsers.push($(this).val());
-                });
-                updateUrlState();
-                updateDebug();
-                updateUserSelectLabel();
-                renderCalendar();
+            var $userLabel = $('<label>Кто:</label>');
+            $userBtn = $('<button type="button" class="aui-button ujg-user-dd-btn"></button>');
+            $userPanel = $('<div class="ujg-user-dd-panel"></div>').hide();
+            $userSearch = $('<input type="search" class="ujg-user-dd-search" placeholder="Поиск пользователя">');
+            $userList = $('<div class="ujg-user-dd-list"></div>');
+            var $userActions = $('<div class="ujg-user-dd-actions"></div>');
+            var $allUsersBtn = $('<button type="button" class="aui-button ujg-btn-small">Все</button>');
+            var $clearUsersBtn = $('<button type="button" class="aui-button ujg-btn-small" title="Сбросить выбор">Сбросить</button>');
+            $userBtn.on("click", function(e) {
+                e.stopPropagation();
+                $userPanel.toggle();
+                if ($userPanel.is(":visible")) $userSearch.trigger("focus");
             });
-            $userFilter.append($userLabel, $userSelect);
-            
-            // Кнопка сброса выбора
-            var $clearUsersBtn = $('<button class="aui-button ujg-btn-small" title="Сбросить выбор">✕</button>');
+            $userPanel.on("click", function(e) {
+                e.stopPropagation();
+            });
+            $userSearch.on("input", updateUserList);
+            $allUsersBtn.on("click", function() {
+                state.selectedUsers = getCalendarUserIds(state.users, []);
+                applyUserSelection();
+            });
             $clearUsersBtn.on("click", function() {
                 state.selectedUsers = [];
-                $userSelect.find("option").prop("selected", false);
-                updateUrlState();
-                updateDebug();
-                updateUserSelectLabel();
-                renderCalendar();
+                applyUserSelection();
             });
-            $userFilter.append($clearUsersBtn);
+            $userActions.append($allUsersBtn, $clearUsersBtn);
+            $userPanel.append($userSearch, $userActions, $userList);
+            $userFilter.append($userLabel, $userBtn, $userPanel);
+            $(document).on("click.ujgUserDd", function() {
+                $userPanel.hide();
+            });
+            updateUserList();
             
             $row2.append($userFilter);
             
@@ -634,8 +708,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             // Контролы - чекбоксы
             var $row3 = $('<div class="ujg-controls-row"></div>');
             
-            // Галочка "Отдельные календари"
-            $separateCheck = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>Отдельные календари</span></label>');
+            // Галочка "По разработчикам"
+            $separateCheck = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>По разработчикам</span></label>');
             $separateCheck.find("input").prop("checked", initSeparate).on("change", function() { 
                 state.separateCalendars = $(this).is(":checked"); 
                 updateUrlState();
@@ -673,6 +747,11 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         initPanel();
         startLoading();
     }
+
+    MyGadget.__test = {
+        filterDayDataByUsers: filterDayDataByUsers,
+        getCalendarUserIds: getCalendarUserIds
+    };
     
     return MyGadget;
 });

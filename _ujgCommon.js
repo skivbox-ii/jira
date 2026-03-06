@@ -61,6 +61,37 @@ define("_ujgCommon", ["jquery"], function($) {
         return res;
     }
 
+    function collectIssueWorklogs(dayWls) {
+        var byAuthor = {};
+        var worklogs = (dayWls || []).map(function(w) {
+            var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
+            var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
+            if (!byAuthor[uid]) byAuthor[uid] = { seconds: 0, comments: [], name: uname };
+            byAuthor[uid].seconds += w.timeSpentSeconds || 0;
+            if (w.comment) byAuthor[uid].comments.push(w.comment);
+            return {
+                authorId: uid,
+                authorName: uname,
+                seconds: w.timeSpentSeconds || 0,
+                comment: w.comment || ""
+            };
+        });
+        var totalSeconds = 0;
+        var allComments = [];
+        var authors = {};
+        Object.keys(byAuthor).forEach(function(uid) {
+            totalSeconds += byAuthor[uid].seconds;
+            allComments = allComments.concat(byAuthor[uid].comments);
+            authors[uid] = byAuthor[uid].name;
+        });
+        return {
+            seconds: totalSeconds,
+            comments: allComments,
+            authors: authors,
+            worklogs: worklogs
+        };
+    }
+
     // Загрузка данных за один день (фильтрация по пользователю только на уровне worklogs)
     function loadDayData(day, jqlFilter, userId) {
         var d = $.Deferred();
@@ -147,33 +178,13 @@ define("_ujgCommon", ["jquery"], function($) {
                     });
                     
                     if (dayWls.length > 0) {
-                        // Группируем по автору, чтобы показать отдельно для каждого
-                        var byAuthor = {};
-                        dayWls.forEach(function(w) {
-                            var uid = (w.author && (w.author.accountId || w.author.key || w.author.name)) || "unknown";
-                            var uname = (w.author && (w.author.displayName || w.author.name)) || uid;
-                            if (!byAuthor[uid]) {
-                                byAuthor[uid] = { seconds: 0, comments: [], name: uname };
-                            }
-                            byAuthor[uid].seconds += w.timeSpentSeconds || 0;
-                            if (w.comment) byAuthor[uid].comments.push(w.comment);
-                        });
-                        
-                        // Создаем запись для задачи с инфой по авторам
-                        var totalSeconds = 0;
-                        var allComments = [];
-                        var authors = {};
-                        Object.keys(byAuthor).forEach(function(uid) {
-                            totalSeconds += byAuthor[uid].seconds;
-                            allComments = allComments.concat(byAuthor[uid].comments);
-                            authors[uid] = byAuthor[uid].name;
-                        });
-                        
-                        result.push({ 
-                            key: key, 
-                            seconds: totalSeconds, 
-                            comments: allComments, 
-                            authors: authors 
+                        var issueData = collectIssueWorklogs(dayWls);
+                        result.push({
+                            key: key,
+                            seconds: issueData.seconds,
+                            comments: issueData.comments,
+                            authors: issueData.authors,
+                            worklogs: issueData.worklogs
                         });
                     }
                     done++;
@@ -192,6 +203,7 @@ define("_ujgCommon", ["jquery"], function($) {
         baseUrl: baseUrl,
         utils: utils,
         daysBetween: daysBetween,
-        loadDayData: loadDayData
+        loadDayData: loadDayData,
+        collectIssueWorklogs: collectIssueWorklogs
     };
 });
