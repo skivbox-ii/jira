@@ -1,0 +1,14 @@
+{
+  "name": "ujg-standalone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone server for UJG Jira widgets",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.22.1",
+    "express-session": "^1.19.0"
+  }
+}

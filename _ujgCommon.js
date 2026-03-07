@@ -107,7 +107,7 @@ define("_ujgCommon", ["jquery"], function($) {
             contentType: "application/json",
             data: JSON.stringify({ 
                 jql: jql, 
-                fields: ["summary", "status", "timetracking", "timeoriginalestimate", "duedate"], 
+                fields: ["summary", "status", "issuetype", "timetracking", "timeoriginalestimate", "duedate"], 
                 maxResults: 500 
             }),
             success: function(r) {
@@ -128,6 +128,7 @@ define("_ujgCommon", ["jquery"], function($) {
                         key: iss.key,
                         summary: iss.fields && iss.fields.summary || "",
                         status: iss.fields && iss.fields.status && iss.fields.status.name || "",
+                        issueType: iss.fields && iss.fields.issuetype && iss.fields.issuetype.name || "",
                         estimate: estimate
                     };
                 });
@@ -137,6 +138,7 @@ define("_ujgCommon", ["jquery"], function($) {
                         var info = issueMap[di.key] || {};
                         di.summary = info.summary || "";
                         di.status = info.status || "";
+                        di.issueType = info.issueType || "";
                         di.estimate = info.estimate || 0;
                     });
                     d.resolve({ dayKey: dayKey, issues: dayIssues });

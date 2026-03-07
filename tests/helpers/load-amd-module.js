@@ -7,6 +7,19 @@ module.exports = function loadAmdModule(filePath, deps) {
     var exported;
     var sandbox = {
         console: console,
+        Date: Date,
+        Object: Object,
+        Array: Array,
+        JSON: JSON,
+        Math: Math,
+        parseInt: parseInt,
+        parseFloat: parseFloat,
+        isNaN: isNaN,
+        isFinite: isFinite,
+        encodeURIComponent: encodeURIComponent,
+        decodeURIComponent: decodeURIComponent,
+        setTimeout: setTimeout,
+        clearTimeout: clearTimeout,
         define: function(name, names, factory) {
             if (typeof name !== "string") {
                 factory = names;

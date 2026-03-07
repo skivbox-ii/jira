@@ -13,6 +13,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     };
 
     var WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    var MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
     var DONE_STATUSES = ["done", "closed", "resolved", "готово", "закрыт", "закрыта", "завершен", "завершена", "выполнено"];
     
     // Загрузка/сохранение групп пользователей
@@ -128,6 +129,149 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         });
     }
 
+    function countWorkDays(days) {
+        var count = 0;
+        (days || []).forEach(function(day) {
+            if (day && utils.getDayOfWeek(day) < 5) count++;
+        });
+        return count;
+    }
+
+    function computeUserReport(userId, days, calendarData) {
+        var workDays = countWorkDays(days);
+        var expectedSeconds = workDays * 8 * 3600;
+        var totalSeconds = 0;
+        var daysWithEntries = 0;
+        var taskKeys = {};
+
+        (days || []).forEach(function(day) {
+            var dayKey = utils.getDayKey(day);
+            var items = calendarData[dayKey] || [];
+            var daySeconds = 0;
+            items.forEach(function(item) {
+                var wls = item.worklogs || [];
+                wls.forEach(function(wl) {
+                    if (wl.authorId === userId) {
+                        daySeconds += wl.seconds || 0;
+                        if (item.key) taskKeys[item.key] = true;
+                    }
+                });
+                if ((!wls || wls.length === 0) && item.authors && item.authors[userId]) {
+                    daySeconds += item.seconds || 0;
+                    if (item.key) taskKeys[item.key] = true;
+                }
+            });
+            if (daySeconds > 0) daysWithEntries++;
+            totalSeconds += daySeconds;
+        });
+
+        var deficit = expectedSeconds - totalSeconds;
+        return {
+            totalSeconds: totalSeconds,
+            expectedSeconds: expectedSeconds,
+            deficit: deficit > 0 ? deficit : 0,
+            daysWorked: daysWithEntries,
+            workDays: workDays,
+            taskCount: Object.keys(taskKeys).length
+        };
+    }
+
+    function computeWeekSummary(weekDays, userFilter, calendarData) {
+        var totalSeconds = 0;
+        var projects = {};
+        var issueTypeKeys = {};
+        var taskKeys = {};
+        var daysWorked = 0;
+        var workDays = 0;
+
+        (weekDays || []).forEach(function(day) {
+            if (!day) return;
+            if (utils.getDayOfWeek(day) < 5) workDays++;
+
+            var dayKey = utils.getDayKey(day);
+            var dayData = filterDayDataByUsers(calendarData[dayKey] || [], userFilter);
+            var daySeconds = 0;
+
+            dayData.forEach(function(item) {
+                var secs = item.seconds || 0;
+                daySeconds += secs;
+                totalSeconds += secs;
+                if (item.key) {
+                    taskKeys[item.key] = true;
+                    var proj = item.key.split("-")[0];
+                    projects[proj] = (projects[proj] || 0) + secs;
+                    if (item.issueType) {
+                        if (!issueTypeKeys[item.issueType]) issueTypeKeys[item.issueType] = {};
+                        issueTypeKeys[item.issueType][item.key] = true;
+                    }
+                }
+            });
+            if (daySeconds > 0) daysWorked++;
+        });
+
+        var expectedSeconds = workDays * 8 * 3600;
+        var issueTypes = {};
+        Object.keys(issueTypeKeys).forEach(function(type) {
+            issueTypes[type] = Object.keys(issueTypeKeys[type]).length;
+        });
+
+        return {
+            totalSeconds: totalSeconds,
+            expectedSeconds: expectedSeconds,
+            deficit: Math.max(0, expectedSeconds - totalSeconds),
+            projects: projects,
+            issueTypes: issueTypes,
+            tasks: taskKeys,
+            taskCount: Object.keys(taskKeys).length,
+            daysWorked: daysWorked,
+            workDays: workDays
+        };
+    }
+
+    function computeMonthSummary(monthDays, userFilter, calendarData) {
+        var result = computeWeekSummary(monthDays, userFilter, calendarData);
+        result.utilization = result.expectedSeconds > 0
+            ? Math.round(result.totalSeconds / result.expectedSeconds * 1000) / 10
+            : 0;
+        result.projectPcts = {};
+        if (result.totalSeconds > 0) {
+            Object.keys(result.projects).forEach(function(proj) {
+                result.projectPcts[proj] = Math.round(result.projects[proj] / result.totalSeconds * 1000) / 10;
+            });
+        }
+        return result;
+    }
+
+    function getWeekTransitions(weekDays, taskKeysObj, changelogData) {
+        if (!changelogData || Object.keys(changelogData).length === 0) return [];
+        var weekStart = null, weekEnd = null;
+        weekDays.forEach(function(day) {
+            if (!day) return;
+            if (!weekStart || day < weekStart) weekStart = day;
+            if (!weekEnd || day > weekEnd) weekEnd = day;
+        });
+        if (!weekStart || !weekEnd) return [];
+        var startMs = weekStart.getTime();
+        var endMs = weekEnd.getTime() + 24 * 3600 * 1000;
+
+        var result = [];
+        Object.keys(taskKeysObj).forEach(function(key) {
+            var transitions = changelogData[key];
+            if (!transitions || transitions.length === 0) return;
+            var weekChanges = [];
+            transitions.forEach(function(t) {
+                var tDate = new Date(t.date);
+                if (tDate.getTime() >= startMs && tDate.getTime() < endMs) {
+                    weekChanges.push(t.from + " → " + t.to);
+                }
+            });
+            if (weekChanges.length > 0) {
+                result.push({ key: key, changes: weekChanges });
+            }
+        });
+        return result;
+    }
+
     function MyGadget(API) {
         var state = {
             showComments: false,
@@ -142,7 +286,10 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             loading: false,
             loadedDays: 0,
             totalDays: 0,
-            lastError: ""
+            lastError: "",
+            showDetails: false,
+            changelogData: {},
+            changelogLoading: false,
         };
 
         var $content = API.getGadgetContentEl();
@@ -262,6 +409,106 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             return s.substring(0, 5);
         }
         
+        function renderWeekSummaryCell(summary, transitions) {
+            var hours = utils.formatTime(summary.totalSeconds) || "0";
+            var expected = utils.formatTime(summary.expectedSeconds) || "0";
+            var isOk = summary.totalSeconds >= summary.expectedSeconds;
+            var cls = isOk ? "ujg-sum-ok" : "ujg-sum-deficit";
+
+            var html = '<div class="ujg-summary-cell">';
+            if (summary.totalSeconds === 0 && summary.expectedSeconds === 0) {
+                html += '</div>';
+                return html;
+            }
+
+            html += '<div class="ujg-sum-hours ' + cls + '">';
+            html += hours + ' / ' + expected;
+            if (summary.expectedSeconds > 0) {
+                if (isOk) html += ' ✓';
+                else if (summary.deficit > 0) html += ' −' + utils.formatTime(summary.deficit);
+            }
+            html += '</div>';
+
+            var projKeys = Object.keys(summary.projects).sort(function(a, b) {
+                return summary.projects[b] - summary.projects[a];
+            });
+            if (projKeys.length > 0) {
+                html += '<div class="ujg-sum-section">';
+                projKeys.forEach(function(proj) {
+                    html += '<div class="ujg-sum-proj"><span class="ujg-sum-proj-name">' + utils.escapeHtml(proj) + '</span> <span class="ujg-sum-proj-time">' + utils.formatTime(summary.projects[proj]) + '</span></div>';
+                });
+                html += '</div>';
+            }
+
+            var types = Object.keys(summary.issueTypes).sort(function(a, b) {
+                return summary.issueTypes[b] - summary.issueTypes[a];
+            });
+            if (types.length > 0) {
+                html += '<div class="ujg-sum-section ujg-sum-types-wrap">';
+                types.forEach(function(type) {
+                    html += '<span class="ujg-sum-type-badge">' + utils.escapeHtml(type) + '&nbsp;&times;' + summary.issueTypes[type] + '</span>';
+                });
+                html += '</div>';
+            }
+
+            if (transitions && transitions.length > 0) {
+                html += '<div class="ujg-sum-section ujg-sum-transitions">';
+                transitions.forEach(function(t) {
+                    html += '<div class="ujg-sum-tr">';
+                    html += '<a href="' + baseUrl + '/browse/' + t.key + '" target="_blank" class="ujg-sum-tr-key">' + t.key + '</a> ';
+                    html += '<span class="ujg-sum-tr-changes">' + utils.escapeHtml(t.changes.join(', ')) + '</span>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+
+            html += '</div>';
+            return html;
+        }
+
+        function renderMonthSummaryRow(month, year, summary, colCount) {
+            var title = MONTH_NAMES[month] + ' ' + year;
+            var hours = utils.formatTime(summary.totalSeconds) || "0";
+            var expected = utils.formatTime(summary.expectedSeconds) || "0";
+            var pct = summary.utilization || 0;
+            var isOk = summary.totalSeconds >= summary.expectedSeconds;
+
+            var html = '<div class="ujg-month-summary" style="grid-column:1/-1">';
+            html += '<div class="ujg-ms-header">';
+            html += '<span class="ujg-ms-title">' + title + '</span>';
+            html += '<span class="ujg-ms-hours ' + (isOk ? 'ujg-sum-ok' : 'ujg-sum-deficit') + '">' + hours + ' / ' + expected + ' (' + pct + '%)</span>';
+            html += '</div>';
+
+            html += '<div class="ujg-ms-body">';
+
+            var projKeys = Object.keys(summary.projects).sort(function(a, b) {
+                return summary.projects[b] - summary.projects[a];
+            });
+            if (projKeys.length > 0) {
+                html += '<div class="ujg-ms-section">';
+                projKeys.forEach(function(proj) {
+                    var ppct = (summary.projectPcts && summary.projectPcts[proj]) || 0;
+                    html += '<span class="ujg-ms-proj">' + utils.escapeHtml(proj) + ' ' + utils.formatTime(summary.projects[proj]) + ' (' + ppct + '%)</span>';
+                });
+                html += '</div>';
+            }
+
+            var types = Object.keys(summary.issueTypes).sort(function(a, b) {
+                return summary.issueTypes[b] - summary.issueTypes[a];
+            });
+            if (types.length > 0) {
+                html += '<div class="ujg-ms-section">';
+                types.forEach(function(type) {
+                    html += '<span class="ujg-sum-type-badge">' + utils.escapeHtml(type) + '&nbsp;&times;' + summary.issueTypes[type] + '</span>';
+                });
+                html += '</div>';
+            }
+
+            html += '<div class="ujg-ms-meta">Задач: ' + summary.taskCount + ' &middot; Дней: ' + summary.daysWorked + '/' + summary.workDays + '</div>';
+            html += '</div></div>';
+            return html;
+        }
+
         // Рендер одного календаря (userId = null для всех)
         function renderSingleCalendar(userId, calendarId) {
             var days = state.days;
@@ -281,23 +528,34 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 });
             });
             
-            // Проверяем, есть ли данные за выходные (Сб=5, Вс=6)
             var hasWeekendData = weekdayTotals[5] > 0 || weekdayTotals[6] > 0;
+
+            // Collect days per month + detect last week for each month
+            var monthMap = {};
+            days.forEach(function(day) {
+                var mk = day.getFullYear() + "-" + day.getMonth();
+                if (!monthMap[mk]) monthMap[mk] = { days: [], year: day.getFullYear(), month: day.getMonth() };
+                monthMap[mk].days.push(day);
+            });
+            var monthLastWeek = {};
+            weeks.forEach(function(week, wi) {
+                week.forEach(function(day) {
+                    if (day) monthLastWeek[day.getFullYear() + "-" + day.getMonth()] = wi;
+                });
+            });
 
             var html = '<div class="ujg-calendar' + (hasWeekendData ? '' : ' ujg-hide-weekends') + '" data-calendar-id="' + calendarId + '">';
             
-            // Заголовок календаря (имя пользователя)
             if (userId) {
                 html += '<div class="ujg-calendar-title">' + utils.escapeHtml(state.users[userId] || userId) + '</div>';
             }
             
-            // Шапка с днями недели
+            // Шапка с днями недели + Σ
             html += '<div class="ujg-calendar-header">';
             WEEKDAYS.forEach(function(wd, idx) {
                 var wdTotal = weekdayTotals[idx];
                 var isWeekend = idx >= 5;
                 var cls = isWeekend ? "ujg-weekend" : "";
-                // Скрываем выходные без данных
                 if (isWeekend && !hasWeekendData) cls += " ujg-hidden";
                 html += '<div class="ujg-calendar-header-cell ' + cls + '" data-weekday="' + idx + '">';
                 html += '<div class="ujg-header-day">' + wd + '</div>';
@@ -306,17 +564,16 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 }
                 html += '</div>';
             });
+            html += '<div class="ujg-calendar-header-cell ujg-summary-header-cell">Σ</div>';
             html += '</div>';
             
             var totalAll = 0;
             
             // Строки недель
-            weeks.forEach(function(week) {
+            weeks.forEach(function(week, weekIdx) {
                 html += '<div class="ujg-calendar-week">';
                 week.forEach(function(day, idx) {
                     var isWeekend = idx >= 5;
-                    
-                    // Скрываем выходные без данных
                     var hiddenClass = (isWeekend && !hasWeekendData) ? " ujg-hidden" : "";
                     
                     if (!day) {
@@ -350,17 +607,14 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                             var isDone = item.status && DONE_STATUSES.indexOf(item.status.toLowerCase()) >= 0;
                             html += '<div class="ujg-cell-issue">';
                             html += '<div class="ujg-issue-header">';
-                            // Только ключ перечёркиваем и делаем серым если задача закрыта
                             html += '<a href="' + baseUrl + '/browse/' + item.key + '" target="_blank" class="ujg-issue-link' + (isDone ? ' ujg-link-done' : '') + '">' + item.key + '</a>';
                             html += '<span class="ujg-issue-time">' + (utils.formatTime(item.seconds) || "") + '</span>';
-                            // Статус в овале (max 5 символов)
                             if (item.status) {
                                 var statusClass = isDone ? "ujg-status-done" : "ujg-status-open";
                                 html += '<span class="ujg-issue-status ' + statusClass + '">' + utils.escapeHtml(shortStatus(item.status)) + '</span>';
                             }
                             if (item.estimate) html += '<span class="ujg-issue-est">[' + utils.formatTime(item.estimate) + ']</span>';
                             html += '</div>';
-                            // Summary и comment НЕ перечёркиваем
                             if (item.summary) html += '<div class="ujg-issue-summary">' + utils.escapeHtml(item.summary) + '</div>';
                             if (item.worklogs && item.worklogs.length > 1) {
                                 html += '<div class="ujg-worklogs">';
@@ -388,7 +642,24 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     
                     html += '</div>';
                 });
+
+                // Summary cell for this week
+                var wSummary = computeWeekSummary(week, userFilter, calendarData);
+                var transitions = state.showDetails ? getWeekTransitions(week, wSummary.tasks, state.changelogData) : null;
+                html += renderWeekSummaryCell(wSummary, transitions);
+
                 html += '</div>';
+
+                // Month summary after last week of each month
+                Object.keys(monthLastWeek).forEach(function(mk) {
+                    if (monthLastWeek[mk] === weekIdx) {
+                        var mData = monthMap[mk];
+                        if (mData && mData.days.length > 0) {
+                            var mSummary = computeMonthSummary(mData.days, userFilter, calendarData);
+                            html += renderMonthSummaryRow(mData.month, mData.year, mSummary);
+                        }
+                    }
+                });
             });
             
             html += '</div>';
@@ -405,26 +676,27 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 return;
             }
             
-            var html = '';
+            var calHtml = '';
             
-            // Режим отдельных календарей для каждого пользователя
             if (state.separateCalendars) {
                 var calendarUsers = getCalendarUserIds(state.users, state.selectedUsers);
                 if (calendarUsers.length > 0) {
-                    html += '<div class="ujg-calendars-container">';
+                    calHtml += '<div class="ujg-calendars-container">';
                     calendarUsers.forEach(function(userId, idx) {
-                        html += renderSingleCalendar(userId, 'cal-' + idx);
+                        calHtml += renderSingleCalendar(userId, 'cal-' + idx);
                     });
-                    html += '</div>';
+                    calHtml += '</div>';
                 } else {
-                    html = renderSingleCalendar(null, 'cal-main');
+                    calHtml = renderSingleCalendar(null, 'cal-main');
                 }
             } else {
-                // Один общий календарь (с фильтром по выбранным пользователям)
-                html = renderSingleCalendar(null, 'cal-main');
+                calHtml = renderSingleCalendar(null, 'cal-main');
             }
 
+            var html = calHtml;
+
             $cont.html(html);
+
             API.resize();
         }
         
@@ -474,6 +746,63 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             }, function() {
                 loadDaySequentially(index + 1);
             });
+        }
+
+        function fetchChangelogs() {
+            var allKeys = {};
+            Object.keys(state.calendarData).forEach(function(dayKey) {
+                (state.calendarData[dayKey] || []).forEach(function(item) {
+                    if (item.key) allKeys[item.key] = true;
+                });
+            });
+            var keys = Object.keys(allKeys);
+            if (keys.length === 0) return;
+
+            state.changelogLoading = true;
+            state.changelogData = {};
+            var done = 0;
+            var total = keys.length;
+
+            function fetchNext(idx) {
+                if (idx >= keys.length) {
+                    state.changelogLoading = false;
+                    $progress.hide();
+                    renderCalendar();
+                    return;
+                }
+                $.ajax({
+                    url: baseUrl + "/rest/api/2/issue/" + keys[idx] + "?expand=changelog&fields=summary",
+                    type: "GET",
+                    success: function(r) {
+                        if (r && r.changelog && r.changelog.histories) {
+                            var transitions = [];
+                            r.changelog.histories.forEach(function(h) {
+                                (h.items || []).forEach(function(item) {
+                                    if (item.field === "status") {
+                                        transitions.push({
+                                            date: h.created,
+                                            from: item.fromString || "",
+                                            to: item.toString || "",
+                                            author: h.author && h.author.displayName || ""
+                                        });
+                                    }
+                                });
+                            });
+                            state.changelogData[keys[idx]] = transitions;
+                        }
+                        done++;
+                        $progress.text("Changelog: " + done + "/" + total).show();
+                        fetchNext(idx + 1);
+                    },
+                    error: function() {
+                        done++;
+                        fetchNext(idx + 1);
+                    }
+                });
+            }
+
+            $progress.text("Changelog: 0/" + total).show();
+            fetchNext(0);
         }
 
         function startLoading() {
@@ -725,6 +1054,17 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             });
             $row3.append($cmt);
 
+            var $detailCheck = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>Подробно</span></label>');
+            $detailCheck.find("input").on("change", function() {
+                state.showDetails = $(this).is(":checked");
+                if (state.showDetails && Object.keys(state.changelogData).length === 0 && !state.changelogLoading) {
+                    fetchChangelogs();
+                } else {
+                    renderCalendar();
+                }
+            });
+            $row3.append($detailCheck);
+
             $fsBtn = $('<button class="aui-button ujg-fullscreen-btn">Fullscreen</button>');
             $fsBtn.on("click", toggleFs);
             $row3.append($fsBtn);
@@ -750,7 +1090,12 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
 
     MyGadget.__test = {
         filterDayDataByUsers: filterDayDataByUsers,
-        getCalendarUserIds: getCalendarUserIds
+        getCalendarUserIds: getCalendarUserIds,
+        countWorkDays: countWorkDays,
+        computeUserReport: computeUserReport,
+        computeWeekSummary: computeWeekSummary,
+        computeMonthSummary: computeMonthSummary,
+        getWeekTransitions: getWeekTransitions
     };
     
     return MyGadget;

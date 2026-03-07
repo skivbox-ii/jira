@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Вход — UJG</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="login-wrapper">
+    <form class="login-card" id="loginForm" autocomplete="on">
+      <h1>UJG</h1>
+      <p class="login-subtitle">Universal Jira Gadgets</p>
+
+      <div class="form-group">
+        <label for="jiraUrl">Jira URL</label>
+        <input type="text" id="jiraUrl" name="jiraUrl" placeholder="https://jira.company.com" required>
+      </div>
+
+      <div class="form-group">
+        <label for="username">Имя пользователя</label>
+        <input type="text" id="username" name="username" autocomplete="username" required>
+      </div>
+
+      <div class="form-group">
+        <label for="password">Пароль</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+      </div>
+
+      <button type="submit" class="btn-primary" id="submitBtn">Войти</button>
+
+      <div class="error-message" id="errorMsg"></div>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById("loginForm");
+    const errorMsg = document.getElementById("errorMsg");
+    const submitBtn = document.getElementById("submitBtn");
+    const jiraUrlInput = document.getElementById("jiraUrl");
+
+    const saved = localStorage.getItem("ujg_jira_url");
+    if (saved) jiraUrlInput.value = saved;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorMsg.classList.remove("visible");
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Вход…";
+
+      const jiraUrl = jiraUrlInput.value.trim();
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        const resp = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jiraUrl, username, password }),
+        });
+
+        const data = await resp.json();
+
+        if (data.ok) {
+          localStorage.setItem("ujg_jira_url", jiraUrl);
+          window.location.href = "/";
+          return;
+        }
+
+        errorMsg.textContent = data.error || "Не удалось войти";
+        errorMsg.classList.add("visible");
+      } catch {
+        errorMsg.textContent = "Ошибка сети — сервер недоступен";
+        errorMsg.classList.add("visible");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Войти";
+      }
+    });
+  </script>
+</body>
+</html>
