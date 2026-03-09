@@ -14,6 +14,7 @@ const WIDGET_FILES = [
   "ujg-project-analytics.js", "ujg-project-analytics.css",
   "ujg-timesheet.js", "ujg-timesheet.css",
   "ujg-timesheet.v0.js", "ujg-timesheet.v0.css",
+  "ujg-user-activity.js", "ujg-user-activity.css",
 ];
 
 app.use(
@@ -31,6 +32,18 @@ app.use(
 
 function requireAuth(req, res, next) {
   if (req.path === "/login") return next();
+  
+  // Test mode: bypass auth if TEST_MODE env var is set
+  if (process.env.TEST_MODE === "true") {
+    if (!req.session.jiraUrl) {
+      req.session.jiraUrl = "https://jira.elemento.systems";
+      req.session.authHeader = "Basic dGVzdDp0ZXN0";
+      req.session.username = "testuser";
+      req.session.displayName = "Test User";
+    }
+    return next();
+  }
+  
   if (!req.session || !req.session.jiraUrl) return res.redirect("/login");
   next();
 }
@@ -97,6 +110,23 @@ app.get("/api/session", (req, res) => {
   });
 });
 
+// Test mode: mock user picker API
+if (process.env.TEST_MODE === "true") {
+  app.get("/rest/api/2/user/picker", (req, res) => {
+    const query = req.query.query || "";
+    const mockUsers = [
+      { name: "dtorzok", displayName: "Dima Torzok", emailAddress: "dtorzok@example.com" },
+      { name: "testuser", displayName: "Test User", emailAddress: "test@example.com" },
+      { name: "admin", displayName: "Admin User", emailAddress: "admin@example.com" },
+    ];
+    const filtered = mockUsers.filter(u => 
+      u.name.toLowerCase().includes(query.toLowerCase()) || 
+      u.displayName.toLowerCase().includes(query.toLowerCase())
+    );
+    res.json({ users: filtered.slice(0, parseInt(req.query.maxResults) || 10) });
+  });
+}
+
 // Proxy: forward raw body to avoid JSON re-serialization
 app.all("/rest/*", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => {
   const { jiraUrl, authHeader } = req.session;
@@ -146,6 +176,10 @@ app.get("/timesheet", (_req, res) => {
 
 app.get("/timesheet-v0", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "timesheet-v0.html"));
+});
+
+app.get("/user-activity", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "user-activity.html"));
 });
 
 // --- Proxy helper ---
