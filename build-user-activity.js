@@ -14,16 +14,20 @@ var MODULE_ORDER = [
     "config.js",
     "utils.js",
     "api.js",
+    "repo-api.js",
     "data-processor.js",
+    "repo-data-processor.js",
     "progress-loader.js",
     "user-picker.js",
     "date-range-picker.js",
     "summary-cards.js",
     "calendar-heatmap.js",
+    "repo-calendar.js",
     "daily-detail.js",
     "project-breakdown.js",
     "issue-list.js",
     "activity-log.js",
+    "repo-log.js",
     "rendering.js",
     "main.js"
 ];
@@ -31,8 +35,7 @@ var MODULE_ORDER = [
 function readModule(fileName) {
     var filePath = path.join(MODULES_DIR, fileName);
     if (!fs.existsSync(filePath)) {
-        console.warn("Warning: Module not found:", fileName);
-        return "";
+        throw new Error("Module not found: " + fileName);
     }
     return fs.readFileSync(filePath, "utf8");
 }

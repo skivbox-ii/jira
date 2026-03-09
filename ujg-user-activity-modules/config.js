@@ -44,6 +44,19 @@ define("_ujgUA_config", [], function() {
         'Sub-task': 'checkCircle2'
     };
 
+    var REPO_ACTIVITY_LABELS = {
+        commit: "Коммит",
+        branch_commit: "Коммит в ветке",
+        branch_update: "Ветка",
+        pull_request_opened: "PR открыт",
+        pull_request_merged: "PR влит",
+        pull_request_declined: "PR отклонен",
+        pull_request_reviewed: "PR просмотрен",
+        pull_request_needs_work: "Нужны правки",
+        repository_update: "Обновление репозитория",
+        unknown_dev_event: "Прочее"
+    };
+
     return {
         CONFIG: { version: "0.1.0", debug: true, maxConcurrent: 5, defaultPeriodDays: 30, maxResults: 100 },
         CHART_COLORS: CHART_COLORS,
@@ -51,6 +64,7 @@ define("_ujgUA_config", [], function() {
         ICONS: ICONS,
         STATUS_COLORS: STATUS_COLORS,
         TYPE_ICONS: TYPE_ICONS,
+        REPO_ACTIVITY_LABELS: REPO_ACTIVITY_LABELS,
         DATE_PRESETS: [
             { label: "Текущая неделя", id: "this_week" },
             { label: "Последние 2 недели", id: "last_2_weeks" },

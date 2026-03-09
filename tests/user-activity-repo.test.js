@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const fs = require("node:fs");
+const vm = require("node:vm");
 const loadAmdModule = require("./helpers/load-amd-module");
 
 function normalize(value) {
@@ -157,8 +159,10 @@ function loadRepoDataProcessor() {
 function createHtmlJqueryStub() {
     function createCollection(root, selectors, singleNode) {
         return {
-            html: function() {
-                return root.html;
+            html: function(value) {
+                if (value === undefined) return root.html;
+                root.html = String(value);
+                return this;
             },
             find: function(selector) {
                 return createCollection(root, parseSelector(selector));
@@ -183,15 +187,27 @@ function createHtmlJqueryStub() {
                 });
                 return this;
             },
-            attr: function(name) {
+            attr: function(name, value) {
                 var node = singleNode || selectors[0];
-                return node ? node.attrs[name] : undefined;
+                if (value === undefined) return node ? node.attrs[name] : undefined;
+                if (!node) return this;
+                node.attrs[name] = String(value);
+                syncNode(node);
+                return this;
+            },
+            val: function(value) {
+                var node = singleNode || selectors[0];
+                if (value === undefined) return node ? (node.attrs.value || "") : "";
+                if (!node) return this;
+                node.attrs.value = String(value);
+                syncNode(node);
+                return this;
             },
             trigger: function(eventName) {
                 var node = singleNode || selectors[0];
                 (root.handlers[eventName] || []).forEach(function(binding) {
                     if (node && matchesSelector(node, binding.selector)) {
-                        binding.handler.call(node);
+                        binding.handler.call(node, { target: node });
                     }
                 });
                 return this;
@@ -226,8 +242,8 @@ function createHtmlJqueryStub() {
             if (value === undefined || value === null || value === "") return "";
             return name + '="' + value + '"';
         }).filter(Boolean).join(" ");
-        root.html = root.html.replace(node.original, "<td " + attrs + ">");
-        node.original = "<td " + attrs + ">";
+        root.html = root.html.replace(node.original, "<" + node.tag + (attrs ? " " + attrs : "") + ">");
+        node.original = "<" + node.tag + (attrs ? " " + attrs : "") + ">";
     }
 
     function parseAttrs(attrText) {
@@ -240,26 +256,48 @@ function createHtmlJqueryStub() {
     }
 
     function parseSelector(selector) {
-        var attrMatch = selector.match(/^td\[data-date(?:="([^"]+)")?\]$/);
-        if (!attrMatch) return [];
-        var wantedDate = attrMatch[1];
         var matches = [];
-        root.html.replace(/<td\s+([^>]*data-date="[^"]+"[^>]*)>/g, function(full, attrText) {
-            var attrs = parseAttrs(attrText);
-            if (!wantedDate || attrs["data-date"] === wantedDate) {
-                matches.push({
-                    attrs: attrs,
-                    original: full
-                });
+
+        root.html.replace(/<([a-zA-Z0-9]+)\s*([^>]*)>/g, function(full, tag, attrText) {
+            if (full.indexOf("</") === 0) return full;
+            var node = {
+                tag: tag.toLowerCase(),
+                attrs: parseAttrs(attrText),
+                original: full
+            };
+
+            if (matchesSelector(node, selector)) {
+                matches.push(node);
             }
             return full;
         });
+
         return matches;
     }
 
+    function hasClass(node, className) {
+        return splitClasses(node.attrs["class"]).indexOf(className) >= 0;
+    }
+
     function matchesSelector(node, selector) {
-        var attrMatch = selector.match(/^td\[data-date(?:="([^"]+)")?\]$/);
-        return !!attrMatch && (!attrMatch[1] || node.attrs["data-date"] === attrMatch[1]);
+        var classMatch = selector.match(/^\.([a-zA-Z0-9_-]+)$/);
+        var tagMatch = selector.match(/^([a-zA-Z0-9]+)$/);
+        var tagClassMatch = selector.match(/^([a-zA-Z0-9]+)\.([a-zA-Z0-9_-]+)$/);
+        var attrMatch = selector.match(/^([a-zA-Z0-9]+)?\[([a-zA-Z0-9:-]+)(?:="([^"]+)")?\]$/);
+
+        if (classMatch) return hasClass(node, classMatch[1]);
+        if (tagMatch) return node.tag === tagMatch[1].toLowerCase();
+        if (tagClassMatch) {
+            return node.tag === tagClassMatch[1].toLowerCase() && hasClass(node, tagClassMatch[2]);
+        }
+        if (!attrMatch) return false;
+        var wantedTag = attrMatch && attrMatch[1];
+        var attrName = attrMatch && attrMatch[2];
+        var attrValue = attrMatch && attrMatch[3];
+
+        if (wantedTag && node.tag !== wantedTag.toLowerCase()) return false;
+        if (!Object.prototype.hasOwnProperty.call(node.attrs, attrName)) return false;
+        return attrValue === undefined || node.attrs[attrName] === attrValue;
     }
 
     var root = {
@@ -310,9 +348,487 @@ function loadRepoCalendar(jquery, utilsOverrides) {
     });
 }
 
+function loadRepoLog(jquery, utilsOverrides, configOverrides) {
+    utilsOverrides = utilsOverrides || {};
+    configOverrides = configOverrides || {};
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "repo-log.js"), {
+        jquery: jquery,
+        _ujgUA_config: configOverrides,
+        _ujgUA_utils: Object.assign({
+            escapeHtml: function(value) {
+                return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }
+        }, utilsOverrides)
+    });
+}
+
 function countMatches(value, pattern) {
     var matches = String(value).match(pattern);
     return matches ? matches.length : 0;
+}
+
+function loadRendering(jquery, utilsOverrides, documentStub) {
+    var filePath = path.join(__dirname, "..", "ujg-user-activity-modules", "rendering.js");
+    var code = fs.readFileSync(filePath, "utf8");
+    var exported;
+    var sandbox = {
+        console: console,
+        Date: Date,
+        Object: Object,
+        Array: Array,
+        JSON: JSON,
+        Math: Math,
+        parseInt: parseInt,
+        parseFloat: parseFloat,
+        isNaN: isNaN,
+        isFinite: isFinite,
+        encodeURIComponent: encodeURIComponent,
+        decodeURIComponent: decodeURIComponent,
+        setTimeout: setTimeout,
+        clearTimeout: clearTimeout,
+        document: documentStub,
+        define: function(name, names, factory) {
+            if (typeof name !== "string") {
+                factory = names;
+                names = name;
+            }
+            exported = factory.apply(null, (names || []).map(function(dep) {
+                if (dep === "jquery") return jquery;
+                if (dep === "_ujgUA_config") return {};
+                if (dep === "_ujgUA_utils") {
+                    return Object.assign({
+                        icon: function(name) { return "[" + name + "]"; },
+                        getDefaultPeriod: function() {
+                            return { start: "2026-03-01", end: "2026-03-31" };
+                        },
+                        escapeHtml: function(value) { return String(value || ""); },
+                        getDayKey: function(date) {
+                            var year = date.getFullYear();
+                            var month = String(date.getMonth() + 1).padStart(2, "0");
+                            var day = String(date.getDate()).padStart(2, "0");
+                            return year + "-" + month + "-" + day;
+                        }
+                    }, utilsOverrides || {});
+                }
+                throw new Error("Missing dependency: " + dep);
+            }));
+        }
+    };
+    sandbox.define.amd = true;
+    vm.runInNewContext(code, sandbox, {
+        filename: path.resolve(filePath)
+    });
+    return exported;
+}
+
+function createRenderingJqueryStub(documentStub) {
+    function parseEventName(eventName) {
+        var parts = String(eventName || "").split(".");
+        return {
+            type: parts[0] || "",
+            namespace: parts.slice(1).join(".")
+        };
+    }
+
+    function createElement(label, html) {
+        return {
+            label: label,
+            html: html || "",
+            children: [],
+            slots: {},
+            handlers: {}
+        };
+    }
+
+    function inferLabel(html) {
+        if (/<header\b/.test(html)) return "header";
+        if (/<main\b/.test(html)) return "main";
+        if (/Лог репозиторной активности/.test(html)) return "Repository Activity Log Error";
+        if (/Репозиторная активность/.test(html)) return "Repo Activity Calendar Error";
+        if (/Ошибка загрузки/.test(html)) return "Error";
+        return "div";
+    }
+
+    function wrap(node) {
+        return {
+            __el: node,
+            empty: function() {
+                node.children = [];
+                node.html = "";
+                return this;
+            },
+            addClass: function() {
+                return this;
+            },
+            append: function(child) {
+                node.children.push(child && child.__el ? child.__el : child);
+                return this;
+            },
+            html: function(value) {
+                if (value === undefined) return node.html;
+                node.html = String(value);
+                return this;
+            },
+            find: function(selector) {
+                if (!node.slots[selector]) node.slots[selector] = createElement(selector, selector);
+                return wrap(node.slots[selector]);
+            },
+            on: function(eventName, selector, handler) {
+                if (typeof selector === "function") handler = selector;
+                var parsed = parseEventName(eventName);
+                if (!node.handlers[parsed.type]) node.handlers[parsed.type] = [];
+                node.handlers[parsed.type].push({
+                    namespace: parsed.namespace,
+                    handler: handler
+                });
+                return this;
+            },
+            off: function(eventName) {
+                var parsed = parseEventName(eventName);
+                var handlers = node.handlers[parsed.type] || [];
+                node.handlers[parsed.type] = handlers.filter(function(binding) {
+                    if (!parsed.namespace) return false;
+                    return binding.namespace !== parsed.namespace;
+                });
+                if (!node.handlers[parsed.type].length) delete node.handlers[parsed.type];
+                return this;
+            },
+            trigger: function(eventName) {
+                var parsed = parseEventName(eventName);
+                (node.handlers[parsed.type] || []).forEach(function(binding) {
+                    binding.handler.call(node, { target: node, type: parsed.type });
+                });
+                return this;
+            }
+        };
+    }
+
+    function $(input) {
+        if (input === documentStub) return wrap(documentStub.__node);
+        if (input && input.__el) return input;
+        if (typeof input === "string") return wrap(createElement(inferLabel(input), input));
+        throw new Error("Unsupported jquery stub input");
+    }
+
+    return {
+        $: $,
+        createNode: function(label) {
+            return wrap(createElement(label, label));
+        }
+    };
+}
+
+function createRenderingHarness(options) {
+    options = options || {};
+
+    var period = options.period || { start: "2026-03-01", end: "2026-03-31" };
+    var selectedUser = options.selectedUser || { name: "dtorzok", displayName: "Dima Torzok" };
+    var rawData = options.rawData || {
+        issues: [{ id: "1001", key: "CORE-1" }]
+    };
+    var processed = options.processed || {
+        stats: { totalHours: 1 },
+        dayMap: {
+            "2026-03-08": { worklogs: [], changes: [], issues: ["CORE-1"], totalHours: 1 }
+        },
+        issueMap: {
+            "CORE-1": { key: "CORE-1", summary: "Test task", type: "Task", status: "Done", totalTimeHours: 1 }
+        },
+        projectMap: {
+            CORE: { key: "CORE", totalHours: 1, issueCount: 1, issues: ["CORE-1"] }
+        },
+        statusTransitions: {}
+    };
+    var repoFetchResult = options.repoFetchResult || {
+        issueDevStatusMap: {
+            "CORE-1": { detail: [{ repositories: [] }] }
+        }
+    };
+    var repoActivity = options.repoActivity || {
+        items: [{
+            type: "commit",
+            date: "2026-03-09",
+            timestamp: "2026-03-09T10:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "abc123"
+        }],
+        dayMap: {},
+        repoMap: {},
+        stats: { totalEvents: 1 }
+    };
+    var documentStub = {
+        __node: {
+            label: "document",
+            html: "",
+            children: [],
+            slots: {},
+            handlers: {}
+        },
+        fullscreenElement: null,
+        documentElement: {
+            requestFullscreen: function() {
+                return { catch: function() {} };
+            }
+        },
+        exitFullscreen: function() {
+            return { catch: function() {} };
+        }
+    };
+    var jquery = createRenderingJqueryStub(documentStub);
+    var events = {
+        fetchAllDataCalls: [],
+        fetchRepoArgs: null,
+        fetchRepoArgsHistory: [],
+        processRepoArgs: null,
+        processRepoArgsHistory: [],
+        repoLogCalls: [],
+        dailyShows: [],
+        dailyHides: 0,
+        jiraSelect: null,
+        repoSelect: null,
+        userChange: null
+    };
+
+    function resolvedPromise(value) {
+        var d = createDeferred();
+        d.resolve(value);
+        return d.promise();
+    }
+
+    function rejectedPromise(value) {
+        var d = createDeferred();
+        d.reject(value);
+        return d.promise();
+    }
+
+    function shiftOrValue(value, fallback) {
+        if (Array.isArray(value)) {
+            if (value.length) return value.shift();
+            return fallback;
+        }
+        return value === undefined ? fallback : value;
+    }
+
+    var modules = {
+        userPicker: {
+            create: function(_, onChange) {
+                events.userChange = onChange;
+                return {
+                    $el: jquery.createNode("UserPicker"),
+                    setFromUrl: function() {},
+                    getSelected: function() {
+                        return selectedUser;
+                    }
+                };
+            }
+        },
+        dateRangePicker: {
+            create: function(onChange) {
+                if (onChange) onChange(period);
+                return {
+                    $el: jquery.createNode("DateRangePicker"),
+                    getPeriod: function() {
+                        return period;
+                    }
+                };
+            }
+        },
+        progressLoader: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("Loader"),
+                    show: function() {},
+                    update: function() {}
+                };
+            }
+        },
+        api: {
+            fetchAllData: function(username, startDate, endDate, onProgress) {
+                events.fetchAllDataCalls.push({
+                    username: username,
+                    startDate: startDate,
+                    endDate: endDate,
+                    hasOnProgress: typeof onProgress === "function"
+                });
+                if (typeof options.fetchAllDataImpl === "function") {
+                    return options.fetchAllDataImpl(username, startDate, endDate, onProgress, events);
+                }
+                return resolvedPromise(shiftOrValue(options.rawDataQueue, rawData));
+            }
+        },
+        repoApi: {
+            fetchRepoActivityForIssues: function(issues, onProgress) {
+                events.fetchRepoArgs = {
+                    issues: issues,
+                    hasOnProgress: typeof onProgress === "function"
+                };
+                events.fetchRepoArgsHistory.push(events.fetchRepoArgs);
+                if (onProgress) onProgress({ phase: "repo-dev-status", loaded: 0, total: (issues || []).length });
+                if (typeof options.fetchRepoImpl === "function") {
+                    return options.fetchRepoImpl(issues, onProgress, events);
+                }
+                return options.repoShouldFail
+                    ? rejectedPromise(options.repoFailure || "repo failed")
+                    : resolvedPromise(shiftOrValue(options.repoFetchResultQueue, repoFetchResult));
+            }
+        },
+        dataProcessor: {
+            processData: function(currentRawData) {
+                if (typeof options.processDataImpl === "function") {
+                    return options.processDataImpl(currentRawData, events);
+                }
+                return shiftOrValue(options.processedQueue, processed);
+            }
+        },
+        repoDataProcessor: {
+            processRepoActivity: function(issueMap, issueDevStatusMap, user, startDate, endDate) {
+                events.processRepoArgs = {
+                    issueMap: issueMap,
+                    issueDevStatusMap: issueDevStatusMap,
+                    user: user,
+                    startDate: startDate,
+                    endDate: endDate
+                };
+                events.processRepoArgsHistory.push(events.processRepoArgs);
+                if (typeof options.processRepoActivityImpl === "function") {
+                    return options.processRepoActivityImpl(issueMap, issueDevStatusMap, user, startDate, endDate, events);
+                }
+                return shiftOrValue(options.repoActivityQueue, repoActivity);
+            }
+        },
+        summaryCards: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("SummaryCards"),
+                    render: function() {}
+                };
+            }
+        },
+        calendarHeatmap: {
+            render: function() {
+                return {
+                    $el: jquery.createNode("Jira Activity Calendar"),
+                    onSelectDate: function(handler) {
+                        events.jiraSelect = handler;
+                    }
+                };
+            }
+        },
+        repoCalendar: {
+            render: function() {
+                return {
+                    $el: jquery.createNode("Repo Activity Calendar"),
+                    onSelectDate: function(handler) {
+                        events.repoSelect = handler;
+                    }
+                };
+            }
+        },
+        dailyDetail: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("DailyDetail"),
+                    show: function(dateStr, dayData, issueMap) {
+                        events.dailyShows.push({
+                            dateStr: dateStr,
+                            dayData: dayData,
+                            issueMap: issueMap
+                        });
+                    },
+                    hide: function() {
+                        events.dailyHides += 1;
+                    }
+                };
+            }
+        },
+        projectBreakdown: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("ProjectBreakdown"),
+                    render: function() {}
+                };
+            }
+        },
+        issueList: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("IssueList"),
+                    render: function() {}
+                };
+            }
+        },
+        activityLog: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("Activity Log"),
+                    render: function() {}
+                };
+            }
+        },
+        repoLog: {
+            create: function() {
+                return {
+                    $el: jquery.createNode("Repository Activity Log"),
+                    render: function(activity, selectedDate) {
+                        events.repoLogCalls.push({
+                            activity: activity,
+                            selectedDate: selectedDate
+                        });
+                    }
+                };
+            }
+        }
+    };
+    var rendering = loadRendering(jquery.$, {}, documentStub);
+    var root = jquery.createNode("root");
+
+    function initInto(targetRoot) {
+        rendering.init(targetRoot, modules);
+        root = targetRoot;
+    }
+
+    initInto(root);
+
+    return {
+        events: events,
+        get root() {
+            return root;
+        },
+        period: period,
+        rawData: rawData,
+        processed: processed,
+        repoFetchResult: repoFetchResult,
+        repoActivity: repoActivity,
+        selectedUser: selectedUser,
+        documentStub: documentStub,
+        mutateSelectedUser: function(nextValues) {
+            Object.keys(nextValues || {}).forEach(function(key) {
+                selectedUser[key] = nextValues[key];
+            });
+        },
+        triggerUserChange: function(user) {
+            if (events.userChange) events.userChange(user);
+        },
+        reinit: function() {
+            initInto(jquery.createNode("root"));
+        },
+        getFullscreenHandlerCount: function() {
+            return (documentStub.__node.handlers.fullscreenchange || []).length;
+        },
+        getDashboardLabels: function() {
+            var main = root.__el.children[1];
+            return (main && main.children || []).map(function(child) {
+                return child && child.label || "";
+            });
+        }
+    };
 }
 
 test("mergeDevStatus merges repository and pullrequest payloads by detail and repository identity", function() {
@@ -1060,4 +1576,503 @@ test("repo calendar switches selection between dates and toggles callback", func
     $otherCell.trigger("click");
     assert.deepEqual(selected, ["2026-03-08", "2026-03-09", null]);
     assert.equal(countMatches(widget.$el.html(), /ring-2/g), 0);
+});
+
+test("repo log renders rows for repository events", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            branchName: "main",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "abc123"
+        }]
+    }, null);
+
+    assert.match(log.$el.html(), /core-api/);
+    assert.match(log.$el.html(), /abc123/);
+    assert.equal(countMatches(log.$el.html(), /<tr class="[^"]*ujg-ua-repo-row\b/g), 1);
+});
+
+test("repo log filters rendered rows by selectedDate", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            branchName: "main",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "abc123"
+        }, {
+            type: "pull_request_merged",
+            date: "2026-03-09",
+            timestamp: "2026-03-09T12:00:00.000Z",
+            repoName: "core-ui",
+            branchName: "feature/ui",
+            issueKey: "CORE-2",
+            title: "Refine layout",
+            status: "MERGED",
+            hash: "def456"
+        }]
+    }, "2026-03-08");
+
+    assert.match(log.$el.html(), /core-api/);
+    assert.doesNotMatch(log.$el.html(), /core-ui/);
+    assert.equal(countMatches(log.$el.html(), /<tr class="[^"]*ujg-ua-repo-row\b/g), 1);
+});
+
+test("repo log expands a row with author reviewers and raw details", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "pull_request_reviewed",
+            date: "2026-03-09",
+            timestamp: "2026-03-09T12:00:00.000Z",
+            repoName: "core-api",
+            branchName: "feature/auth",
+            issueKey: "CORE-3",
+            title: "Review auth",
+            status: "APPROVED",
+            author: "Dima Torzok",
+            reviewers: ["Reviewer A", "Reviewer B"],
+            raw: {
+                id: "42",
+                source: "bitbucket"
+            }
+        }]
+    }, null);
+
+    assert.doesNotMatch(log.$el.html(), /Reviewer A/);
+
+    log.$el.find('button[data-idx="0"]').trigger("click");
+
+    assert.match(log.$el.html(), /Reviewer A, Reviewer B/);
+    assert.match(log.$el.html(), /Dima Torzok/);
+    assert.match(log.$el.html(), /&quot;source&quot;:&quot;bitbucket&quot;/);
+});
+
+test("repo log keeps selected type filter visible after rerender", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            message: "Fix auth"
+        }, {
+            type: "pull_request_reviewed",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T12:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            title: "Review auth"
+        }]
+    }, null);
+
+    log.$el.find('select[data-filter="type"]').val("PR reviewed").trigger("change");
+
+    assert.equal(countMatches(log.$el.html(), /<tr class="[^"]*ujg-ua-repo-row\b/g), 1);
+    assert.match(log.$el.html(), /<option value="PR reviewed" selected="selected">PR reviewed<\/option>/);
+});
+
+test("repo log text filter matches visible type label", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            message: "Fix auth"
+        }, {
+            type: "pull_request_reviewed",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T12:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            title: "Review auth"
+        }]
+    }, null);
+
+    log.$el.find('input[data-filter="text"]').val("pr reviewed").trigger("input");
+
+    assert.equal(countMatches(log.$el.html(), /<tr class="[^"]*ujg-ua-repo-row\b/g), 1);
+    assert.match(log.$el.html(), /Review auth/);
+    assert.doesNotMatch(log.$el.html(), /Fix auth/);
+});
+
+test("repo log uses localized shell and visible labels closer to activity log", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            branchName: "main",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "abc123"
+        }]
+    }, null);
+
+    assert.match(log.$el.html(), /Лог репозиторной активности/);
+    assert.match(log.$el.html(), />Дата</);
+    assert.match(log.$el.html(), />Время</);
+    assert.match(log.$el.html(), />Репозиторий</);
+    assert.match(log.$el.html(), />Ветка</);
+    assert.match(log.$el.html(), />Задача</);
+    assert.match(log.$el.html(), />Тип</);
+    assert.match(log.$el.html(), />Описание</);
+    assert.match(log.$el.html(), />Статус\/хеш</);
+    assert.match(log.$el.html(), /Репозиторий<\/span><select data-filter="repo"/);
+    assert.match(log.$el.html(), /Описание<\/span><input data-filter="text"/);
+});
+
+test("repo log type filter supports custom config label outside built-in map", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub(), {}, {
+        REPO_ACTIVITY_LABELS: {
+            custom_deploy_event: "Деплой"
+        }
+    });
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "custom_deploy_event",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            title: "Deploy service"
+        }, {
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T11:00:00.000Z",
+            repoName: "core-api",
+            issueKey: "CORE-1",
+            message: "Fix auth"
+        }]
+    }, null);
+
+    log.$el.find('select[data-filter="type"]').val("Деплой").trigger("change");
+
+    assert.equal(countMatches(log.$el.html(), /<tr class="[^"]*ujg-ua-repo-row\b/g), 1);
+    assert.match(log.$el.html(), /Deploy service/);
+    assert.match(log.$el.html(), /<option value="Деплой" selected="selected">Деплой<\/option>/);
+});
+
+test("repo log renders filters directly inside table header cells", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "pull_request_reviewed",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T12:00:00.000Z",
+            repoName: "core-api",
+            branchName: "feature/auth",
+            issueKey: "CORE-1",
+            title: "Review auth"
+        }]
+    }, null);
+
+    assert.match(log.$el.html(), /<th[^>]*>.*Репозиторий<\/span><select data-filter="repo"/);
+    assert.match(log.$el.html(), /<th[^>]*>.*Ветка<\/span><select data-filter="branch"/);
+    assert.match(log.$el.html(), /<th[^>]*>.*Задача<\/span><select data-filter="issue"/);
+    assert.match(log.$el.html(), /<th[^>]*>.*Тип<\/span><select data-filter="type"/);
+    assert.match(log.$el.html(), /<th[^>]*>.*Описание<\/span><input data-filter="text"/);
+});
+
+test("repo log expand exposes explicit pull request metadata fields", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "pull_request_reviewed",
+            date: "2026-03-09",
+            timestamp: "2026-03-09T12:00:00.000Z",
+            repoName: "core-api",
+            branchName: "feature/auth",
+            issueKey: "CORE-3",
+            title: "Review auth",
+            status: "APPROVED",
+            author: "Dima Torzok",
+            reviewers: ["Reviewer A", "Reviewer B"],
+            raw: {
+                id: "42",
+                source: "bitbucket",
+                title: "Review auth",
+                status: "APPROVED"
+            }
+        }]
+    }, null);
+
+    log.$el.find('button[data-idx="0"]').trigger("click");
+
+    assert.match(log.$el.html(), /PR ID:/);
+    assert.match(log.$el.html(), /42/);
+    assert.match(log.$el.html(), /PR заголовок:/);
+    assert.match(log.$el.html(), /Review auth/);
+    assert.match(log.$el.html(), /PR статус:/);
+    assert.match(log.$el.html(), /APPROVED/);
+    assert.match(log.$el.html(), /Ревьюеры:/);
+    assert.match(log.$el.html(), /Reviewer A, Reviewer B/);
+});
+
+test("repo config exposes repo activity labels", function() {
+    var config = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+
+    assert.ok(config.REPO_ACTIVITY_LABELS);
+    assert.equal(config.REPO_ACTIVITY_LABELS.commit, "Коммит");
+    assert.equal(config.REPO_ACTIVITY_LABELS.pull_request_merged, "PR влит");
+});
+
+test("repo modules are wired in main module and build order", function() {
+    var mainSource = fs.readFileSync(path.join(__dirname, "..", "ujg-user-activity-modules", "main.js"), "utf8");
+    var buildSource = fs.readFileSync(path.join(__dirname, "..", "build-user-activity.js"), "utf8");
+
+    assert.match(mainSource, /"_ujgUA_api", "_ujgUA_repoApi", "_ujgUA_dataProcessor", "_ujgUA_repoDataProcessor"/);
+    assert.match(mainSource, /"_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail"/);
+    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog", "_ujgUA_rendering"/);
+    assert.match(mainSource, /repoApi: repoApi, dataProcessor: dataProcessor, repoDataProcessor: repoDataProcessor/);
+    assert.match(mainSource, /summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar/);
+    assert.match(mainSource, /issueList: issueList, activityLog: activityLog, repoLog: repoLog/);
+
+    assert.match(buildSource, /"api\.js",\s*"repo-api\.js",\s*"data-processor\.js",\s*"repo-data-processor\.js"/);
+    assert.match(buildSource, /"calendar-heatmap\.js",\s*"repo-calendar\.js",\s*"daily-detail\.js"/);
+    assert.match(buildSource, /"activity-log\.js",\s*"repo-log\.js",\s*"rendering\.js"/);
+});
+
+test("public user activity bundle includes repo modules", function() {
+    var builder = require(path.join(__dirname, "..", "build-user-activity.js"));
+    builder.build();
+    var bundleSource = fs.readFileSync(path.join(__dirname, "..", "ujg-user-activity.js"), "utf8");
+
+    assert.match(bundleSource, /_ujgUA_repoApi/);
+    assert.match(bundleSource, /_ujgUA_repoDataProcessor/);
+    assert.match(bundleSource, /_ujgUA_repoCalendar/);
+    assert.match(bundleSource, /_ujgUA_repoLog/);
+});
+
+test("rendering appends repo blocks after Jira counterparts in dashboard order", function() {
+    var harness = createRenderingHarness();
+
+    assert.deepEqual(harness.getDashboardLabels(), [
+        "SummaryCards",
+        "Jira Activity Calendar",
+        "Repo Activity Calendar",
+        "DailyDetail",
+        "ProjectBreakdown",
+        "IssueList",
+        "Activity Log",
+        "Repository Activity Log"
+    ]);
+    assert.deepEqual(normalize(harness.events.fetchRepoArgs), {
+        issues: normalize(harness.rawData.issues),
+        hasOnProgress: true
+    });
+    assert.deepEqual(normalize(harness.events.processRepoArgs), {
+        issueMap: normalize(harness.processed.issueMap),
+        issueDevStatusMap: normalize(harness.repoFetchResult.issueDevStatusMap),
+        user: normalize(harness.selectedUser),
+        startDate: harness.period.start,
+        endDate: harness.period.end
+    });
+    assert.deepEqual(normalize(harness.events.repoLogCalls), [{
+        activity: normalize(harness.repoActivity),
+        selectedDate: null
+    }]);
+});
+
+test("rendering keeps Jira calendar wired to DailyDetail and repo calendar wired to repo log", function() {
+    var harness = createRenderingHarness();
+
+    harness.events.jiraSelect("2026-03-08");
+    assert.equal(harness.events.dailyShows.length, 1);
+    assert.equal(harness.events.dailyShows[0].dateStr, "2026-03-08");
+    assert.equal(harness.events.repoLogCalls.length, 1);
+
+    harness.events.repoSelect("2026-03-09");
+    assert.equal(harness.events.dailyShows.length, 1);
+    assert.equal(harness.events.repoLogCalls.length, 2);
+    assert.equal(harness.events.repoLogCalls[1].selectedDate, "2026-03-09");
+
+    harness.events.jiraSelect(null);
+    assert.equal(harness.events.dailyHides, 1);
+});
+
+test("rendering keeps Jira blocks visible when repo loading fails", function() {
+    var harness = createRenderingHarness({
+        repoShouldFail: true
+    });
+
+    assert.deepEqual(harness.getDashboardLabels(), [
+        "SummaryCards",
+        "Jira Activity Calendar",
+        "Repo Activity Calendar Error",
+        "DailyDetail",
+        "ProjectBreakdown",
+        "IssueList",
+        "Activity Log",
+        "Repository Activity Log Error"
+    ]);
+    assert.equal(harness.events.processRepoArgs, null);
+    assert.deepEqual(harness.events.repoLogCalls, []);
+});
+
+test("rendering ignores stale older request responses and keeps newer dashboard", function() {
+    var firstApi = createDeferred();
+    var secondApi = createDeferred();
+    var activeRepo = createDeferred();
+    var apiCallCount = 0;
+    var harness = createRenderingHarness({
+        selectedUser: { name: "first-user", displayName: "First User" },
+        fetchAllDataImpl: function() {
+            apiCallCount += 1;
+            return apiCallCount === 1 ? firstApi.promise() : secondApi.promise();
+        },
+        processDataImpl: function(currentRawData) {
+            return currentRawData.processed;
+        },
+        fetchRepoImpl: function() {
+            return activeRepo.promise();
+        },
+        processRepoActivityImpl: function(issueMap, issueDevStatusMap, user) {
+            return {
+                items: [],
+                dayMap: {},
+                repoMap: {},
+                stats: { totalEvents: 0 },
+                marker: user.name + ":" + Object.keys(issueDevStatusMap || {}).join(",")
+            };
+        }
+    });
+
+    harness.triggerUserChange({ name: "second-user", displayName: "Second User" });
+
+    secondApi.resolve({
+        issues: [{ id: "2002", key: "SECOND-2" }],
+        processed: {
+            stats: { totalHours: 2 },
+            dayMap: {},
+            issueMap: { "SECOND-2": { key: "SECOND-2", summary: "second", totalTimeHours: 2 } },
+            projectMap: { SECOND: { key: "SECOND", totalHours: 2, issueCount: 1, issues: ["SECOND-2"] } },
+            statusTransitions: {}
+        }
+    });
+    activeRepo.resolve({
+        issueDevStatusMap: { "SECOND-2": { detail: [] } }
+    });
+
+    assert.equal(harness.events.processRepoArgsHistory.length, 1);
+    assert.equal(harness.events.processRepoArgsHistory[0].user.name, "second-user");
+
+    firstApi.resolve({
+        issues: [{ id: "1001", key: "FIRST-1" }],
+        processed: {
+            stats: { totalHours: 1 },
+            dayMap: {},
+            issueMap: { "FIRST-1": { key: "FIRST-1", summary: "first", totalTimeHours: 1 } },
+            projectMap: { FIRST: { key: "FIRST", totalHours: 1, issueCount: 1, issues: ["FIRST-1"] } },
+            statusTransitions: {}
+        }
+    });
+
+    assert.equal(harness.events.processRepoArgsHistory.length, 1);
+    assert.deepEqual(harness.getDashboardLabels(), [
+        "SummaryCards",
+        "Jira Activity Calendar",
+        "Repo Activity Calendar",
+        "DailyDetail",
+        "ProjectBreakdown",
+        "IssueList",
+        "Activity Log",
+        "Repository Activity Log"
+    ]);
+    assert.equal(harness.events.fetchAllDataCalls.length, 2);
+    assert.equal(harness.events.fetchRepoArgsHistory.length, 1);
+});
+
+test("rendering invalidates in-flight request when selected user is cleared", function() {
+    var apiDeferred = createDeferred();
+    var harness = createRenderingHarness({
+        fetchAllDataImpl: function() {
+            return apiDeferred.promise();
+        }
+    });
+
+    harness.triggerUserChange(null);
+    apiDeferred.resolve({
+        issues: [{ id: "1001", key: "FIRST-1" }]
+    });
+
+    assert.deepEqual(harness.getDashboardLabels(), []);
+    assert.equal(harness.events.fetchRepoArgsHistory.length, 0);
+    assert.match(harness.root.__el.children[1].html, /Выберите пользователя и период/);
+});
+
+test("rendering processes repo activity for request user snapshot, not later mutated currentUser", function() {
+    var apiDeferred = createDeferred();
+    var repoDeferred = createDeferred();
+    var selectedUser = { name: "first-user", displayName: "First User" };
+    var harness = createRenderingHarness({
+        selectedUser: selectedUser,
+        fetchAllDataImpl: function() {
+            return apiDeferred.promise();
+        },
+        fetchRepoImpl: function() {
+            return repoDeferred.promise();
+        }
+    });
+
+    apiDeferred.resolve({
+        issues: [{ id: "1001", key: "FIRST-1" }]
+    });
+    harness.mutateSelectedUser({
+        name: "mutated-user",
+        displayName: "Mutated User"
+    });
+    repoDeferred.resolve({
+        issueDevStatusMap: { "FIRST-1": { detail: [] } }
+    });
+
+    assert.equal(harness.events.processRepoArgs.user.name, "first-user");
+    assert.equal(harness.events.processRepoArgs.user.displayName, "First User");
+});
+
+test("rendering reinit does not accumulate fullscreenchange handlers", function() {
+    var harness = createRenderingHarness();
+
+    assert.equal(harness.getFullscreenHandlerCount(), 1);
+
+    harness.reinit();
+    assert.equal(harness.getFullscreenHandlerCount(), 1);
+
+    harness.reinit();
+    assert.equal(harness.getFullscreenHandlerCount(), 1);
 });

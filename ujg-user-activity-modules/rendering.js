@@ -7,6 +7,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var currentUser = null;
     var currentPeriod = null;
     var isFullscreen = false;
+    var activeRequestId = 0;
 
     var summaryInst = null;
     var projBreakInst = null;
@@ -47,8 +48,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             currentUser = user;
             if (user) {
                 var period = currentPeriod || utils.getDefaultPeriod();
-                loadData(user.name, period);
+                loadData(user.name, period, user);
             } else {
+                activeRequestId += 1;
                 renderEmptyState();
             }
         });
@@ -61,7 +63,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $header.find(".ujg-ua-btn-load").on("click", function() {
             if (!currentUser) return;
             var period = currentPeriod || utils.getDefaultPeriod();
-            loadData(currentUser.name, period);
+            loadData(currentUser.name, period, currentUser);
         });
 
         $header.find(".ujg-ua-btn-fullscreen").on("click", function() {
@@ -71,7 +73,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                 document.exitFullscreen().catch(function() {});
             }
         });
-        $(document).on("fullscreenchange", function() {
+        $(document).off("fullscreenchange.ujgUA_rendering").on("fullscreenchange.ujgUA_rendering", function() {
             isFullscreen = !!document.fullscreenElement;
             $header.find(".ujg-ua-btn-fullscreen").html(
                 utils.icon(isFullscreen ? "minimize2" : "maximize2", "w-3.5 h-3.5")
@@ -86,7 +88,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         if (currentUser) {
             var period = currentPeriod || utils.getDefaultPeriod();
-            loadData(currentUser.name, period);
+            loadData(currentUser.name, period, currentUser);
         } else {
             renderEmptyState();
         }
@@ -104,7 +106,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
     }
 
-    function loadData(username, period) {
+    function loadData(username, period, user) {
+        var requestId = ++activeRequestId;
+        var requestUser = Object.assign({}, user || currentUser || { name: username });
         $contentArea.empty();
 
         var loader = mods.progressLoader.create();
@@ -114,11 +118,30 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         mods.api.fetchAllData(username, period.start, period.end, function(progress) {
             loader.update(progress);
         }).done(function(rawData) {
+            if (requestId !== activeRequestId) return;
             var processed = mods.dataProcessor.processData(rawData, username, period.start, period.end);
             var startDate = new Date(period.start + "T00:00:00");
             var endDate = new Date(period.end + "T23:59:59");
-            renderDashboard(processed, startDate, endDate, username);
+            if (requestId !== activeRequestId) return;
+            mods.repoApi.fetchRepoActivityForIssues(rawData.issues, function(progress) {
+                loader.update(progress);
+            }).done(function(repoData) {
+                if (requestId !== activeRequestId) return;
+                var repoActivity = mods.repoDataProcessor.processRepoActivity(
+                    processed.issueMap,
+                    repoData && repoData.issueDevStatusMap,
+                    requestUser,
+                    period.start,
+                    period.end
+                );
+                if (requestId !== activeRequestId) return;
+                renderDashboard(processed, startDate, endDate, username, { activity: repoActivity });
+            }).fail(function(err) {
+                if (requestId !== activeRequestId) return;
+                renderDashboard(processed, startDate, endDate, username, { error: err });
+            });
         }).fail(function(err) {
+            if (requestId !== activeRequestId) return;
             $contentArea.empty().html(
                 '<div class="dashboard-card p-8 text-center">' +
                     '<div class="text-destructive font-medium mb-2">Ошибка загрузки</div>' +
@@ -128,8 +151,19 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
     }
 
-    function renderDashboard(data, startDate, endDate, username) {
+    function renderRepoStateCard(title, message) {
+        return $(
+            '<div class="dashboard-card p-4">' +
+                '<div class="text-sm font-semibold text-foreground mb-1">' + utils.escapeHtml(title) + '</div>' +
+                '<div class="text-sm text-muted-foreground">' + utils.escapeHtml(message) + '</div>' +
+            '</div>'
+        );
+    }
+
+    function renderDashboard(data, startDate, endDate, username, repoState) {
         $contentArea.empty();
+        repoState = repoState || {};
+        var repoActivity = repoState.activity || null;
 
         summaryInst = mods.summaryCards.create();
         summaryInst.render(data.stats);
@@ -137,6 +171,19 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         var heatmap = mods.calendarHeatmap.render(data.dayMap, data.issueMap, startDate, endDate);
         $contentArea.append(heatmap.$el);
+
+        var repoCalendarInst = null;
+        var repoLogInst = null;
+
+        if (repoActivity) {
+            repoCalendarInst = mods.repoCalendar.render(repoActivity.dayMap, startDate, endDate);
+            $contentArea.append(repoCalendarInst.$el);
+        } else if (repoState.error) {
+            $contentArea.append(renderRepoStateCard(
+                "Репозиторная активность",
+                "Не удалось загрузить данные репозиториев."
+            ));
+        }
 
         detailInst = mods.dailyDetail.create();
         $contentArea.append(detailInst.$el);
@@ -146,6 +193,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var dayData = data.dayMap[dateStr] || { worklogs: [], changes: [], issues: [], totalHours: 0 };
             detailInst.show(dateStr, dayData, data.issueMap);
         });
+
+        if (repoCalendarInst) {
+            repoCalendarInst.onSelectDate(function(selectedDate) {
+                if (repoLogInst) repoLogInst.render(repoActivity, selectedDate || null);
+            });
+        }
 
         projBreakInst = mods.projectBreakdown.create();
         var projects = Object.values(data.projectMap).sort(function(a, b) { return b.totalHours - a.totalHours; });
@@ -170,6 +223,17 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         activityLogInst = mods.activityLog.create();
         activityLogInst.render(data, username, utils.getDayKey(startDate), utils.getDayKey(endDate));
         $contentArea.append(activityLogInst.$el);
+
+        if (repoActivity) {
+            repoLogInst = mods.repoLog.create();
+            repoLogInst.render(repoActivity, null);
+            $contentArea.append(repoLogInst.$el);
+        } else if (repoState.error) {
+            $contentArea.append(renderRepoStateCard(
+                "Лог репозиторной активности",
+                "Данные репозиториев недоступны для выбранного периода."
+            ));
+        }
     }
 
     return { init: init };

@@ -49,6 +49,19 @@ define("_ujgUA_config", [], function() {
         'Sub-task': 'checkCircle2'
     };
 
+    var REPO_ACTIVITY_LABELS = {
+        commit: "Коммит",
+        branch_commit: "Коммит в ветке",
+        branch_update: "Ветка",
+        pull_request_opened: "PR открыт",
+        pull_request_merged: "PR влит",
+        pull_request_declined: "PR отклонен",
+        pull_request_reviewed: "PR просмотрен",
+        pull_request_needs_work: "Нужны правки",
+        repository_update: "Обновление репозитория",
+        unknown_dev_event: "Прочее"
+    };
+
     return {
         CONFIG: { version: "0.1.0", debug: true, maxConcurrent: 5, defaultPeriodDays: 30, maxResults: 100 },
         CHART_COLORS: CHART_COLORS,
@@ -56,6 +69,7 @@ define("_ujgUA_config", [], function() {
         ICONS: ICONS,
         STATUS_COLORS: STATUS_COLORS,
         TYPE_ICONS: TYPE_ICONS,
+        REPO_ACTIVITY_LABELS: REPO_ACTIVITY_LABELS,
         DATE_PRESETS: [
             { label: "Текущая неделя", id: "this_week" },
             { label: "Последние 2 недели", id: "last_2_weeks" },
@@ -415,6 +429,306 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
     };
 });
 
+/* === Module: repo-api.js === */
+define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], function($, Common, config, utils) {
+    "use strict";
+
+    var baseUrl = Common.baseUrl || "";
+    var CONFIG = config.CONFIG || {};
+
+    function cloneValue(value) {
+        if (!value || typeof value !== "object") return value;
+        if (Array.isArray(value)) return value.map(cloneValue);
+
+        var out = {};
+        Object.keys(value).forEach(function(key) {
+            out[key] = cloneValue(value[key]);
+        });
+        return out;
+    }
+
+    function firstNonEmpty(item, keys) {
+        var i;
+        var value;
+
+        for (i = 0; i < keys.length; i++) {
+            value = item && item[keys[i]];
+            if (value !== undefined && value !== null && value !== "") return String(value);
+        }
+
+        return "";
+    }
+
+    function mergeUniqueField(target, source, field, keys) {
+        if (!Array.isArray(source[field]) || source[field].length === 0) return;
+        target[field] = uniqueByIdentity((target[field] || []).concat(source[field]), keys);
+    }
+
+    function uniqueByIdentity(items, keys) {
+        var seen = {};
+        var out = [];
+
+        (items || []).forEach(function(item) {
+            var key = firstNonEmpty(item, keys);
+
+            if (!key) {
+                out.push(cloneValue(item));
+                return;
+            }
+            if (seen[key]) return;
+
+            seen[key] = true;
+            out.push(cloneValue(item));
+        });
+
+        return out;
+    }
+
+    function mergeDevStatus(repoResp, prResp) {
+        var base = repoResp && typeof repoResp === "object" ? cloneValue(repoResp) : {};
+        var add = prResp && typeof prResp === "object" ? cloneValue(prResp) : {};
+
+        if (!Array.isArray(base.detail)) base.detail = [];
+        if (!Array.isArray(add.detail)) return base;
+
+        function detailKey(detail) {
+            var key = [
+                detail && detail.applicationLinkId || "",
+                detail && detail.instanceId || "",
+                detail && (detail.type || detail.typeName) || "",
+                detail && detail.name || ""
+            ].join("|");
+
+            return key === "|||" ? "" : key;
+        }
+
+        function repoKey(repo) {
+            var key = [
+                repo && repo.url || "",
+                repo && repo.name || "",
+                repo && repo.id || ""
+            ].join("|");
+
+            return key === "||" ? "" : key;
+        }
+
+        function mergeRepoField(targetRepo, addRepo, field) {
+            var keysByField = {
+                commits: ["id", "hash", "commitHash", "displayId", "url"],
+                branches: ["id", "name", "url"],
+                pullRequests: ["id", "url", "name"]
+            };
+            mergeUniqueField(targetRepo, addRepo, field, keysByField[field] || ["id", "url", "name"]);
+        }
+
+        function fillMissingFields(target, source) {
+            Object.keys(source || {}).forEach(function(key) {
+                if (target[key] === undefined || target[key] === null || target[key] === "") {
+                    target[key] = cloneValue(source[key]);
+                }
+            });
+        }
+
+        add.detail.forEach(function(addDetail) {
+            var targetDetail = null;
+            var addDetailKey = detailKey(addDetail);
+            var i;
+
+            for (i = 0; i < base.detail.length; i++) {
+                var currentDetailKey = detailKey(base.detail[i]);
+                if (addDetailKey && currentDetailKey === addDetailKey) {
+                    targetDetail = base.detail[i];
+                    break;
+                }
+            }
+
+            if (!targetDetail) {
+                base.detail.push(addDetail);
+                return;
+            }
+
+            fillMissingFields(targetDetail, addDetail);
+            mergeUniqueField(targetDetail, addDetail, "pullRequests", ["id", "url", "name"]);
+            if (!Array.isArray(targetDetail.repositories) && Array.isArray(addDetail.repositories)) {
+                targetDetail.repositories = [];
+            }
+
+            (addDetail.repositories || []).forEach(function(addRepo) {
+                var targetRepo = null;
+                var addRepoKey = repoKey(addRepo);
+                var j;
+
+                for (j = 0; j < targetDetail.repositories.length; j++) {
+                    var currentRepoKey = repoKey(targetDetail.repositories[j]);
+                    if (addRepoKey && currentRepoKey === addRepoKey) {
+                        targetRepo = targetDetail.repositories[j];
+                        break;
+                    }
+                }
+
+                if (!targetRepo) {
+                    targetDetail.repositories.push(addRepo);
+                    return;
+                }
+
+                fillMissingFields(targetRepo, addRepo);
+                mergeRepoField(targetRepo, addRepo, "commits");
+                mergeRepoField(targetRepo, addRepo, "branches");
+                mergeRepoField(targetRepo, addRepo, "pullRequests");
+            });
+        });
+
+        return base;
+    }
+
+    function normalizeDevStatus(devStatus) {
+        if (!devStatus || !Array.isArray(devStatus.detail) || devStatus.detail.length === 0) {
+            return {};
+        }
+        return devStatus;
+    }
+
+    function fetchIssueDevStatus(issue, onProgress) {
+        var d = $.Deferred();
+        var pending = 2;
+        var repoDone = false;
+        var prDone = false;
+        var repoData = {};
+        var prData = {};
+
+        if (!issue || !issue.id) {
+            d.resolve({});
+            return d.promise();
+        }
+
+        function unwrap(resp) {
+            return resp && resp[0] ? resp[0] : resp;
+        }
+
+        function finish() {
+            var status;
+
+            pending -= 1;
+            if (pending > 0) return;
+
+            issue.devStatus = (repoDone || prDone)
+                ? normalizeDevStatus(mergeDevStatus(repoData, prData) || {})
+                : {};
+            if (onProgress) {
+                status = repoDone && prDone ? "done" : (repoDone || prDone ? "partial" : "empty");
+                onProgress({
+                    issue: issue,
+                    status: status
+                });
+            }
+            d.resolve(issue.devStatus);
+        }
+
+        var repoReq = $.ajax({
+            url: baseUrl + "/rest/dev-status/1.0/issue/detail",
+            type: "GET",
+            dataType: "json",
+            data: {
+                issueId: issue.id,
+                applicationType: "stash",
+                dataType: "repository"
+            }
+        });
+        var prReq = $.ajax({
+            url: baseUrl + "/rest/dev-status/1.0/issue/detail",
+            type: "GET",
+            dataType: "json",
+            data: {
+                issueId: issue.id,
+                applicationType: "stash",
+                dataType: "pullrequest"
+            }
+        });
+
+        repoReq.done(function(resp) {
+            repoDone = true;
+            repoData = unwrap(resp) || {};
+            finish();
+        }).fail(function() {
+            finish();
+        });
+
+        prReq.done(function(resp) {
+            prDone = true;
+            prData = unwrap(resp) || {};
+            finish();
+        }).fail(function() {
+            finish();
+        });
+
+        return d.promise();
+    }
+
+    function fetchRepoActivityForIssues(issues, onProgress) {
+        var d = $.Deferred();
+        var queue = Array.isArray(issues) ? issues.slice() : [];
+        var maxConcurrent = CONFIG.maxConcurrent || 5;
+        var issueDevStatusMap = {};
+        var running = 0;
+        var progress = { phase: "repo-dev-status", loaded: 0, total: queue.length };
+
+        if (onProgress) onProgress(progress);
+
+        function markDone(issue, devStatus) {
+            var issueKey = issue && (issue.key || issue.id);
+            if (issueKey) issueDevStatusMap[issueKey] = devStatus || {};
+            progress.loaded += 1;
+            if (onProgress) onProgress(progress);
+        }
+
+        function maybeFinish() {
+            if (queue.length === 0 && running === 0) {
+                d.resolve({ issueDevStatusMap: issueDevStatusMap });
+                return true;
+            }
+            return false;
+        }
+
+        function pump() {
+            while (running < maxConcurrent && queue.length > 0) {
+                var issue = queue.shift();
+
+                if (!issue || !issue.id) {
+                    markDone(issue, {});
+                    continue;
+                }
+
+                running += 1;
+
+                fetchIssueDevStatus(issue).done(function(currentIssue) {
+                    return function(devStatus) {
+                        markDone(currentIssue, devStatus);
+                        running -= 1;
+                        if (!maybeFinish()) pump();
+                    };
+                }(issue)).fail(function(currentIssue) {
+                    return function() {
+                        markDone(currentIssue, {});
+                        running -= 1;
+                        if (!maybeFinish()) pump();
+                    };
+                }(issue));
+            }
+
+            maybeFinish();
+        }
+
+        pump();
+        return d.promise();
+    }
+
+    return {
+        mergeDevStatus: mergeDevStatus,
+        fetchIssueDevStatus: fetchIssueDevStatus,
+        fetchRepoActivityForIssues: fetchRepoActivityForIssues
+    };
+});
+
 /* === Module: data-processor.js === */
 define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(config, utils) {
     "use strict";
@@ -580,6 +894,551 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
 
     return {
         processData: processData
+    };
+});
+
+/* === Module: repo-data-processor.js === */
+define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(config, utils) {
+    "use strict";
+
+    function normalizeUserValue(value) {
+        if (value === undefined || value === null) return "";
+        return String(value).trim().toLowerCase();
+    }
+
+    function collectUserValues(userLike) {
+        var values = [];
+
+        function push(value) {
+            value = normalizeUserValue(value);
+            if (!value || values.indexOf(value) >= 0) return;
+            values.push(value);
+        }
+
+        if (!userLike) return values;
+        push(userLike.name);
+        push(userLike.displayName);
+        push(userLike.key);
+        push(userLike.accountId);
+        push(userLike.userName);
+        if (userLike.user) {
+            push(userLike.user.name);
+            push(userLike.user.displayName);
+            push(userLike.user.key);
+            push(userLike.user.accountId);
+            push(userLike.user.userName);
+        }
+
+        return values;
+    }
+
+    function matchesSelectedUser(userLike, selectedUser) {
+        var selectedValues = collectUserValues(selectedUser);
+        var userValues = collectUserValues(userLike);
+
+        if (!selectedValues.length || !userValues.length) return false;
+
+        return userValues.some(function(value) {
+            return selectedValues.indexOf(value) >= 0;
+        });
+    }
+
+    function getUserLabel(userLike) {
+        if (!userLike) return "";
+        if (userLike.user) return getUserLabel(userLike.user);
+        return userLike.displayName || userLike.name || userLike.userName || userLike.key || userLike.accountId || "";
+    }
+
+    function getReviewerLabels(reviewers) {
+        return normalizeArray(reviewers).map(function(reviewer) {
+            return getUserLabel(reviewer);
+        }).filter(function(name) {
+            return !!name;
+        });
+    }
+
+    function normalizeTimestamp(value) {
+        if (value === undefined || value === null || value === "") return null;
+        if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+        if (typeof value === "number") {
+            return new Date(value > 1e12 ? value : value * 1000);
+        }
+        return utils.parseDate ? utils.parseDate(value) : new Date(value);
+    }
+
+    function isTimestampInRange(state, value) {
+        var timestamp = normalizeTimestamp(value);
+        if (!timestamp) return false;
+        return timestamp.getTime() >= state.startMs && timestamp.getTime() <= state.endMs;
+    }
+
+    function ensureDay(dayMap, dateKey) {
+        if (!dayMap[dateKey]) {
+            dayMap[dateKey] = {
+                date: dateKey,
+                items: [],
+                totalEvents: 0,
+                countsByType: {},
+                countsByRepo: {}
+            };
+        }
+        return dayMap[dateKey];
+    }
+
+    function ensureRepo(repoMap, repoName, repoUrl) {
+        var key = repoName || "(unknown)";
+        if (!repoMap[key]) {
+            repoMap[key] = {
+                repoName: key,
+                repoUrl: repoUrl || "",
+                totalEvents: 0,
+                branches: [],
+                issues: [],
+                countsByType: {}
+            };
+        } else if (!repoMap[key].repoUrl && repoUrl) {
+            repoMap[key].repoUrl = repoUrl;
+        }
+        return repoMap[key];
+    }
+
+    function pushUnique(list, value) {
+        if (!value || list.indexOf(value) >= 0) return;
+        list.push(value);
+    }
+
+    function isCommitType(type) {
+        return type === "commit" || type === "branch_commit";
+    }
+
+    function isPullRequestType(type) {
+        return type.indexOf("pull_request_") === 0;
+    }
+
+    function pushEvent(state, item) {
+        var timestamp = normalizeTimestamp(item && item.timestamp);
+        var dateKey;
+        var day;
+        var repo;
+
+        if (!timestamp) return;
+        if (timestamp.getTime() < state.startMs || timestamp.getTime() > state.endMs) return;
+
+        dateKey = utils.getDayKey(timestamp);
+        item.timestamp = timestamp.toISOString();
+        item.date = dateKey;
+        item.repoName = item.repoName || "(unknown)";
+        item.repoUrl = item.repoUrl || "";
+        item.issueKey = item.issueKey || "";
+        item.issueSummary = item.issueSummary || "";
+        item.branchName = item.branchName || "";
+        item.type = item.type || "unknown_dev_event";
+        item.title = item.title || "";
+        item.message = item.message || "";
+        item.status = item.status || "";
+        item.hash = item.hash || "";
+        item.author = item.author || getUserLabel(item.userLike || item.raw && (item.raw.author || item.raw.user || item.raw.actor || item.raw.updatedBy)) || "";
+        item.reviewers = item.reviewers || getReviewerLabels(item.raw && item.raw.reviewers);
+        item.raw = item.raw || null;
+
+        state.items.push(item);
+
+        day = ensureDay(state.dayMap, dateKey);
+        day.items.push(item);
+        day.totalEvents += 1;
+        day.countsByType[item.type] = (day.countsByType[item.type] || 0) + 1;
+        day.countsByRepo[item.repoName] = (day.countsByRepo[item.repoName] || 0) + 1;
+
+        repo = ensureRepo(state.repoMap, item.repoName, item.repoUrl);
+        repo.totalEvents += 1;
+        repo.countsByType[item.type] = (repo.countsByType[item.type] || 0) + 1;
+        pushUnique(repo.issues, item.issueKey);
+        pushUnique(repo.branches, item.branchName);
+
+        state.stats.totalEvents += 1;
+        if (isCommitType(item.type)) state.stats.totalCommits += 1;
+        if (isPullRequestType(item.type)) state.stats.totalPullRequests += 1;
+    }
+
+    function extractCommitEvents(state, issueKey, issueInfo, repo) {
+        (repo.commits || []).forEach(function(commit) {
+            if (!matchesSelectedUser(commit.author, state.selectedUser)) return;
+            pushEvent(state, {
+                type: "commit",
+                timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
+                issueKey: issueKey,
+                issueSummary: issueInfo.summary || "",
+                repoName: repo.name || repo.slug || "(unknown)",
+                repoUrl: repo.url || "",
+                branchName: commit.branchName || "",
+                message: commit.message || "",
+                hash: commit.id || commit.hash || commit.commitId || "",
+                title: commit.message || "",
+                userLike: commit.author,
+                raw: commit
+            });
+        });
+    }
+
+    function extractReviewerTimestamp(reviewer) {
+        return reviewer.lastReviewedDate || reviewer.approvedDate || reviewer.updatedDate || reviewer.reviewedDate;
+    }
+
+    function normalizeArray(value) {
+        if (!value) return [];
+        return Array.isArray(value) ? value : [value];
+    }
+
+    function getPullRequests(container) {
+        return normalizeArray(
+            container && (
+                container.pullRequests ||
+                container.pullrequests ||
+                container.pullRequest ||
+                container.pullrequest
+            )
+        );
+    }
+
+    function getActor(item) {
+        return item && (item.author || item.user || item.actor || item.updatedBy);
+    }
+
+    function getActivityTimestamp(item) {
+        return item && (
+            item.updatedDate ||
+            item.lastUpdated ||
+            item.lastUpdatedDate ||
+            item.date ||
+            item.createdDate ||
+            item.timestamp
+        );
+    }
+
+    function hasConcretePullRequestActivity(state, pullRequests) {
+        return getPullRequests({ pullRequests: pullRequests }).some(function(pr) {
+            if (matchesSelectedUser(pr.author, state.selectedUser)) {
+                if (isTimestampInRange(state, pr.createdDate || pr.created || pr.openedDate)) return true;
+                if (isTimestampInRange(state, pr.mergedDate || pr.completedDate || pr.closedDate)) return true;
+                if (isTimestampInRange(state, pr.declinedDate || pr.closedDate)) return true;
+                if (isTimestampInRange(state, pr.updatedDate || pr.updated || pr.lastUpdated)) return true;
+            }
+
+            return normalizeArray(pr.reviewers).some(function(reviewer) {
+                return matchesSelectedUser(reviewer, state.selectedUser) &&
+                    isTimestampInRange(state, extractReviewerTimestamp(reviewer));
+            });
+        });
+    }
+
+    function hasConcreteBranchActivity(state, repo) {
+        return normalizeArray(repo && repo.branches).some(function(branch) {
+            if ((branch.commits || []).some(function(commit) {
+                return matchesSelectedUser(commit.author, state.selectedUser) &&
+                    isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
+            })) {
+                return true;
+            }
+
+            return matchesSelectedUser(branch.author, state.selectedUser) &&
+                isTimestampInRange(state, branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date);
+        });
+    }
+
+    function hasConcreteRepoActivity(state, repo) {
+        if ((repo.commits || []).some(function(commit) {
+            return matchesSelectedUser(commit.author, state.selectedUser) &&
+                isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
+        })) {
+            return true;
+        }
+
+        if (hasConcretePullRequestActivity(state, getPullRequests(repo))) return true;
+        if (hasConcreteBranchActivity(state, repo)) return true;
+
+        return false;
+    }
+
+    function extractRepositoryEvents(state, issueKey, issueInfo, repo) {
+        if (!matchesSelectedUser(getActor(repo), state.selectedUser)) return;
+        if (hasConcreteRepoActivity(state, repo)) return;
+        pushEvent(state, {
+            type: "repository_update",
+            timestamp: getActivityTimestamp(repo),
+            issueKey: issueKey,
+            issueSummary: issueInfo.summary || "",
+            repoName: repo.name || repo.slug || "(unknown)",
+            repoUrl: repo.url || "",
+            title: repo.name || repo.slug || "(unknown)",
+            userLike: getActor(repo),
+            raw: repo
+        });
+    }
+
+    function extractUnknownEvents(state, issueKey, issueInfo, container, repoName, repoUrl) {
+        var skipKeys = {
+            id: true,
+            key: true,
+            name: true,
+            slug: true,
+            url: true,
+            type: true,
+            commits: true,
+            branches: true,
+            repositories: true,
+            pullRequests: true,
+            pullrequests: true,
+            pullRequest: true,
+            pullrequest: true,
+            author: true,
+            user: true,
+            actor: true,
+            updatedBy: true,
+            updatedDate: true,
+            lastUpdated: true,
+            lastUpdatedDate: true,
+            createdDate: true,
+            date: true,
+            timestamp: true
+        };
+
+        Object.keys(container || {}).forEach(function(key) {
+            if (skipKeys[key]) return;
+
+            normalizeArray(container[key]).forEach(function(item) {
+                if (!item || typeof item !== "object") return;
+                if (!matchesSelectedUser(getActor(item), state.selectedUser)) return;
+                pushEvent(state, {
+                    type: "unknown_dev_event",
+                    timestamp: getActivityTimestamp(item),
+                    issueKey: issueKey,
+                    issueSummary: issueInfo.summary || "",
+                    repoName: repoName || container.name || "(unknown)",
+                    repoUrl: repoUrl || container.url || "",
+                    title: item.title || item.name || item.id || key,
+                    userLike: getActor(item),
+                    raw: item
+                });
+            });
+        });
+    }
+
+    function extractPullRequestEvents(state, issueKey, issueInfo, repo, pullRequests) {
+        (pullRequests || []).forEach(function(pr) {
+            var repoName = repo.name || repo.slug || "(unknown)";
+            var repoUrl = repo.url || "";
+            var prTitle = pr.name || pr.title || pr.id || "";
+            var prStatus = normalizeUserValue(pr.status);
+            var hasTypedAuthorEvent = false;
+
+            if (matchesSelectedUser(pr.author, state.selectedUser)) {
+                pushEvent(state, {
+                    type: "pull_request_opened",
+                    timestamp: pr.createdDate || pr.created || pr.openedDate,
+                    issueKey: issueKey,
+                    issueSummary: issueInfo.summary || "",
+                    repoName: repoName,
+                    repoUrl: repoUrl,
+                    branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
+                    pullRequestId: pr.id || pr.key || "",
+                    title: prTitle,
+                    status: pr.status || "",
+                    userLike: pr.author,
+                    raw: pr
+                });
+                hasTypedAuthorEvent = hasTypedAuthorEvent || isTimestampInRange(state, pr.createdDate || pr.created || pr.openedDate);
+
+                if (prStatus === "merged" || prStatus === "completed") {
+                    pushEvent(state, {
+                        type: "pull_request_merged",
+                        timestamp: pr.mergedDate || pr.completedDate || pr.closedDate,
+                        issueKey: issueKey,
+                        issueSummary: issueInfo.summary || "",
+                        repoName: repoName,
+                        repoUrl: repoUrl,
+                        branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
+                        pullRequestId: pr.id || pr.key || "",
+                        title: prTitle,
+                        status: pr.status || "",
+                        userLike: pr.author,
+                        raw: pr
+                    });
+                    hasTypedAuthorEvent = hasTypedAuthorEvent || isTimestampInRange(state, pr.mergedDate || pr.completedDate || pr.closedDate);
+                } else if (prStatus === "declined" || prStatus === "rejected") {
+                    pushEvent(state, {
+                        type: "pull_request_declined",
+                        timestamp: pr.closedDate || pr.declinedDate || pr.updatedDate,
+                        issueKey: issueKey,
+                        issueSummary: issueInfo.summary || "",
+                        repoName: repoName,
+                        repoUrl: repoUrl,
+                        branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
+                        pullRequestId: pr.id || pr.key || "",
+                        title: prTitle,
+                        status: pr.status || "",
+                        userLike: pr.author,
+                        raw: pr
+                    });
+                    hasTypedAuthorEvent = hasTypedAuthorEvent || isTimestampInRange(state, pr.closedDate || pr.declinedDate || pr.updatedDate);
+                }
+
+                if (!hasTypedAuthorEvent) {
+                    pushEvent(state, {
+                        type: "repository_update",
+                        timestamp: pr.updatedDate || pr.updated || pr.lastUpdated,
+                        issueKey: issueKey,
+                        issueSummary: issueInfo.summary || "",
+                        repoName: repoName,
+                        repoUrl: repoUrl,
+                        branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
+                        pullRequestId: pr.id || pr.key || "",
+                        title: prTitle,
+                        status: pr.status || "",
+                        userLike: pr.author,
+                        raw: pr
+                    });
+                }
+            }
+
+            (pr.reviewers || []).forEach(function(reviewer) {
+                var reviewerStatus;
+
+                if (!matchesSelectedUser(reviewer, state.selectedUser)) return;
+
+                reviewerStatus = normalizeUserValue(reviewer.status || reviewer.approvalStatus);
+                pushEvent(state, {
+                    type: reviewerStatus.indexOf("needs") >= 0 || reviewerStatus.indexOf("work") >= 0
+                        ? "pull_request_needs_work"
+                        : "pull_request_reviewed",
+                    timestamp: extractReviewerTimestamp(reviewer),
+                    issueKey: issueKey,
+                    issueSummary: issueInfo.summary || "",
+                    repoName: repoName,
+                    repoUrl: repoUrl,
+                    branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
+                    pullRequestId: pr.id || pr.key || "",
+                    title: prTitle,
+                    status: reviewer.status || reviewer.approvalStatus || "",
+                    userLike: reviewer,
+                    reviewers: getReviewerLabels(pr.reviewers),
+                    raw: pr
+                });
+            });
+        });
+    }
+
+    function extractBranchEvents(state, issueKey, issueInfo, repo) {
+        (repo.branches || []).forEach(function(branch) {
+            var branchName = branch.name || branch.id || "";
+            var hasBranchCommitInRange = (branch.commits || []).some(function(commit) {
+                return matchesSelectedUser(commit.author, state.selectedUser) &&
+                    isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
+            });
+
+            if (!hasBranchCommitInRange && matchesSelectedUser(branch.author, state.selectedUser)) {
+                pushEvent(state, {
+                    type: "branch_update",
+                    timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
+                    issueKey: issueKey,
+                    issueSummary: issueInfo.summary || "",
+                    repoName: repo.name || repo.slug || "(unknown)",
+                    repoUrl: repo.url || "",
+                    branchName: branchName,
+                    title: branchName,
+                    userLike: branch.author,
+                    raw: branch
+                });
+            }
+
+            (branch.commits || []).forEach(function(commit) {
+                if (!matchesSelectedUser(commit.author, state.selectedUser)) return;
+                pushEvent(state, {
+                    type: "branch_commit",
+                    timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
+                    issueKey: issueKey,
+                    issueSummary: issueInfo.summary || "",
+                    repoName: repo.name || repo.slug || "(unknown)",
+                    repoUrl: repo.url || "",
+                    branchName: branchName,
+                    message: commit.message || "",
+                    hash: commit.id || commit.hash || commit.commitId || "",
+                    title: commit.message || "",
+                    userLike: commit.author,
+                    raw: commit
+                });
+            });
+        });
+    }
+
+    function processRepoActivity(issueMap, issueDevStatusMap, selectedUser, startDate, endDate) {
+        var state = {
+            selectedUser: selectedUser || {},
+            startMs: new Date(startDate + "T00:00:00").getTime(),
+            endMs: new Date(endDate + "T23:59:59").getTime(),
+            items: [],
+            dayMap: {},
+            repoMap: {},
+            stats: {
+                totalEvents: 0,
+                totalCommits: 0,
+                totalPullRequests: 0,
+                totalBranchesTouched: 0,
+                totalRepositories: 0,
+                activeRepoDays: 0
+            }
+        };
+
+        Object.keys(issueDevStatusMap || {}).forEach(function(issueKey) {
+            var issueInfo = issueMap && issueMap[issueKey] ? issueMap[issueKey] : { key: issueKey, summary: "" };
+            var devStatus = issueDevStatusMap[issueKey] || {};
+
+            (devStatus.detail || []).forEach(function(detail) {
+                var detailRepo = {
+                    name: detail.name || "(unknown)",
+                    url: detail.url || "",
+                    pullRequests: getPullRequests(detail)
+                };
+
+                extractPullRequestEvents(state, issueKey, issueInfo, detailRepo, detailRepo.pullRequests);
+                extractUnknownEvents(state, issueKey, issueInfo, detail, detailRepo.name, detailRepo.url);
+
+                (detail.repositories || []).forEach(function(repo) {
+                    extractCommitEvents(state, issueKey, issueInfo, repo || {});
+                    extractPullRequestEvents(state, issueKey, issueInfo, repo || {}, getPullRequests(repo));
+                    extractBranchEvents(state, issueKey, issueInfo, repo || {});
+                    extractRepositoryEvents(state, issueKey, issueInfo, repo || {});
+                    extractUnknownEvents(
+                        state,
+                        issueKey,
+                        issueInfo,
+                        repo,
+                        repo && (repo.name || repo.slug || "(unknown)"),
+                        repo && repo.url || ""
+                    );
+                });
+            });
+        });
+
+        state.items.sort(function(a, b) {
+            return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+        });
+
+        state.stats.totalRepositories = Object.keys(state.repoMap).length;
+        state.stats.activeRepoDays = Object.keys(state.dayMap).length;
+        state.stats.totalBranchesTouched = Object.keys(state.repoMap).reduce(function(total, repoName) {
+            return total + state.repoMap[repoName].branches.length;
+        }, 0);
+
+        return {
+            items: state.items,
+            dayMap: state.dayMap,
+            repoMap: state.repoMap,
+            stats: state.stats
+        };
+    }
+
+    return {
+        processRepoActivity: processRepoActivity
     };
 });
 
@@ -1106,6 +1965,238 @@ define("_ujgUA_calendarHeatmap", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
     }
 
     return { render: render };
+});
+
+/* === Module: repo-calendar.js === */
+define("_ujgUA_repoCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($, config, utils) {
+    "use strict";
+
+    var WEEKDAYS_RU = utils.WEEKDAYS_RU;
+    var MONTHS_RU = utils.MONTHS_RU;
+    var MAX_DAY_ITEMS = 2;
+    var MAX_WEEK_REPOS = 3;
+
+    function buildWeeks(repoDayMap, startDate, endDate) {
+        var weeks = [];
+        var hasSatActivity = false;
+        var hasSunActivity = false;
+        var d = new Date(startDate);
+        var dow = d.getDay();
+        var mondayOffset = dow === 0 ? -6 : 1 - dow;
+
+        d.setDate(d.getDate() + mondayOffset);
+
+        while (d <= endDate) {
+            var days = [];
+            var weekTotal = 0;
+            var repoTotals = {};
+            var i;
+
+            for (i = 0; i < 7; i++) {
+                var current = new Date(d);
+                var dateStr;
+                var dayData;
+
+                current.setDate(d.getDate() + i);
+                dateStr = utils.getDayKey(current);
+
+                if (current >= startDate && current <= endDate) {
+                    days.push(dateStr);
+                    dayData = repoDayMap[dateStr];
+                    if (dayData) {
+                        weekTotal += dayData.totalEvents || 0;
+                        if (current.getDay() === 6 && dayData.totalEvents > 0) hasSatActivity = true;
+                        if (current.getDay() === 0 && dayData.totalEvents > 0) hasSunActivity = true;
+                        Object.keys(dayData.countsByRepo || {}).forEach(function(repoName) {
+                            repoTotals[repoName] = (repoTotals[repoName] || 0) + (dayData.countsByRepo[repoName] || 0);
+                        });
+                    }
+                } else {
+                    days.push(null);
+                }
+            }
+
+            weeks.push({
+                weekLabel: d.getDate() + " " + MONTHS_RU[d.getMonth()],
+                days: days,
+                weekTotal: weekTotal,
+                repoTotals: repoTotals
+            });
+            d.setDate(d.getDate() + 7);
+        }
+
+        return { weeks: weeks, showSat: hasSatActivity, showSun: hasSunActivity };
+    }
+
+    function getVisibleDays(showSat, showSun) {
+        var visibleDays = [0, 1, 2, 3, 4];
+        if (showSat) visibleDays.push(5);
+        if (showSun) visibleDays.push(6);
+        return visibleDays;
+    }
+
+    function getTopRepos(repoTotals) {
+        return Object.keys(repoTotals || {}).sort(function(a, b) {
+            return repoTotals[b] - repoTotals[a];
+        }).slice(0, MAX_WEEK_REPOS);
+    }
+
+    function getDayTitle(dateStr) {
+        var dt = new Date(dateStr + "T00:00:00");
+        var dowIdx = (dt.getDay() + 6) % 7;
+        return WEEKDAYS_RU[dowIdx] + ", " + dt.getDate() + " " + MONTHS_RU[dt.getMonth()];
+    }
+
+    function getItemText(item) {
+        return item.title || item.message || item.hash || item.type || "";
+    }
+
+    function getItemTimestamp(item) {
+        var ts = item && item.timestamp ? new Date(item.timestamp).getTime() : NaN;
+        return isNaN(ts) ? null : ts;
+    }
+
+    function getItemInfoScore(item) {
+        var score = 0;
+        if (item && item.title) score += 3;
+        if (item && item.message) score += 2;
+        if (item && item.hash) score += 1;
+        return score;
+    }
+
+    function getSortedDayItems(items) {
+        return (items || []).map(function(item, index) {
+            return {
+                item: item,
+                index: index,
+                ts: getItemTimestamp(item),
+                score: getItemInfoScore(item)
+            };
+        }).sort(function(a, b) {
+            if (a.ts !== null || b.ts !== null) {
+                if (a.ts === null) return 1;
+                if (b.ts === null) return -1;
+                if (a.ts !== b.ts) return b.ts - a.ts;
+            }
+            if (a.score !== b.score) return b.score - a.score;
+            return a.index - b.index;
+        }).map(function(entry) {
+            return entry.item;
+        });
+    }
+
+    function renderDayCell(dateStr, dayData) {
+        var totalEvents = dayData && dayData.totalEvents || 0;
+        var heatCls = utils.getHeatBg(totalEvents);
+        var textCls = totalEvents >= 5 ? "text-primary-foreground" : "text-foreground";
+        var items = getSortedDayItems(dayData && dayData.items);
+        var html = '<td class="px-1 py-0.5 border-r border-border cursor-pointer transition-colors ' +
+            (totalEvents > 0 ? "hover:bg-primary/5" : "hover:bg-muted/20") +
+            '" data-date="' + dateStr + '">';
+
+        html += '<div class="flex items-center justify-between mb-0.5">';
+        html += '<span class="text-[9px] font-semibold text-muted-foreground">' + utils.escapeHtml(getDayTitle(dateStr)) + "</span>";
+        if (totalEvents > 0) {
+            html += '<span class="text-[9px] font-bold px-1 py-0 rounded ' + heatCls + " " + textCls + '">' + totalEvents + "</span>";
+        }
+        html += "</div>";
+
+        if (items.length > 0) {
+            html += '<div class="space-y-0.5">';
+            items.slice(0, MAX_DAY_ITEMS).forEach(function(item) {
+                html += '<div class="leading-snug">';
+                html += '<div class="text-[10px] font-semibold text-primary break-words">' + utils.escapeHtml(item.repoName || "(unknown)") + "</div>";
+                html += '<div class="text-[9px] text-muted-foreground break-words">' + utils.escapeHtml(getItemText(item)) + "</div>";
+                html += "</div>";
+            });
+            if (items.length > MAX_DAY_ITEMS) {
+                html += '<div class="text-[9px] font-semibold text-muted-foreground">+' + (items.length - MAX_DAY_ITEMS) + " еще</div>";
+            }
+            html += "</div>";
+        }
+
+        html += "</td>";
+        return html;
+    }
+
+    function render(repoDayMap, startDate, endDate) {
+        var data = buildWeeks(repoDayMap || {}, startDate, endDate);
+        var weeks = data.weeks;
+        var visibleDays = getVisibleDays(data.showSat, data.showSun);
+        var selectedDate = null;
+        var selectCallback = null;
+        var html = '<div class="dashboard-card p-0 overflow-hidden"><div><table class="w-full table-fixed border-collapse text-[11px]"><colgroup>';
+        var vi;
+
+        for (vi = 0; vi < visibleDays.length; vi++) {
+            html += "<col />";
+        }
+        html += '<col style="width:84px;min-width:84px;max-width:84px" />';
+        html += '</colgroup><thead><tr class="bg-muted/40">';
+
+        for (vi = 0; vi < visibleDays.length; vi++) {
+            var dayIdx = visibleDays[vi];
+            html += '<th class="text-[10px] font-semibold text-muted-foreground px-1 py-0.5 text-left border-r border-border">' +
+                WEEKDAYS_RU[dayIdx] + "</th>";
+        }
+        html += '<th class="text-[10px] font-semibold text-muted-foreground px-1 py-0.5 text-right">Σ</th>';
+        html += "</tr></thead><tbody>";
+
+        weeks.forEach(function(week) {
+            html += '<tr class="border-t border-border hover:bg-surface-hover/50 align-top">';
+            visibleDays.forEach(function(dayIdx) {
+                var dateStr = week.days[dayIdx];
+                if (!dateStr) {
+                    html += '<td class="px-1 py-0.5 border-r border-border bg-muted/10"></td>';
+                    return;
+                }
+                html += renderDayCell(dateStr, repoDayMap[dateStr]);
+            });
+
+            html += '<td class="px-1 py-0.5 text-right align-top overflow-hidden">';
+            html += '<span class="text-[11px] font-bold block">' + week.weekTotal + "</span>";
+
+            getTopRepos(week.repoTotals).forEach(function(repoName) {
+                html += '<div class="text-[9px] text-muted-foreground break-all leading-tight text-left">' +
+                    utils.escapeHtml(repoName) + ": " + week.repoTotals[repoName] + "</div>";
+            });
+            html += "</td></tr>";
+        });
+
+        html += "</tbody></table></div></div>";
+
+        var $el = $(html);
+
+        function updateSelection(newDate) {
+            $el.find("td[data-date]").removeClass("ring-2 ring-inset ring-primary bg-primary/5");
+            if (newDate) {
+                $el.find('td[data-date="' + newDate + '"]').addClass("ring-2 ring-inset ring-primary bg-primary/5");
+            }
+            selectedDate = newDate;
+        }
+
+        $el.on("click", "td[data-date]", function() {
+            var date = $(this).attr("data-date");
+            if (date === selectedDate) {
+                updateSelection(null);
+                if (selectCallback) selectCallback(null);
+                return;
+            }
+            updateSelection(date);
+            if (selectCallback) selectCallback(date);
+        });
+
+        return {
+            $el: $el,
+            onSelectDate: function(callback) {
+                selectCallback = callback;
+            }
+        };
+    }
+
+    return {
+        render: render
+    };
 });
 
 /* === Module: daily-detail.js === */
@@ -1688,6 +2779,324 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     return { create: create };
 });
 
+/* === Module: repo-log.js === */
+define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($, config, utils) {
+    "use strict";
+
+    var TYPE_LABELS = {
+        commit: "Commit",
+        branch_commit: "Branch commit",
+        branch_update: "Branch",
+        pull_request_opened: "PR opened",
+        pull_request_merged: "PR merged",
+        pull_request_declined: "PR declined",
+        pull_request_reviewed: "PR reviewed",
+        pull_request_needs_work: "Needs work",
+        repository_update: "Repository",
+        unknown_dev_event: "Other"
+    };
+    var UI = {
+        title: "Лог репозиторной активности",
+        repo: "Репозиторий",
+        branch: "Ветка",
+        issue: "Задача",
+        type: "Тип",
+        text: "Текст",
+        date: "Дата",
+        time: "Время",
+        description: "Описание",
+        statusHash: "Статус/хеш",
+        empty: "Нет событий для выбранных фильтров",
+        show: "Открыть",
+        hide: "Скрыть",
+        author: "Автор",
+        reviewers: "Ревьюеры",
+        prId: "PR ID",
+        prTitle: "PR заголовок",
+        prStatus: "PR статус",
+        raw: "Raw"
+    };
+
+    function escapeHtml(value) {
+        return utils.escapeHtml ? utils.escapeHtml(value) : String(value || "");
+    }
+
+    function pad2(value) {
+        return value < 10 ? "0" + value : String(value);
+    }
+
+    function formatTime(timestamp) {
+        var date = new Date(timestamp || "");
+        if (isNaN(date.getTime())) return "";
+        return pad2(date.getHours()) + ":" + pad2(date.getMinutes());
+    }
+
+    function getTypeLabel(type) {
+        return config.REPO_ACTIVITY_LABELS && config.REPO_ACTIVITY_LABELS[type] || TYPE_LABELS[type] || type || "";
+    }
+
+    function getTextHaystack(item) {
+        return [
+            item.repoName,
+            item.branchName,
+            item.issueKey,
+            item.type,
+            getTypeLabel(item.type),
+            item.title,
+            item.message,
+            item.status,
+            item.hash,
+            item.author,
+            (item.reviewers || []).join(" ")
+        ].join(" ").toLowerCase();
+    }
+
+    function getDateScopedRows(items, selectedDate) {
+        return (items || []).filter(function(item) {
+            return !selectedDate || item.date === selectedDate;
+        });
+    }
+
+    function getVisibleRows(state) {
+        return getDateScopedRows(state.items, state.selectedDate).filter(function(item) {
+            if (state.filters.repo && item.repoName !== state.filters.repo) return false;
+            if (state.filters.branch && item.branchName !== state.filters.branch) return false;
+            if (state.filters.issue && item.issueKey !== state.filters.issue) return false;
+            if (state.filters.type && item.type !== state.filters.type) return false;
+            if (state.filters.text && getTextHaystack(item).indexOf(state.filters.text) < 0) return false;
+            return true;
+        });
+    }
+
+    function getOptions(rows, field) {
+        var map = {};
+        rows.forEach(function(item) {
+            var value = item[field];
+            if (value) map[value] = true;
+        });
+        return Object.keys(map).sort();
+    }
+
+    function getTypeValueByLabel(rows, label) {
+        var map = {};
+
+        rows.forEach(function(item) {
+            if (item && item.type) map[getTypeLabel(item.type)] = item.type;
+        });
+
+        return map[label] || label || "";
+    }
+
+    function renderSelect(label, field, value, options) {
+        var html = '<label class="flex flex-col gap-0.5 text-[10px] text-muted-foreground">' + escapeHtml(label);
+        html += '<select data-filter="' + field + '" class="h-7 min-w-[110px] rounded border border-border bg-background px-1.5 text-[11px] text-foreground">';
+        html += '<option value="">Все</option>';
+        options.forEach(function(option) {
+            html += '<option value="' + escapeHtml(option) + '"' + (option === value ? ' selected="selected"' : "") + '>' +
+                escapeHtml(option) + '</option>';
+        });
+        html += "</select></label>";
+        return html;
+    }
+
+    function getDescription(item) {
+        return item.message || item.title || item.type || "";
+    }
+
+    function getStatusHash(item) {
+        if (item.status && item.hash) return item.status + " / " + item.hash;
+        return item.status || item.hash || "";
+    }
+
+    function getPullRequestId(item) {
+        return item.pullRequestId || item.raw && (item.raw.id || item.raw.key) || "";
+    }
+
+    function getPullRequestTitle(item) {
+        return item.title || item.raw && (item.raw.title || item.raw.name) || "";
+    }
+
+    function getPullRequestStatus(item) {
+        return item.status || item.raw && item.raw.status || "";
+    }
+
+    function buildDetails(item) {
+        var raw = item.raw ? JSON.stringify(item.raw) : "";
+        var pullRequestId = getPullRequestId(item);
+        var pullRequestTitle = getPullRequestTitle(item);
+        var pullRequestStatus = getPullRequestStatus(item);
+        var details = '<tr class="bg-muted/20"><td colspan="9" class="px-3 py-2">';
+        details += '<div class="grid gap-1 text-[11px]">';
+        details += '<div><span class="text-muted-foreground">' + UI.repo + ':</span> <span class="font-semibold text-foreground">' + escapeHtml(item.repoName || "") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.branch + ':</span> <span class="text-foreground">' + escapeHtml(item.branchName || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> <span class="font-mono text-foreground">' + escapeHtml(item.issueKey || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.author + ':</span> <span class="text-foreground">' + escapeHtml(item.author || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.reviewers + ':</span> <span class="text-foreground">' + escapeHtml((item.reviewers || []).join(", ") || "-") + '</span></div>';
+        if (pullRequestId) {
+            details += '<div><span class="text-muted-foreground">' + UI.prId + ':</span> <span class="font-mono text-foreground">' + escapeHtml(pullRequestId) + '</span></div>';
+        }
+        if (pullRequestTitle) {
+            details += '<div><span class="text-muted-foreground">' + UI.prTitle + ':</span> <span class="text-foreground">' + escapeHtml(pullRequestTitle) + '</span></div>';
+        }
+        if (pullRequestStatus) {
+            details += '<div><span class="text-muted-foreground">' + UI.prStatus + ':</span> <span class="text-foreground">' + escapeHtml(pullRequestStatus) + '</span></div>';
+        }
+        details += '<div><span class="text-muted-foreground">' + UI.description + ':</span> <span class="text-foreground break-all">' + escapeHtml(getDescription(item) || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.statusHash + ':</span> <span class="text-foreground break-all">' + escapeHtml(getStatusHash(item) || "-") + '</span></div>';
+        if (raw) {
+            details += '<div><span class="text-muted-foreground">' + UI.raw + ':</span> <span class="font-mono text-foreground break-all">' + escapeHtml(raw) + "</span></div>";
+        }
+        details += "</div></td></tr>";
+        return details;
+    }
+
+    function renderHeaderFilter(label, field, value, options, isText) {
+        var html = '<div class="flex flex-col gap-1">';
+        html += '<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">' + escapeHtml(label) + '</span>';
+        if (isText) {
+            html += '<input data-filter="' + field + '" value="' + escapeHtml(value) + '" class="h-7 w-full rounded border border-border bg-background px-1.5 text-[11px] text-foreground" />';
+        } else {
+            html += '<select data-filter="' + field + '" class="h-7 w-full rounded border border-border bg-background px-1.5 text-[11px] text-foreground">';
+            html += '<option value="">Все</option>';
+            options.forEach(function(option) {
+                html += '<option value="' + escapeHtml(option) + '"' + (option === value ? ' selected="selected"' : "") + '>' + escapeHtml(option) + '</option>';
+            });
+            html += "</select>";
+        }
+        html += "</div>";
+        return html;
+    }
+
+    function buildRows(rows, expandedIndex) {
+        var html = "";
+
+        rows.forEach(function(item, index) {
+            var time = formatTime(item.timestamp);
+            var isExpanded = String(index) === expandedIndex;
+
+            html += '<tr class="border-b border-border/50 hover:bg-muted/30 ujg-ua-repo-row">';
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground whitespace-nowrap">' + escapeHtml(item.date || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + escapeHtml(time) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-semibold text-primary">' + escapeHtml(item.repoName || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground">' + escapeHtml(item.branchName || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' + escapeHtml(item.issueKey || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] truncate">' + escapeHtml(getDescription(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] truncate">' + escapeHtml(getStatusHash(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-right"><button class="text-[10px] text-primary hover:underline ujg-ua-repo-row-expand" data-idx="' + index + '">' + (isExpanded ? UI.hide : UI.show) + "</button></td>";
+            html += "</tr>";
+
+            if (isExpanded) {
+                html += buildDetails(item);
+            }
+        });
+
+        if (!html) {
+            html = '<tr><td colspan="9" class="px-3 py-6 text-center text-[11px] text-muted-foreground">' + UI.empty + '</td></tr>';
+        }
+
+        return html;
+    }
+
+    function buildHtml(state) {
+        var dateScopedRows = getDateScopedRows(state.items, state.selectedDate);
+        var rows = getVisibleRows(state);
+        var headerSuffix = state.selectedDate ? " за " + state.selectedDate : "";
+        var html = '<div class="dashboard-card overflow-hidden">';
+
+        html += '<div class="px-2 py-1 border-b border-border flex items-center justify-between gap-2">';
+        html += '<h3 class="text-[10px] font-semibold text-foreground uppercase tracking-wider">' + UI.title + escapeHtml(headerSuffix) + "</h3>";
+        html += '<span class="text-[10px] font-mono text-muted-foreground">' + rows.length + "/" + state.items.length + "</span>";
+        html += "</div>";
+
+        html += '<div class="max-h-[600px] overflow-auto"><div class="relative w-full overflow-auto"><table class="w-full caption-bottom text-sm">';
+        html += '<thead><tr class="hover:bg-transparent border-b border-border align-top">';
+        html += '<th class="px-1.5 py-1 w-[84px] text-left text-muted-foreground"><div class="text-[10px] font-semibold uppercase tracking-wider">' + UI.date + '</div></th>';
+        html += '<th class="px-1.5 py-1 w-[48px] text-left text-muted-foreground"><div class="text-[10px] font-semibold uppercase tracking-wider">' + UI.time + '</div></th>';
+        html += '<th class="px-1.5 py-1 w-[140px] text-left text-muted-foreground">' + renderHeaderFilter(UI.repo, "repo", state.filters.repo, getOptions(dateScopedRows, "repoName")) + '</th>';
+        html += '<th class="px-1.5 py-1 w-[140px] text-left text-muted-foreground">' + renderHeaderFilter(UI.branch, "branch", state.filters.branch, getOptions(dateScopedRows, "branchName")) + '</th>';
+        html += '<th class="px-1.5 py-1 w-[100px] text-left text-muted-foreground">' + renderHeaderFilter(UI.issue, "issue", state.filters.issue, getOptions(dateScopedRows, "issueKey")) + '</th>';
+        html += '<th class="px-1.5 py-1 w-[110px] text-left text-muted-foreground">' + renderHeaderFilter(UI.type, "type", state.filters.type ? getTypeLabel(state.filters.type) : "", getOptions(dateScopedRows, "type").map(getTypeLabel)) + '</th>';
+        html += '<th class="px-1.5 py-1 text-left text-muted-foreground">' + renderHeaderFilter(UI.description, "text", state.filters.text, [], true) + '</th>';
+        html += '<th class="px-1.5 py-1 w-[150px] text-left text-muted-foreground"><div class="text-[10px] font-semibold uppercase tracking-wider">' + UI.statusHash + '</div></th>';
+        html += '<th class="px-1.5 py-1 w-[44px] text-right text-muted-foreground"><div class="text-[10px] font-semibold uppercase tracking-wider">+</div></th>';
+        html += "</tr></thead><tbody>";
+        html += buildRows(rows, state.expandedIndex);
+        html += "</tbody></table></div></div></div>";
+
+        return html;
+    }
+
+    function create() {
+        var state = {
+            items: [],
+            selectedDate: null,
+            expandedIndex: "",
+            filters: {
+                repo: "",
+                branch: "",
+                issue: "",
+                type: "",
+                text: ""
+            }
+        };
+        var $el = $("<div></div>");
+
+        function renderHtml() {
+            $el.html(buildHtml(state));
+        }
+
+        $el.on("change", "select[data-filter]", function() {
+            var field = $(this).attr("data-filter");
+            var value = $(this).val();
+            if (field === "type") {
+                state.filters.type = getTypeValueByLabel(getDateScopedRows(state.items, state.selectedDate), value);
+            } else if (Object.prototype.hasOwnProperty.call(state.filters, field)) {
+                state.filters[field] = value || "";
+            }
+            state.expandedIndex = "";
+            renderHtml();
+        });
+
+        $el.on("input", 'input[data-filter="text"]', function() {
+            state.filters.text = ($(this).val() || "").toLowerCase();
+            state.expandedIndex = "";
+            renderHtml();
+        });
+
+        $el.on("click", ".ujg-ua-repo-row-expand", function() {
+            var index = $(this).attr("data-idx") || "";
+            state.expandedIndex = state.expandedIndex === index ? "" : index;
+            renderHtml();
+        });
+
+        return {
+            $el: $el,
+            render: function(repoActivity, selectedDate) {
+                state.items = (repoActivity && repoActivity.items || []).slice().sort(function(a, b) {
+                    var left = String(a && a.timestamp || "");
+                    var right = String(b && b.timestamp || "");
+                    return left < right ? 1 : left > right ? -1 : 0;
+                });
+                state.selectedDate = selectedDate || null;
+                state.expandedIndex = "";
+                state.filters = {
+                    repo: "",
+                    branch: "",
+                    issue: "",
+                    type: "",
+                    text: ""
+                };
+                renderHtml();
+            }
+        };
+    }
+
+    return {
+        create: create
+    };
+});
+
 /* === Module: rendering.js === */
 define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($, config, utils) {
     "use strict";
@@ -1698,6 +3107,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var currentUser = null;
     var currentPeriod = null;
     var isFullscreen = false;
+    var activeRequestId = 0;
 
     var summaryInst = null;
     var projBreakInst = null;
@@ -1738,8 +3148,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             currentUser = user;
             if (user) {
                 var period = currentPeriod || utils.getDefaultPeriod();
-                loadData(user.name, period);
+                loadData(user.name, period, user);
             } else {
+                activeRequestId += 1;
                 renderEmptyState();
             }
         });
@@ -1752,7 +3163,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $header.find(".ujg-ua-btn-load").on("click", function() {
             if (!currentUser) return;
             var period = currentPeriod || utils.getDefaultPeriod();
-            loadData(currentUser.name, period);
+            loadData(currentUser.name, period, currentUser);
         });
 
         $header.find(".ujg-ua-btn-fullscreen").on("click", function() {
@@ -1762,7 +3173,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                 document.exitFullscreen().catch(function() {});
             }
         });
-        $(document).on("fullscreenchange", function() {
+        $(document).off("fullscreenchange.ujgUA_rendering").on("fullscreenchange.ujgUA_rendering", function() {
             isFullscreen = !!document.fullscreenElement;
             $header.find(".ujg-ua-btn-fullscreen").html(
                 utils.icon(isFullscreen ? "minimize2" : "maximize2", "w-3.5 h-3.5")
@@ -1777,7 +3188,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         if (currentUser) {
             var period = currentPeriod || utils.getDefaultPeriod();
-            loadData(currentUser.name, period);
+            loadData(currentUser.name, period, currentUser);
         } else {
             renderEmptyState();
         }
@@ -1795,7 +3206,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
     }
 
-    function loadData(username, period) {
+    function loadData(username, period, user) {
+        var requestId = ++activeRequestId;
+        var requestUser = Object.assign({}, user || currentUser || { name: username });
         $contentArea.empty();
 
         var loader = mods.progressLoader.create();
@@ -1805,11 +3218,30 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         mods.api.fetchAllData(username, period.start, period.end, function(progress) {
             loader.update(progress);
         }).done(function(rawData) {
+            if (requestId !== activeRequestId) return;
             var processed = mods.dataProcessor.processData(rawData, username, period.start, period.end);
             var startDate = new Date(period.start + "T00:00:00");
             var endDate = new Date(period.end + "T23:59:59");
-            renderDashboard(processed, startDate, endDate, username);
+            if (requestId !== activeRequestId) return;
+            mods.repoApi.fetchRepoActivityForIssues(rawData.issues, function(progress) {
+                loader.update(progress);
+            }).done(function(repoData) {
+                if (requestId !== activeRequestId) return;
+                var repoActivity = mods.repoDataProcessor.processRepoActivity(
+                    processed.issueMap,
+                    repoData && repoData.issueDevStatusMap,
+                    requestUser,
+                    period.start,
+                    period.end
+                );
+                if (requestId !== activeRequestId) return;
+                renderDashboard(processed, startDate, endDate, username, { activity: repoActivity });
+            }).fail(function(err) {
+                if (requestId !== activeRequestId) return;
+                renderDashboard(processed, startDate, endDate, username, { error: err });
+            });
         }).fail(function(err) {
+            if (requestId !== activeRequestId) return;
             $contentArea.empty().html(
                 '<div class="dashboard-card p-8 text-center">' +
                     '<div class="text-destructive font-medium mb-2">Ошибка загрузки</div>' +
@@ -1819,8 +3251,19 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
     }
 
-    function renderDashboard(data, startDate, endDate, username) {
+    function renderRepoStateCard(title, message) {
+        return $(
+            '<div class="dashboard-card p-4">' +
+                '<div class="text-sm font-semibold text-foreground mb-1">' + utils.escapeHtml(title) + '</div>' +
+                '<div class="text-sm text-muted-foreground">' + utils.escapeHtml(message) + '</div>' +
+            '</div>'
+        );
+    }
+
+    function renderDashboard(data, startDate, endDate, username, repoState) {
         $contentArea.empty();
+        repoState = repoState || {};
+        var repoActivity = repoState.activity || null;
 
         summaryInst = mods.summaryCards.create();
         summaryInst.render(data.stats);
@@ -1828,6 +3271,19 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         var heatmap = mods.calendarHeatmap.render(data.dayMap, data.issueMap, startDate, endDate);
         $contentArea.append(heatmap.$el);
+
+        var repoCalendarInst = null;
+        var repoLogInst = null;
+
+        if (repoActivity) {
+            repoCalendarInst = mods.repoCalendar.render(repoActivity.dayMap, startDate, endDate);
+            $contentArea.append(repoCalendarInst.$el);
+        } else if (repoState.error) {
+            $contentArea.append(renderRepoStateCard(
+                "Репозиторная активность",
+                "Не удалось загрузить данные репозиториев."
+            ));
+        }
 
         detailInst = mods.dailyDetail.create();
         $contentArea.append(detailInst.$el);
@@ -1837,6 +3293,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var dayData = data.dayMap[dateStr] || { worklogs: [], changes: [], issues: [], totalHours: 0 };
             detailInst.show(dateStr, dayData, data.issueMap);
         });
+
+        if (repoCalendarInst) {
+            repoCalendarInst.onSelectDate(function(selectedDate) {
+                if (repoLogInst) repoLogInst.render(repoActivity, selectedDate || null);
+            });
+        }
 
         projBreakInst = mods.projectBreakdown.create();
         var projects = Object.values(data.projectMap).sort(function(a, b) { return b.totalHours - a.totalHours; });
@@ -1861,6 +3323,17 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         activityLogInst = mods.activityLog.create();
         activityLogInst.render(data, username, utils.getDayKey(startDate), utils.getDayKey(endDate));
         $contentArea.append(activityLogInst.$el);
+
+        if (repoActivity) {
+            repoLogInst = mods.repoLog.create();
+            repoLogInst.render(repoActivity, null);
+            $contentArea.append(repoLogInst.$el);
+        } else if (repoState.error) {
+            $contentArea.append(renderRepoStateCard(
+                "Лог репозиторной активности",
+                "Данные репозиториев недоступны для выбранного периода."
+            ));
+        }
     }
 
     return { init: init };
@@ -1869,14 +3342,14 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 /* === Module: main.js === */
 define("_ujgUA_main", [
     "jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils",
-    "_ujgUA_api", "_ujgUA_dataProcessor", "_ujgUA_progressLoader",
+    "_ujgUA_api", "_ujgUA_repoApi", "_ujgUA_dataProcessor", "_ujgUA_repoDataProcessor", "_ujgUA_progressLoader",
     "_ujgUA_userPicker", "_ujgUA_dateRangePicker", "_ujgUA_summaryCards",
-    "_ujgUA_calendarHeatmap", "_ujgUA_dailyDetail",
+    "_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail",
     "_ujgUA_projectBreakdown", "_ujgUA_issueList",
-    "_ujgUA_activityLog", "_ujgUA_rendering"
-], function($, Common, config, utils, api, dataProcessor, progressLoader,
-            userPicker, dateRangePicker, summaryCards, calendarHeatmap, dailyDetail,
-            projectBreakdown, issueList, activityLog, rendering) {
+    "_ujgUA_activityLog", "_ujgUA_repoLog", "_ujgUA_rendering"
+], function($, Common, config, utils, api, repoApi, dataProcessor, repoDataProcessor, progressLoader,
+            userPicker, dateRangePicker, summaryCards, calendarHeatmap, repoCalendar, dailyDetail,
+            projectBreakdown, issueList, activityLog, repoLog, rendering) {
     "use strict";
 
     function MyGadget(API) {
@@ -1889,11 +3362,11 @@ define("_ujgUA_main", [
 
         rendering.init($container, {
             config: config, utils: utils, api: api,
-            dataProcessor: dataProcessor, progressLoader: progressLoader,
+            repoApi: repoApi, dataProcessor: dataProcessor, repoDataProcessor: repoDataProcessor, progressLoader: progressLoader,
             userPicker: userPicker, dateRangePicker: dateRangePicker,
-            summaryCards: summaryCards, calendarHeatmap: calendarHeatmap,
+            summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
-            issueList: issueList, activityLog: activityLog
+            issueList: issueList, activityLog: activityLog, repoLog: repoLog
         });
     }
 
