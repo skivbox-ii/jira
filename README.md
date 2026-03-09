@@ -21,17 +21,6 @@
 ├── ujg-project-analytics-spec.md
 ├── ujg-project-analytics.css
 ├── ujg-project-analytics.js
-├── ujg-user-activity-modules/
-│   ├── api.js
-│   ├── config.js
-│   ├── utils.js
-│   ├── user-picker.js
-│   ├── date-range-picker.js
-│   ├── summary-cards.js
-│   ├── project-breakdown.js
-│   ├── issue-list.js
-│   ├── progress-loader.js
-│   └── activity-log.js
 ├── ujg-sprint-health-modules/
 ├── ujg-sprint-health-spec.md
 ├── ujg-sprint-health.css
@@ -39,17 +28,6 @@
 ├── ujg-sprint-health.js
 ├── ujg-timesheet.css
 ├── ujg-timesheet.js
-├── build-user-activity.js         # сборка ujg-user-activity.js из модулей
-├── ujg-user-activity-modules/
-│   ├── config.js          # _ujgUA_config — константы, иконки, цвета
-│   ├── utils.js           # _ujgUA_utils — утилиты форматирования, дат, HTML
-│   ├── api.js             # _ujgUA_api — Jira REST API (search, worklogs, changelog)
-│   ├── data-processor.js  # _ujgUA_dataProcessor — обработка сырых данных
-│   ├── user-picker.js     # _ujgUA_userPicker — выбор пользователя
-│   ├── calendar-heatmap.js # _ujgUA_calendarHeatmap — тепловая карта по неделям
-│   ├── daily-detail.js    # _ujgUA_dailyDetail — детали активности за день
-│   ├── rendering.js       # _ujgUA_rendering — оркестратор UI
-│   └── main.js            # _ujgUA_main — точка входа гаджета
 └── vba/
 ```
 
