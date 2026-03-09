@@ -234,6 +234,63 @@ test("computeMonthSummary adds utilization and project percentages", function() 
     assert.equal(result.projectPcts["B"], 25);
 });
 
+test("computeWeekSummary in group mode scales capacity by active users", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var weekDays = [
+        new Date(2026, 2, 2), // Mon
+        new Date(2026, 2, 3), // Tue
+        new Date(2026, 2, 4), // Wed
+        new Date(2026, 2, 5), // Thu
+        new Date(2026, 2, 6), // Fri
+    ];
+    var calendarData = {
+        "2026-03-02": [{
+            key: "TEAM-1",
+            seconds: 57600,
+            issueType: "Story",
+            authors: { u1: "Alice", u2: "Bob" },
+            worklogs: [
+                { authorId: "u1", authorName: "Alice", seconds: 28800, comment: "" },
+                { authorId: "u2", authorName: "Bob", seconds: 28800, comment: "" }
+            ]
+        }]
+    };
+
+    var result = Timesheet.__test.computeWeekSummary(weekDays, [], calendarData, { groupSummary: true });
+
+    assert.equal(result.totalSeconds, 57600);
+    assert.equal(result.activeUserCount, 2);
+    assert.equal(result.expectedSeconds, 2 * 5 * 8 * 3600);
+    assert.equal(result.utilization, 20);
+});
+
+test("computeMonthSummary in group mode reports active users instead of single-user norm", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var days = [new Date(2026, 2, 2)]; // Mon
+    var calendarData = {
+        "2026-03-02": [{
+            key: "TEAM-1",
+            seconds: 57600,
+            issueType: "Task",
+            authors: { u1: "Alice", u2: "Bob" },
+            worklogs: [
+                { authorId: "u1", authorName: "Alice", seconds: 28800, comment: "" },
+                { authorId: "u2", authorName: "Bob", seconds: 28800, comment: "" }
+            ]
+        }]
+    };
+
+    var result = Timesheet.__test.computeMonthSummary(days, [], calendarData, { groupSummary: true });
+
+    assert.equal(result.activeUserCount, 2);
+    assert.equal(result.expectedSeconds, 2 * 8 * 3600);
+    assert.equal(result.utilization, 100);
+    assert.match(Timesheet.__test.formatSummaryHeadline(result, true), /2/);
+    assert.doesNotMatch(Timesheet.__test.formatSummaryHeadline(result, true), /\/\s*8h|\/\s*40h/i);
+});
+
 test("getWeekTransitions filters changelog entries by week date range", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);

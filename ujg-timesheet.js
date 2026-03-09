@@ -137,6 +137,47 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         return count;
     }
 
+    function collectActiveUserIds(items, activeUserIds, userFilter) {
+        (items || []).forEach(function(item) {
+            var allowedUsers = userFilter && userFilter.length > 0 ? userFilter : null;
+            var worklogs = item.worklogs || [];
+            if (worklogs.length > 0) {
+                worklogs.forEach(function(wl) {
+                    if (!wl.authorId) return;
+                    if (allowedUsers && allowedUsers.indexOf(wl.authorId) < 0) return;
+                    activeUserIds[wl.authorId] = true;
+                });
+                return;
+            }
+            Object.keys(item.authors || {}).forEach(function(authorId) {
+                if (allowedUsers && allowedUsers.indexOf(authorId) < 0) return;
+                activeUserIds[authorId] = true;
+            });
+        });
+    }
+
+    function formatUserCountRu(count) {
+        var mod10 = count % 10;
+        var mod100 = count % 100;
+        if (mod10 === 1 && mod100 !== 11) return count + " пользователь";
+        if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return count + " пользователя";
+        return count + " пользователей";
+    }
+
+    function formatSummaryHeadline(summary, groupSummary) {
+        var hours = utils.formatTime(summary.totalSeconds) || "0";
+        if (!groupSummary) {
+            var expected = utils.formatTime(summary.expectedSeconds) || "0";
+            var text = hours + " / " + expected;
+            if (summary.expectedSeconds > 0) {
+                if (summary.totalSeconds >= summary.expectedSeconds) text += " ✓";
+                else if (summary.deficit > 0) text += " −" + utils.formatTime(summary.deficit);
+            }
+            return text;
+        }
+        return formatUserCountRu(summary.activeUserCount || 0) + " · " + hours + " (" + (summary.utilization || 0) + "%)";
+    }
+
     function computeUserReport(userId, days, calendarData) {
         var workDays = countWorkDays(days);
         var expectedSeconds = workDays * 8 * 3600;
@@ -176,13 +217,15 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         };
     }
 
-    function computeWeekSummary(weekDays, userFilter, calendarData) {
+    function computeWeekSummary(weekDays, userFilter, calendarData, options) {
         var totalSeconds = 0;
         var projects = {};
         var issueTypeKeys = {};
         var taskKeys = {};
         var daysWorked = 0;
         var workDays = 0;
+        var groupSummary = !!(options && options.groupSummary);
+        var activeUserIds = {};
 
         (weekDays || []).forEach(function(day) {
             if (!day) return;
@@ -191,6 +234,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var dayKey = utils.getDayKey(day);
             var dayData = filterDayDataByUsers(calendarData[dayKey] || [], userFilter);
             var daySeconds = 0;
+
+            if (groupSummary) collectActiveUserIds(dayData, activeUserIds, userFilter);
 
             dayData.forEach(function(item) {
                 var secs = item.seconds || 0;
@@ -209,11 +254,15 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             if (daySeconds > 0) daysWorked++;
         });
 
-        var expectedSeconds = workDays * 8 * 3600;
+        var activeUserCount = groupSummary ? Object.keys(activeUserIds).length : 0;
+        var expectedSeconds = workDays * 8 * 3600 * (groupSummary ? activeUserCount : 1);
         var issueTypes = {};
         Object.keys(issueTypeKeys).forEach(function(type) {
             issueTypes[type] = Object.keys(issueTypeKeys[type]).length;
         });
+        var utilization = expectedSeconds > 0
+            ? Math.round(totalSeconds / expectedSeconds * 1000) / 10
+            : 0;
 
         return {
             totalSeconds: totalSeconds,
@@ -224,15 +273,14 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             tasks: taskKeys,
             taskCount: Object.keys(taskKeys).length,
             daysWorked: daysWorked,
-            workDays: workDays
+            workDays: workDays,
+            activeUserCount: activeUserCount,
+            utilization: utilization
         };
     }
 
-    function computeMonthSummary(monthDays, userFilter, calendarData) {
-        var result = computeWeekSummary(monthDays, userFilter, calendarData);
-        result.utilization = result.expectedSeconds > 0
-            ? Math.round(result.totalSeconds / result.expectedSeconds * 1000) / 10
-            : 0;
+    function computeMonthSummary(monthDays, userFilter, calendarData, options) {
+        var result = computeWeekSummary(monthDays, userFilter, calendarData, options);
         result.projectPcts = {};
         if (result.totalSeconds > 0) {
             Object.keys(result.projects).forEach(function(proj) {
@@ -409,24 +457,18 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             return s.substring(0, 5);
         }
         
-        function renderWeekSummaryCell(summary, transitions) {
-            var hours = utils.formatTime(summary.totalSeconds) || "0";
-            var expected = utils.formatTime(summary.expectedSeconds) || "0";
-            var isOk = summary.totalSeconds >= summary.expectedSeconds;
+        function renderWeekSummaryCell(summary, transitions, groupSummary) {
+            var isOk = groupSummary ? (summary.utilization >= 100) : (summary.totalSeconds >= summary.expectedSeconds);
             var cls = isOk ? "ujg-sum-ok" : "ujg-sum-deficit";
 
             var html = '<div class="ujg-summary-cell">';
-            if (summary.totalSeconds === 0 && summary.expectedSeconds === 0) {
+            if (summary.totalSeconds === 0 && (!groupSummary ? summary.expectedSeconds === 0 : (summary.activeUserCount || 0) === 0)) {
                 html += '</div>';
                 return html;
             }
 
             html += '<div class="ujg-sum-hours ' + cls + '">';
-            html += hours + ' / ' + expected;
-            if (summary.expectedSeconds > 0) {
-                if (isOk) html += ' ✓';
-                else if (summary.deficit > 0) html += ' −' + utils.formatTime(summary.deficit);
-            }
+            html += formatSummaryHeadline(summary, groupSummary);
             html += '</div>';
 
             var projKeys = Object.keys(summary.projects).sort(function(a, b) {
@@ -466,17 +508,15 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             return html;
         }
 
-        function renderMonthSummaryRow(month, year, summary, colCount) {
+        function renderMonthSummaryRow(month, year, summary, groupSummary) {
             var title = MONTH_NAMES[month] + ' ' + year;
-            var hours = utils.formatTime(summary.totalSeconds) || "0";
-            var expected = utils.formatTime(summary.expectedSeconds) || "0";
             var pct = summary.utilization || 0;
-            var isOk = summary.totalSeconds >= summary.expectedSeconds;
+            var isOk = groupSummary ? pct >= 100 : summary.totalSeconds >= summary.expectedSeconds;
 
             var html = '<div class="ujg-month-summary" style="grid-column:1/-1">';
             html += '<div class="ujg-ms-header">';
             html += '<span class="ujg-ms-title">' + title + '</span>';
-            html += '<span class="ujg-ms-hours ' + (isOk ? 'ujg-sum-ok' : 'ujg-sum-deficit') + '">' + hours + ' / ' + expected + ' (' + pct + '%)</span>';
+            html += '<span class="ujg-ms-hours ' + (isOk ? 'ujg-sum-ok' : 'ujg-sum-deficit') + '">' + formatSummaryHeadline(summary, groupSummary) + '</span>';
             html += '</div>';
 
             html += '<div class="ujg-ms-body">';
@@ -644,9 +684,10 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 });
 
                 // Summary cell for this week
-                var wSummary = computeWeekSummary(week, userFilter, calendarData);
+                var groupSummaryMode = !userId;
+                var wSummary = computeWeekSummary(week, userFilter, calendarData, { groupSummary: groupSummaryMode });
                 var transitions = state.showDetails ? getWeekTransitions(week, wSummary.tasks, state.changelogData) : null;
-                html += renderWeekSummaryCell(wSummary, transitions);
+                html += renderWeekSummaryCell(wSummary, transitions, groupSummaryMode);
 
                 html += '</div>';
 
@@ -655,8 +696,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                     if (monthLastWeek[mk] === weekIdx) {
                         var mData = monthMap[mk];
                         if (mData && mData.days.length > 0) {
-                            var mSummary = computeMonthSummary(mData.days, userFilter, calendarData);
-                            html += renderMonthSummaryRow(mData.month, mData.year, mSummary);
+                            var mSummary = computeMonthSummary(mData.days, userFilter, calendarData, { groupSummary: groupSummaryMode });
+                            html += renderMonthSummaryRow(mData.month, mData.year, mSummary, groupSummaryMode);
                         }
                     }
                 });
@@ -1095,7 +1136,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         computeUserReport: computeUserReport,
         computeWeekSummary: computeWeekSummary,
         computeMonthSummary: computeMonthSummary,
-        getWeekTransitions: getWeekTransitions
+        getWeekTransitions: getWeekTransitions,
+        formatSummaryHeadline: formatSummaryHeadline
     };
     
     return MyGadget;
