@@ -3357,8 +3357,12 @@ define("_ujgUA_main", [
         var $content = API.getGadgetContentEl();
         if (!$content || $content.length === 0) { console.error("[UJG-UserActivity] No content element"); return; }
 
-        var $container = $("<div></div>");
-        $content.append($container);
+        var $container = $content.find(".ujg-user-activity");
+        if ($container.length === 0) {
+            $container = $("<div></div>");
+            $content.append($container);
+        }
+        $container.removeAttr("style");
 
         rendering.init($container, {
             config: config, utils: utils, api: api,
