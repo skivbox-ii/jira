@@ -22,7 +22,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     }
 
     function renderShell() {
-        $container.empty().addClass("bg-background flex flex-col min-h-0");
+        $container.empty().addClass("bg-background");
 
         var $header = $(
             '<header class="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-30">' +
@@ -80,7 +80,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             );
         });
 
-        $contentArea = $('<main class="w-full flex-1 min-h-0 overflow-auto px-3 py-2 space-y-2"></main>');
+        $contentArea = $('<main class="w-full px-3 py-2 space-y-2"></main>');
         $container.append($contentArea);
 
         userPicker.setFromUrl();
