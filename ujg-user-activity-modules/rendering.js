@@ -67,17 +67,18 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
 
         $header.find(".ujg-ua-btn-fullscreen").on("click", function() {
-            if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen().catch(function() {});
-            } else {
-                document.exitFullscreen().catch(function() {});
-            }
-        });
-        $(document).off("fullscreenchange.ujgUA_rendering").on("fullscreenchange.ujgUA_rendering", function() {
-            isFullscreen = !!document.fullscreenElement;
+            var $el = $container.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
+            if ($el.length === 0) $el = $container;
+            isFullscreen = !isFullscreen;
+            $el.toggleClass("ujg-fullscreen", isFullscreen);
             $header.find(".ujg-ua-btn-fullscreen").html(
                 utils.icon(isFullscreen ? "minimize2" : "maximize2", "w-3.5 h-3.5")
             );
+        });
+        $(document).off("keydown.ujgUA_rendering").on("keydown.ujgUA_rendering", function(e) {
+            if (e.key === "Escape" && isFullscreen) {
+                $header.find(".ujg-ua-btn-fullscreen").trigger("click");
+            }
         });
 
         $contentArea = $('<main class="w-full px-3 py-2 space-y-2"></main>');
