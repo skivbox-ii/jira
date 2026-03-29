@@ -254,11 +254,37 @@ test("bootstrap generator emits daily diligence runtime and bootstrap outputs", 
   assert.doesNotMatch(bootstrap, /@main\//);
 });
 
+test("bootstrap generator emits story browser runtime and bootstrap outputs", function() {
+  var releaseRef = 'story"5678\\ref';
+  var mod = require(MOD_PATH);
+  var baseUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira";
+  var out = mod.buildAssets({
+    releaseRef: releaseRef,
+    assetBaseUrl: baseUrl,
+    widgets: [mod.WIDGETS.storyBrowser]
+  });
+  var runtime = out["ujg-story-browser.runtime.js"];
+  var bootstrap = out["ujg-story-browser.bootstrap.js"];
+
+  assert.match(
+    runtime,
+    /define\("_ujgStoryBrowserRuntime", \["_ujgSB_main"\], function\(G\) {\s+"use strict";\s+return G;/
+  );
+  assert.match(bootstrap, /define\("_ujgStoryBrowser"/);
+  assert.match(bootstrap, /var releaseRef = "story\\"5678\\\\ref"/);
+  assert.match(bootstrap, /_ujgCommon\.js"/);
+  assert.match(bootstrap, /ujg-story-browser\.css"/);
+  assert.match(bootstrap, /ujg-story-browser\.runtime\.js"/);
+  assert.doesNotMatch(bootstrap, /@main\//);
+});
+
 test("generated bootstrap assets are present in the repository", function() {
   var root = path.join(__dirname, "..");
   var expectedAssets = [
     ["ujg-daily-diligence.bootstrap.js", /_ujgDailyDiligence/],
     ["ujg-daily-diligence.runtime.js", /_ujgDailyDiligenceRuntime/],
+    ["ujg-story-browser.bootstrap.js", /_ujgStoryBrowser/],
+    ["ujg-story-browser.runtime.js", /_ujgStoryBrowserRuntime/],
     ["ujg-project-analytics.bootstrap.js", /_ujgProjectAnalytics/],
     ["ujg-project-analytics.runtime.js", /_ujgProjectAnalyticsRuntime/],
     ["ujg-sprint-health.bootstrap.js", /_ujgSprintHealth/],

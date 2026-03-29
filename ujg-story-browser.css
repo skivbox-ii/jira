@@ -1,0 +1,338 @@
+/* Story Browser — widget-scoped layout and badge tokens (utility layer may also apply). */
+
+.ujg-story-browser {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 11px;
+    line-height: 1.35;
+    color: hsl(var(--foreground));
+}
+
+.ujg-story-browser .ujg-sb-root {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.ujg-story-browser .ujg-sb-view-host {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.5rem;
+}
+
+/* Sticky header: divider + frosted backdrop */
+.ujg-sb-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-shrink: 0;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background-color: hsl(var(--background) / 0.88);
+    border-bottom: 1px solid hsl(var(--border));
+}
+
+.ujg-sb-header-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem;
+}
+
+.ujg-sb-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.5rem;
+    flex: 1 1 12rem;
+    min-width: 0;
+}
+
+.ujg-sb-view-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
+.ujg-sb-action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
+.ujg-sb-view-active {
+    background-color: hsl(var(--primary) / 0.12);
+    border-color: hsl(var(--primary) / 0.45);
+    color: hsl(var(--primary));
+}
+
+.ujg-sb-progress-host {
+    flex-shrink: 0;
+}
+
+/* Fetch / chunk progress */
+.ujg-sb-progress {
+    font-size: 10px;
+    color: hsl(var(--muted-foreground));
+    padding: 0.25rem 0.5rem;
+}
+
+.ujg-sb-progress-bar {
+    height: 0.25rem;
+    width: 100%;
+    max-width: 20rem;
+    border-radius: 9999px;
+    background-color: hsl(var(--muted));
+    overflow: hidden;
+    margin-top: 0.125rem;
+}
+
+.ujg-sb-progress-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background-color: hsl(var(--primary));
+    transition: width 0.2s ease;
+}
+
+/* Table */
+.ujg-sb-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+}
+
+.ujg-sb-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+}
+
+.ujg-sb-table th,
+.ujg-sb-table td {
+    padding: 0.2rem 0.35rem;
+    vertical-align: top;
+    border-bottom: 1px solid hsl(var(--border) / 0.65);
+}
+
+.ujg-sb-table thead th {
+    font-weight: 600;
+    white-space: nowrap;
+    background-color: hsl(var(--muted) / 0.25);
+}
+
+.ujg-sb-table-row-epic {
+    background-color: hsl(var(--muted) / 0.4);
+    font-weight: 600;
+}
+
+.ujg-sb-table-row-epic td {
+    border-bottom-color: hsl(var(--border) / 0.85);
+}
+
+.ujg-sb-table-row-story {
+    background-color: hsl(var(--card) / 0.35);
+}
+
+.ujg-sb-table-row-story:hover td {
+    background-color: hsl(var(--muted) / 0.12);
+}
+
+.ujg-sb-problem-row {
+    background-color: hsl(var(--destructive) / 0.14);
+    color: hsl(var(--destructive));
+}
+
+.ujg-sb-problem-row td {
+    border-bottom-color: hsl(var(--destructive) / 0.25);
+}
+
+.ujg-sb-problem-cell {
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+}
+
+/* Accordion */
+.ujg-sb-accordion-item {
+    border-radius: calc(var(--radius) - 2px);
+    margin-bottom: 0.25rem;
+    border-color: hsl(var(--border));
+}
+
+.ujg-sb-accordion-head {
+    border-radius: calc(var(--radius) - 4px);
+}
+
+/* Rows (list) view */
+.ujg-sb-rows-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 0;
+}
+
+.ujg-sb-row-card {
+    border-radius: calc(var(--radius) - 6px);
+}
+
+/* Type badges — hsl theme tokens for light/dark */
+.ujg-sb-type-epic,
+.ujg-sb-type-story,
+.ujg-sb-type-bug,
+.ujg-sb-type-task,
+.ujg-sb-type-subtask,
+.ujg-sb-type-frontend,
+.ujg-sb-type-backend,
+.ujg-sb-type-se,
+.ujg-sb-type-devops,
+.ujg-sb-type-qa,
+.ujg-sb-type-unknown {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.ujg-sb-type-epic {
+    color: hsl(var(--chart-4));
+    background-color: hsl(var(--chart-4) / 0.18);
+}
+
+.ujg-sb-type-story {
+    color: hsl(var(--chart-1));
+    background-color: hsl(var(--chart-1) / 0.15);
+}
+
+.ujg-sb-type-bug {
+    color: hsl(var(--destructive));
+    background-color: hsl(var(--destructive) / 0.14);
+}
+
+.ujg-sb-type-task {
+    color: hsl(var(--chart-2));
+    background-color: hsl(var(--chart-2) / 0.16);
+}
+
+.ujg-sb-type-subtask {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--muted) / 0.55);
+}
+
+.ujg-sb-type-frontend {
+    color: hsl(var(--chart-5));
+    background-color: hsl(var(--chart-5) / 0.16);
+}
+
+.ujg-sb-type-backend {
+    color: hsl(var(--chart-3));
+    background-color: hsl(var(--chart-3) / 0.16);
+}
+
+.ujg-sb-type-se {
+    color: hsl(var(--chart-6));
+    background-color: hsl(var(--chart-6) / 0.18);
+}
+
+.ujg-sb-type-devops {
+    color: hsl(var(--info));
+    background-color: hsl(var(--info) / 0.16);
+}
+
+.ujg-sb-type-qa {
+    color: hsl(var(--warning));
+    background-color: hsl(var(--warning) / 0.18);
+}
+
+.ujg-sb-type-unknown {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--muted) / 0.45);
+}
+
+/* Status pills */
+.ujg-sb-status-open,
+.ujg-sb-status-progress,
+.ujg-sb-status-todo,
+.ujg-sb-status-done,
+.ujg-sb-status-default {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.ujg-sb-status-open {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--muted) / 0.55);
+}
+
+.ujg-sb-status-progress {
+    color: hsl(var(--primary));
+    background-color: hsl(var(--primary) / 0.14);
+}
+
+.ujg-sb-status-todo {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--secondary) / 0.65);
+}
+
+.ujg-sb-status-done {
+    color: hsl(var(--success));
+    background-color: hsl(var(--success) / 0.16);
+}
+
+.ujg-sb-status-default {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--muted) / 0.4);
+}
+
+/* Priority pills */
+.ujg-sb-priority-highest,
+.ujg-sb-priority-high,
+.ujg-sb-priority-medium,
+.ujg-sb-priority-low,
+.ujg-sb-priority-lowest,
+.ujg-sb-priority-default {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.ujg-sb-priority-highest {
+    color: hsl(var(--destructive));
+    background-color: hsl(var(--destructive) / 0.14);
+}
+
+.ujg-sb-priority-high {
+    color: hsl(var(--warning));
+    background-color: hsl(var(--warning) / 0.16);
+}
+
+.ujg-sb-priority-medium {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--muted) / 0.5);
+}
+
+.ujg-sb-priority-low {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--muted) / 0.35);
+}
+
+.ujg-sb-priority-lowest {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--secondary) / 0.45);
+}
+
+.ujg-sb-priority-default {
+    color: hsl(var(--muted-foreground));
+    background-color: hsl(var(--muted) / 0.3);
+}
