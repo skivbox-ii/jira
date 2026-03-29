@@ -13,6 +13,9 @@ var UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY = "ujg.dashboardReleaseRef";
 var UJG_GITHUB_MAIN_COMMIT_URL =
   "https://api.github.com/repos/skivbox-ii/jira/commits/main";
 var UJG_GITHUB_COMMITS_MAIN_URL = UJG_GITHUB_MAIN_COMMIT_URL;
+/** Prefix for GET /repos/skivbox-ii/jira/commits/{ref} (append encodeURIComponent(ref)). */
+var UJG_GITHUB_COMMITS_REF_URL_PREFIX =
+  "https://api.github.com/repos/skivbox-ii/jira/commits/";
 
 var WIDGETS = {
   sprintHealth: "ujg-sprint-health",
@@ -241,6 +244,91 @@ function emittedDashboardReleaseRefHelpers() {
   );
 }
 
+function emittedCommitMetadataHelpers() {
+  return (
+    "  function ujgGithubCommitsApiUrl(ref) {\n" +
+    '    return "https://api.github.com/repos/skivbox-ii/jira/commits/" + encodeURIComponent(String(ref));\n' +
+    "  }\n" +
+    "  function formatCommitDateTime(iso) {\n" +
+    "    var d = new Date(String(iso || \"\"));\n" +
+    "    if (isNaN(d.getTime())) {\n" +
+    '      return "";\n' +
+    "    }\n" +
+    "    function z(n) {\n" +
+    '      return (n < 10 ? "0" : "") + n;\n' +
+    "    }\n" +
+    "    return (\n" +
+    "      d.getUTCFullYear() +\n" +
+    '      "-" +\n' +
+    "      z(d.getUTCMonth() + 1) +\n" +
+    '      "-" +\n' +
+    "      z(d.getUTCDate()) +\n" +
+    '      " " +\n' +
+    "      z(d.getUTCHours()) +\n" +
+    '      ":" +\n' +
+    "      z(d.getUTCMinutes())\n" +
+    "    );\n" +
+    "  }\n" +
+    "  function fetchGithubCommitMetadata(ref) {\n" +
+    "    return fetch(ujgGithubCommitsApiUrl(ref), {\n" +
+    '      headers: { Accept: "application/vnd.github+json" }\n' +
+    "    })\n" +
+    "      .then(function(r) {\n" +
+    "        if (!r.ok) {\n" +
+    "          return r.text().then(function(t) {\n" +
+    '            throw new Error("GitHub commit API " + r.status + ": " + t);\n' +
+    "          });\n" +
+    "        }\n" +
+    "        return r.json();\n" +
+    "      })\n" +
+    "      .then(function(data) {\n" +
+    "        if (!data || !data.sha) {\n" +
+    '          throw new Error("GitHub commit API: missing sha");\n' +
+    "        }\n" +
+    "        var iso = \"\";\n" +
+    "        if (data.commit) {\n" +
+    "          if (data.commit.committer && data.commit.committer.date) {\n" +
+    "            iso = data.commit.committer.date;\n" +
+    "          } else if (data.commit.author && data.commit.author.date) {\n" +
+    "            iso = data.commit.author.date;\n" +
+    "          }\n" +
+    "        }\n" +
+    "        return {\n" +
+    "          sha: String(data.sha),\n" +
+    "          formattedTime: formatCommitDateTime(iso)\n" +
+    "        };\n" +
+    "      });\n" +
+    "  }\n" +
+    "  function loadCommitMetadataForRef(ref) {\n" +
+    "    var key = String(ref || \"\");\n" +
+    "    if (!key) {\n" +
+    "      return Promise.resolve(null);\n" +
+    "    }\n" +
+    "    if (cache.commitMetadataByRef[key]) {\n" +
+    "      return Promise.resolve(cache.commitMetadataByRef[key]);\n" +
+    "    }\n" +
+    "    if (cache.commitMetadataPromises[key]) {\n" +
+    "      return cache.commitMetadataPromises[key];\n" +
+    "    }\n" +
+    "    var p = fetchGithubCommitMetadata(key).then(\n" +
+    "      function(meta) {\n" +
+    "        delete cache.commitMetadataPromises[key];\n" +
+    "        if (meta && meta.formattedTime) {\n" +
+    "          cache.commitMetadataByRef[key] = meta;\n" +
+    "        }\n" +
+    "        return meta;\n" +
+    "      },\n" +
+    "      function() {\n" +
+    "        delete cache.commitMetadataPromises[key];\n" +
+    "        return null;\n" +
+    "      }\n" +
+    "    );\n" +
+    "    cache.commitMetadataPromises[key] = p;\n" +
+    "    return p;\n" +
+    "  }\n"
+  );
+}
+
 function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBaseUrl, fk) {
   var pa = escapeJsString(publicAmd);
   var ra = escapeJsString(runtimeAmd);
@@ -284,6 +372,12 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "  if (cache.refreshPromise && typeof cache.refreshPromise.then !== \"function\") {\n" +
     "    cache.refreshPromise = null;\n" +
     "  }\n" +
+    "  if (typeof cache.commitMetadataByRef !== \"object\" || cache.commitMetadataByRef === null) {\n" +
+    "    cache.commitMetadataByRef = {};\n" +
+    "  }\n" +
+    "  if (typeof cache.commitMetadataPromises !== \"object\" || cache.commitMetadataPromises === null) {\n" +
+    "    cache.commitMetadataPromises = {};\n" +
+    "  }\n" +
     "  function loadScriptOnce(url) {\n" +
     "    if (cache.scriptPromises[url]) return cache.scriptPromises[url];\n" +
     "    cache.scriptPromises[url] = new Promise(function(resolve, reject) {\n" +
@@ -318,6 +412,7 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "    return cache.stylePromises[url];\n" +
     "  }\n" +
     emittedDashboardReleaseRefHelpers() +
+    emittedCommitMetadataHelpers() +
     "  function buildPinnedAssetUrl(activeRef, fileName) {\n" +
     "    var base = String(assetBaseUrl).replace(/\\/+$/, \"\");\n" +
     '    return base + "@" + encodeURIComponent(String(activeRef)) + "/" + fileName;\n' +
@@ -424,7 +519,16 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "  function updateToolbarVersionDisplay(toolbarRoot, ref) {\n" +
     "    if (!toolbarRoot || !toolbarRoot.querySelector) return;\n" +
     "    var span = toolbarRoot.querySelector(\".ujg-bootstrap-version\");\n" +
-    '    if (span) span.textContent = shortRefForToolbar(ref) || "";\n' +
+    "    if (!span) return;\n" +
+    "    var base = shortRefForToolbar(ref) || \"\";\n" +
+    "    span.textContent = base;\n" +
+    "    if (!base) return;\n" +
+    "    loadCommitMetadataForRef(String(ref)).then(function(meta) {\n" +
+    "      if (!meta || !meta.formattedTime) return;\n" +
+    "      var cur = toolbarRoot.querySelector(\".ujg-bootstrap-version\");\n" +
+    "      if (cur !== span) return;\n" +
+    '      span.textContent = base + " \\u2022 " + meta.formattedTime;\n' +
+    "    });\n" +
     "  }\n" +
     "  function normalizeBootstrapBodyNode(body) {\n" +
     "    if (!body) return null;\n" +
@@ -546,6 +650,7 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "    return saveDashboardReleaseRef(targetApi, releaseRefVal);\n" +
     "  };\n" +
     "  UjgWidgetGadget.prototype.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;\n" +
+    "  UjgWidgetGadget.prototype.loadCommitMetadataForRef = loadCommitMetadataForRef;\n" +
     "  syncExportedAssetUrls(cache.runtimeReleaseRef != null && cache.runtimeReleaseRef !== \"\" ? cache.runtimeReleaseRef : releaseRef);\n" +
     "  UjgWidgetGadget.runtimeAmd = runtimeAmd;\n" +
     "  UjgWidgetGadget.loadScriptOnce = loadScriptOnce;\n" +
@@ -554,6 +659,7 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "  UjgWidgetGadget.loadDashboardReleaseRef = loadDashboardReleaseRef;\n" +
     "  UjgWidgetGadget.saveDashboardReleaseRef = saveDashboardReleaseRef;\n" +
     "  UjgWidgetGadget.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;\n" +
+    "  UjgWidgetGadget.loadCommitMetadataForRef = loadCommitMetadataForRef;\n" +
     "  return UjgWidgetGadget;\n" +
     "});\n"
   );
@@ -735,5 +841,6 @@ module.exports = {
   normalizeTextNewlines: normalizeTextNewlines,
   UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY: UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY,
   UJG_GITHUB_MAIN_COMMIT_URL: UJG_GITHUB_MAIN_COMMIT_URL,
-  UJG_GITHUB_COMMITS_MAIN_URL: UJG_GITHUB_COMMITS_MAIN_URL
+  UJG_GITHUB_COMMITS_MAIN_URL: UJG_GITHUB_COMMITS_MAIN_URL,
+  UJG_GITHUB_COMMITS_REF_URL_PREFIX: UJG_GITHUB_COMMITS_REF_URL_PREFIX
 };

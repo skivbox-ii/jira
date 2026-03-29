@@ -780,6 +780,168 @@ test("fetchLatestGithubReleaseRef fetches latest main SHA from GitHub API", asyn
   assert.equal(await gadget.fetchLatestGithubReleaseRef(), sha);
 });
 
+test("active releaseRef loads commit metadata via GitHub commits API and version span shows short hash and formatted time", async function() {
+  var mod = require(MOD_PATH);
+  var key = mod.UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY;
+  var commitsPrefix = mod.UJG_GITHUB_COMMITS_REF_URL_PREFIX;
+  assert.equal(
+    commitsPrefix,
+    "https://api.github.com/repos/skivbox-ii/jira/commits/"
+  );
+  var activeRef = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+  var commitApiUrl = commitsPrefix + encodeURIComponent(activeRef);
+  var iso = "2024-06-12T15:05:30Z";
+  var baseUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira";
+  var out = mod.buildAssets({
+    releaseRef: activeRef,
+    assetBaseUrl: baseUrl,
+    widgets: [mod.WIDGETS.dailyDiligence]
+  });
+  var bootstrapSrc = out["ujg-daily-diligence.bootstrap.js"];
+  var appendedScripts = [];
+  var appendedLinks = [];
+  var amdRegistry = {};
+  var defineCapture = null;
+  var commitFetchCount = 0;
+
+  function defineShim(name, deps, factory) {
+    if (typeof deps === "function") {
+      factory = deps;
+      deps = [];
+    }
+    defineCapture = { name: name, factory: factory };
+  }
+  function requireShim(deps, onSuccess, onFailure) {
+    queueMicrotask(function() {
+      try {
+        var resolved = deps.map(function(d) {
+          if (!Object.prototype.hasOwnProperty.call(amdRegistry, d)) {
+            throw new Error("missing AMD module: " + d);
+          }
+          return amdRegistry[d];
+        });
+        onSuccess.apply(null, resolved);
+      } catch (err) {
+        if (typeof onFailure === "function") {
+          onFailure(err);
+        }
+      }
+    });
+  }
+  var head = {
+    appendChild: function(node) {
+      if (node.tagName === "SCRIPT") {
+        appendedScripts.push(node);
+      } else if (node.tagName === "LINK") {
+        appendedLinks.push(node);
+      }
+    }
+  };
+  var sandboxWindow = {};
+  var ctx = vm.createContext({
+    define: defineShim,
+    require: requireShim,
+    document: {
+      head: head,
+      createElement: bootstrapTestCreateElement
+    },
+    window: sandboxWindow,
+    globalThis: sandboxWindow,
+    fetch: function(input) {
+      var u = String(input);
+      if (u === commitApiUrl) {
+        commitFetchCount += 1;
+        return Promise.resolve({
+          ok: true,
+          json: function() {
+            return Promise.resolve({
+              sha: activeRef,
+              commit: { committer: { date: iso } }
+            });
+          },
+          text: function() {
+            return Promise.resolve("");
+          }
+        });
+      }
+      return Promise.reject(new Error("unexpected fetch URL: " + u));
+    },
+    queueMicrotask: queueMicrotask,
+    Promise: Promise
+  });
+  ctx.__ujgBody = createMockGadgetBody();
+  vm.runInContext(bootstrapSrc, ctx);
+  ctx.__bootstrapFactory = defineCapture.factory;
+  ctx.__ujgKey = key;
+  vm.runInContext(
+    "__ujgCtor = __bootstrapFactory();" +
+      '__ujgApi = { getDashboardProperty: function(k) { ' +
+      "if (k !== __ujgKey) return Promise.reject(new Error(\"bad key\")); " +
+      "return Promise.resolve(" +
+      JSON.stringify(activeRef) +
+      "); }, getGadget: function() { return { getBody: function() { return __ujgBody; } }; } };" +
+      "__ujgG = new __ujgCtor(__ujgApi);" +
+      "__ujgP = __ujgG.readyPromise;",
+    ctx
+  );
+
+  var expectedCommon = pinnedAssetUrlForTest(baseUrl, activeRef, "_ujgCommon.js");
+  for (var w = 0; w < 40; w++) {
+    await new Promise(function(r) {
+      queueMicrotask(r);
+    });
+    if (appendedScripts.some(function(n) { return n.src === expectedCommon; })) {
+      break;
+    }
+  }
+  appendedScripts
+    .filter(function(n) {
+      return n.src === expectedCommon;
+    })
+    .forEach(function(n) {
+      if (typeof n.onload === "function") {
+        n.onload();
+      }
+    });
+  await new Promise(function(r) {
+    queueMicrotask(r);
+  });
+  appendedLinks.forEach(function(n) {
+    if (typeof n.onload === "function") {
+      n.onload();
+    }
+  });
+  appendedScripts.forEach(function(n) {
+    if (
+      n.src === pinnedAssetUrlForTest(baseUrl, activeRef, "ujg-daily-diligence.runtime.js") &&
+      typeof n.onload === "function"
+    ) {
+      amdRegistry["_ujgDailyDiligenceRuntime"] = function Gadget(api) {
+        this.api = api;
+      };
+      n.onload();
+    }
+  });
+  await ctx.__ujgP;
+
+  var ver = ctx.__ujgBody.querySelector(".ujg-bootstrap-version");
+  assert.ok(ver);
+  for (var t = 0; t < 40 && String(ver.textContent || "").indexOf("2024-06-12 15:05") === -1; t++) {
+    await new Promise(function(r) {
+      queueMicrotask(r);
+    });
+  }
+  var text = String(ver.textContent || "");
+  assert.match(text, /deadbeefdeadbe/);
+  assert.match(text, /2024-06-12 15:05/);
+  assert.ok(sandboxWindow.__UJG_BOOTSTRAP__);
+  assert.equal(
+    sandboxWindow.__UJG_BOOTSTRAP__.commitMetadataByRef[activeRef].formattedTime,
+    "2024-06-12 15:05"
+  );
+  assert.equal(commitFetchCount, 1);
+});
+
 test("fetchLatestGithubReleaseRef rejects when GitHub main commit API is non-OK", async function() {
   var mod = require(MOD_PATH);
   var url = mod.UJG_GITHUB_MAIN_COMMIT_URL || mod.UJG_GITHUB_COMMITS_MAIN_URL;
