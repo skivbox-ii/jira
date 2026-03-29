@@ -1,10 +1,10 @@
 define("_ujgDailyDiligence", [], function() {
   "use strict";
-  var commonJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@6a5cf4f/_ujgCommon.js";
-  var cssUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@6a5cf4f/ujg-daily-diligence.css";
-  var runtimeJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@6a5cf4f/ujg-daily-diligence.runtime.js";
+  var commonJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@a0a76ae/_ujgCommon.js";
+  var cssUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@a0a76ae/ujg-daily-diligence.css";
+  var runtimeJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@a0a76ae/ujg-daily-diligence.runtime.js";
   var runtimeAmd = "_ujgDailyDiligenceRuntime";
-  var releaseRef = "6a5cf4f";
+  var releaseRef = "a0a76ae";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
