@@ -6,6 +6,14 @@ const childProcess = require("node:child_process");
 
 const REPO_ROOT = __dirname;
 
+/** Dashboard entity property key for shared CDN/Git SHA (whole dashboard). */
+var UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY = "ujg.dashboardReleaseRef";
+
+/** GitHub REST endpoint for the latest commit on main for skivbox-ii/jira. */
+var UJG_GITHUB_MAIN_COMMIT_URL =
+  "https://api.github.com/repos/skivbox-ii/jira/commits/main";
+var UJG_GITHUB_COMMITS_MAIN_URL = UJG_GITHUB_MAIN_COMMIT_URL;
+
 var WIDGETS = {
   sprintHealth: "ujg-sprint-health",
   projectAnalytics: "ujg-project-analytics",
@@ -90,26 +98,163 @@ function pinnedAssetUrl(assetBaseUrl, releaseRef, fileName) {
   return base + "@" + encodeURIComponent(String(releaseRef)) + "/" + fileName;
 }
 
-function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, commonJsUrl, cssUrl, runtimeJsUrl) {
+function emittedDashboardReleaseRefHelpers() {
+  var keyLit = escapeJsString(UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY);
+  var urlLit = escapeJsString(UJG_GITHUB_MAIN_COMMIT_URL);
+  return (
+    '  var ujgDashboardReleaseRefKey = "' +
+    keyLit +
+    '";\n' +
+    '  var ujgGithubMainCommitUrl = "' +
+    urlLit +
+    '";\n' +
+    "  function detectDashboardId() {\n" +
+    '    if (typeof window === "undefined" || !window) {\n' +
+    "      return null;\n" +
+    "    }\n" +
+    "    var loc = window.location || {};\n" +
+    '    var search = String(loc.search || "");\n' +
+    "    var m = /[?&]selectPageId=(\\d+)/.exec(search);\n" +
+    "    if (m) {\n" +
+    "      return m[1];\n" +
+    "    }\n" +
+    "    if (window.AJS && window.AJS.params) {\n" +
+    "      var p = window.AJS.params;\n" +
+    "      if (p.selectPageId != null && String(p.selectPageId).length) {\n" +
+    "        return String(p.selectPageId);\n" +
+    "      }\n" +
+    "      if (p.pageId != null && String(p.pageId).length) {\n" +
+    "        return String(p.pageId);\n" +
+    "      }\n" +
+    "    }\n" +
+    "    return null;\n" +
+    "  }\n" +
+    "  function jiraDashboardPropertyRestUrl(dashboardId) {\n" +
+    '    var origin = "";\n' +
+    "    if (typeof window !== \"undefined\" && window && window.location && window.location.origin) {\n" +
+    "      origin = String(window.location.origin);\n" +
+    "    }\n" +
+    "    return (\n" +
+    "      origin +\n" +
+    '      "/rest/api/2/dashboard/" +\n' +
+    "      encodeURIComponent(String(dashboardId)) +\n" +
+    '      "/properties/" +\n' +
+    "      encodeURIComponent(ujgDashboardReleaseRefKey)\n" +
+    "    );\n" +
+    "  }\n" +
+    "  function loadDashboardReleaseRef(api) {\n" +
+    "    if (api && typeof api.getDashboardProperty === \"function\") {\n" +
+    "      return Promise.resolve(api.getDashboardProperty(ujgDashboardReleaseRefKey)).then(function(v) {\n" +
+    '        if (v == null || v === "") {\n' +
+    "          return null;\n" +
+    "        }\n" +
+    "        return String(v);\n" +
+    "      });\n" +
+    "    }\n" +
+    "    var dashboardId = detectDashboardId();\n" +
+    "    if (!dashboardId) {\n" +
+    "      return Promise.resolve(null);\n" +
+    "    }\n" +
+    "    return fetch(jiraDashboardPropertyRestUrl(dashboardId), {\n" +
+    '      credentials: "same-origin"\n' +
+    "    })\n" +
+    "      .then(function(r) {\n" +
+    "        if (r.status === 404) {\n" +
+    "          return null;\n" +
+    "        }\n" +
+    "        if (!r.ok) {\n" +
+    "          return r.text().then(function(t) {\n" +
+    '            throw new Error("Jira dashboard property GET " + r.status + ": " + t);\n' +
+    "          });\n" +
+    "        }\n" +
+    "        return r.json();\n" +
+    "      })\n" +
+    "      .then(function(data) {\n" +
+    "        if (data == null || data.value == null || data.value === \"\") {\n" +
+    "          return null;\n" +
+    "        }\n" +
+    "        return String(data.value);\n" +
+    "      });\n" +
+    "  }\n" +
+    '  function normalizeDashboardReleaseRefForSave(releaseRef) {\n' +
+    '    if (releaseRef == null) {\n' +
+    '      throw new Error("releaseRef must be a non-empty string");\n' +
+    "    }\n" +
+    "    var normalized = String(releaseRef).trim();\n" +
+    '    if (!normalized) {\n' +
+    '      throw new Error("releaseRef must be a non-empty string");\n' +
+    "    }\n" +
+    "    return normalized;\n" +
+    "  }\n" +
+    "  function saveDashboardReleaseRef(api, releaseRef) {\n" +
+    "    return Promise.resolve().then(function() {\n" +
+    "      var normalizedReleaseRef = normalizeDashboardReleaseRefForSave(releaseRef);\n" +
+    '      if (api && typeof api.setDashboardProperty === "function") {\n' +
+    "        return api.setDashboardProperty(ujgDashboardReleaseRefKey, normalizedReleaseRef);\n" +
+    "      }\n" +
+    "      var id = detectDashboardId();\n" +
+    "      if (!id) {\n" +
+    '        return Promise.reject(new Error("dashboard id not found for Jira REST save"));\n' +
+    "      }\n" +
+    "      return fetch(jiraDashboardPropertyRestUrl(id), {\n" +
+    '        method: "PUT",\n' +
+    '        credentials: "same-origin",\n' +
+    "        headers: {\n" +
+    '          "Content-Type": "application/json",\n' +
+    '          "X-Atlassian-Token": "no-check"\n' +
+    "        },\n" +
+    '        body: JSON.stringify({ value: normalizedReleaseRef })\n' +
+    "      }).then(function(r) {\n" +
+    "        if (!r.ok) {\n" +
+    "          return r.text().then(function(t) {\n" +
+    '            throw new Error("Jira dashboard property PUT " + r.status + ": " + t);\n' +
+    "          });\n" +
+    "        }\n" +
+    "      });\n" +
+    "    });\n" +
+    "  }\n" +
+    '  function fetchLatestGithubReleaseRef() {\n' +
+    "    return fetch(ujgGithubMainCommitUrl, {\n" +
+    '      headers: { Accept: "application/vnd.github+json" }\n' +
+    "    })\n" +
+    "      .then(function(r) {\n" +
+    "        if (!r.ok) {\n" +
+    "          return r.text().then(function(t) {\n" +
+    '            throw new Error("GitHub main commit API " + r.status + ": " + t);\n' +
+    "          });\n" +
+    "        }\n" +
+    "        return r.json();\n" +
+    "      })\n" +
+    "      .then(function(data) {\n" +
+    "        if (!data || !data.sha) {\n" +
+    '          throw new Error("GitHub main commit API: missing sha");\n' +
+    "        }\n" +
+    "        return String(data.sha);\n" +
+    "      });\n" +
+    "  }\n"
+  );
+}
+
+function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBaseUrl, fk) {
   var pa = escapeJsString(publicAmd);
   var ra = escapeJsString(runtimeAmd);
   var rs = escapeJsString(releaseRef);
-  var cj = escapeJsString(commonJsUrl);
-  var cs = escapeJsString(cssUrl);
-  var rj = escapeJsString(runtimeJsUrl);
+  var ab = escapeJsString(String(assetBaseUrl).replace(/\/+$/, ""));
+  var wcf = escapeJsString(fk + ".css");
+  var wrf = escapeJsString(fk + ".runtime.js");
   return (
     'define("' +
     pa +
     '", [], function() {\n' +
     '  "use strict";\n' +
-    '  var commonJs = "' +
-    cj +
+    '  var assetBaseUrl = "' +
+    ab +
     '";\n' +
-    '  var cssUrl = "' +
-    cs +
+    '  var widgetCssFile = "' +
+    wcf +
     '";\n' +
-    '  var runtimeJs = "' +
-    rj +
+    '  var widgetRuntimeFile = "' +
+    wrf +
     '";\n' +
     '  var runtimeAmd = "' +
     ra +
@@ -122,6 +267,17 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, commonJs
     "  var cache = w.__UJG_BOOTSTRAP__;\n" +
     "  if (typeof cache.scriptPromises !== \"object\" || cache.scriptPromises === null) cache.scriptPromises = {};\n" +
     "  if (typeof cache.stylePromises !== \"object\" || cache.stylePromises === null) cache.stylePromises = {};\n" +
+    "  if (cache.runtimeReleaseRef != null && cache.runtimeReleaseRef !== \"\") {\n" +
+    "    cache.runtimeReleaseRef = String(cache.runtimeReleaseRef);\n" +
+    "  } else {\n" +
+    "    cache.runtimeReleaseRef = null;\n" +
+    "  }\n" +
+    "  if (cache.runtimeReleaseRefPromise && typeof cache.runtimeReleaseRefPromise.then !== \"function\") {\n" +
+    "    cache.runtimeReleaseRefPromise = null;\n" +
+    "  }\n" +
+    "  if (cache.refreshPromise && typeof cache.refreshPromise.then !== \"function\") {\n" +
+    "    cache.refreshPromise = null;\n" +
+    "  }\n" +
     "  function loadScriptOnce(url) {\n" +
     "    if (cache.scriptPromises[url]) return cache.scriptPromises[url];\n" +
     "    cache.scriptPromises[url] = new Promise(function(resolve, reject) {\n" +
@@ -155,36 +311,228 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, commonJs
     "    });\n" +
     "    return cache.stylePromises[url];\n" +
     "  }\n" +
-    "  function instantiateWhenReady(api) {\n" +
-    "    return loadScriptOnce(commonJs)\n" +
-    "      .then(function() {\n" +
-    "        return Promise.all([loadStyleOnce(cssUrl), loadScriptOnce(runtimeJs)]);\n" +
-    "      })\n" +
-    "      .then(function() {\n" +
-    "        return new Promise(function(resolve, reject) {\n" +
-    '          if (typeof require !== "function") {\n' +
-    '            reject(new Error("require is not a function"));\n' +
-    "            return;\n" +
+    emittedDashboardReleaseRefHelpers() +
+    "  function buildPinnedAssetUrl(activeRef, fileName) {\n" +
+    "    var base = String(assetBaseUrl).replace(/\\/+$/, \"\");\n" +
+    '    return base + "@" + encodeURIComponent(String(activeRef)) + "/" + fileName;\n' +
+    "  }\n" +
+    "  function applyAssetUrls(target, normalizedRef) {\n" +
+    "    if (!target) return;\n" +
+    "    target.releaseRef = normalizedRef;\n" +
+    "    target.commonJs = buildPinnedAssetUrl(normalizedRef, \"_ujgCommon.js\");\n" +
+    "    target.css = buildPinnedAssetUrl(normalizedRef, widgetCssFile);\n" +
+    "    target.runtimeJs = buildPinnedAssetUrl(normalizedRef, widgetRuntimeFile);\n" +
+    "  }\n" +
+    "  function syncExportedAssetUrls(activeRef, gadgetInstance) {\n" +
+    "    var normalizedRef = String(activeRef);\n" +
+    "    applyAssetUrls(UjgWidgetGadget, normalizedRef);\n" +
+    "    applyAssetUrls(gadgetInstance, normalizedRef);\n" +
+    "    return normalizedRef;\n" +
+    "  }\n" +
+    "  function resolveRuntimeReleaseRefForAssets(api, gadgetInstance) {\n" +
+    "    if (cache.runtimeReleaseRef != null && cache.runtimeReleaseRef !== \"\") {\n" +
+    "      return Promise.resolve(syncExportedAssetUrls(cache.runtimeReleaseRef, gadgetInstance));\n" +
+    "    }\n" +
+    "    if (cache.runtimeReleaseRefPromise) {\n" +
+    "      return cache.runtimeReleaseRefPromise.then(function(activeRef) {\n" +
+    "        return syncExportedAssetUrls(activeRef, gadgetInstance);\n" +
+    "      });\n" +
+    "    }\n" +
+    "    cache.runtimeReleaseRefPromise = loadDashboardReleaseRef(api || {})\n" +
+    "      .then(\n" +
+    "        function(existing) {\n" +
+    "          if (existing != null && existing !== \"\") {\n" +
+    "            return String(existing);\n" +
     "          }\n" +
-    "          require([runtimeAmd], function(RuntimeMod) {\n" +
-    "            var Ctor = RuntimeMod && RuntimeMod.default ? RuntimeMod.default : RuntimeMod;\n" +
-    "            resolve(new Ctor(api));\n" +
-    "          }, function(err) {\n" +
-    "            reject(err);\n" +
+    "          return fetchLatestGithubReleaseRef().then(\n" +
+    "            function(sha) {\n" +
+    "              return saveDashboardReleaseRef(api || {}, sha).then(\n" +
+    "                function() {\n" +
+    "                  return sha;\n" +
+    "                },\n" +
+    "                function() {\n" +
+    "                  return sha;\n" +
+    "                }\n" +
+    "              );\n" +
+    "            },\n" +
+    "            function() {\n" +
+    "              return releaseRef;\n" +
+    "            }\n" +
+    "          );\n" +
+    "        },\n" +
+    "        function() {\n" +
+    "          return releaseRef;\n" +
+    "        }\n" +
+    "      )\n" +
+    "      .then(function(activeRef) {\n" +
+    "        var normalizedRef = syncExportedAssetUrls(activeRef, gadgetInstance);\n" +
+    "        cache.runtimeReleaseRef = normalizedRef;\n" +
+    "        return normalizedRef;\n" +
+    "      });\n" +
+    "    return cache.runtimeReleaseRefPromise.then(\n" +
+    "      function(activeRef) {\n" +
+    "        return syncExportedAssetUrls(activeRef, gadgetInstance);\n" +
+    "      },\n" +
+    "      function(err) {\n" +
+    "        cache.runtimeReleaseRefPromise = null;\n" +
+    "        throw err;\n" +
+    "      }\n" +
+    "    );\n" +
+    "  }\n" +
+    "  function instantiateWhenReady(api, gadgetInstance) {\n" +
+    "    return resolveRuntimeReleaseRefForAssets(api, gadgetInstance).then(function(activeRef) {\n" +
+    "      var commonJsU = buildPinnedAssetUrl(activeRef, \"_ujgCommon.js\");\n" +
+    "      var cssU = buildPinnedAssetUrl(activeRef, widgetCssFile);\n" +
+    "      var runtimeU = buildPinnedAssetUrl(activeRef, widgetRuntimeFile);\n" +
+    "      syncExportedAssetUrls(activeRef, gadgetInstance);\n" +
+    "      return loadScriptOnce(commonJsU)\n" +
+    "        .then(function() {\n" +
+    "          return Promise.all([loadStyleOnce(cssU), loadScriptOnce(runtimeU)]);\n" +
+    "        })\n" +
+    "        .then(function() {\n" +
+    "          return new Promise(function(resolve, reject) {\n" +
+    '            if (typeof require !== "function") {\n' +
+    '              reject(new Error("require is not a function"));\n' +
+    "              return;\n" +
+    "            }\n" +
+    "            require([runtimeAmd], function(RuntimeMod) {\n" +
+    "              var Ctor = RuntimeMod && RuntimeMod.default ? RuntimeMod.default : RuntimeMod;\n" +
+    "              resolve(new Ctor(api));\n" +
+    "            }, function(err) {\n" +
+    "              reject(err);\n" +
+    "            });\n" +
     "          });\n" +
     "        });\n" +
-    "      });\n" +
+    "    }).then(function(runtimeInst) {\n" +
+    "      tryRefreshToolbarVersionForApi(api);\n" +
+    "      return runtimeInst;\n" +
+    "    });\n" +
     "  }\n" +
-    "  return {\n" +
-    "    releaseRef: releaseRef,\n" +
-    "    commonJs: commonJs,\n" +
-    "    css: cssUrl,\n" +
-    "    runtimeJs: runtimeJs,\n" +
-    "    runtimeAmd: runtimeAmd,\n" +
-    "    loadScriptOnce: loadScriptOnce,\n" +
-    "    loadStyleOnce: loadStyleOnce,\n" +
-    "    instantiateWhenReady: instantiateWhenReady\n" +
+    "  function shortRefForToolbar(ref) {\n" +
+    "    var s = String(ref || \"\");\n" +
+    '    return s.length > 14 ? s.slice(0, 14) + "\\u2026" : s;\n' +
+    "  }\n" +
+    "  function updateToolbarVersionDisplay(toolbarRoot, ref) {\n" +
+    "    if (!toolbarRoot || !toolbarRoot.querySelector) return;\n" +
+    "    var span = toolbarRoot.querySelector(\".ujg-bootstrap-version\");\n" +
+    '    if (span) span.textContent = shortRefForToolbar(ref) || "";\n' +
+    "  }\n" +
+    "  function tryRefreshToolbarVersionForApi(api) {\n" +
+    "    try {\n" +
+    '      if (api && typeof api.getGadget === "function") {\n' +
+    "        var body = api.getGadget().getBody();\n" +
+    "        var toolbar = body && typeof body.querySelector === \"function\" ? body.querySelector(\".ujg-bootstrap-toolbar\") : null;\n" +
+    "        if (toolbar) updateToolbarVersionDisplay(toolbar, cache.runtimeReleaseRef || releaseRef);\n" +
+    "      }\n" +
+    "    } catch (eTb) {}\n" +
+    "  }\n" +
+    "  function requestPageReload() {\n" +
+    "    if (typeof window === \"undefined\" || !window || !window.location) {\n" +
+    "      return;\n" +
+    "    }\n" +
+    "    if (typeof window.location.reload === \"function\") {\n" +
+    "      window.location.reload();\n" +
+    "    }\n" +
+    "  }\n" +
+    "  function handleBootstrapRefreshClick(api, toolbarRoot, gadgetInstance) {\n" +
+    "    if (cache.refreshPromise) {\n" +
+    "      return cache.refreshPromise;\n" +
+    "    }\n" +
+    "    cache.refreshPromise = resolveRuntimeReleaseRefForAssets(api, gadgetInstance)\n" +
+    "      .then(function(cur) {\n" +
+    "        return fetchLatestGithubReleaseRef().then(function(sha) {\n" +
+    "          var next = String(sha).trim();\n" +
+    '          if (cur != null && cur !== "" && String(cur).trim() === next) {\n' +
+    "            updateToolbarVersionDisplay(toolbarRoot, cur);\n" +
+    "            return null;\n" +
+    "          }\n" +
+    "          return saveDashboardReleaseRef(api, next).then(function() {\n" +
+    "            applyAssetUrls(gadgetInstance, next);\n" +
+    "            updateToolbarVersionDisplay(toolbarRoot, next);\n" +
+    "            requestPageReload();\n" +
+    "            return null;\n" +
+    "          });\n" +
+    "        });\n" +
+    "      })\n" +
+    "      .catch(function(errRf) {\n" +
+    '        if (typeof console !== "undefined" && console.error) {\n' +
+    '          console.error("UJG bootstrap: refresh failed", errRf);\n' +
+    "        }\n" +
+    "      });\n" +
+    "    return cache.refreshPromise.then(function(result) {\n" +
+    "      cache.refreshPromise = null;\n" +
+    "      return result;\n" +
+    "    }, function(err) {\n" +
+    "      cache.refreshPromise = null;\n" +
+    "      throw err;\n" +
+    "    });\n" +
+    "  }\n" +
+    "  function mountBootstrapUpdateControls(api, gadgetInstance) {\n" +
+    '    if (!api || typeof api.getGadget !== "function") return;\n' +
+    "    var body = api.getGadget().getBody();\n" +
+    '    if (!body || typeof body.appendChild !== "function") return;\n' +
+    "    var toolbar = typeof body.querySelector === \"function\" ? body.querySelector(\".ujg-bootstrap-toolbar\") : null;\n" +
+    "    if (!toolbar) {\n" +
+    '      toolbar = document.createElement("div");\n' +
+    '      toolbar.className = "ujg-bootstrap-toolbar";\n' +
+    '      var btn = document.createElement("button");\n' +
+    '      btn.type = "button";\n' +
+    '      btn.className = "ujg-bootstrap-refresh";\n' +
+    '      btn.textContent = "\\u041e\\u0431\\u043d\\u043e\\u0432\\u0438\\u0442\\u044c \\u0432\\u0435\\u0440\\u0441\\u0438\\u044e";\n' +
+    '      var ver = document.createElement("span");\n' +
+    '      ver.className = "ujg-bootstrap-version";\n' +
+    "      toolbar.appendChild(btn);\n" +
+    "      toolbar.appendChild(ver);\n" +
+    '      if (typeof body.insertBefore === "function") {\n' +
+    "        body.insertBefore(toolbar, body.firstChild || null);\n" +
+    "      } else {\n" +
+    "        body.appendChild(toolbar);\n" +
+    "      }\n" +
+    "    }\n" +
+    "    updateToolbarVersionDisplay(toolbar, cache.runtimeReleaseRef || releaseRef);\n" +
+    "    var btnEl = toolbar.querySelector ? toolbar.querySelector(\".ujg-bootstrap-refresh\") : null;\n" +
+    "    if (btnEl && !btnEl.__ujgBootstrapRefreshBound) {\n" +
+    "      btnEl.__ujgBootstrapRefreshBound = true;\n" +
+    "      btnEl.onclick = function(evRf) {\n" +
+    "        if (evRf && evRf.preventDefault) evRf.preventDefault();\n" +
+    "        handleBootstrapRefreshClick(api, toolbar, gadgetInstance);\n" +
+    "      };\n" +
+    "    }\n" +
+    "  }\n" +
+    "  function UjgWidgetGadget(api) {\n" +
+    "    this._api = api;\n" +
+    "    syncExportedAssetUrls(cache.runtimeReleaseRef != null && cache.runtimeReleaseRef !== \"\" ? cache.runtimeReleaseRef : releaseRef, this);\n" +
+    "    try {\n" +
+    "      mountBootstrapUpdateControls(api, this);\n" +
+    "    } catch (eGadgetMount) {}\n" +
+    "    if (!api || api.__ujgBootstrapSkipAutoLoad !== true) {\n" +
+    "      this.readyPromise = instantiateWhenReady(api, this);\n" +
+    "    } else {\n" +
+    "      this.readyPromise = Promise.resolve(null);\n" +
+    "    }\n" +
+    "  }\n" +
+    "  UjgWidgetGadget.prototype.loadScriptOnce = loadScriptOnce;\n" +
+    "  UjgWidgetGadget.prototype.loadStyleOnce = loadStyleOnce;\n" +
+    "  UjgWidgetGadget.prototype.instantiateWhenReady = function(targetApi) {\n" +
+    "    var callApi = targetApi !== undefined ? targetApi : this._api;\n" +
+    "    return instantiateWhenReady(callApi, this);\n" +
     "  };\n" +
+    "  UjgWidgetGadget.prototype.loadDashboardReleaseRef = function(targetApi) {\n" +
+    "    return loadDashboardReleaseRef(targetApi !== undefined ? targetApi : this._api);\n" +
+    "  };\n" +
+    "  UjgWidgetGadget.prototype.saveDashboardReleaseRef = function(targetApi, releaseRefVal) {\n" +
+    "    return saveDashboardReleaseRef(targetApi, releaseRefVal);\n" +
+    "  };\n" +
+    "  UjgWidgetGadget.prototype.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;\n" +
+    "  syncExportedAssetUrls(cache.runtimeReleaseRef != null && cache.runtimeReleaseRef !== \"\" ? cache.runtimeReleaseRef : releaseRef);\n" +
+    "  UjgWidgetGadget.runtimeAmd = runtimeAmd;\n" +
+    "  UjgWidgetGadget.loadScriptOnce = loadScriptOnce;\n" +
+    "  UjgWidgetGadget.loadStyleOnce = loadStyleOnce;\n" +
+    "  UjgWidgetGadget.instantiateWhenReady = instantiateWhenReady;\n" +
+    "  UjgWidgetGadget.loadDashboardReleaseRef = loadDashboardReleaseRef;\n" +
+    "  UjgWidgetGadget.saveDashboardReleaseRef = saveDashboardReleaseRef;\n" +
+    "  UjgWidgetGadget.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;\n" +
+    "  return UjgWidgetGadget;\n" +
     "});\n"
   );
 }
@@ -309,19 +657,15 @@ function buildAssets(options) {
       );
     }
     var fk = spec.fileKey;
-    var commonUrl = pinnedAssetUrl(assetBaseUrl, releaseRef, "_ujgCommon.js");
-    var cssUrl = pinnedAssetUrl(assetBaseUrl, releaseRef, fk + ".css");
     var runtimeFile = fk + ".runtime.js";
-    var runtimeUrl = pinnedAssetUrl(assetBaseUrl, releaseRef, runtimeFile);
 
     out[runtimeFile] = runtimeFromPublicRename(fk, spec.publicAmd, spec.runtimeAmd);
     out[fk + ".bootstrap.js"] = widgetBootstrapModuleSource(
       spec.publicAmd,
       spec.runtimeAmd,
       releaseRef,
-      commonUrl,
-      cssUrl,
-      runtimeUrl
+      assetBaseUrl,
+      fk
     );
   });
 
@@ -366,5 +710,8 @@ module.exports = {
   resolveCliWriteReleaseRef: resolveCliWriteReleaseRef,
   transformRuntimeAmdRename: transformRuntimeAmdRename,
   allWidgetIds: allWidgetIds,
-  normalizeTextNewlines: normalizeTextNewlines
+  normalizeTextNewlines: normalizeTextNewlines,
+  UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY: UJG_DASHBOARD_RELEASE_REF_PROPERTY_KEY,
+  UJG_GITHUB_MAIN_COMMIT_URL: UJG_GITHUB_MAIN_COMMIT_URL,
+  UJG_GITHUB_COMMITS_MAIN_URL: UJG_GITHUB_COMMITS_MAIN_URL
 };

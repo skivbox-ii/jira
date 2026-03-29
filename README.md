@@ -16,6 +16,10 @@
 ├── demo-v2.html
 ├── docs/
 │   └── plans/
+│       ├── 2026-03-29-dashboard-release-ref-design.md
+│       ├── 2026-03-29-dashboard-release-ref.md
+│       ├── 2026-03-29-widget-bootstrap-design.md
+│       └── 2026-03-29-widget-bootstrap.md
 ├── jira_attach_latest_assets.py
 ├── standalone/
 │   └── public/
@@ -34,6 +38,7 @@
 │   ├── standalone-server-login.test.js
 │   ├── standalone-timesheet-v0.test.js
 │   ├── timesheet-logic.test.js
+│   ├── user-activity-repo.test.js
 │   └── widget-bootstrap.test.js
 ├── ujg-daily-diligence-modules/
 ├── ujg-daily-diligence.bootstrap.js
@@ -69,11 +74,40 @@
 └── vba/
 ```
 
-`tests/timesheet-logic.test.js` содержит минимальные unit-тесты на чистую логику Timesheet через `node --test`, без внешних зависимостей. Точечные тесты Daily Diligence: `daily-diligence-api-jira.test.js`, `daily-diligence-api-bitbucket.test.js`, `daily-diligence-api-confluence.test.js`, `daily-diligence-data-processor.test.js`, `daily-diligence-main.test.js`, `daily-diligence-rendering.test.js`, `daily-diligence-team-manager.test.js`, `daily-diligence-utils.test.js`. Standalone smoke-тесты: `standalone-daily-diligence.test.js`, `standalone-server-login.test.js`, `standalone-timesheet-v0.test.js`. Генератор и поведение stable bootstrap: `widget-bootstrap.test.js` (`node --test tests/widget-bootstrap.test.js`). Дизайн и план: `docs/plans/2026-03-29-widget-bootstrap-design.md`, `docs/plans/2026-03-29-widget-bootstrap.md`.
+`tests/timesheet-logic.test.js` содержит минимальные unit-тесты на чистую логику Timesheet через `node --test`, без внешних зависимостей. Точечные тесты Daily Diligence: `daily-diligence-api-jira.test.js`, `daily-diligence-api-bitbucket.test.js`, `daily-diligence-api-confluence.test.js`, `daily-diligence-data-processor.test.js`, `daily-diligence-main.test.js`, `daily-diligence-rendering.test.js`, `daily-diligence-team-manager.test.js`, `daily-diligence-utils.test.js`. Репозиторный слой User Activity покрыт `user-activity-repo.test.js`. Standalone smoke-тесты: `standalone-daily-diligence.test.js`, `standalone-server-login.test.js`, `standalone-timesheet-v0.test.js`. Генератор и поведение stable bootstrap: `widget-bootstrap.test.js` (`node --test tests/widget-bootstrap.test.js`).
 
-## Стабильные URL гаджетов (bootstrap)
+Документация по bootstrap и версионированию на дашборде:
 
-Рекомендуемый формат настройки гаджета в Jira: один URL на `*.bootstrap.js` с веткой `@main` на jsDelivr, **пустой** список CSS (стили подгружает bootstrap вместе с runtime), **без изменений** поле AMD module (то же публичное имя, что и у legacy bundle).
+- актуальная модель **dashboard `releaseRef`**: `docs/plans/2026-03-29-dashboard-release-ref-design.md`, `docs/plans/2026-03-29-dashboard-release-ref.md`;
+- исторический дизайн/план только про bootstrap/runtime без property: `docs/plans/2026-03-29-widget-bootstrap-design.md`, `docs/plans/2026-03-29-widget-bootstrap.md`.
+
+## Стабильные URL гаджетов и версия на дашборде (`releaseRef`)
+
+### Что настраивается в Jira один раз
+
+Рекомендуемый формат настройки гаджета в Jira: **один постоянный URL** на `*.bootstrap.js` с веткой `@main` на jsDelivr, **пустой** список CSS (стили подгружает bootstrap вместе с runtime), **без изменений** поле AMD module (то же публичное имя, что и у legacy bundle). Этот URL не нужно менять при каждом релизе виджета.
+
+### Откуда берётся версия ассетов (не из «ручного SHA в гаджете»)
+
+Версия набора файлов (`_ujgCommon.js`, CSS, `*.runtime.js`) задаётся **общим для всего дашборда** значением в **Jira Dashboard Entity Properties**:
+
+- ключ: `ujg.dashboardReleaseRef` (строка — SHA коммита в репозитории ассетов, обычно полный SHA с GitHub `main`).
+
+**Первый заход** на дашборд, если свойства ещё нет: bootstrap запрашивает актуальный коммит `main` через GitHub API (`/repos/.../commits/main`), при необходимости **сохраняет** полученный SHA в property дашборда и в этой же сессии грузит ассеты с этого ref. Если сохранить не удалось (права, сеть), для текущей загрузки всё равно используется полученный SHA; при полной недоступности Jira/GitHub используется **запасной** ref, вшитый в `*.bootstrap.js` при сборке (`node build-widget-bootstrap-assets.js`).
+
+**Следующие загрузки** страницы дашборда: bootstrap читает `ujg.dashboardReleaseRef` и подгружает все ассеты с закреплённого SHA — набор остаётся согласованным.
+
+### Обновление до последней версии с `main`
+
+В теле гаджета отображается кнопка **«Обновить версию»**. По нажатию:
+
+1. запрашивается свежий SHA с GitHub `main`;
+2. если он отличается от текущего закреплённого, новый SHA **записывается** в `ujg.dashboardReleaseRef`;
+3. выполняется **чистая перезагрузка страницы** (`location.reload`), чтобы все гаджеты и общий кэш загрузчиков вошли в состояние, согласованное с новым ref.
+
+Если SHA совпадает с уже закреплённым, перезагрузки нет — обновляется только отображаемая метка версии.
+
+Подробнее: обработка ошибок, REST-пути и почему выбран reload вместо hot-swap AMD в странице — в `docs/plans/2026-03-29-dashboard-release-ref-design.md`.
 
 Базовый префикс CDN (при необходимости замените org/repo):
 
@@ -139,7 +173,69 @@ https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-user-activity.bootstrap.js
 _ujgUserActivity
 ```
 
-Пересобрать committed `*.bootstrap.js` / `*.runtime.js` из текущих bundle: `node build-widget-bootstrap-assets.js`.
+### Sprint Health
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-sprint-health.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgSprintHealth
+```
+
+### Project Analytics
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-project-analytics.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgProjectAnalytics
+```
+
+### Timesheet v0
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-timesheet.v0.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgTimesheet
+```
+
+Пересобрать committed `*.bootstrap.js` / `*.runtime.js` из текущих bundle: `node build-widget-bootstrap-assets.js` (обновляет вшитый fallback `releaseRef` в bootstrap; **операционная** версия на дашборде по-прежнему хранится в `ujg.dashboardReleaseRef`).
+
+Если при нажатии **«Обновить версию»** запись property не удалась, страница не должна перезагружаться: виджет остаётся на текущем закреплённом ref до успешной записи.
 
 ## Утилита: загрузка последних ассетов в Jira attachment
 
