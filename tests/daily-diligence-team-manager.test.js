@@ -265,7 +265,9 @@ test("saveTeams sends PUT and mirrors localStorage", async function() {
     var next = [{ id: "a", name: "A", memberKeys: ["u1"] }];
     var jq = createJqueryStub(function(options) {
         if (options.type === "PUT" && options.url.indexOf("/rest/api/2/dashboard/5/properties/ujg-dd-teams") !== -1) {
-            assert.deepEqual(JSON.parse(options.data), { teams: next });
+            var body = JSON.parse(options.data);
+            assert.deepEqual(body.teams, next);
+            assert.ok(body.displayNameByKey && typeof body.displayNameByKey === "object");
             return resolvedAjax({});
         }
         return resolvedAjax({});
@@ -277,6 +279,7 @@ test("saveTeams sends PUT and mirrors localStorage", async function() {
     assert.deepEqual(tm.getTeams(), next);
     var cached = JSON.parse(ls.getItem("ujg-dd-teams"));
     assert.deepEqual(cached.teams, next);
+    assert.ok(cached.displayNameByKey && typeof cached.displayNameByKey === "object");
 });
 
 test("saveTeams rejects when PUT fails but keeps localStorage", async function() {
@@ -298,7 +301,9 @@ test("saveTeams rejects when PUT fails but keeps localStorage", async function()
         /fail/
     );
     assert.deepEqual(tm.getTeams(), next);
-    assert.deepEqual(JSON.parse(ls.getItem("ujg-dd-teams")).teams, next);
+    var disk = JSON.parse(ls.getItem("ujg-dd-teams"));
+    assert.deepEqual(disk.teams, next);
+    assert.ok(disk.displayNameByKey && typeof disk.displayNameByKey === "object");
 });
 
 test("searchUsers normalizes rows to key and displayName", async function() {
@@ -703,4 +708,104 @@ test("create appends overlay and new team triggers onChange", async function() {
 
     ctrl.close();
     assert.equal($parent.find(".ujg-dd-teams-overlay").length, 0);
+});
+
+test("loadTeams restores memberLabel from persisted displayNameByKey (localStorage)", async function() {
+    var ls = makeLocalStorage();
+    ls.setItem(
+        "ujg-dd-teams",
+        JSON.stringify({
+            teams: [{ id: "t1", name: "Crew", memberKeys: ["JIRAUSER12028"] }],
+            displayNameByKey: { JIRAUSER12028: "Ivan Petrov" }
+        })
+    );
+    var jq = createJqueryStub(function() {
+        return resolvedAjax({});
+    });
+    var tm = loadTeamManager(jq, { location: { search: "" } }, ls);
+    await new Promise(function(resolve, reject) {
+        tm.loadTeams().done(resolve).fail(reject);
+    });
+    assert.equal(tm.memberLabel("JIRAUSER12028"), "Ivan Petrov");
+});
+
+test("loadTeams restores display names from dashboard property payload", async function() {
+    var ls = makeLocalStorage();
+    var remote = [{ id: "t1", name: "Crew", memberKeys: ["acc-99"] }];
+    var jq = createJqueryStub(function(options) {
+        if (options.type === "GET" && options.url.indexOf("/rest/api/2/dashboard/77/properties/ujg-dd-teams") !== -1) {
+            return resolvedAjax({
+                key: "ujg-dd-teams",
+                value: {
+                    teams: remote,
+                    displayNameByKey: { "acc-99": "Cloud User" }
+                }
+            });
+        }
+        return resolvedAjax({});
+    });
+    var tm = loadTeamManager(jq, { location: { search: "?selectPageId=77" }, AJS: { params: {} } }, ls);
+    await new Promise(function(resolve, reject) {
+        tm.loadTeams().done(resolve).fail(reject);
+    });
+    assert.equal(tm.memberLabel("acc-99"), "Cloud User");
+});
+
+test("saveTeams PUT includes displayNameByKey merged from loaded local metadata", async function() {
+    var ls = makeLocalStorage();
+    ls.setItem(
+        "ujg-dd-teams",
+        JSON.stringify({
+            teams: [{ id: "a", name: "A", memberKeys: ["u1"] }],
+            displayNameByKey: { u1: "Saved Name" }
+        })
+    );
+    var putBodies = [];
+    var jq = createJqueryStub(function(options) {
+        if (options.type === "GET" && options.url.indexOf("/properties/ujg-dd-teams") !== -1) {
+            return resolvedAjax({ key: "ujg-dd-teams", value: { teams: [{ id: "a", name: "A", memberKeys: ["u1"] }] } });
+        }
+        if (options.type === "PUT" && options.url.indexOf("/properties/ujg-dd-teams") !== -1) {
+            putBodies.push(JSON.parse(options.data));
+            return resolvedAjax({});
+        }
+        return resolvedAjax({});
+    });
+    var tm = loadTeamManager(jq, { location: { search: "?selectPageId=5" } }, ls);
+    await new Promise(function(resolve, reject) {
+        tm.loadTeams().done(resolve).fail(reject);
+    });
+    await new Promise(function(resolve, reject) {
+        tm.saveTeams(tm.getTeams()).done(resolve).fail(reject);
+    });
+    assert.equal(putBodies.length, 1);
+    assert.deepEqual(putBodies[0].displayNameByKey.u1, "Saved Name");
+});
+
+test("legacy teams without displayNameByKey backfill display names via GET /rest/api/2/user", async function() {
+    var ls = makeLocalStorage();
+    ls.setItem(
+        "ujg-dd-teams",
+        JSON.stringify({
+            teams: [{ id: "leg", name: "Legacy", memberKeys: ["JIRAUSER12028"] }]
+        })
+    );
+    var userCalls = [];
+    var jq = createJqueryStub(function(options) {
+        var url = String(options.url || "");
+        if (url.indexOf("/rest/api/2/user") !== -1 && url.indexOf("user/search") === -1) {
+            userCalls.push(options);
+            assert.equal(options.data.key, "JIRAUSER12028");
+            return resolvedAjax({ key: "JIRAUSER12028", displayName: "Alice Example" });
+        }
+        return resolvedAjax({});
+    });
+    var tm = loadTeamManager(jq, { location: { search: "" } }, ls);
+    await new Promise(function(resolve, reject) {
+        tm.loadTeams().done(resolve).fail(reject);
+    });
+    assert.equal(userCalls.length, 1);
+    assert.equal(tm.memberLabel("JIRAUSER12028"), "Alice Example");
+    var cached = JSON.parse(ls.getItem("ujg-dd-teams"));
+    assert.equal(cached.displayNameByKey.JIRAUSER12028, "Alice Example");
 });

@@ -35,23 +35,139 @@ define("_ujgDD_teamManager", ["jquery", "_ujgDD_config", "_ujgDD_utils"], functi
         return normalized;
     }
 
-    function readLocalTeams() {
+    function readStoredState() {
         try {
-            if (typeof localStorage === "undefined") return [];
+            if (typeof localStorage === "undefined") {
+                return { teams: [], displayNameByKey: {} };
+            }
             var raw = localStorage.getItem(config.STORAGE_KEY);
-            if (!raw) return [];
+            if (!raw) return { teams: [], displayNameByKey: {} };
             var parsed = JSON.parse(raw);
-            if (parsed && Array.isArray(parsed.teams)) return normalizeTeams(parsed.teams);
-        } catch (e) {}
-        return [];
+            var teamsPart = parsed && Array.isArray(parsed.teams) ? normalizeTeams(parsed.teams) : [];
+            var names =
+                parsed && parsed.displayNameByKey && typeof parsed.displayNameByKey === "object"
+                    ? parsed.displayNameByKey
+                    : {};
+            return { teams: teamsPart, displayNameByKey: Object.assign({}, names) };
+        } catch (e) {
+            return { teams: [], displayNameByKey: {} };
+        }
     }
 
     function writeLocalTeams(list) {
         try {
             if (typeof localStorage !== "undefined") {
-                localStorage.setItem(config.STORAGE_KEY, JSON.stringify({ teams: list }));
+                localStorage.setItem(
+                    config.STORAGE_KEY,
+                    JSON.stringify({
+                        teams: list,
+                        displayNameByKey: displayNameByKey
+                    })
+                );
             }
         } catch (e) {}
+    }
+
+    function augmentDisplayNamesFromLocalCache() {
+        var st = readStoredState();
+        var loc = st.displayNameByKey && typeof st.displayNameByKey === "object" ? st.displayNameByKey : {};
+        var i;
+        var j;
+        var k;
+        var mks;
+        for (i = 0; i < teams.length; i++) {
+            mks = teams[i].memberKeys || [];
+            for (j = 0; j < mks.length; j++) {
+                k = mks[j];
+                if (k && !displayNameByKey[k] && loc[k]) {
+                    displayNameByKey[k] = loc[k];
+                }
+            }
+        }
+    }
+
+    function fetchUserDisplayName(key) {
+        var d = $.Deferred();
+        $.ajax({
+            url: apiUrl("/rest/api/2/user"),
+            type: "GET",
+            dataType: "json",
+            data: { key: key }
+        })
+            .done(function(u) {
+                var row = normalizeUserRow(u);
+                if (row && row.displayName) {
+                    displayNameByKey[key] = row.displayName;
+                }
+                d.resolve();
+            })
+            .fail(function() {
+                $.ajax({
+                    url: apiUrl("/rest/api/2/user"),
+                    type: "GET",
+                    dataType: "json",
+                    data: { accountId: key }
+                })
+                    .done(function(u) {
+                        var row = normalizeUserRow(u);
+                        if (row && row.displayName) {
+                            displayNameByKey[key] = row.displayName;
+                        }
+                        d.resolve();
+                    })
+                    .fail(function() {
+                        d.resolve();
+                    });
+            });
+        return d.promise();
+    }
+
+    function backfillDisplayNames() {
+        var needed = [];
+        var seen = Object.create(null);
+        var i;
+        var j;
+        var k;
+        var mks;
+        var dEmpty;
+        for (i = 0; i < teams.length; i++) {
+            mks = teams[i].memberKeys || [];
+            for (j = 0; j < mks.length; j++) {
+                k = mks[j];
+                if (!k || displayNameByKey[k]) {
+                    continue;
+                }
+                if (seen[k]) {
+                    continue;
+                }
+                seen[k] = true;
+                needed.push(k);
+            }
+        }
+        if (needed.length === 0) {
+            dEmpty = $.Deferred();
+            dEmpty.resolve(teams);
+            return dEmpty.promise();
+        }
+        var dAll = $.Deferred();
+        var remaining = needed.length;
+        for (i = 0; i < needed.length; i++) {
+            fetchUserDisplayName(needed[i]).always(function() {
+                remaining -= 1;
+                if (remaining === 0) {
+                    dAll.resolve(teams);
+                }
+            });
+        }
+        return dAll.promise();
+    }
+
+    function finishLoadTeams(d) {
+        augmentDisplayNamesFromLocalCache();
+        backfillDisplayNames().always(function() {
+            writeLocalTeams(teams);
+            d.resolve(teams);
+        });
     }
 
     function detectDashboardId() {
@@ -72,8 +188,10 @@ define("_ujgDD_teamManager", ["jquery", "_ujgDD_config", "_ujgDD_utils"], functi
         var d = $.Deferred();
         dashboardId = detectDashboardId();
         if (!dashboardId) {
-            teams = readLocalTeams();
-            d.resolve(teams);
+            var localOnly = readStoredState();
+            teams = localOnly.teams;
+            displayNameByKey = Object.assign({}, localOnly.displayNameByKey || {});
+            finishLoadTeams(d);
             return d.promise();
         }
         $.ajax({
@@ -84,14 +202,24 @@ define("_ujgDD_teamManager", ["jquery", "_ujgDD_config", "_ujgDD_utils"], functi
             .done(function(data) {
                 if (data && data.value && Array.isArray(data.value.teams)) {
                     teams = normalizeTeams(data.value.teams);
+                    displayNameByKey = Object.assign(
+                        {},
+                        data.value.displayNameByKey && typeof data.value.displayNameByKey === "object"
+                            ? data.value.displayNameByKey
+                            : {}
+                    );
                 } else {
-                    teams = readLocalTeams();
+                    var st = readStoredState();
+                    teams = st.teams;
+                    displayNameByKey = Object.assign({}, st.displayNameByKey || {});
                 }
-                d.resolve(teams);
+                finishLoadTeams(d);
             })
             .fail(function() {
-                teams = readLocalTeams();
-                d.resolve(teams);
+                var stFail = readStoredState();
+                teams = stFail.teams;
+                displayNameByKey = Object.assign({}, stFail.displayNameByKey || {});
+                finishLoadTeams(d);
             });
         return d.promise();
     }
@@ -112,7 +240,7 @@ define("_ujgDD_teamManager", ["jquery", "_ujgDD_config", "_ujgDD_utils"], functi
             type: "PUT",
             contentType: "application/json",
             dataType: "json",
-            data: JSON.stringify({ teams: list })
+            data: JSON.stringify({ teams: list, displayNameByKey: displayNameByKey })
         })
             .done(function() {
                 d.resolve(list);
@@ -536,6 +664,7 @@ define("_ujgDD_teamManager", ["jquery", "_ujgDD_config", "_ujgDD_utils"], functi
         saveTeams: saveTeams,
         searchUsers: searchUsers,
         create: create,
-        getTeams: getTeams
+        getTeams: getTeams,
+        memberLabel: memberLabel
     };
 });

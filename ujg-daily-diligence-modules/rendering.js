@@ -98,11 +98,66 @@ define("_ujgDD_rendering", [
         }
     }
 
+    /**
+     * Optional Bitbucket/Confluence calls can hang indefinitely in the browser (CORS-blocked or
+     * stalled XHR). Cap wait time so Jira-only data can still render.
+     */
+    var OPTIONAL_EXTERNAL_SOURCE_MS = 25000;
+
+    function guardOptionalExternalPromise(promise, emptyFactory, logLabel) {
+        var inner = $.Deferred();
+        var finished = false;
+        var timerId = null;
+
+        function cleanupTimer() {
+            if (timerId != null) {
+                clearTimeout(timerId);
+                timerId = null;
+            }
+        }
+
+        function finish(value) {
+            if (finished) return;
+            finished = true;
+            cleanupTimer();
+            inner.resolve(value);
+        }
+
+        function finishEmptyFromReject() {
+            if (finished) return;
+            finished = true;
+            cleanupTimer();
+            if (utils && typeof utils.log === "function") {
+                utils.log(logLabel, extractErrorMessage(arguments));
+            }
+            inner.resolve(emptyFactory());
+        }
+
+        function finishEmptyFromTimeout() {
+            if (finished) return;
+            finished = true;
+            cleanupTimer();
+            if (utils && typeof utils.log === "function") {
+                utils.log(logLabel + " timed out", "using empty data");
+            }
+            inner.resolve(emptyFactory());
+        }
+
+        timerId = setTimeout(finishEmptyFromTimeout, OPTIONAL_EXTERNAL_SOURCE_MS);
+        attachPromise(promise, finish, finishEmptyFromReject);
+        return {
+            promise: inner.promise(),
+            cancelWatchdog: cleanupTimer
+        };
+    }
+
     function joinRequests(jiraPromise, bitbucketPromise, confluencePromise) {
         var deferred = $.Deferred();
         var failed = false;
         var remaining = 3;
         var results = [emptyJiraData(), emptyBitbucketData(), emptyConfluenceData()];
+        var bitbucketGuard = guardOptionalExternalPromise(bitbucketPromise, emptyBitbucketData, "Bitbucket load failed");
+        var confluenceGuard = guardOptionalExternalPromise(confluencePromise, emptyConfluenceData, "Confluence load failed");
 
         function resolveAt(index) {
             return function(value) {
@@ -118,22 +173,14 @@ define("_ujgDD_rendering", [
         function reject() {
             if (failed) return;
             failed = true;
+            bitbucketGuard.cancelWatchdog();
+            confluenceGuard.cancelWatchdog();
             deferred.reject.apply(deferred, arguments);
         }
 
-        function resolveFallback(index, label, factory) {
-            return function() {
-                if (failed) return;
-                if (utils && typeof utils.log === "function") {
-                    utils.log(label, extractErrorMessage(arguments));
-                }
-                resolveAt(index)(factory());
-            };
-        }
-
         attachPromise(jiraPromise, resolveAt(0), reject);
-        attachPromise(bitbucketPromise, resolveAt(1), resolveFallback(1, "Bitbucket load failed", emptyBitbucketData));
-        attachPromise(confluencePromise, resolveAt(2), resolveFallback(2, "Confluence load failed", emptyConfluenceData));
+        attachPromise(bitbucketGuard.promise, resolveAt(1), reject);
+        attachPromise(confluenceGuard.promise, resolveAt(2), reject);
 
         return deferred.promise();
     }

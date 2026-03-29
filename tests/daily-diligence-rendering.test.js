@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const loadAmdModule = require("./helpers/load-amd-module");
 
+/** Must match OPTIONAL_EXTERNAL_SOURCE_MS in ujg-daily-diligence-modules/rendering.js */
+var OPTIONAL_EXTERNAL_SOURCE_MS = 25000;
+
 function createDeferred() {
     var state = "pending";
     var settledArgs = [];
@@ -441,8 +444,8 @@ function loadRendering(env) {
             document: env.documentNode,
             window: env.window || { document: env.documentNode },
             Date: env.Date || Date,
-            setTimeout: setTimeout,
-            clearTimeout: clearTimeout
+            setTimeout: env.setTimeout || setTimeout,
+            clearTimeout: env.clearTimeout || clearTimeout
         }
     );
 }
@@ -1372,6 +1375,83 @@ test("bitbucket and confluence failures degrade to empty source data when Jira s
     assert.equal(env.$container.find(".ujg-dd-loading").length, 0);
     assert.equal(env.$container.text().indexOf("Bitbucket exploded") >= 0, false);
     assert.equal(env.$container.text().indexOf("Confluence exploded") >= 0, false);
+});
+
+test("optional Bitbucket and Confluence promises that never settle time out and render Jira data", function(t) {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    var env = createTestEnv();
+    env.setTimeout = globalThis.setTimeout;
+    env.clearTimeout = globalThis.clearTimeout;
+    var rendering = loadRendering(env);
+    var jiraDeferred = createDeferred();
+    var processorCalls = [];
+    var watchdogMarker = "WATCHDOG_JIRA_ONLY_RENDER";
+
+    rendering.init(env.$container, {
+        config: env.config,
+        utils: env.utils,
+        apiJira: {
+            fetchTeamData: function() {
+                return jiraDeferred.promise();
+            }
+        },
+        apiBitbucket: {
+            fetchTeamActivity: function() {
+                return createDeferred().promise();
+            }
+        },
+        apiConfluence: {
+            fetchTeamActivity: function() {
+                return createDeferred().promise();
+            }
+        },
+        dataProcessor: {
+            processTeamData: function(jiraData, bitbucketData, confluenceData) {
+                processorCalls.push([jiraData, bitbucketData, confluenceData]);
+                return {
+                    u1: {
+                        userKey: "u1",
+                        issueMap: {
+                            "WDG-1": { key: "WDG-1", summary: watchdogMarker }
+                        },
+                        dayMap: {
+                            "2026-03-09": buildDay("2026-03-09", {
+                                worklogs: [{ issueKey: "WDG-1", loggedAt: "10:00", timeSpentHours: 1 }],
+                                totalHours: 1
+                            }),
+                            "2026-03-10": buildDay("2026-03-10"),
+                            "2026-03-11": buildDay("2026-03-11"),
+                            "2026-03-12": buildDay("2026-03-12"),
+                            "2026-03-13": buildDay("2026-03-13")
+                        }
+                    }
+                };
+            }
+        },
+        teamManager: {
+            loadTeams: function() {
+                return resolvedDeferred([{ id: "team-a", name: "Alpha", memberKeys: ["u1"] }]);
+            },
+            create: function() {
+                return { close: function() {} };
+            }
+        },
+        resize: function() {}
+    });
+
+    assert.equal(env.$container.find(".ujg-dd-loading").length, 1);
+    jiraDeferred.resolve({ issues: [{ key: "WDG-1" }] });
+    assert.equal(processorCalls.length, 0);
+
+    t.mock.timers.tick(OPTIONAL_EXTERNAL_SOURCE_MS);
+
+    assert.equal(processorCalls.length, 1);
+    assert.deepEqual(processorCalls[0][0], { issues: [{ key: "WDG-1" }] });
+    assert.deepEqual(JSON.parse(JSON.stringify(processorCalls[0][1])), { commits: [], pullRequests: [] });
+    assert.deepEqual(JSON.parse(JSON.stringify(processorCalls[0][2])), []);
+    assert.equal(env.$container.find(".ujg-dd-loading").length, 0);
+    assert.equal(env.$container.find(".ujg-dd-error").length, 0);
+    assert.match(env.$container.text(), new RegExp(watchdogMarker));
 });
 
 test("synchronous processTeamData errors are surfaced as the compact error state", function() {
