@@ -3170,10 +3170,16 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var $el = $container.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
             if ($el.length === 0) $el = $container;
             isFullscreen = !isFullscreen;
-            $el.toggleClass("ujg-fullscreen", isFullscreen);
+            if (isFullscreen) {
+                $el.data("ujg-style", $el.attr("style") || "");
+                $el.addClass("ujg-fullscreen");
+            } else {
+                $el.removeClass("ujg-fullscreen").attr("style", $el.data("ujg-style"));
+            }
             $header.find(".ujg-ua-btn-fullscreen").html(
                 utils.icon(isFullscreen ? "minimize2" : "maximize2", "w-3.5 h-3.5")
             );
+            if (mods.resize) mods.resize();
         });
         $(document).off("keydown.ujgUA_rendering").on("keydown.ujgUA_rendering", function(e) {
             if (e.key === "Escape" && isFullscreen) {
@@ -3371,7 +3377,8 @@ define("_ujgUA_main", [
             userPicker: userPicker, dateRangePicker: dateRangePicker,
             summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
-            issueList: issueList, activityLog: activityLog, repoLog: repoLog
+            issueList: issueList, activityLog: activityLog, repoLog: repoLog,
+            resize: function() { if (typeof API.resize === "function") API.resize(); }
         });
     }
 

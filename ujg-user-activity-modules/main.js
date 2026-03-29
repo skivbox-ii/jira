@@ -28,7 +28,8 @@ define("_ujgUA_main", [
             userPicker: userPicker, dateRangePicker: dateRangePicker,
             summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
-            issueList: issueList, activityLog: activityLog, repoLog: repoLog
+            issueList: issueList, activityLog: activityLog, repoLog: repoLog,
+            resize: function() { if (typeof API.resize === "function") API.resize(); }
         });
     }
 
