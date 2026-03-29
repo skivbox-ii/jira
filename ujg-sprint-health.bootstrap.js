@@ -1,10 +1,10 @@
 define("_ujgSprintHealth", [], function() {
   "use strict";
-  var commonJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@ed616c5/_ujgCommon.js";
-  var cssUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@ed616c5/ujg-sprint-health.css";
-  var runtimeJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@ed616c5/ujg-sprint-health.runtime.js";
+  var commonJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@6a5cf4f/_ujgCommon.js";
+  var cssUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@6a5cf4f/ujg-sprint-health.css";
+  var runtimeJs = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira@6a5cf4f/ujg-sprint-health.runtime.js";
   var runtimeAmd = "_ujgSprintHealthRuntime";
-  var releaseRef = "ed616c5";
+  var releaseRef = "6a5cf4f";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
