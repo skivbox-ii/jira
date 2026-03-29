@@ -285,13 +285,27 @@ define("_ujgUserActivity", [], function() {
     var span = toolbarRoot.querySelector(".ujg-bootstrap-version");
     if (span) span.textContent = shortRefForToolbar(ref) || "";
   }
+  function normalizeBootstrapBodyNode(body) {
+    if (!body) return null;
+    if (typeof body.appendChild === "function") return body;
+    if (body[0] && typeof body[0].appendChild === "function") return body[0];
+    if (typeof body.get === "function") {
+      var first = body.get(0);
+      if (first && typeof first.appendChild === "function") return first;
+    }
+    return null;
+  }
+  function getBootstrapGadgetBody(api) {
+    if (!api || typeof api.getGadget !== "function") return null;
+    var gadget = api.getGadget();
+    if (!gadget || typeof gadget.getBody !== "function") return null;
+    return normalizeBootstrapBodyNode(gadget.getBody());
+  }
   function tryRefreshToolbarVersionForApi(api) {
     try {
-      if (api && typeof api.getGadget === "function") {
-        var body = api.getGadget().getBody();
-        var toolbar = body && typeof body.querySelector === "function" ? body.querySelector(".ujg-bootstrap-toolbar") : null;
-        if (toolbar) updateToolbarVersionDisplay(toolbar, cache.runtimeReleaseRef || releaseRef);
-      }
+      var body = getBootstrapGadgetBody(api);
+      var toolbar = body && typeof body.querySelector === "function" ? body.querySelector(".ujg-bootstrap-toolbar") : null;
+      if (toolbar) updateToolbarVersionDisplay(toolbar, cache.runtimeReleaseRef || releaseRef);
     } catch (eTb) {}
   }
   function requestPageReload() {
@@ -336,9 +350,8 @@ define("_ujgUserActivity", [], function() {
     });
   }
   function mountBootstrapUpdateControls(api, gadgetInstance) {
-    if (!api || typeof api.getGadget !== "function") return;
-    var body = api.getGadget().getBody();
-    if (!body || typeof body.appendChild !== "function") return;
+    var body = getBootstrapGadgetBody(api);
+    if (!body) return;
     var toolbar = typeof body.querySelector === "function" ? body.querySelector(".ujg-bootstrap-toolbar") : null;
     if (!toolbar) {
       toolbar = document.createElement("div");

@@ -135,6 +135,17 @@ function gadgetApiWithBody(body, extras) {
   return Object.assign(base, extras || {});
 }
 
+function wrapGadgetBodyAsJquery(body) {
+  return {
+    0: body,
+    length: 1,
+    jquery: "3.7.1",
+    get: function(idx) {
+      return idx === 0 ? body : undefined;
+    }
+  };
+}
+
 function createDeferred() {
   var resolve;
   var reject;
@@ -1749,6 +1760,49 @@ test("gadget constructor renders shared version refresh control in gadget body",
   var btn = body.querySelector(".ujg-bootstrap-refresh");
   assert.ok(btn, "expected refresh button in gadget body");
   assert.match(String(btn.textContent || ""), /Обновить версию/);
+  assert.ok(body.querySelector(".ujg-bootstrap-version"));
+});
+
+test("gadget constructor renders refresh control when getBody returns jQuery-like wrapper", function() {
+  var mod = require(MOD_PATH);
+  var body = createMockGadgetBody();
+  var wrappedBody = wrapGadgetBodyAsJquery(body);
+  var out = mod.buildAssets({
+    releaseRef: "ui-pin",
+    assetBaseUrl: "https://cdn.jsdelivr.net/gh/skivbox-ii/jira",
+    widgets: [mod.WIDGETS.dailyDiligence]
+  });
+  var defineCapture = null;
+  function defineShim(name, deps, factory) {
+    if (typeof deps === "function") {
+      factory = deps;
+      deps = [];
+    }
+    defineCapture = { name: name, factory: factory };
+  }
+  var ctx = vm.createContext({
+    define: defineShim,
+    require: function() {},
+    document: {
+      head: { appendChild: function() {} },
+      createElement: bootstrapTestCreateElement
+    },
+    window: {},
+    globalThis: null,
+    queueMicrotask: queueMicrotask,
+    Promise: Promise
+  });
+  ctx.globalThis = ctx.window;
+  ctx.__ujgBody = wrappedBody;
+  vm.runInContext(out["ujg-daily-diligence.bootstrap.js"], ctx);
+  var Ctor = defineCapture.factory();
+  ctx.__ujgCtor = Ctor;
+  vm.runInContext(
+    "new __ujgCtor({ __ujgBootstrapSkipAutoLoad: true, getGadget: function() { return { getBody: function() { return __ujgBody; } }; } });",
+    ctx
+  );
+  var btn = body.querySelector(".ujg-bootstrap-refresh");
+  assert.ok(btn, "expected refresh button even with jQuery-like body wrapper");
   assert.ok(body.querySelector(".ujg-bootstrap-version"));
 });
 

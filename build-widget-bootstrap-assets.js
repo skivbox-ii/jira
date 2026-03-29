@@ -423,13 +423,27 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "    var span = toolbarRoot.querySelector(\".ujg-bootstrap-version\");\n" +
     '    if (span) span.textContent = shortRefForToolbar(ref) || "";\n' +
     "  }\n" +
+    "  function normalizeBootstrapBodyNode(body) {\n" +
+    "    if (!body) return null;\n" +
+    "    if (typeof body.appendChild === \"function\") return body;\n" +
+    "    if (body[0] && typeof body[0].appendChild === \"function\") return body[0];\n" +
+    "    if (typeof body.get === \"function\") {\n" +
+    "      var first = body.get(0);\n" +
+    "      if (first && typeof first.appendChild === \"function\") return first;\n" +
+    "    }\n" +
+    "    return null;\n" +
+    "  }\n" +
+    "  function getBootstrapGadgetBody(api) {\n" +
+    "    if (!api || typeof api.getGadget !== \"function\") return null;\n" +
+    "    var gadget = api.getGadget();\n" +
+    "    if (!gadget || typeof gadget.getBody !== \"function\") return null;\n" +
+    "    return normalizeBootstrapBodyNode(gadget.getBody());\n" +
+    "  }\n" +
     "  function tryRefreshToolbarVersionForApi(api) {\n" +
     "    try {\n" +
-    '      if (api && typeof api.getGadget === "function") {\n' +
-    "        var body = api.getGadget().getBody();\n" +
-    "        var toolbar = body && typeof body.querySelector === \"function\" ? body.querySelector(\".ujg-bootstrap-toolbar\") : null;\n" +
-    "        if (toolbar) updateToolbarVersionDisplay(toolbar, cache.runtimeReleaseRef || releaseRef);\n" +
-    "      }\n" +
+    "      var body = getBootstrapGadgetBody(api);\n" +
+    "      var toolbar = body && typeof body.querySelector === \"function\" ? body.querySelector(\".ujg-bootstrap-toolbar\") : null;\n" +
+    "      if (toolbar) updateToolbarVersionDisplay(toolbar, cache.runtimeReleaseRef || releaseRef);\n" +
     "    } catch (eTb) {}\n" +
     "  }\n" +
     "  function requestPageReload() {\n" +
@@ -474,9 +488,8 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "    });\n" +
     "  }\n" +
     "  function mountBootstrapUpdateControls(api, gadgetInstance) {\n" +
-    '    if (!api || typeof api.getGadget !== "function") return;\n' +
-    "    var body = api.getGadget().getBody();\n" +
-    '    if (!body || typeof body.appendChild !== "function") return;\n' +
+    "    var body = getBootstrapGadgetBody(api);\n" +
+    "    if (!body) return;\n" +
     "    var toolbar = typeof body.querySelector === \"function\" ? body.querySelector(\".ujg-bootstrap-toolbar\") : null;\n" +
     "    if (!toolbar) {\n" +
     '      toolbar = document.createElement("div");\n' +
