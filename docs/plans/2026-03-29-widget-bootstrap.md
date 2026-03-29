@@ -262,6 +262,8 @@ Run: `node --test tests/widget-bootstrap.test.js`
 
 Expected: still PASS; docs update should not affect generator behavior.
 
+**Status:** Done in `widget-bootstrap` worktree — `README.md` tree + Jira examples; plan/design docs under `docs/plans/`; sanity check `node --test tests/widget-bootstrap.test.js` passes.
+
 ---
 
 ### Task 6: Add a regression guard that bootstraps stay in sync with source bundles

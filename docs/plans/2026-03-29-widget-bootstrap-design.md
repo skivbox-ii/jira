@@ -152,15 +152,14 @@ Bootstrap должен:
 
 Для этого используется общий глобальный cache, например:
 
-- `window.__UJG_BOOTSTRAP__.scripts`
-- `window.__UJG_BOOTSTRAP__.styles`
-- `window.__UJG_BOOTSTRAP__.promises`
+- `window.__UJG_BOOTSTRAP__.scriptPromises`
+- `window.__UJG_BOOTSTRAP__.stylePromises`
 
 ## Настройка Jira после перехода
 
 После rollout конфигурация становится простой.
 
-Пример для `Daily Diligence`:
+### Daily Diligence
 
 `JavaScript URLs`
 
@@ -178,6 +177,46 @@ https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-daily-diligence.bootstrap.j
 
 ```text
 _ujgDailyDiligence
+```
+
+### Timesheet
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-timesheet.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgTimesheet
+```
+
+### User Activity
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-user-activity.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgUserActivity
 ```
 
 То есть CSS больше не задаётся отдельно в Jira config: его догружает bootstrap той же версии.
