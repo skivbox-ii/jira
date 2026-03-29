@@ -44,7 +44,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                         all = all.concat(batch);
                         var total = typeof data.total === "number" ? data.total : all.length;
                         if (onProgress) {
-                            onProgress(all.length, total);
+                            onProgress(all.length, total, all.slice());
                         }
                         if (batch.length === 0) {
                             d.resolve(all);

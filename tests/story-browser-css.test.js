@@ -139,3 +139,18 @@ test("story-browser CSS: 2 contract selectors and key properties", function() {
     assert.ok(priPill, ".ujg-sb-priority-high block");
     assert.match(priPill, /color\s*:\s*hsl|background(?:-color)?\s*:\s*hsl/i, "priority uses theme hsl()");
 });
+
+test("story-browser CSS: standalone widget controls have semantic styles and token fallbacks", function() {
+    const css = readCss();
+
+    assert.match(css, /\.ujg-sb-title\s*\{[^{}]*font-size\s*:[^{}]*\}/i, "title should size itself without utility classes");
+    assert.match(css, /\.ujg-sb-title\s*\{[^{}]*margin\s*:\s*0/i, "title should reset default h1 margin");
+    assert.match(css, /\.ujg-sb-controls\s+select\s*\{[^{}]*border[^{}]*\}/i, "controls select should have semantic border styling");
+    assert.match(css, /\.ujg-sb-controls\s+input\s*\{[^{}]*border[^{}]*\}/i, "controls input should have semantic border styling");
+    assert.match(css, /\.ujg-sb-view-btn\s*\{[^{}]*padding[^{}]*\}/i, "view button should size itself without utility classes");
+    assert.match(css, /\.ujg-sb-expand-all\s*\{[^{}]*padding[^{}]*\}/i, "expand button should size itself without utility classes");
+    assert.match(css, /\.ujg-sb-collapse-all\s*\{[^{}]*padding[^{}]*\}/i, "collapse button should size itself without utility classes");
+    assert.match(css, /var\(--foreground,\s*[^)]+\)/i, "theme tokens should provide foreground fallback");
+    assert.match(css, /var\(--border,\s*[^)]+\)/i, "theme tokens should provide border fallback");
+    assert.match(css, /var\(--primary,\s*[^)]+\)/i, "theme tokens should provide primary fallback");
+});

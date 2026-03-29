@@ -20,6 +20,19 @@ define("_ujgSB_main", [
         return { statuses: [], sprints: [], epics: [] };
     }
 
+    function shouldRenderPartialSnapshot(loaded, total, issues) {
+        var ld = Number(loaded);
+        var tt = Number(total);
+        if (!issues || !issues.length || !isFinite(ld) || ld <= 0) {
+            return false;
+        }
+        if (isFinite(tt) && tt > 0 && ld >= tt) {
+            return false;
+        }
+        // Show an early preview fast, then refresh in larger chunks for big projects.
+        return ld <= 200 || ld % 500 === 0;
+    }
+
     function StoryBrowserGadget(API) {
         if (!API) {
             console.error("[UJG-StoryBrowser] API object is missing!");
@@ -156,6 +169,14 @@ define("_ujgSB_main", [
             state.filters.search = "";
         }
 
+        function applyLoadedIssues(issues, keepLoading) {
+            state.tree = data.buildTree(issues || []);
+            state.filterOptions = data.collectFilters(state.tree);
+            state.loading = !!keepLoading;
+            rerenderHeader();
+            rerenderTree();
+        }
+
         function expandAllInFiltered() {
             state.expanded = {};
             function walk(nodes) {
@@ -201,22 +222,21 @@ define("_ujgSB_main", [
             rerenderHeader();
             rerenderTree();
             api
-                .getProjectIssues(String(projectKey), function(loaded, total) {
+                .getProjectIssues(String(projectKey), function(loaded, total, partialIssues) {
                     if (loadToken !== activeLoadToken) {
                         return;
                     }
                     rendering.renderProgress(loaded, total);
+                    if (shouldRenderPartialSnapshot(loaded, total, partialIssues)) {
+                        applyLoadedIssues(partialIssues, true);
+                    }
                 })
                 .then(
                     function(issues) {
                         if (loadToken !== activeLoadToken) {
                             return;
                         }
-                        state.tree = data.buildTree(issues);
-                        state.filterOptions = data.collectFilters(state.tree);
-                        state.loading = false;
-                        rerenderHeader();
-                        rerenderTree();
+                        applyLoadedIssues(issues, false);
                         clearProgress();
                         persistUiState();
                     },

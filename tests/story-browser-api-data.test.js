@@ -236,6 +236,44 @@ test("getProjectIssues posts search with expected body and paginates", async fun
     assert.equal(jquery.__calls.length, 2);
 });
 
+test("getProjectIssues progress callback receives accumulated issues for partial rendering", async function() {
+    const progressCalls = [];
+    var page = 0;
+    const jquery = createJqueryStub(function() {
+        if (page === 0) {
+            page += 1;
+            return resolvedAjax({
+                total: 3,
+                issues: [
+                    { key: "DEMO-1", fields: { summary: "first" } },
+                    { key: "DEMO-2", fields: { summary: "second" } }
+                ]
+            });
+        }
+        return resolvedAjax({
+            total: 3,
+            issues: [{ key: "DEMO-3", fields: { summary: "third" } }]
+        });
+    });
+    const api = loadApi(jquery);
+
+    const issues = await api.getProjectIssues("DEMO", function(loaded, total, partialIssues) {
+        progressCalls.push({
+            loaded: loaded,
+            total: total,
+            keys: (partialIssues || []).map(function(issue) {
+                return issue.key;
+            })
+        });
+    });
+
+    assert.equal(issues.length, 3);
+    assert.deepEqual(JSON.parse(JSON.stringify(progressCalls)), [
+        { loaded: 2, total: 3, keys: ["DEMO-1", "DEMO-2"] },
+        { loaded: 3, total: 3, keys: ["DEMO-1", "DEMO-2", "DEMO-3"] }
+    ]);
+});
+
 test("getProjectIssues uses direct ISSUE_FIELDS split contract", async function() {
     const jquery = createJqueryStub(function(options) {
         const body = JSON.parse(options.data);

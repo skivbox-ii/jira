@@ -1053,3 +1053,52 @@ test("story browser main resets stale filters on project switch so new project i
   assert.equal(svc.state.filteredTree.length, 1);
   assert.equal(svc.state.filteredTree[0].key, "P2-tree");
 });
+
+test("story browser main surfaces partial tree and filter options while project is still loading", async function() {
+  var d = baseDeps();
+  var finalLoad = createDeferred();
+
+  d.api.getProjectIssues = function(_key, onProgress) {
+    if (onProgress) {
+      onProgress(100, 500, [{ treeKey: "partial-tree" }]);
+    }
+    return finalLoad.promise();
+  };
+  d.data.buildTree = function(issues) {
+    return [{ key: issues[0].treeKey, type: "Epic", children: [] }];
+  };
+  d.data.collectFilters = function(tree) {
+    return {
+      statuses: [tree[0].key + "-status"],
+      sprints: [tree[0].key + "-sprint"],
+      epics: [{ key: tree[0].key, summary: tree[0].key }]
+    };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  assert.equal(svc.state.loading, true);
+  assert.equal(svc.state.tree.length, 1);
+  assert.equal(svc.state.tree[0].key, "partial-tree");
+  assert.equal(svc.state.filterOptions.statuses[0], "partial-tree-status");
+  assert.equal(svc.state.filterOptions.sprints[0], "partial-tree-sprint");
+  assert.equal(svc.state.filterOptions.epics[0].key, "partial-tree");
+  assert.equal(d.rendering.treeCalls[d.rendering.treeCalls.length - 1].tree[0].key, "partial-tree");
+
+  finalLoad.resolve([{ treeKey: "final-tree" }]);
+  await nextTurn();
+
+  assert.equal(svc.state.loading, false);
+  assert.equal(svc.state.tree[0].key, "final-tree");
+  assert.equal(svc.state.filterOptions.epics[0].key, "final-tree");
+});
