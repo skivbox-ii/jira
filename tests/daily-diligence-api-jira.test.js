@@ -82,6 +82,53 @@ function resolvedAjax(data) {
     return d.promise();
 }
 
+function rejectedAjax(xhr, status, errorThrown) {
+    var d = createDeferred();
+    d.reject(xhr || {}, status || "error", errorThrown || "");
+    return d.promise();
+}
+
+function hybridWorklogSearchResponse() {
+    return {
+        total: 1,
+        issues: [
+            {
+                key: "PROJ-1",
+                fields: {
+                    summary: "Worklog issue",
+                    status: { name: "In Progress" },
+                    issuetype: { name: "Task" },
+                    project: { key: "PROJ" },
+                    worklog: {
+                        startAt: 0,
+                        maxResults: 20,
+                        total: 1,
+                        worklogs: [
+                            {
+                                id: "wl-hybrid-1",
+                                author: { accountId: "u1" },
+                                started: "2026-03-25T09:15:00.000+0000",
+                                timeSpentSeconds: 1800
+                            }
+                        ]
+                    }
+                },
+                changelog: { histories: [] }
+            }
+        ]
+    };
+}
+
+var hybridActivityAtomXml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<feed xmlns="http://www.w3.org/2005/Atom">' +
+    "<entry>" +
+    "<title>User One commented on PROJ-2</title>" +
+    "<published>2026-03-25T11:42:00.000Z</published>" +
+    "<summary type=\"text\">Profile-only issue</summary>" +
+    "</entry>" +
+    "</feed>";
+
 function createJqueryStub(handler) {
     var calls = [];
     return {
@@ -174,6 +221,9 @@ test("fetchTeamData backfills paginated full worklogs only for truncated issues"
         if (options.url === "https://jira.example.com/rest/api/2/search") {
             return resolvedAjax(searchResponse);
         }
+        if (options.url === "https://jira.example.com/rest/api/2/user") {
+            return rejectedAjax({ status: 404 }, "error", "not found");
+        }
         if (options.url === "https://jira.example.com/rest/api/2/issue/PROJ-1/worklog") {
             if (options.data.startAt === 0) {
                 return resolvedAjax({
@@ -249,4 +299,67 @@ test("fetchTeamData backfills paginated full worklogs only for truncated issues"
         { url: "https://jira.example.com/rest/api/2/issue/PROJ-1/worklog", startAt: 0 },
         { url: "https://jira.example.com/rest/api/2/issue/PROJ-1/worklog", startAt: 2 }
     ]);
+});
+
+test("fetchTeamData merges activity stream events with worklog issues", async function() {
+    var jquery = createJqueryStub(function(options) {
+        if (options.url === "https://jira.example.com/rest/api/2/search") {
+            return resolvedAjax(hybridWorklogSearchResponse());
+        }
+        if (options.url === "https://jira.example.com/rest/api/2/user" && options.data && options.data.key === "u1") {
+            return resolvedAjax({
+                key: "u1",
+                name: "user.one",
+                displayName: "User One"
+            });
+        }
+        if (String(options.url).indexOf("https://jira.example.com/activity") === 0) {
+            return resolvedAjax(hybridActivityAtomXml);
+        }
+        throw new Error("Unexpected AJAX call: " + JSON.stringify(normalize(options)));
+    });
+
+    var api = loadApi(jquery);
+    var result = await api.fetchTeamData(["u1"], "2026-03-24", "2026-03-25");
+
+    assert.equal(result.issues.length, 1);
+    assert.equal(result.issues[0].key, "PROJ-1");
+    assert.equal(result.issues[0].fields.summary, "Worklog issue");
+    assert.equal(result.issues[0].fields.worklog.worklogs.length, 1);
+    assert.equal(result.profileEvents && result.profileEvents.length, 1);
+    assert.deepEqual(normalize(result.profileEvents[0]), {
+        userKey: "u1",
+        date: "2026-03-25",
+        time: "11:42",
+        issueKey: "PROJ-2",
+        issueSummary: "Profile-only issue",
+        eventType: "commented",
+        text: "commented",
+        rawTitle: "User One commented on PROJ-2"
+    });
+});
+
+test("fetchTeamData keeps worklog results when activity stream fails", async function() {
+    var jquery = createJqueryStub(function(options) {
+        if (options.url === "https://jira.example.com/rest/api/2/search") {
+            return resolvedAjax(hybridWorklogSearchResponse());
+        }
+        if (options.url === "https://jira.example.com/rest/api/2/user" && options.data && options.data.key === "u1") {
+            return resolvedAjax({
+                key: "u1",
+                name: "user.one",
+                displayName: "User One"
+            });
+        }
+        if (String(options.url).indexOf("https://jira.example.com/activity") === 0) {
+            return rejectedAjax({ status: 503 }, "error", "activity unavailable");
+        }
+        throw new Error("Unexpected AJAX call: " + JSON.stringify(normalize(options)));
+    });
+
+    var api = loadApi(jquery);
+    var result = await api.fetchTeamData(["u1"], "2026-03-24", "2026-03-25");
+
+    assert.equal(result.issues.length, 1);
+    assert.deepEqual(normalize(result.profileEvents), []);
 });

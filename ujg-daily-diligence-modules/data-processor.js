@@ -129,7 +129,8 @@ define("_ujgDD_dataProcessor", ["_ujgDD_utils"], function(utils) {
             totalHours: 0,
             issueKeys: [],
             worklogLoggedLate: false,
-            hasEveningCommit: false
+            hasEveningCommit: false,
+            jiraActivity: []
         };
     }
 
@@ -302,6 +303,15 @@ define("_ujgDD_dataProcessor", ["_ujgDD_utils"], function(utils) {
         var rows;
         var ri;
         var chHist;
+        var profileEvents;
+        var pei;
+        var profEvt;
+        var seenJiraActivity;
+        var dedupeKey;
+        var cj;
+        var skipTransitionDup;
+        var profDay;
+        var profEt;
 
         for (ii = 0; ii < issues.length; ii++) {
             issue = issues[ii];
@@ -352,6 +362,51 @@ define("_ujgDD_dataProcessor", ["_ujgDD_utils"], function(utils) {
                     pushIssueKey(day, issue.key);
                 }
             }
+        }
+
+        profileEvents = (jiraData && jiraData.profileEvents) || [];
+        seenJiraActivity = {};
+        for (pei = 0; pei < profileEvents.length; pei++) {
+            profEvt = profileEvents[pei];
+            uid = profEvt && profEvt.userKey;
+            if (!uid || !keySet[uid]) continue;
+            profDay = profEvt && profEvt.date;
+            if (!profDay || !out[uid] || !out[uid].dayMap[profDay]) continue;
+            day = out[uid].dayMap[profDay];
+            profEt = String((profEvt && profEvt.eventType) || "").toLowerCase();
+            if (profEt === "worklogged" || profEt === "worklog") continue;
+            if (profEt === "transitioned") {
+                skipTransitionDup = false;
+                for (cj = 0; cj < day.changes.length; cj++) {
+                    if (day.changes[cj].issueKey === profEvt.issueKey && day.changes[cj].field === "status") {
+                        skipTransitionDup = true;
+                        break;
+                    }
+                }
+                if (skipTransitionDup) continue;
+            }
+            dedupeKey = [uid, profDay, profEvt.issueKey || "", profEvt.eventType || "", profEvt.rawTitle || ""].join("|");
+            if (seenJiraActivity[dedupeKey]) continue;
+            seenJiraActivity[dedupeKey] = true;
+            if (profEvt.issueKey && !out[uid].issueMap[profEvt.issueKey]) {
+                out[uid].issueMap[profEvt.issueKey] = {
+                    key: profEvt.issueKey,
+                    summary: profEvt.issueSummary != null ? String(profEvt.issueSummary) : "",
+                    status: "",
+                    type: "",
+                    project: "",
+                    projectName: ""
+                };
+            }
+            day.jiraActivity.push({
+                date: profDay,
+                time: profEvt.time != null ? String(profEvt.time) : "",
+                issueKey: profEvt.issueKey != null ? String(profEvt.issueKey) : "",
+                eventType: profEvt.eventType != null ? String(profEvt.eventType) : "other",
+                text: profEvt.text != null ? String(profEvt.text) : "",
+                rawTitle: profEvt.rawTitle != null ? String(profEvt.rawTitle) : ""
+            });
+            if (profEvt.issueKey) pushIssueKey(day, profEvt.issueKey);
         }
 
         for (ci = 0; ci < commits.length; ci++) {

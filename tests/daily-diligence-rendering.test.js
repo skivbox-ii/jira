@@ -464,6 +464,7 @@ function buildDay(date, overrides) {
         date: date,
         worklogs: [],
         changes: [],
+        jiraActivity: [],
         commits: [],
         confluence: [],
         pullRequests: [],
@@ -828,6 +829,129 @@ test("init auto-loads the first populated team and renders reverse-chronological
     assert.match(env.$container.text(), /Done/);
     assert.match(env.$container.text(), /open/);
     assert.equal(env.$container.text().indexOf("OPEN") >= 0, false);
+});
+
+test("Jira column lists jiraActivity after status changes; jira-only days stay visible", function() {
+    var env = createTestEnv();
+    var rendering = loadRendering(env);
+    var jiraDeferred = createDeferred();
+    var bitbucketDeferred = createDeferred();
+    var confluenceDeferred = createDeferred();
+    var onlyJiraMarker = "ONLY_JIRA_ACTIVITY_DAY_VISIBLE";
+    var afterStatusMarker = "AFTER_STATUS_JIRA_ACTIVITY_ROW";
+    var fromUnique = "FROM_STATUS_UNIQUE_QQ";
+    var toUnique = "TO_STATUS_UNIQUE_ZZ";
+
+    var processed = {
+        u_only_jira: {
+            userKey: "u_only_jira",
+            issueMap: {},
+            dayMap: {
+                "2026-03-09": buildDay("2026-03-09"),
+                "2026-03-10": buildDay("2026-03-10"),
+                "2026-03-11": buildDay("2026-03-11", {
+                    jiraActivity: [
+                        {
+                            issueKey: "ACT-ONLY",
+                            eventType: "generic",
+                            text: onlyJiraMarker,
+                            time: "11:30",
+                            rawTitle: ""
+                        }
+                    ]
+                }),
+                "2026-03-12": buildDay("2026-03-12"),
+                "2026-03-13": buildDay("2026-03-13")
+            }
+        },
+        u_mix: {
+            userKey: "u_mix",
+            issueMap: {
+                "MIX-1": { key: "MIX-1", summary: "Mixed column order" }
+            },
+            dayMap: {
+                "2026-03-09": buildDay("2026-03-09"),
+                "2026-03-10": buildDay("2026-03-10"),
+                "2026-03-11": buildDay("2026-03-11", {
+                    changes: [{ issueKey: "MIX-1", fromString: fromUnique, toString: toUnique }],
+                    jiraActivity: [
+                        {
+                            issueKey: "MIX-1",
+                            eventType: "comment",
+                            text: afterStatusMarker,
+                            time: "15:00",
+                            rawTitle: "raw-fallback-should-not-appear"
+                        }
+                    ]
+                }),
+                "2026-03-12": buildDay("2026-03-12"),
+                "2026-03-13": buildDay("2026-03-13")
+            }
+        }
+    };
+
+    rendering.init(env.$container, {
+        config: env.config,
+        utils: env.utils,
+        apiJira: {
+            fetchTeamData: function() {
+                return jiraDeferred.promise();
+            }
+        },
+        apiBitbucket: {
+            fetchTeamActivity: function() {
+                return bitbucketDeferred.promise();
+            }
+        },
+        apiConfluence: {
+            fetchTeamActivity: function() {
+                return confluenceDeferred.promise();
+            }
+        },
+        dataProcessor: {
+            processTeamData: function() {
+                return processed;
+            }
+        },
+        teamManager: {
+            loadTeams: function() {
+                return resolvedDeferred([{ id: "team-jira-act", name: "JiraAct", memberKeys: ["u_only_jira", "u_mix"] }]);
+            },
+            create: function() {
+                return { close: function() {} };
+            }
+        },
+        resize: function() {}
+    });
+
+    jiraDeferred.resolve({ issues: [] });
+    bitbucketDeferred.resolve({ commits: [], pullRequests: [] });
+    confluenceDeferred.resolve([]);
+
+    var fullText = env.$container.text();
+    assert.match(fullText, new RegExp(onlyJiraMarker));
+    assert.match(fullText, new RegExp(afterStatusMarker));
+    assert.equal(fullText.indexOf("raw-fallback-should-not-appear") >= 0, false);
+
+    var stickerTexts = env.$container.find(".ujg-dd-date-sticker").toArray().map(function(node) {
+        return nodeText(node);
+    });
+    assert.ok(stickerTexts.some(function(label) {
+        return label.indexOf("11 мар") >= 0;
+    }));
+
+    var mixRow = env.$container.find(".ujg-dd-user-row").toArray().find(function(row) {
+        return nodeText(row.children[0] || {}).indexOf("u_mix") >= 0;
+    });
+    assert.ok(mixRow);
+    var jiraCol = mixRow.children[1];
+    assert.ok(jiraCol && jiraCol.children.length >= 2);
+    var firstRowText = nodeText(jiraCol.children[0]);
+    var secondRowText = nodeText(jiraCol.children[1]);
+    assert.match(firstRowText, new RegExp(fromUnique));
+    assert.match(firstRowText, new RegExp(toUnique));
+    assert.match(secondRowText, new RegExp(afterStatusMarker));
+    assert.equal(secondRowText.indexOf(fromUnique) >= 0, false);
 });
 
 test("teams button opens the popup and popup changes sync teams state then auto-load the new team", function() {

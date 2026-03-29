@@ -173,6 +173,12 @@ test("processTeamData merges Jira, Bitbucket, Confluence for two users over two 
     assert.ok(out.u1.issueMap["SDKU-1"]);
     assert.equal(out.u1.issueMap["SDKU-1"].summary, "Fix bug");
     assert.ok(out.u2.issueMap["SDKU-1"]);
+
+    assert.ok(Array.isArray(d1u1.jiraActivity));
+    assert.equal(d1u1.jiraActivity.length, 0);
+    assert.equal(d2u1.jiraActivity.length, 0);
+    assert.equal(d1u2.jiraActivity.length, 0);
+    assert.equal(d2u2.jiraActivity.length, 0);
 });
 
 test("processTeamData skips changelog rows when history author is not a requested team key", function() {
@@ -332,4 +338,109 @@ test("processTeamData flattens structured worklog comments to plain text", funct
 
     var out = dp.processTeamData(jiraData, { commits: [], pullRequests: [] }, [], ["u1"], "2026-03-01", "2026-03-01");
     assert.equal(out.u1.dayMap["2026-03-01"].worklogs[0].comment, "hello world");
+});
+
+test("processTeamData maps profile-only Jira events to jiraActivity and enriches issueMap", function() {
+    var dp = loadDataProcessor();
+    var jiraData = {
+        issues: [],
+        profileEvents: [
+            {
+                userKey: "u1",
+                date: "2026-03-10",
+                time: "11:42",
+                issueKey: "PROJ-99",
+                issueSummary: "Only in activity stream",
+                eventType: "commented",
+                text: "commented",
+                rawTitle: "User commented on PROJ-99"
+            }
+        ]
+    };
+    var out = dp.processTeamData(jiraData, { commits: [], pullRequests: [] }, [], ["u1"], "2026-03-10", "2026-03-10");
+    var day = out.u1.dayMap["2026-03-10"];
+    assert.equal(day.jiraActivity.length, 1);
+    assert.equal(day.jiraActivity[0].issueKey, "PROJ-99");
+    assert.equal(day.jiraActivity[0].eventType, "commented");
+    assert.equal(day.jiraActivity[0].date, "2026-03-10");
+    assert.equal(day.jiraActivity[0].time, "11:42");
+    assert.ok(out.u1.issueMap["PROJ-99"]);
+    assert.equal(out.u1.issueMap["PROJ-99"].key, "PROJ-99");
+    assert.equal(out.u1.issueMap["PROJ-99"].summary, "Only in activity stream");
+});
+
+test("processTeamData skips profile transitioned when a status change for the same issue exists in day.changes", function() {
+    var dp = loadDataProcessor();
+    var jiraData = {
+        issues: [
+            {
+                key: "SDKU-5",
+                fields: {
+                    summary: "Dual",
+                    status: { name: "In Progress" },
+                    issuetype: { name: "Task" },
+                    project: { key: "SDKU", name: "SDK" },
+                    worklog: { startAt: 0, maxResults: 0, total: 0, worklogs: [] }
+                },
+                changelog: {
+                    histories: [
+                        {
+                            author: { accountId: "u1" },
+                            created: "2026-03-15T10:00:00.000+0000",
+                            items: [{ field: "status", fromString: "Open", toString: "In Progress" }]
+                        }
+                    ]
+                }
+            }
+        ],
+        profileEvents: [
+            {
+                userKey: "u1",
+                date: "2026-03-15",
+                time: "10:05",
+                issueKey: "SDKU-5",
+                issueSummary: "Dual",
+                eventType: "transitioned",
+                text: "transitioned",
+                rawTitle: "User transitioned SDKU-5"
+            },
+            {
+                userKey: "u1",
+                date: "2026-03-15",
+                time: "11:00",
+                issueKey: "SDKU-5",
+                issueSummary: "Dual",
+                eventType: "commented",
+                text: "commented",
+                rawTitle: "User commented on SDKU-5"
+            }
+        ]
+    };
+    var out = dp.processTeamData(jiraData, { commits: [], pullRequests: [] }, [], ["u1"], "2026-03-15", "2026-03-15");
+    var day = out.u1.dayMap["2026-03-15"];
+    assert.equal(day.changes.length, 1);
+    assert.equal(day.jiraActivity.length, 1);
+    assert.equal(day.jiraActivity[0].eventType, "commented");
+});
+
+test("processTeamData works when jiraData has no profileEvents property", function() {
+    var dp = loadDataProcessor();
+    var jiraData = {
+        issues: [
+            {
+                key: "Z-1",
+                fields: {
+                    summary: "No profile",
+                    status: { name: "Open" },
+                    issuetype: { name: "Task" },
+                    project: { key: "Z", name: "Zed" },
+                    worklog: { startAt: 0, maxResults: 0, total: 0, worklogs: [] }
+                },
+                changelog: { histories: [] }
+            }
+        ]
+    };
+    var out = dp.processTeamData(jiraData, { commits: [], pullRequests: [] }, [], ["u1"], "2026-03-20", "2026-03-20");
+    assert.ok(Array.isArray(out.u1.dayMap["2026-03-20"].jiraActivity));
+    assert.equal(out.u1.dayMap["2026-03-20"].jiraActivity.length, 0);
 });

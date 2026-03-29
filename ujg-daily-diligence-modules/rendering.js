@@ -28,6 +28,7 @@ define("_ujgDD_rendering", [
         return Number(day.totalHours || 0) > 0 ||
             ((day.worklogs && day.worklogs.length) || 0) > 0 ||
             ((day.changes && day.changes.length) || 0) > 0 ||
+            ((day.jiraActivity && day.jiraActivity.length) || 0) > 0 ||
             ((day.commits && day.commits.length) || 0) > 0 ||
             ((day.confluence && day.confluence.length) || 0) > 0 ||
             ((day.pullRequests && day.pullRequests.length) || 0) > 0;
@@ -730,6 +731,25 @@ define("_ujgDD_rendering", [
                         .append($("<span/>").addClass("text-[8px] text-warning").text(change.fromString || ""))
                         .append($("<span/>").html(utils.icon("arrowRight", "w-1.5 h-1.5 text-muted-foreground")))
                         .append($("<span/>").addClass("text-[8px] text-success").text(change.toString || ""))
+                );
+            });
+            (day.jiraActivity || []).forEach(function(activity) {
+                var label = activity.text != null && String(activity.text) !== ""
+                    ? String(activity.text)
+                    : String(activity.rawTitle || "");
+                hasRows = true;
+                $col.append(
+                    $("<div/>")
+                        .addClass("flex items-baseline gap-1 px-1 py-[0px] border-b border-border last:border-b-0 hover:bg-muted/20")
+                        .append($("<span/>").addClass("font-mono text-[7px] shrink-0 text-muted-foreground").text(activity.time || ""))
+                        .append($("<span/>").html(utils.icon("fileText", "w-2 h-2 text-muted-foreground shrink-0 relative top-[1px]")))
+                        .append($("<span/>").addClass("font-mono text-[8px] text-primary shrink-0").text(activity.issueKey || ""))
+                        .append(
+                            activity.eventType
+                                ? $("<span/>").addClass("text-[7px] text-muted-foreground shrink-0 max-w-[56px] truncate").text(String(activity.eventType))
+                                : $("<span/>")
+                        )
+                        .append($("<span/>").addClass("text-foreground truncate flex-1 text-[8px]").text(label))
                 );
             });
             if (!hasRows) {
