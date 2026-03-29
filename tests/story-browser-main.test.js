@@ -271,7 +271,8 @@ function loadMain(deps) {
     _ujgSB_storage: deps.storage,
     _ujgSB_api: deps.api,
     _ujgSB_data: deps.data,
-    _ujgSB_rendering: deps.rendering
+    _ujgSB_rendering: deps.rendering,
+    "_ujgSB_create-story": deps.createStory
   });
 }
 
@@ -300,9 +301,40 @@ function baseDeps(overrides) {
     renderProgress: function(loaded, total) {
       rendering.progressCalls.push({ loaded: loaded, total: total });
     },
+    renderCreateStoryModalCalls: [],
+    renderCreateStoryModal: function(draft) {
+      rendering.renderCreateStoryModalCalls.push(draft);
+    },
+    clearCreateStoryModalCalls: 0,
+    clearCreateStoryModal: function() {
+      rendering.clearCreateStoryModalCalls += 1;
+    },
     headerCalls: 0,
     treeCalls: [],
     progressCalls: []
+  };
+  var createStory = {
+    makeDefaultDraftCalls: [],
+    makeDefaultDraft: function(projectKey) {
+      createStory.makeDefaultDraftCalls.push(projectKey);
+      return {
+        projectKey: projectKey != null ? String(projectKey) : "",
+        mode: "draft",
+        epicMode: "existingEpic",
+        existingEpicKey: "P1-EP",
+        story: { summary: "S", errors: [], assignee: null, components: [], labels: [] },
+        children: [],
+        ui: { formErrors: [] },
+        _fromTest: true
+      };
+    },
+    validateDraft: function() {},
+    hasSubmitValidationErrors: function() {
+      return false;
+    },
+    submitCreateDraft: function() {
+      return resolved({ ok: true });
+    }
   };
   var api = {
     getProjects: function() {
@@ -343,6 +375,7 @@ function baseDeps(overrides) {
     storage: storage,
     data: data,
     rendering: rendering,
+    createStory: createStory,
     api: api,
     jquery: createJQuery()
   };
