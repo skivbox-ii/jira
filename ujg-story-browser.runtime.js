@@ -80,10 +80,13 @@ define("_ujgSB_config", [], function() {
         Lowest: "ujg-sb-priority-lowest"
     };
 
-    var ISSUE_FIELDS = "summary,status,assignee,issuetype,priority,timeoriginalestimate,timetracking,timespent,components,labels,fixVersions,parent,created,updated,customfield_10014,customfield_10020";
+    var ISSUE_FIELDS = "summary,status,assignee,issuetype,priority,timeoriginalestimate,timetracking,timespent,components,labels,fixVersions,parent,issuelinks,created,updated,customfield_10014,customfield_10020";
 
     var EPIC_LINK_FIELD = "customfield_10014";
     var SPRINT_FIELD = "customfield_10020";
+    var EPIC_ISSUE_TYPE = "Epic";
+    var STORY_ISSUE_TYPE = "Story";
+    var CHILD_LINK_NAMES = ["child", "is_child"];
     var STORAGE_KEY = "ujg-sb-state";
 
     function trimSlash(s) {
@@ -124,6 +127,9 @@ define("_ujgSB_config", [], function() {
         ISSUE_FIELDS: ISSUE_FIELDS,
         EPIC_LINK_FIELD: EPIC_LINK_FIELD,
         SPRINT_FIELD: SPRINT_FIELD,
+        EPIC_ISSUE_TYPE: EPIC_ISSUE_TYPE,
+        STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
+        CHILD_LINK_NAMES: CHILD_LINK_NAMES,
         STORAGE_KEY: STORAGE_KEY
     };
 });
@@ -365,9 +371,25 @@ define("_ujgSB_storage", ["_ujgSB_config"], function(config) {
         project: null,
         viewMode: "all",
         epicFilter: "",
+        selectedEpicKeys: [],
         statusFilter: "",
         sprintFilter: ""
     };
+
+    function normalizeSelectedEpicKeys(value, legacyEpicFilter) {
+        var list = Array.isArray(value)
+            ? value
+            : legacyEpicFilter != null && String(legacyEpicFilter).trim() !== ""
+              ? [legacyEpicFilter]
+              : [];
+        return list
+            .map(function(item) {
+                return item != null ? String(item) : "";
+            })
+            .filter(function(item) {
+                return item !== "";
+            });
+    }
 
     function normalizeLoaded(raw) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -375,14 +397,17 @@ define("_ujgSB_storage", ["_ujgSB_config"], function(config) {
                 project: DEFAULT_STATE.project,
                 viewMode: DEFAULT_STATE.viewMode,
                 epicFilter: DEFAULT_STATE.epicFilter,
+                selectedEpicKeys: DEFAULT_STATE.selectedEpicKeys.slice(),
                 statusFilter: DEFAULT_STATE.statusFilter,
                 sprintFilter: DEFAULT_STATE.sprintFilter
             };
         }
+        var epicFilter = raw.epicFilter != null ? raw.epicFilter : DEFAULT_STATE.epicFilter;
         return {
             project: raw.project != null ? raw.project : DEFAULT_STATE.project,
             viewMode: raw.viewMode != null ? raw.viewMode : DEFAULT_STATE.viewMode,
-            epicFilter: raw.epicFilter != null ? raw.epicFilter : DEFAULT_STATE.epicFilter,
+            epicFilter: epicFilter,
+            selectedEpicKeys: normalizeSelectedEpicKeys(raw.selectedEpicKeys, epicFilter),
             statusFilter: raw.statusFilter != null ? raw.statusFilter : DEFAULT_STATE.statusFilter,
             sprintFilter: raw.sprintFilter != null ? raw.sprintFilter : DEFAULT_STATE.sprintFilter
         };
@@ -402,10 +427,20 @@ define("_ujgSB_storage", ["_ujgSB_config"], function(config) {
 
     function save(state) {
         if (typeof localStorage === "undefined") return;
+        var selectedEpicKeys = normalizeSelectedEpicKeys(
+            state && state.selectedEpicKeys,
+            state && state.epicFilter
+        );
         var payload = {
             project: state && state.project != null ? state.project : null,
             viewMode: state && state.viewMode != null ? state.viewMode : DEFAULT_STATE.viewMode,
-            epicFilter: state && state.epicFilter != null ? state.epicFilter : "",
+            epicFilter:
+                state && state.epicFilter != null
+                    ? state.epicFilter
+                    : selectedEpicKeys[0] != null
+                      ? selectedEpicKeys[0]
+                      : "",
+            selectedEpicKeys: selectedEpicKeys,
             statusFilter: state && state.statusFilter != null ? state.statusFilter : "",
             sprintFilter: state && state.sprintFilter != null ? state.sprintFilter : ""
         };
@@ -425,17 +460,153 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
     "use strict";
 
     var CONFIG = config;
+    var JQL_KEY_CHUNK_SIZE = 100;
+
+    function resolvedPromise(value) {
+        var d = $.Deferred();
+        d.resolve(value);
+        return d.promise();
+    }
 
     function quoteJqlString(value) {
         return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
     }
 
-    function buildProjectJql(projectKey) {
-        var value = String(projectKey);
-        if (/^[A-Za-z0-9_]+$/.test(value)) {
-            return "project = " + value + " ORDER BY issuetype ASC, key ASC";
+    function toJqlToken(value) {
+        var token = String(value);
+        if (/^[A-Za-z0-9_-]+$/.test(token)) {
+            return token;
         }
-        return "project = " + quoteJqlString(value) + " ORDER BY issuetype ASC, key ASC";
+        return quoteJqlString(token);
+    }
+
+    function buildProjectJql(projectKey) {
+        return "project = " + toJqlToken(projectKey) + " ORDER BY issuetype ASC, key ASC";
+    }
+
+    function epicLinkJqlField() {
+        var match = /customfield_(\d+)/.exec(String(CONFIG.EPIC_LINK_FIELD || ""));
+        return match ? "cf[" + match[1] + "]" : quoteJqlString(CONFIG.EPIC_LINK_FIELD);
+    }
+
+    function buildProjectEpicsJql(projectKey) {
+        return "project = " + toJqlToken(projectKey) + " AND issuetype = " + CONFIG.EPIC_ISSUE_TYPE + " ORDER BY key ASC";
+    }
+
+    function buildStoriesForEpicKeysJql(projectKey, epicKeys) {
+        return (
+            "project = " +
+            toJqlToken(projectKey) +
+            " AND issuetype = " +
+            CONFIG.STORY_ISSUE_TYPE +
+            " AND " +
+            epicLinkJqlField() +
+            " in (" +
+            (epicKeys || []).map(toJqlToken).join(", ") +
+            ") ORDER BY key ASC"
+        );
+    }
+
+    function buildKeysJql(issueKeys) {
+        return "key in (" + (issueKeys || []).map(toJqlToken).join(", ") + ") ORDER BY key ASC";
+    }
+
+    function normalizeKeyList(values) {
+        return (values || []).map(function(value) {
+            return value != null ? String(value) : "";
+        }).filter(Boolean);
+    }
+
+    function chunkValues(values, chunkSize) {
+        var chunks = [];
+        var index = 0;
+        while (index < values.length) {
+            chunks.push(values.slice(index, index + chunkSize));
+            index += chunkSize;
+        }
+        return chunks;
+    }
+
+    function searchChunked(values, buildJql, onProgress) {
+        var safeValues = normalizeKeyList(values);
+        var chunks = chunkValues(safeValues, JQL_KEY_CHUNK_SIZE);
+        var d = $.Deferred();
+        var all = [];
+
+        if (!chunks.length) {
+            return resolvedPromise([]);
+        }
+
+        function loadChunk(index) {
+            if (index >= chunks.length) {
+                d.resolve(all);
+                return;
+            }
+            searchIssues(buildJql(chunks[index]), onProgress ? function(loaded, total, partial) {
+                onProgress(all.length + loaded, all.length + total, all.concat(partial));
+            } : null).then(
+                function(batch) {
+                    all = all.concat(batch || []);
+                    loadChunk(index + 1);
+                },
+                function(err) {
+                    if (all.length) {
+                        d.resolve(all);
+                    } else {
+                        d.reject(err);
+                    }
+                }
+            );
+        }
+
+        loadChunk(0);
+        return d.promise();
+    }
+
+    function searchIssues(jql, onProgress) {
+        var d = $.Deferred();
+        var all = [];
+
+        function load(startAt) {
+            $.ajax({
+                url: CONFIG.baseUrl + "/rest/api/2/search",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({
+                    jql: jql,
+                    fields: CONFIG.ISSUE_FIELDS.split(","),
+                    expand: ["changelog"],
+                    maxResults: 100,
+                    startAt: startAt
+                })
+            }).then(
+                function(data) {
+                    var batch = data.issues || [];
+                    all = all.concat(batch);
+                    var total = typeof data.total === "number" ? data.total : all.length;
+                    if (onProgress) {
+                        onProgress(all.length, total, all.slice());
+                    }
+                    if (batch.length === 0) {
+                        d.resolve(all);
+                    } else if (all.length >= total) {
+                        d.resolve(all);
+                    } else {
+                        load(startAt + batch.length);
+                    }
+                },
+                function(err) {
+                    if (all.length === 0) {
+                        d.reject(err);
+                    } else {
+                        d.resolve(all);
+                    }
+                }
+            );
+        }
+
+        load(0);
+        return d.promise();
     }
 
     return {
@@ -446,48 +617,24 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
             });
         },
         getProjectIssues: function(projectKey, onProgress) {
-            var d = $.Deferred();
-            var all = [];
-
-            function load(startAt) {
-                $.ajax({
-                    url: CONFIG.baseUrl + "/rest/api/2/search",
-                    type: "POST",
-                    contentType: "application/json",
-                    data: JSON.stringify({
-                        jql: buildProjectJql(projectKey),
-                        fields: CONFIG.ISSUE_FIELDS.split(","),
-                        expand: ["changelog"],
-                        maxResults: 100,
-                        startAt: startAt
-                    })
-                }).then(
-                    function(data) {
-                        var batch = data.issues || [];
-                        all = all.concat(batch);
-                        var total = typeof data.total === "number" ? data.total : all.length;
-                        if (onProgress) {
-                            onProgress(all.length, total, all.slice());
-                        }
-                        if (batch.length === 0) {
-                            d.resolve(all);
-                        } else if (all.length >= total) {
-                            d.resolve(all);
-                        } else {
-                            load(startAt + batch.length);
-                        }
-                    },
-                    function(err) {
-                        if (all.length === 0) {
-                            d.reject(err);
-                        } else {
-                            d.resolve(all);
-                        }
-                    }
-                );
+            return searchIssues(buildProjectJql(projectKey), onProgress);
+        },
+        getProjectEpics: function(projectKey, onProgress) {
+            return searchIssues(buildProjectEpicsJql(projectKey), onProgress);
+        },
+        getStoriesForEpicKeys: function(projectKey, epicKeys, onProgress) {
+            if (!epicKeys || !epicKeys.length) {
+                return resolvedPromise([]);
             }
-            load(0);
-            return d.promise();
+            return searchChunked(epicKeys, function(keys) {
+                return buildStoriesForEpicKeysJql(projectKey, keys);
+            }, onProgress);
+        },
+        getIssuesByKeys: function(issueKeys, onProgress) {
+            if (!issueKeys || !issueKeys.length) {
+                return resolvedPromise([]);
+            }
+            return searchChunked(issueKeys, buildKeysJql, onProgress);
         }
     };
 });
@@ -497,6 +644,54 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
     "use strict";
 
     var CONFIG = config;
+
+    function compareIssueKeys(a, b) {
+        function parseKey(value) {
+            var text = typeof value === "string" ? value : value && value.key != null ? String(value.key) : "";
+            var match = /^(.*?)-(\d+)$/.exec(text);
+            return {
+                raw: text,
+                prefix: match ? match[1] : text,
+                number: match ? Number(match[2]) : Number.NaN
+            };
+        }
+
+        var left = parseKey(a);
+        var right = parseKey(b);
+        var prefixCmp = left.prefix.localeCompare(right.prefix);
+        if (prefixCmp !== 0) {
+            return prefixCmp;
+        }
+        if (isFinite(left.number) && isFinite(right.number) && left.number !== right.number) {
+            return left.number - right.number;
+        }
+        return left.raw.localeCompare(right.raw);
+    }
+
+    function buildBrowseUrl(baseUrl, key) {
+        var issueKey = key != null ? String(key) : "";
+        var root = String(baseUrl || "").replace(/\/+$/, "");
+        if (!issueKey) {
+            return "";
+        }
+        return (root || "") + "/browse/" + issueKey;
+    }
+
+    function readClassification(summary) {
+        var match = /^\s*\[([^\]]+)\]/.exec(String(summary || ""));
+        var value = match && match[1] != null ? String(match[1]).trim().toUpperCase() : "";
+        return value || "NO PREFIX";
+    }
+
+    function normalizeLinkName(name) {
+        return normalizeText(name).replace(/\s+/g, "_");
+    }
+
+    function isAllowedChildLinkName(name) {
+        return (CONFIG.CHILD_LINK_NAMES || []).some(function(linkName) {
+            return normalizeLinkName(linkName) === normalizeLinkName(name);
+        });
+    }
 
     function readEpicLink(fields) {
         var v = fields[CONFIG.EPIC_LINK_FIELD];
@@ -594,6 +789,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         var f = issue.fields || {};
         var st = f.status || {};
         var typeName = f.issuetype && f.issuetype.name != null ? String(f.issuetype.name) : "";
+        var classification = readClassification(f.summary);
         var est =
             f.timeoriginalestimate != null
                 ? Number(f.timeoriginalestimate)
@@ -648,9 +844,35 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             created: f.created != null ? String(f.created) : "",
             updated: f.updated != null ? String(f.updated) : "",
             isDone: utils.isDone(st),
+            browseUrl: buildBrowseUrl(CONFIG.baseUrl, issue.key),
+            classification: classification,
+            classificationMissing: classification === "NO PREFIX",
             transitions: extractTransitions(issue.changelog),
             children: []
         };
+    }
+
+    function extractChildLinkedKeys(issue) {
+        var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+        var seen = {};
+        var out = [];
+
+        function pushLinkedKey(linkName, linkedIssue) {
+            var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key) : "";
+            var norm = normalizeText(key);
+            if (!isAllowedChildLinkName(linkName) || !key || seen[norm]) {
+                return;
+            }
+            seen[norm] = true;
+            out.push(key);
+        }
+
+        links.forEach(function(link) {
+            var type = link && link.type ? link.type : {};
+            pushLinkedKey(type.outward, link && link.outwardIssue);
+            pushLinkedKey(type.inward, link && link.inwardIssue);
+        });
+        return out;
     }
 
     function resolveParentInMap(node, keyToNode) {
@@ -715,7 +937,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         node.progress = totalCount > 0 ? totalDone / totalCount : 0;
     }
 
-    function buildTree(rawIssues) {
+    function buildLegacyTree(rawIssues) {
         var list = rawIssues || [];
         var keyToNode = {};
         var order = [];
@@ -770,6 +992,75 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         return root;
     }
 
+    function buildPayloadTree(payload) {
+        var rawEpics = payload && Array.isArray(payload.epics) ? payload.epics : [];
+        var rawStories = payload && Array.isArray(payload.stories) ? payload.stories : [];
+        var rawChildren = payload && Array.isArray(payload.children) ? payload.children : [];
+        var roots = [];
+        var epicMap = {};
+        var storiesByEpic = {};
+        var childMap = {};
+
+        rawChildren.forEach(function(issue) {
+            if (!issue || !issue.key) {
+                return;
+            }
+            childMap[String(issue.key)] = normalizeIssue(issue);
+        });
+
+        rawEpics.forEach(function(issue) {
+            var epic;
+            if (!issue || !issue.key) {
+                return;
+            }
+            epic = normalizeIssue(issue);
+            if (epic.type !== CONFIG.EPIC_ISSUE_TYPE || epic.isDone) {
+                return;
+            }
+            epic.children = [];
+            epicMap[epic.key] = epic;
+            roots.push(epic);
+        });
+
+        rawStories.forEach(function(issue) {
+            var story;
+            var epicKey;
+            if (!issue || !issue.key) {
+                return;
+            }
+            story = normalizeIssue(issue);
+            epicKey = story.epicLink;
+            if (story.type !== CONFIG.STORY_ISSUE_TYPE || !epicKey || !epicMap[epicKey]) {
+                return;
+            }
+            story.children = extractChildLinkedKeys(issue)
+                .map(function(childKey) {
+                    return childMap[childKey] || null;
+                })
+                .filter(Boolean)
+                .sort(compareIssueKeys);
+            if (!storiesByEpic[epicKey]) {
+                storiesByEpic[epicKey] = [];
+            }
+            storiesByEpic[epicKey].push(story);
+        });
+
+        roots.sort(compareIssueKeys);
+        roots.forEach(function(epic) {
+            epic.children = (storiesByEpic[epic.key] || []).sort(compareIssueKeys);
+            aggregate(epic);
+            assignProblemItems(epic);
+        });
+        return roots;
+    }
+
+    function buildTree(input) {
+        if (Array.isArray(input)) {
+            return buildLegacyTree(input);
+        }
+        return buildPayloadTree(input);
+    }
+
     function walkTree(nodes, visit) {
         (nodes || []).forEach(function(n) {
             visit(n);
@@ -777,10 +1068,28 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         });
     }
 
-    function collectFilters(tree) {
+    function normalizeEpicOption(item) {
+        if (!item) {
+            return null;
+        }
+        var key = item.key != null ? String(item.key) : "";
+        var summary =
+            item.summary != null
+                ? String(item.summary)
+                : item.fields && item.fields.summary != null
+                  ? String(item.fields.summary)
+                  : key;
+        if (!key) {
+            return null;
+        }
+        return { key: key, summary: summary };
+    }
+
+    function collectFilters(tree, epicCatalog) {
         var statusSet = {};
         var sprintSet = {};
         var epics = [];
+        var epicSeen = {};
         walkTree(tree, function(n) {
             if (n.key === "__orphans__") {
                 return;
@@ -791,10 +1100,28 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (n.sprint) {
                 sprintSet[n.sprint] = true;
             }
-            if (n.type === "Epic") {
+            if (!epicCatalog && n.type === "Epic") {
                 epics.push({ key: n.key, summary: n.summary });
             }
         });
+        if (Array.isArray(epicCatalog)) {
+            epicCatalog.forEach(function(item) {
+                var epic = normalizeEpicOption(item);
+                var normKey;
+                if (!epic) {
+                    return;
+                }
+                normKey = normalizeText(epic.key);
+                if (epicSeen[normKey]) {
+                    return;
+                }
+                epicSeen[normKey] = true;
+                epics.push(epic);
+            });
+            epics.sort(compareIssueKeys);
+        } else {
+            epics.sort(compareIssueKeys);
+        }
         return {
             statuses: Object.keys(statusSet),
             sprints: Object.keys(sprintSet),
@@ -882,12 +1209,30 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
     function filterTree(tree, filters) {
         var f = filters || {};
         var roots = tree || [];
-        if (trimText(f.epic)) {
-            var sub = findSubtree(roots, f.epic);
-            if (!sub) {
-                return [];
+        var selectedEpicKeys = Array.isArray(f.selectedEpicKeys)
+            ? f.selectedEpicKeys.filter(function(key) {
+                  return trimText(key) !== "";
+              })
+            : [];
+        if (!selectedEpicKeys.length && trimText(f.epic)) {
+            selectedEpicKeys = [f.epic];
+        }
+        if (selectedEpicKeys.length) {
+            var wanted = {};
+            roots = roots.filter(function(node) {
+                return node && node.key != null;
+            }).filter(function(node) {
+                return selectedEpicKeys.some(function(key) {
+                    return normalizeText(key) === normalizeText(node.key);
+                });
+            });
+            if (!roots.length && trimText(f.epic)) {
+                var sub = findSubtree(tree, f.epic);
+                if (!sub) {
+                    return [];
+                }
+                roots = [sub];
             }
-            roots = [sub];
         }
         var out = [];
         var i;
@@ -967,6 +1312,62 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
             })
             .filter(Boolean)
             .join(", ");
+    }
+
+    function componentsText(node) {
+        var components = node.components;
+        if (!components || !components.length) return "";
+        return components
+            .map(function(item) {
+                return typeof item === "string" ? item : (item && item.name) || "";
+            })
+            .filter(Boolean)
+            .join(", ");
+    }
+
+    function classificationText(node) {
+        if (!node) return "—";
+        if (node.classification != null && String(node.classification).trim() !== "") {
+            return String(node.classification);
+        }
+        if (isEpicNode(node)) return "EPIC";
+        if (typeLabel(node) === "Story") return "STORY";
+        return "—";
+    }
+
+    function classificationClass(node) {
+        return node && node.classificationMissing
+            ? "ujg-sb-classification-badge ujg-sb-classification-missing"
+            : "ujg-sb-classification-badge";
+    }
+
+    function keyContent(node, extraClass) {
+        var className = extraClass ? String(extraClass) : "";
+        var keyText = displayKey(node);
+        if (!node || isOrphanBucket(node) || !node.browseUrl) {
+            return $("<span/>").addClass(className).text(keyText || "—");
+        }
+        return $("<a/>")
+            .addClass((className ? className + " " : "") + "ujg-sb-key-link")
+            .attr("href", node.browseUrl)
+            .attr("target", "_blank")
+            .attr("rel", "noreferrer noopener")
+            .text(keyText);
+    }
+
+    function displayMetaValue(text) {
+        return text && String(text).trim() !== "" ? String(text) : "—";
+    }
+
+    function currentState() {
+        return services && services.state ? services.state : {};
+    }
+
+    function epicOptionLabel(epic) {
+        if (!epic) return "";
+        var key = epic.key != null ? String(epic.key) : "";
+        var summary = epic.summary != null ? String(epic.summary) : "";
+        return key && summary && summary !== key ? key + " - " + summary : key || summary;
     }
 
     function assigneeText(node) {
@@ -1097,18 +1498,21 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                     .text(isOpen ? "▾" : "▸")
             );
         }
+        $tr.append(
+            $("<td/>")
+                .addClass("ujg-sb-col-classification text-[10px]")
+                .append($("<span/>").addClass(classificationClass(node)).text(classificationText(node)))
+        );
         $keyTd.append(
             $("<span/>")
                 .addClass("inline-flex items-center gap-1")
                 .append(
                     $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
-                    $("<span/>").addClass("text-primary font-semibold").text(displayKey(node))
+                    keyContent(node, "font-semibold")
                 )
         );
         $tr.append($keyTd);
         $tr.append($("<td/>").addClass("ujg-sb-col-summary text-[11px]").text(displaySummary(node)));
-        appendProgressCell($tr, node);
-        $tr.append($("<td/>").addClass("ujg-sb-col-estimate text-[10px] font-mono").text(estimateText(node)));
         var st = statusForUtils(node);
         var statusName = utils.getStatusName(st);
         $tr.append(
@@ -1123,28 +1527,15 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $tr.append(
             $("<td/>").addClass("ujg-sb-col-sprint text-[10px]").text(utils.getSprintName(node.sprint))
         );
-        $tr.append($("<td/>").addClass("ujg-sb-col-assignee text-[10px]").text(assigneeText(node)));
-        var pr = priorityForUtils(node);
-        var priName = utils.getPriorityName(pr);
-        $tr.append(
-            $("<td/>")
-                .addClass("ujg-sb-col-priority text-[10px]")
-                .append($("<span/>").addClass("rounded px-1 py-px text-[9px] " + utils.getPriorityClass(pr)).text(priName || "—"))
-        );
-        $tr.append($("<td/>").addClass("ujg-sb-col-labels text-[10px]").text(labelsText(node)));
-        $tr.append(
-            $("<td/>").addClass("ujg-sb-col-created text-[10px] font-mono").text(utils.formatDate(node.created))
-        );
-        $tr.append(
-            $("<td/>").addClass("ujg-sb-col-updated text-[10px] font-mono").text(utils.formatDate(node.updated))
-        );
+        $tr.append($("<td/>").addClass("ujg-sb-col-labels text-[10px]").text(displayMetaValue(labelsText(node))));
+        $tr.append($("<td/>").addClass("ujg-sb-col-components text-[10px]").text(displayMetaValue(componentsText(node))));
         $tbody.append($tr);
         if ((epic || orphanBucket) && node.problemItems && node.problemItems.length && isOpen) {
             var $prob = $("<tr/>").addClass("ujg-sb-problem-row text-[10px]");
             $prob.append(
                 $("<td/>")
                     .addClass("ujg-sb-problem-cell py-1 px-2")
-                    .attr("colspan", "11")
+                    .attr("colspan", "7")
                     .text(problemSummaryText(node.problemItems))
             );
             $tbody.append($prob);
@@ -1163,17 +1554,13 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
 
     function renderTable(tree, expanded) {
         var headers = [
+            "Классификация",
             "Ключ",
             "Название",
-            "Прогресс",
-            "Оценка",
             "Статус",
             "Спринт",
-            "Исполнитель",
-            "Приоритет",
-            "Метка",
-            "Создан",
-            "Обновлён"
+            "Метки",
+            "Компоненты"
         ];
         var $wrap = $("<div/>").addClass("ujg-sb-table-wrap overflow-auto");
         var $table = $("<table/>").addClass("ujg-sb-table w-full border-collapse text-foreground");
@@ -1210,7 +1597,8 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $head.attr("data-acc-key", node.key);
         $head.append(
             $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
-            $("<span/>").addClass("font-mono text-primary font-semibold").text(displayKey(node)),
+            $("<span/>").addClass(classificationClass(node)).text(classificationText(node)),
+            keyContent(node, "font-mono font-semibold"),
             $("<span/>").addClass("flex-1 truncate").text(displaySummary(node)),
             $("<span/>").addClass("text-[9px] text-muted-foreground shrink-0").text(metricsLine(node))
         );
@@ -1242,10 +1630,13 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                           .text(isOpen ? "▾" : "▸")
                     : null,
                 $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
-                $("<span/>").addClass("font-mono text-primary font-semibold").text(displayKey(node)),
+                $("<span/>").addClass(classificationClass(node)).text(classificationText(node)),
+                keyContent(node, "font-mono font-semibold"),
                 $("<span/>").addClass("flex-1 truncate").text(displaySummary(node)),
                 $("<span/>").addClass("rounded px-1 py-px text-[9px] " + utils.getStatusClass(st)).text(statusName),
-                $("<span/>").addClass("text-[9px] text-muted-foreground").text(utils.getSprintName(node.sprint))
+                $("<span/>").addClass("text-[9px] text-muted-foreground").text(utils.getSprintName(node.sprint)),
+                $("<span/>").addClass("text-[9px] text-muted-foreground").text(displayMetaValue(labelsText(node))),
+                $("<span/>").addClass("text-[9px] text-muted-foreground").text(displayMetaValue(componentsText(node)))
             );
             $parent.append($line);
             if (kids && isOpen) {
@@ -1317,11 +1708,14 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                           .attr("data-epic-key", node.key)
                           .text(isOpen ? "▾" : "▸")
                     : null,
-                $("<span/>").addClass("font-mono text-primary font-semibold").text(displayKey(node)),
+                $("<span/>").addClass(classificationClass(node)).text(classificationText(node)),
+                keyContent(node, "font-mono font-semibold"),
                 $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
                 $("<span/>").addClass("flex-1 min-w-[120px]").text(displaySummary(node)),
                 $("<span/>").addClass("rounded px-1 py-px text-[9px] " + utils.getStatusClass(st)).text(statusName),
-                $("<span/>").addClass("text-muted-foreground").text(sprint)
+                $("<span/>").addClass("text-muted-foreground").text(sprint),
+                $("<span/>").addClass("text-muted-foreground").text(displayMetaValue(labelsText(node))),
+                $("<span/>").addClass("text-muted-foreground").text(displayMetaValue(componentsText(node)))
             );
             $parent.append($row);
             if ((isEpicNode(node) || isOrphanBucket(node)) && node.problemItems && node.problemItems.length && isOpen) {
@@ -1346,8 +1740,164 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
 
     function syncViewButtons() {
         if (!$headerHost || !$headerHost.length) return;
-        $headerHost.find(".ujg-sb-view-table, .ujg-sb-view-accordion, .ujg-sb-view-rows").removeClass("ujg-sb-view-active");
+        $headerHost.find(".ujg-sb-view-table").removeClass("ujg-sb-view-active");
+        $headerHost.find(".ujg-sb-view-accordion").removeClass("ujg-sb-view-active");
+        $headerHost.find(".ujg-sb-view-rows").removeClass("ujg-sb-view-active");
         $headerHost.find(".ujg-sb-view-" + currentViewMode).addClass("ujg-sb-view-active");
+    }
+
+    function closeAllPickers() {
+        if (!$headerHost || !$headerHost.length) return;
+        $headerHost.find(".ujg-sb-picker-popover").each(function() {
+            this.style.display = "none";
+        });
+    }
+
+    function singlePickerOptions(kind) {
+        var state = currentState();
+        if (kind === "project") {
+            return (state.projects || []).map(function(project) {
+                var key = project && project.key != null ? String(project.key) : "";
+                return {
+                    value: key,
+                    label: project && project.name != null ? String(project.name) : key
+                };
+            });
+        }
+        if (kind === "status") {
+            return [{ value: "", label: "Все статусы" }].concat(
+                (state.filterOptions && state.filterOptions.statuses || []).map(function(status) {
+                    return { value: String(status), label: String(status) };
+                })
+            );
+        }
+        if (kind === "sprint") {
+            return [{ value: "", label: "Все спринты" }].concat(
+                (state.filterOptions && state.filterOptions.sprints || []).map(function(sprint) {
+                    return { value: String(sprint), label: String(sprint) };
+                })
+            );
+        }
+        return [];
+    }
+
+    function epicPickerOptions() {
+        var state = currentState();
+        return [{ value: "", label: "Все эпики" }].concat(
+            (state.filterOptions && state.filterOptions.epics || []).map(function(epic) {
+                return {
+                    value: epic && epic.key != null ? String(epic.key) : "",
+                    label: epicOptionLabel(epic)
+                };
+            })
+        );
+    }
+
+    function selectedEpicKeys() {
+        var state = currentState();
+        if (Array.isArray(state.selectedEpicKeys)) {
+            return state.selectedEpicKeys.map(String);
+        }
+        if (state.filters && state.filters.epic) {
+            return [String(state.filters.epic)];
+        }
+        return [];
+    }
+
+    function triggerText(kind, options) {
+        var state = currentState();
+        var i;
+        if (kind === "project") {
+            for (i = 0; i < options.length; i += 1) {
+                if (String(options[i].value) === String(state.project || "")) {
+                    return options[i].label;
+                }
+            }
+            return "Проект";
+        }
+        if (kind === "status") {
+            for (i = 0; i < options.length; i += 1) {
+                if (String(options[i].value) === String(state.filters && state.filters.status || "")) {
+                    return options[i].label;
+                }
+            }
+            return "Все статусы";
+        }
+        if (kind === "sprint") {
+            for (i = 0; i < options.length; i += 1) {
+                if (String(options[i].value) === String(state.filters && state.filters.sprint || "")) {
+                    return options[i].label;
+                }
+            }
+            return "Все спринты";
+        }
+        if (kind === "epic") {
+            var selected = selectedEpicKeys();
+            if (!selected.length) return "Все эпики";
+            if (selected.length === 1) return selected[0];
+            return "Выбрано: " + String(selected.length);
+        }
+        return "";
+    }
+
+    function renderPicker(labelText, kind, nativeClass, options, multi) {
+        var $field = $("<label/>").addClass("ujg-sb-picker-field");
+        var $picker = $("<div/>").addClass("ujg-sb-picker ujg-sb-picker-" + kind);
+        var $native = $("<select/>").addClass("ujg-sb-native-control " + nativeClass);
+        var selected = multi ? selectedEpicKeys() : [];
+        var selectedMap = {};
+        selected.forEach(function(value) {
+            selectedMap[String(value)] = true;
+        });
+        if (multi) {
+            $native.attr("multiple", "multiple");
+        }
+        options.forEach(function(option) {
+            $native.append($("<option/>").attr("value", option.value).text(option.label));
+        });
+        var $chips = $("<div/>").addClass("ujg-sb-picker-chips");
+        if (multi) {
+            selected.forEach(function(value) {
+                $chips.append(
+                    $("<button type=\"button\"/>")
+                        .addClass("ujg-sb-picker-chip")
+                        .attr("data-picker-kind", kind)
+                        .attr("data-value", value)
+                        .text(value)
+                );
+            });
+        }
+        var $trigger = $("<button type=\"button\"/>")
+            .addClass("ujg-sb-picker-trigger")
+            .attr("data-picker-kind", kind)
+            .text(triggerText(kind, options));
+        var $popover = $("<div/>")
+            .addClass("ujg-sb-picker-popover")
+            .attr("data-picker-kind", kind)
+            .css("display", "none");
+        var $search = $("<input/>")
+            .attr("type", "text")
+            .addClass("ujg-sb-picker-search-input")
+            .attr("placeholder", "Поиск...");
+        var $options = $("<div/>").addClass("ujg-sb-picker-options");
+        options.forEach(function(option) {
+            var $button = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-picker-option")
+                .attr("data-picker-kind", kind)
+                .attr("data-value", option.value)
+                .text(option.label);
+            if (!multi && String(option.value) === String($native.val() || "")) {
+                $button.addClass("ujg-sb-picker-option-selected");
+            }
+            if (multi && selectedMap[String(option.value)]) {
+                $button.addClass("ujg-sb-picker-option-selected");
+            }
+            $options.append($button);
+        });
+        $popover.append($search, $options);
+        $picker.append($native, $chips, $trigger, $popover);
+        $field.append($("<span/>").text(labelText), $picker);
+        return $field;
     }
 
     function bindHeaderInteractions() {
@@ -1366,6 +1916,70 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         });
         $headerHost.find(".ujg-sb-search").on("input", function() {
             if (services.onSearchInput) services.onSearchInput($(this).val());
+        });
+        $headerHost.find(".ujg-sb-picker-trigger").on("click", function(ev) {
+            ev.preventDefault();
+            var picker = this.parentNode;
+            var popover = picker ? $(picker).find(".ujg-sb-picker-popover")[0] : null;
+            var isOpen = !!(popover && popover.style.display !== "none");
+            closeAllPickers();
+            if (popover) {
+                popover.style.display = isOpen ? "none" : "block";
+            }
+        });
+        $headerHost.find(".ujg-sb-picker-search-input").on("input", function() {
+            var picker = this.parentNode && this.parentNode.parentNode ? this.parentNode.parentNode : null;
+            var query = String(this.value || "").toLowerCase();
+            if (!picker) return;
+            $(picker)
+                .find(".ujg-sb-picker-option")
+                .each(function() {
+                    var text = String($(this).text() || "").toLowerCase();
+                    this.style.display = !query || text.indexOf(query) >= 0 ? "" : "none";
+                });
+        });
+        $headerHost.find(".ujg-sb-picker-option").on("click", function(ev) {
+            ev.preventDefault();
+            var kind = $(this).attr("data-picker-kind");
+            var value = $(this).attr("data-value") || "";
+            if (kind === "project" && services.onProjectChange) {
+                services.onProjectChange(value);
+                renderHeader();
+                return;
+            }
+            if (kind === "status" && services.onStatusChange) {
+                services.onStatusChange(value);
+                renderHeader();
+                return;
+            }
+            if (kind === "sprint" && services.onSprintChange) {
+                services.onSprintChange(value);
+                renderHeader();
+                return;
+            }
+            if (kind === "epic" && services.onEpicChange) {
+                var next = selectedEpicKeys().slice();
+                var index = next.indexOf(value);
+                if (!value) {
+                    next = [];
+                } else if (index >= 0) {
+                    next.splice(index, 1);
+                } else {
+                    next.push(value);
+                }
+                services.onEpicChange(next);
+                renderHeader();
+            }
+        });
+        $headerHost.find(".ujg-sb-picker-chip").on("click", function(ev) {
+            ev.preventDefault();
+            if (!services.onEpicChange) return;
+            var removeValue = $(this).attr("data-value") || "";
+            var next = selectedEpicKeys().filter(function(value) {
+                return String(value) !== String(removeValue);
+            });
+            services.onEpicChange(next);
+            renderHeader();
         });
         function notifyViewMode(mode) {
             if (services.onViewMode) services.onViewMode(mode);
@@ -1397,37 +2011,16 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
     function renderHeader() {
         if (!$headerHost) return;
         $headerHost.empty();
+        closeAllPickers();
+        var state = currentState();
         var $inner = $("<div/>").addClass("ujg-sb-header-inner");
         $inner.append($("<h1/>").addClass("ujg-sb-title text-sm font-bold w-full shrink-0").text("Stories Dashboard"));
         var $filters = $("<div/>").addClass("ujg-sb-controls");
         $filters.append(
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append($("<span/>").text("Проект"), $("<select/>").addClass("ujg-sb-project-select h-7 rounded border border-border px-1 text-[11px]")),
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append(
-                    $("<span/>").text("Статус"),
-                    $("<select/>")
-                        .addClass("ujg-sb-status-select h-7 rounded border border-border px-1 text-[11px]")
-                        .append($("<option/>").attr("value", "").text("Все статусы"))
-                ),
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append(
-                    $("<span/>").text("Эпик"),
-                    $("<select/>")
-                        .addClass("ujg-sb-epic-select h-7 rounded border border-border px-1 text-[11px]")
-                        .append($("<option/>").attr("value", "").text("Все эпики"))
-                ),
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append(
-                    $("<span/>").text("Спринт"),
-                    $("<select/>")
-                        .addClass("ujg-sb-sprint-select h-7 rounded border border-border px-1 text-[11px]")
-                        .append($("<option/>").attr("value", "").text("Все спринты"))
-                ),
+            renderPicker("Проект", "project", "ujg-sb-project-select", singlePickerOptions("project"), false),
+            renderPicker("Статус", "status", "ujg-sb-status-select", singlePickerOptions("status"), false),
+            renderPicker("Эпик", "epic", "ujg-sb-epic-select", epicPickerOptions(), true),
+            renderPicker("Спринт", "sprint", "ujg-sb-sprint-select", singlePickerOptions("sprint"), false),
             $("<label/>")
                 .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
                 .append(
@@ -1436,6 +2029,7 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                         .attr("type", "text")
                         .addClass("ujg-sb-search h-7 rounded border border-border px-1 text-[11px] min-w-[140px]")
                         .attr("placeholder", "Поиск...")
+                        .attr("value", state.filters && state.filters.search ? state.filters.search : "")
                 )
         );
         var $views = $("<div/>").addClass("ujg-sb-view-buttons");
@@ -1563,6 +2157,65 @@ define("_ujgSB_main", [
         return { statuses: [], sprints: [], epics: [] };
     }
 
+    function normalizeSelectedEpicKeys(value) {
+        var list = Array.isArray(value) ? value : value != null && String(value).trim() !== "" ? [value] : [];
+        return list
+            .map(function(item) {
+                return item != null ? String(item) : "";
+            })
+            .filter(function(item) {
+                return item !== "";
+            });
+    }
+
+    function hasStagedApi(apiClient) {
+        return !!(
+            apiClient &&
+            typeof apiClient.getProjectEpics === "function" &&
+            typeof apiClient.getStoriesForEpicKeys === "function" &&
+            typeof apiClient.getIssuesByKeys === "function"
+        );
+    }
+
+    function normalizeLinkName(name) {
+        return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
+    }
+
+    function isChildLinkName(name) {
+        return (_config.CHILD_LINK_NAMES || []).some(function(linkName) {
+            return normalizeLinkName(linkName) === normalizeLinkName(name);
+        });
+    }
+
+    function collectChildIssueKeys(stories) {
+        var seen = {};
+        var out = [];
+
+        function pushKey(linkName, linkedIssue) {
+            var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key) : "";
+            var normKey = key.toLowerCase();
+            if (!isChildLinkName(linkName) || !key || seen[normKey]) {
+                return;
+            }
+            seen[normKey] = true;
+            out.push(key);
+        }
+
+        (stories || []).forEach(function(issue) {
+            var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+            links.forEach(function(link) {
+                var type = link && link.type ? link.type : {};
+                pushKey(type.outward, link && link.outwardIssue);
+                pushKey(type.inward, link && link.inwardIssue);
+            });
+        });
+        return out;
+    }
+
+    function isOpenEpicIssue(issue) {
+        return !(_utils && typeof _utils.isDone === "function" && _utils.isDone(issue && issue.fields && issue.fields.status));
+    }
+
     function shouldRenderPartialSnapshot(loaded, total, issues) {
         var ld = Number(loaded);
         var tt = Number(total);
@@ -1602,14 +2255,28 @@ define("_ujgSB_main", [
 
         var persisted = storage.load();
         var activeLoadToken = 0;
+        var stagedApiAvailable = hasStagedApi(api);
+        var initialSelectedEpicKeys = normalizeSelectedEpicKeys(
+            persisted.selectedEpicKeys != null ? persisted.selectedEpicKeys : persisted.epicFilter
+        );
         var state = {
             projects: [],
             project: null,
+            epicCatalog: [],
+            loadedEpics: [],
+            loadedStories: [],
+            loadedChildren: [],
+            selectedEpicKeys: initialSelectedEpicKeys,
             tree: [],
             filteredTree: [],
             filters: {
                 status: persisted.statusFilter != null ? String(persisted.statusFilter) : "",
-                epic: persisted.epicFilter != null ? String(persisted.epicFilter) : "",
+                epic:
+                    initialSelectedEpicKeys[0] != null
+                        ? String(initialSelectedEpicKeys[0])
+                        : persisted.epicFilter != null
+                          ? String(persisted.epicFilter)
+                          : "",
                 sprint: persisted.sprintFilter != null ? String(persisted.sprintFilter) : "",
                 search: ""
             },
@@ -1623,15 +2290,56 @@ define("_ujgSB_main", [
             storage.save({
                 project: state.project,
                 viewMode: state.viewMode,
+                selectedEpicKeys: state.selectedEpicKeys,
                 epicFilter: state.filters.epic,
                 statusFilter: state.filters.status,
                 sprintFilter: state.filters.sprint
             });
         }
 
+        function currentFilterState() {
+            return {
+                status: state.filters.status,
+                epic: state.filters.epic,
+                selectedEpicKeys: state.selectedEpicKeys,
+                sprint: state.filters.sprint,
+                search: state.filters.search
+            };
+        }
+
         function rerenderTree() {
-            state.filteredTree = data.filterTree(state.tree, state.filters);
+            state.filteredTree = data.filterTree(state.tree, currentFilterState());
             rendering.renderTree(state.filteredTree, state.viewMode, state.expanded);
+        }
+
+        function refreshFilterOptions() {
+            if (!state.tree || !state.tree.length) {
+                state.filterOptions = stagedApiAvailable ? data.collectFilters([], state.epicCatalog) : emptyFilterOptions();
+                return;
+            }
+            state.filterOptions = data.collectFilters(state.tree, stagedApiAvailable ? state.epicCatalog : null);
+        }
+
+        function syncLegacyEpicFilter() {
+            state.filters.epic = state.selectedEpicKeys[0] != null ? String(state.selectedEpicKeys[0]) : "";
+        }
+
+        function syncSelectedEpicKeysWithCatalog() {
+            var available = {};
+            state.epicCatalog.forEach(function(issue) {
+                if (issue && issue.key != null) {
+                    available[String(issue.key).toLowerCase()] = String(issue.key);
+                }
+            });
+            state.selectedEpicKeys = normalizeSelectedEpicKeys(state.selectedEpicKeys)
+                .map(function(key) {
+                    return available[String(key).toLowerCase()] || "";
+                })
+                .filter(Boolean)
+                .filter(function(key, index, list) {
+                    return list.indexOf(key) === index;
+                });
+            syncLegacyEpicFilter();
         }
 
         function fillHeaderFromState() {
@@ -1710,11 +2418,39 @@ define("_ujgSB_main", [
             state.filters.epic = "";
             state.filters.sprint = "";
             state.filters.search = "";
+            state.selectedEpicKeys = [];
+        }
+
+        function clearLoadedData() {
+            state.loadedEpics = [];
+            state.loadedStories = [];
+            state.loadedChildren = [];
+            state.tree = [];
+            state.filteredTree = [];
+            refreshFilterOptions();
         }
 
         function applyLoadedIssues(issues, keepLoading) {
+            state.loadedEpics = [];
+            state.loadedStories = issues || [];
+            state.loadedChildren = [];
             state.tree = data.buildTree(issues || []);
-            state.filterOptions = data.collectFilters(state.tree);
+            refreshFilterOptions();
+            state.loading = !!keepLoading;
+            rerenderHeader();
+            rerenderTree();
+        }
+
+        function applyLoadedPayload(epics, stories, children, keepLoading) {
+            state.loadedEpics = epics || [];
+            state.loadedStories = stories || [];
+            state.loadedChildren = children || [];
+            state.tree = data.buildTree({
+                epics: state.loadedEpics,
+                stories: state.loadedStories,
+                children: state.loadedChildren
+            });
+            refreshFilterOptions();
             state.loading = !!keepLoading;
             rerenderHeader();
             rerenderTree();
@@ -1746,6 +2482,73 @@ define("_ujgSB_main", [
             rerenderTree();
         }
 
+        function loadDisplayData(projectKey, loadToken) {
+            var selectedKeys = state.selectedEpicKeys.length
+                ? state.selectedEpicKeys.slice()
+                : state.epicCatalog.map(function(issue) {
+                      return issue && issue.key != null ? String(issue.key) : "";
+                  }).filter(Boolean);
+            var selectedEpics = (state.epicCatalog || []).filter(function(issue) {
+                var key = issue && issue.key != null ? String(issue.key) : "";
+                return key && selectedKeys.some(function(selectedKey) {
+                    return String(selectedKey).toLowerCase() === key.toLowerCase();
+                });
+            });
+            var openEpics = selectedEpics.filter(isOpenEpicIssue);
+
+            if (!openEpics.length) {
+                applyLoadedPayload([], [], [], false);
+                clearProgress();
+                persistUiState();
+                return;
+            }
+
+            api.getStoriesForEpicKeys(
+                String(projectKey),
+                openEpics.map(function(issue) {
+                    return issue.key;
+                })
+            ).then(
+                function(stories) {
+                    var safeStories = stories || [];
+                    var childKeys;
+                    if (loadToken !== activeLoadToken) {
+                        return;
+                    }
+                    childKeys = collectChildIssueKeys(safeStories);
+                    api.getIssuesByKeys(childKeys).then(
+                        function(children) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            applyLoadedPayload(openEpics, safeStories, children || [], false);
+                            clearProgress();
+                            persistUiState();
+                        },
+                        function() {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            applyLoadedPayload(openEpics, safeStories, [], false);
+                            clearProgress();
+                            persistUiState();
+                        }
+                    );
+                },
+                function() {
+                    if (loadToken !== activeLoadToken) {
+                        return;
+                    }
+                    state.loading = false;
+                    clearLoadedData();
+                    rerenderHeader();
+                    rerenderTree();
+                    clearProgress();
+                    persistUiState();
+                }
+            );
+        }
+
         function loadProject(projectKey, resetFilters) {
             if (!projectKey) {
                 return;
@@ -1759,11 +2562,39 @@ define("_ujgSB_main", [
                 clearFilters();
             }
             state.expanded = {};
-            state.tree = [];
-            state.filterOptions = emptyFilterOptions();
+            state.epicCatalog = [];
+            clearLoadedData();
             clearProgress();
             rerenderHeader();
             rerenderTree();
+            if (stagedApiAvailable) {
+                api.getProjectEpics(String(projectKey)).then(
+                    function(epics) {
+                        if (loadToken !== activeLoadToken) {
+                            return;
+                        }
+                        state.epicCatalog = epics || [];
+                        syncSelectedEpicKeysWithCatalog();
+                        refreshFilterOptions();
+                        rerenderHeader();
+                        rerenderTree();
+                        loadDisplayData(projectKey, loadToken);
+                    },
+                    function() {
+                        if (loadToken !== activeLoadToken) {
+                            return;
+                        }
+                        state.loading = false;
+                        state.epicCatalog = [];
+                        clearLoadedData();
+                        rerenderHeader();
+                        rerenderTree();
+                        clearProgress();
+                        persistUiState();
+                    }
+                );
+                return;
+            }
             api
                 .getProjectIssues(String(projectKey), function(loaded, total, partialIssues) {
                     if (loadToken !== activeLoadToken) {
@@ -1813,7 +2644,21 @@ define("_ujgSB_main", [
                 onFilterChange();
             },
             onEpicChange: function(v) {
-                state.filters.epic = v != null ? String(v) : "";
+                state.selectedEpicKeys = normalizeSelectedEpicKeys(v);
+                syncLegacyEpicFilter();
+                if (stagedApiAvailable) {
+                    persistUiState();
+                    activeLoadToken += 1;
+                    var loadToken = activeLoadToken;
+                    state.loading = true;
+                    state.expanded = {};
+                    clearLoadedData();
+                    clearProgress();
+                    rerenderHeader();
+                    rerenderTree();
+                    loadDisplayData(state.project, loadToken);
+                    return;
+                }
                 onFilterChange();
             },
             onSprintChange: function(v) {

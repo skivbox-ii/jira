@@ -381,6 +381,278 @@ test("getProjectIssues stops on empty page", async function() {
     assert.equal(issues.length, 0);
 });
 
+test("getProjectEpics posts epic-only search", async function() {
+    const config = loadConfig(mockWindow());
+    const jquery = createJqueryStub(function(options) {
+        const body = JSON.parse(options.data);
+        assert.equal(body.jql, "project = DEMO AND issuetype = Epic ORDER BY key ASC");
+        assert.equal(body.fields.includes("issuelinks"), true);
+        assert.equal(body.expand[0], "changelog");
+        return resolvedAjax({ total: 0, issues: [] });
+    });
+    const api = loadApiWithConfig(jquery, config);
+
+    const issues = await api.getProjectEpics("DEMO");
+    assert.ok(Array.isArray(issues));
+    assert.equal(issues.length, 0);
+});
+
+test("getStoriesForEpicKeys posts story search scoped by epic link field", async function() {
+    const config = loadConfig(mockWindow());
+    const jquery = createJqueryStub(function(options) {
+        const body = JSON.parse(options.data);
+        assert.equal(
+            body.jql,
+            "project = DEMO AND issuetype = Story AND cf[10014] in (DEMO-2, DEMO-10) ORDER BY key ASC"
+        );
+        return resolvedAjax({ total: 0, issues: [] });
+    });
+    const api = loadApiWithConfig(jquery, config);
+
+    const issues = await api.getStoriesForEpicKeys("DEMO", ["DEMO-2", "DEMO-10"]);
+    assert.ok(Array.isArray(issues));
+    assert.equal(issues.length, 0);
+});
+
+test("getStoriesForEpicKeys splits large epic lists into multiple searches", async function() {
+    const config = loadConfig(mockWindow());
+    const epicKeys = Array.from({ length: 250 }, function(_, index) {
+        return "DEMO-" + String(index + 1);
+    });
+    const seenJql = [];
+    const jquery = createJqueryStub(function(options) {
+        const body = JSON.parse(options.data);
+        seenJql.push(body.jql);
+        return resolvedAjax({
+            total: 1,
+            issues: [{ key: "S-" + String(seenJql.length), fields: { summary: "Story" } }]
+        });
+    });
+    const api = loadApiWithConfig(jquery, config);
+
+    const issues = await api.getStoriesForEpicKeys("DEMO", epicKeys);
+    assert.ok(Array.isArray(issues));
+    assert.ok(jquery.__calls.length > 1);
+    assert.equal(issues.length, jquery.__calls.length);
+    assert.equal(seenJql[0].indexOf("DEMO-1") >= 0, true);
+    assert.equal(seenJql[seenJql.length - 1].indexOf("DEMO-250") >= 0, true);
+});
+
+test("getIssuesByKeys returns empty array without search call for empty key list", async function() {
+    const jquery = createJqueryStub(function() {
+        throw new Error("search should not be called");
+    });
+    const api = loadApi(jquery);
+
+    const issues = await api.getIssuesByKeys([]);
+    assert.equal(Array.isArray(issues), true);
+    assert.equal(issues.length, 0);
+    assert.equal(jquery.__calls.length, 0);
+});
+
+test("buildTree payload keeps only open epics, only stories, and linked child issues", function() {
+    const data = loadData();
+    const tree = data.buildTree({
+        epics: [
+            issueFixture({
+                key: "E-10",
+                fields: {
+                    summary: "Open epic",
+                    issuetype: { name: "Epic" },
+                    status: { name: "Open", statusCategory: { name: "To Do", key: "new" } }
+                }
+            }),
+            issueFixture({
+                key: "E-20",
+                fields: {
+                    summary: "Closed epic",
+                    issuetype: { name: "Epic" },
+                    status: { name: "Done", statusCategory: { name: "Done", key: "done" } }
+                }
+            })
+        ],
+        stories: [
+            issueFixture({
+                key: "S-1",
+                fields: {
+                    summary: "Story child",
+                    issuetype: { name: "Story" },
+                    customfield_10014: "E-10",
+                    issuelinks: [
+                        {
+                            type: { outward: "child", inward: "parent" },
+                            outwardIssue: { key: "BE-1" }
+                        },
+                        {
+                            type: { outward: "parent", inward: "is_child" },
+                            inwardIssue: { key: "NP-1" }
+                        },
+                        {
+                            type: { outward: "blocks", inward: "is blocked by" },
+                            outwardIssue: { key: "SKIP-1" }
+                        }
+                    ]
+                }
+            }),
+            issueFixture({
+                key: "T-1",
+                fields: {
+                    summary: "Task under epic",
+                    issuetype: { name: "Task" },
+                    customfield_10014: "E-10"
+                }
+            }),
+            issueFixture({
+                key: "S-2",
+                fields: {
+                    summary: "Story under closed epic",
+                    issuetype: { name: "Story" },
+                    customfield_10014: "E-20"
+                }
+            })
+        ],
+        children: [
+            issueFixture({
+                key: "BE-1",
+                fields: {
+                    summary: "[BE] Backend API",
+                    issuetype: { name: "Task" }
+                }
+            }),
+            issueFixture({
+                key: "NP-1",
+                fields: {
+                    summary: "Missing prefix child",
+                    issuetype: { name: "Task" }
+                }
+            })
+        ]
+    });
+
+    assert.equal(tree.length, 1);
+    assert.equal(tree[0].key, "E-10");
+    assert.equal(tree[0].children.length, 1);
+    assert.equal(tree[0].children[0].key, "S-1");
+    assert.equal(tree[0].children[0].children.length, 2);
+    assert.equal(tree[0].children[0].children[0].key, "BE-1");
+    assert.equal(tree[0].children[0].children[0].classification, "BE");
+    assert.equal(tree[0].children[0].children[0].classificationMissing, false);
+    assert.equal(tree[0].children[0].children[1].key, "NP-1");
+    assert.equal(tree[0].children[0].children[1].classification, "NO PREFIX");
+    assert.equal(tree[0].children[0].children[1].classificationMissing, true);
+    assert.equal(tree[0].children[0].children[0].browseUrl, "https://jira.example.com/browse/BE-1");
+});
+
+test("collectFilters keeps full epic catalog sorted by issue number", function() {
+    const data = loadData();
+    const epicCatalog = [
+        issueFixture({
+            key: "E-20",
+            fields: {
+                summary: "Closed epic",
+                issuetype: { name: "Epic" },
+                status: { name: "Done", statusCategory: { name: "Done", key: "done" } }
+            }
+        }),
+        issueFixture({
+            key: "E-2",
+            fields: {
+                summary: "Early epic",
+                issuetype: { name: "Epic" },
+                status: { name: "Open", statusCategory: { name: "To Do", key: "new" } }
+            }
+        }),
+        issueFixture({
+            key: "E-10",
+            fields: {
+                summary: "Open epic",
+                issuetype: { name: "Epic" },
+                status: { name: "Open", statusCategory: { name: "To Do", key: "new" } }
+            }
+        })
+    ];
+    const tree = data.buildTree({
+        epics: epicCatalog,
+        stories: [
+            issueFixture({
+                key: "S-1",
+                fields: {
+                    summary: "Story child",
+                    issuetype: { name: "Story" },
+                    status: { name: "In Progress", statusCategory: { name: "In Progress", key: "indeterminate" } },
+                    customfield_10014: "E-10",
+                    customfield_10020: { name: "Sprint 42" }
+                }
+            })
+        ],
+        children: []
+    });
+
+    const filters = data.collectFilters(tree, epicCatalog);
+    assert.ok(filters.statuses.includes("Open"));
+    assert.ok(filters.statuses.includes("In Progress"));
+    assert.equal(
+        filters.epics.map(function(epic) {
+            return epic.key;
+        }).join("|"),
+        "E-2|E-10|E-20"
+    );
+    assert.equal(filters.sprints[0], "Sprint 42");
+});
+
+test("filterTree scopes selectedEpicKeys while preserving matching descendants", function() {
+    const data = loadData();
+    const tree = data.buildTree({
+        epics: [
+            issueFixture({
+                key: "E-2",
+                fields: {
+                    summary: "First epic",
+                    issuetype: { name: "Epic" },
+                    status: { name: "Open", statusCategory: { name: "To Do", key: "new" } }
+                }
+            }),
+            issueFixture({
+                key: "E-10",
+                fields: {
+                    summary: "Second epic",
+                    issuetype: { name: "Epic" },
+                    status: { name: "Open", statusCategory: { name: "To Do", key: "new" } }
+                }
+            })
+        ],
+        stories: [
+            issueFixture({
+                key: "S-2",
+                fields: {
+                    summary: "Visible needle story",
+                    issuetype: { name: "Story" },
+                    customfield_10014: "E-10"
+                }
+            }),
+            issueFixture({
+                key: "S-1",
+                fields: {
+                    summary: "Hidden story",
+                    issuetype: { name: "Story" },
+                    customfield_10014: "E-2"
+                }
+            })
+        ],
+        children: []
+    });
+
+    const filtered = data.filterTree(tree, {
+        selectedEpicKeys: ["  e-10  "],
+        search: "needle"
+    });
+
+    assert.equal(filtered.length, 1);
+    assert.equal(filtered[0].key, "E-10");
+    assert.equal(filtered[0].children.length, 1);
+    assert.equal(filtered[0].children[0].key, "S-2");
+});
+
 test("buildTree links parent and epic, places orphans and aggregates", function() {
     const data = loadData();
     const raw = [

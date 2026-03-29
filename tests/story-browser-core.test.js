@@ -120,6 +120,9 @@ test("_ujgSB_config field ids and ISSUE_FIELDS", function() {
     assert.equal(cfg.EPIC_LINK_FIELD, "customfield_10014");
     assert.equal(cfg.SPRINT_FIELD, "customfield_10020");
     assert.equal(cfg.STORAGE_KEY, "ujg-sb-state");
+    assert.equal(cfg.EPIC_ISSUE_TYPE, "Epic");
+    assert.equal(cfg.STORY_ISSUE_TYPE, "Story");
+    assert.deepEqual(Array.from(cfg.CHILD_LINK_NAMES || []), ["child", "is_child"]);
     assertIssueFieldContract(cfg.ISSUE_FIELDS, [
         "summary",
         "status",
@@ -133,6 +136,7 @@ test("_ujgSB_config field ids and ISSUE_FIELDS", function() {
         "labels",
         "fixVersions",
         "parent",
+        "issuelinks",
         "created",
         "updated",
         cfg.EPIC_LINK_FIELD,
@@ -239,6 +243,7 @@ test("_ujgSB_storage save and load round-trip and defaults", function() {
         project: "PROJ",
         viewMode: "tree",
         epicFilter: "E-1",
+        selectedEpicKeys: ["E-1", "E-2"],
         statusFilter: "open",
         sprintFilter: "42"
     };
@@ -248,6 +253,7 @@ test("_ujgSB_storage save and load round-trip and defaults", function() {
     assert.equal(parsed.project, "PROJ");
     assert.equal(parsed.viewMode, "tree");
     assert.equal(parsed.epicFilter, "E-1");
+    assert.equal(parsed.selectedEpicKeys.join("|"), "E-1|E-2");
     assert.equal(parsed.statusFilter, "open");
     assert.equal(parsed.sprintFilter, "42");
 
@@ -255,6 +261,7 @@ test("_ujgSB_storage save and load round-trip and defaults", function() {
     assert.equal(loaded.project, state.project);
     assert.equal(loaded.viewMode, state.viewMode);
     assert.equal(loaded.epicFilter, state.epicFilter);
+    assert.equal(loaded.selectedEpicKeys.join("|"), "E-1|E-2");
     assert.equal(loaded.statusFilter, state.statusFilter);
     assert.equal(loaded.sprintFilter, state.sprintFilter);
 });
@@ -266,6 +273,8 @@ test("_ujgSB_storage load returns defaults when missing or invalid", function() 
     assert.equal(defaults.project, null);
     assert.equal(defaults.viewMode, "all");
     assert.equal(defaults.epicFilter, "");
+    assert.equal(Array.isArray(defaults.selectedEpicKeys), true);
+    assert.equal(defaults.selectedEpicKeys.length, 0);
     assert.equal(defaults.statusFilter, "");
     assert.equal(defaults.sprintFilter, "");
 
@@ -274,6 +283,8 @@ test("_ujgSB_storage load returns defaults when missing or invalid", function() 
     assert.equal(bad.project, null);
     assert.equal(bad.viewMode, "all");
     assert.equal(bad.epicFilter, "");
+    assert.equal(Array.isArray(bad.selectedEpicKeys), true);
+    assert.equal(bad.selectedEpicKeys.length, 0);
     assert.equal(bad.statusFilter, "");
     assert.equal(bad.sprintFilter, "");
 
@@ -282,6 +293,23 @@ test("_ujgSB_storage load returns defaults when missing or invalid", function() 
     assert.equal(partial.project, "X");
     assert.equal(partial.viewMode, "all");
     assert.equal(partial.epicFilter, "");
+    assert.equal(Array.isArray(partial.selectedEpicKeys), true);
+    assert.equal(partial.selectedEpicKeys.length, 0);
     assert.equal(partial.statusFilter, "");
     assert.equal(partial.sprintFilter, "");
+});
+
+test("_ujgSB_storage migrates legacy epicFilter into selectedEpicKeys", function() {
+    const ls = createLocalStorageMock();
+    ls.setItem("ujg-sb-state", JSON.stringify({
+        project: "PROJ",
+        epicFilter: "E-10"
+    }));
+    const storage = loadStorage(ls, mockWindow());
+    const loaded = storage.load();
+
+    assert.equal(loaded.epicFilter, "E-10");
+    assert.equal(Array.isArray(loaded.selectedEpicKeys), true);
+    assert.equal(loaded.selectedEpicKeys.length, 1);
+    assert.equal(loaded.selectedEpicKeys[0], "E-10");
 });

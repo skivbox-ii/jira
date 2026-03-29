@@ -232,6 +232,37 @@ function nextTurn() {
   });
 }
 
+async function flushTurns(count) {
+  var left = count;
+  while (left > 0) {
+    await nextTurn();
+    left -= 1;
+  }
+}
+
+function makeIssue(key, typeName, extraFields) {
+  return {
+    key: key,
+    fields: Object.assign({
+      summary: key + " summary",
+      status: { name: "Open", statusCategory: { name: "To Do", key: "new" } },
+      issuetype: { name: typeName },
+      priority: { name: "Medium" },
+      assignee: null,
+      timetracking: {},
+      components: [],
+      labels: [],
+      fixVersions: [],
+      parent: null,
+      issuelinks: [],
+      created: "2026-01-01",
+      updated: "2026-01-02",
+      customfield_10014: null,
+      customfield_10020: null
+    }, extraFields || {})
+  };
+}
+
 function loadMain(deps) {
   return loadAmdModule(path.join(MODULE_DIR, "main.js"), {
     jquery: deps.jquery,
@@ -1101,4 +1132,289 @@ test("story browser main surfaces partial tree and filter options while project 
   assert.equal(svc.state.loading, false);
   assert.equal(svc.state.tree[0].key, "final-tree");
   assert.equal(svc.state.filterOptions.epics[0].key, "final-tree");
+});
+
+test("story browser main staged load fetches full epic catalog before display data", async function() {
+  var d = baseDeps();
+  var log = [];
+  var buildPayload = null;
+
+  d.api.getProjects = function() {
+    return resolved([{ key: "P1", name: "One" }]);
+  };
+  d.api.getProjectEpics = function(projectKey) {
+    log.push("epics:" + projectKey);
+    return resolved([
+      makeIssue("E-10", "Epic"),
+      makeIssue("E-20", "Epic", {
+        status: { name: "Done", statusCategory: { name: "Done", key: "done" } }
+      })
+    ]);
+  };
+  d.api.getStoriesForEpicKeys = function(projectKey, epicKeys) {
+    log.push("stories:" + projectKey + ":" + epicKeys.join("|"));
+    return resolved([
+      makeIssue("S-1", "Story", {
+        customfield_10014: "E-10",
+        issuelinks: [
+          {
+            type: { outward: "child", inward: "parent" },
+            outwardIssue: { key: "C-1" }
+          }
+        ]
+      })
+    ]);
+  };
+  d.api.getIssuesByKeys = function(issueKeys) {
+    log.push("children:" + issueKeys.join("|"));
+    return resolved([
+      makeIssue("C-1", "Task", {
+        summary: "[BE] Backend child"
+      })
+    ]);
+  };
+  d.data.buildTree = function(payload) {
+    buildPayload = payload;
+    return [{ key: "E-10", type: "Epic", children: [] }];
+  };
+  d.data.collectFilters = function(_tree, epicCatalog) {
+    return {
+      statuses: [],
+      sprints: [],
+      epics: epicCatalog.map(function(issue) {
+        return { key: issue.key, summary: issue.fields.summary };
+      })
+    };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await flushTurns(4);
+  var svc = d.rendering.initCalls[0].services;
+
+  assert.equal(log.join(">"), "epics:P1>stories:P1:E-10>children:C-1");
+  assert.ok(buildPayload);
+  assert.equal(buildPayload.epics.length, 1);
+  assert.equal(buildPayload.epics[0].key, "E-10");
+  assert.equal(buildPayload.stories.length, 1);
+  assert.equal(buildPayload.children.length, 1);
+  assert.equal(svc.state.filterOptions.epics.length, 2);
+  assert.equal(svc.state.filterOptions.epics[0].key, "E-10");
+  assert.equal(svc.state.filterOptions.epics[1].key, "E-20");
+});
+
+test("story browser main refetches only when epic selection changes", async function() {
+  var d = baseDeps();
+  var storyCalls = [];
+  var childCalls = [];
+
+  d.api.getProjects = function() {
+    return resolved([{ key: "P1", name: "One" }]);
+  };
+  d.api.getProjectEpics = function() {
+    return resolved([
+      makeIssue("E-1", "Epic"),
+      makeIssue("E-2", "Epic")
+    ]);
+  };
+  d.api.getStoriesForEpicKeys = function(_projectKey, epicKeys) {
+    storyCalls.push(epicKeys.join("|"));
+    return resolved([
+      makeIssue("S-" + (epicKeys[0] || "NONE"), "Story", {
+        customfield_10014: epicKeys[0] || null
+      })
+    ]);
+  };
+  d.api.getIssuesByKeys = function(issueKeys) {
+    childCalls.push(issueKeys.join("|"));
+    return resolved([]);
+  };
+  d.data.buildTree = function(payload) {
+    return payload.epics.map(function(issue) {
+      return { key: issue.key, type: "Epic", children: [] };
+    });
+  };
+  d.data.collectFilters = function(_tree, epicCatalog) {
+    return {
+      statuses: ["Open"],
+      sprints: ["Sprint 42"],
+      epics: epicCatalog.map(function(issue) {
+        return { key: issue.key, summary: issue.fields.summary };
+      })
+    };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await flushTurns(4);
+  var svc = d.rendering.initCalls[0].services;
+  assert.equal(storyCalls[0], "E-1|E-2");
+
+  svc.onEpicChange("E-2");
+  await flushTurns(4);
+
+  assert.equal(storyCalls[1], "E-2");
+  assert.equal(Array.isArray(svc.state.selectedEpicKeys), true);
+  assert.equal(svc.state.selectedEpicKeys.join("|"), "E-2");
+
+  var storyCallsBeforeFilters = storyCalls.length;
+  var childCallsBeforeFilters = childCalls.length;
+
+  svc.onStatusChange("Open");
+  svc.onSprintChange("Sprint 42");
+  svc.onSearchChange("needle");
+
+  await flushTurns(2);
+  assert.equal(storyCalls.length, storyCallsBeforeFilters);
+  assert.equal(childCalls.length, childCallsBeforeFilters);
+});
+
+test("story browser main selecting only closed epics yields empty tree without losing epic catalog", async function() {
+  var d = baseDeps();
+
+  d.api.getProjects = function() {
+    return resolved([{ key: "P1", name: "One" }]);
+  };
+  d.api.getProjectEpics = function() {
+    return resolved([
+      makeIssue("E-1", "Epic"),
+      makeIssue("E-2", "Epic", {
+        status: { name: "Done", statusCategory: { name: "Done", key: "done" } }
+      })
+    ]);
+  };
+  d.api.getStoriesForEpicKeys = function(_projectKey, epicKeys) {
+    return resolved(
+      epicKeys.length
+        ? [
+            makeIssue("S-1", "Story", {
+              customfield_10014: epicKeys[0]
+            })
+          ]
+        : []
+    );
+  };
+  d.api.getIssuesByKeys = function() {
+    return resolved([]);
+  };
+  d.data.buildTree = function(payload) {
+    return (payload.epics || []).map(function(issue) {
+      return { key: issue.key, type: "Epic", children: [] };
+    });
+  };
+  d.data.collectFilters = function(_tree, epicCatalog) {
+    return {
+      statuses: [],
+      sprints: [],
+      epics: epicCatalog.map(function(issue) {
+        return { key: issue.key, summary: issue.fields.summary };
+      })
+    };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await flushTurns(4);
+  var svc = d.rendering.initCalls[0].services;
+  svc.onEpicChange("E-2");
+  await flushTurns(4);
+
+  assert.equal(svc.state.tree.length, 0);
+  assert.equal(svc.state.filteredTree.length, 0);
+  assert.equal(svc.state.filterOptions.epics.length, 2);
+  assert.equal(svc.state.selectedEpicKeys.join("|"), "E-2");
+});
+
+test("story browser main keeps stories when child issue fetch fails", async function() {
+  var d = baseDeps();
+  var buildPayload = null;
+
+  d.api.getProjects = function() {
+    return resolved([{ key: "P1", name: "One" }]);
+  };
+  d.api.getProjectEpics = function() {
+    return resolved([makeIssue("E-1", "Epic")]);
+  };
+  d.api.getStoriesForEpicKeys = function() {
+    return resolved([
+      makeIssue("S-1", "Story", {
+        customfield_10014: "E-1",
+        issuelinks: [
+          {
+            type: { outward: "child", inward: "parent" },
+            outwardIssue: { key: "C-1" }
+          }
+        ]
+      })
+    ]);
+  };
+  d.api.getIssuesByKeys = function() {
+    return rejected(new Error("boom"));
+  };
+  d.data.buildTree = function(payload) {
+    buildPayload = payload;
+    return [
+      {
+        key: payload.epics[0].key,
+        type: "Epic",
+        children: payload.stories.map(function(issue) {
+          return { key: issue.key, type: "Story", children: [] };
+        })
+      }
+    ];
+  };
+  d.data.collectFilters = function(_tree, epicCatalog) {
+    return {
+      statuses: [],
+      sprints: [],
+      epics: epicCatalog.map(function(issue) {
+        return { key: issue.key, summary: issue.fields.summary };
+      })
+    };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await flushTurns(4);
+  var svc = d.rendering.initCalls[0].services;
+
+  assert.ok(buildPayload);
+  assert.equal(buildPayload.children.length, 0);
+  assert.equal(svc.state.loading, false);
+  assert.equal(svc.state.tree.length, 1);
+  assert.equal(svc.state.tree[0].children.length, 1);
+  assert.equal(svc.state.tree[0].children[0].key, "S-1");
+  assert.equal(svc.state.filterOptions.epics.length, 1);
 });

@@ -55,6 +55,62 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
             .join(", ");
     }
 
+    function componentsText(node) {
+        var components = node.components;
+        if (!components || !components.length) return "";
+        return components
+            .map(function(item) {
+                return typeof item === "string" ? item : (item && item.name) || "";
+            })
+            .filter(Boolean)
+            .join(", ");
+    }
+
+    function classificationText(node) {
+        if (!node) return "—";
+        if (node.classification != null && String(node.classification).trim() !== "") {
+            return String(node.classification);
+        }
+        if (isEpicNode(node)) return "EPIC";
+        if (typeLabel(node) === "Story") return "STORY";
+        return "—";
+    }
+
+    function classificationClass(node) {
+        return node && node.classificationMissing
+            ? "ujg-sb-classification-badge ujg-sb-classification-missing"
+            : "ujg-sb-classification-badge";
+    }
+
+    function keyContent(node, extraClass) {
+        var className = extraClass ? String(extraClass) : "";
+        var keyText = displayKey(node);
+        if (!node || isOrphanBucket(node) || !node.browseUrl) {
+            return $("<span/>").addClass(className).text(keyText || "—");
+        }
+        return $("<a/>")
+            .addClass((className ? className + " " : "") + "ujg-sb-key-link")
+            .attr("href", node.browseUrl)
+            .attr("target", "_blank")
+            .attr("rel", "noreferrer noopener")
+            .text(keyText);
+    }
+
+    function displayMetaValue(text) {
+        return text && String(text).trim() !== "" ? String(text) : "—";
+    }
+
+    function currentState() {
+        return services && services.state ? services.state : {};
+    }
+
+    function epicOptionLabel(epic) {
+        if (!epic) return "";
+        var key = epic.key != null ? String(epic.key) : "";
+        var summary = epic.summary != null ? String(epic.summary) : "";
+        return key && summary && summary !== key ? key + " - " + summary : key || summary;
+    }
+
     function assigneeText(node) {
         var a = node.assignee;
         if (typeof a === "string") return a || "—";
@@ -183,18 +239,21 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                     .text(isOpen ? "▾" : "▸")
             );
         }
+        $tr.append(
+            $("<td/>")
+                .addClass("ujg-sb-col-classification text-[10px]")
+                .append($("<span/>").addClass(classificationClass(node)).text(classificationText(node)))
+        );
         $keyTd.append(
             $("<span/>")
                 .addClass("inline-flex items-center gap-1")
                 .append(
                     $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
-                    $("<span/>").addClass("text-primary font-semibold").text(displayKey(node))
+                    keyContent(node, "font-semibold")
                 )
         );
         $tr.append($keyTd);
         $tr.append($("<td/>").addClass("ujg-sb-col-summary text-[11px]").text(displaySummary(node)));
-        appendProgressCell($tr, node);
-        $tr.append($("<td/>").addClass("ujg-sb-col-estimate text-[10px] font-mono").text(estimateText(node)));
         var st = statusForUtils(node);
         var statusName = utils.getStatusName(st);
         $tr.append(
@@ -209,28 +268,15 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $tr.append(
             $("<td/>").addClass("ujg-sb-col-sprint text-[10px]").text(utils.getSprintName(node.sprint))
         );
-        $tr.append($("<td/>").addClass("ujg-sb-col-assignee text-[10px]").text(assigneeText(node)));
-        var pr = priorityForUtils(node);
-        var priName = utils.getPriorityName(pr);
-        $tr.append(
-            $("<td/>")
-                .addClass("ujg-sb-col-priority text-[10px]")
-                .append($("<span/>").addClass("rounded px-1 py-px text-[9px] " + utils.getPriorityClass(pr)).text(priName || "—"))
-        );
-        $tr.append($("<td/>").addClass("ujg-sb-col-labels text-[10px]").text(labelsText(node)));
-        $tr.append(
-            $("<td/>").addClass("ujg-sb-col-created text-[10px] font-mono").text(utils.formatDate(node.created))
-        );
-        $tr.append(
-            $("<td/>").addClass("ujg-sb-col-updated text-[10px] font-mono").text(utils.formatDate(node.updated))
-        );
+        $tr.append($("<td/>").addClass("ujg-sb-col-labels text-[10px]").text(displayMetaValue(labelsText(node))));
+        $tr.append($("<td/>").addClass("ujg-sb-col-components text-[10px]").text(displayMetaValue(componentsText(node))));
         $tbody.append($tr);
         if ((epic || orphanBucket) && node.problemItems && node.problemItems.length && isOpen) {
             var $prob = $("<tr/>").addClass("ujg-sb-problem-row text-[10px]");
             $prob.append(
                 $("<td/>")
                     .addClass("ujg-sb-problem-cell py-1 px-2")
-                    .attr("colspan", "11")
+                    .attr("colspan", "7")
                     .text(problemSummaryText(node.problemItems))
             );
             $tbody.append($prob);
@@ -249,17 +295,13 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
 
     function renderTable(tree, expanded) {
         var headers = [
+            "Классификация",
             "Ключ",
             "Название",
-            "Прогресс",
-            "Оценка",
             "Статус",
             "Спринт",
-            "Исполнитель",
-            "Приоритет",
-            "Метка",
-            "Создан",
-            "Обновлён"
+            "Метки",
+            "Компоненты"
         ];
         var $wrap = $("<div/>").addClass("ujg-sb-table-wrap overflow-auto");
         var $table = $("<table/>").addClass("ujg-sb-table w-full border-collapse text-foreground");
@@ -296,7 +338,8 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $head.attr("data-acc-key", node.key);
         $head.append(
             $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
-            $("<span/>").addClass("font-mono text-primary font-semibold").text(displayKey(node)),
+            $("<span/>").addClass(classificationClass(node)).text(classificationText(node)),
+            keyContent(node, "font-mono font-semibold"),
             $("<span/>").addClass("flex-1 truncate").text(displaySummary(node)),
             $("<span/>").addClass("text-[9px] text-muted-foreground shrink-0").text(metricsLine(node))
         );
@@ -328,10 +371,13 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                           .text(isOpen ? "▾" : "▸")
                     : null,
                 $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
-                $("<span/>").addClass("font-mono text-primary font-semibold").text(displayKey(node)),
+                $("<span/>").addClass(classificationClass(node)).text(classificationText(node)),
+                keyContent(node, "font-mono font-semibold"),
                 $("<span/>").addClass("flex-1 truncate").text(displaySummary(node)),
                 $("<span/>").addClass("rounded px-1 py-px text-[9px] " + utils.getStatusClass(st)).text(statusName),
-                $("<span/>").addClass("text-[9px] text-muted-foreground").text(utils.getSprintName(node.sprint))
+                $("<span/>").addClass("text-[9px] text-muted-foreground").text(utils.getSprintName(node.sprint)),
+                $("<span/>").addClass("text-[9px] text-muted-foreground").text(displayMetaValue(labelsText(node))),
+                $("<span/>").addClass("text-[9px] text-muted-foreground").text(displayMetaValue(componentsText(node)))
             );
             $parent.append($line);
             if (kids && isOpen) {
@@ -403,11 +449,14 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                           .attr("data-epic-key", node.key)
                           .text(isOpen ? "▾" : "▸")
                     : null,
-                $("<span/>").addClass("font-mono text-primary font-semibold").text(displayKey(node)),
+                $("<span/>").addClass(classificationClass(node)).text(classificationText(node)),
+                keyContent(node, "font-mono font-semibold"),
                 $("<span/>").addClass("text-[9px] font-bold rounded px-1 py-px " + typeColorCls).text(badge),
                 $("<span/>").addClass("flex-1 min-w-[120px]").text(displaySummary(node)),
                 $("<span/>").addClass("rounded px-1 py-px text-[9px] " + utils.getStatusClass(st)).text(statusName),
-                $("<span/>").addClass("text-muted-foreground").text(sprint)
+                $("<span/>").addClass("text-muted-foreground").text(sprint),
+                $("<span/>").addClass("text-muted-foreground").text(displayMetaValue(labelsText(node))),
+                $("<span/>").addClass("text-muted-foreground").text(displayMetaValue(componentsText(node)))
             );
             $parent.append($row);
             if ((isEpicNode(node) || isOrphanBucket(node)) && node.problemItems && node.problemItems.length && isOpen) {
@@ -432,8 +481,164 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
 
     function syncViewButtons() {
         if (!$headerHost || !$headerHost.length) return;
-        $headerHost.find(".ujg-sb-view-table, .ujg-sb-view-accordion, .ujg-sb-view-rows").removeClass("ujg-sb-view-active");
+        $headerHost.find(".ujg-sb-view-table").removeClass("ujg-sb-view-active");
+        $headerHost.find(".ujg-sb-view-accordion").removeClass("ujg-sb-view-active");
+        $headerHost.find(".ujg-sb-view-rows").removeClass("ujg-sb-view-active");
         $headerHost.find(".ujg-sb-view-" + currentViewMode).addClass("ujg-sb-view-active");
+    }
+
+    function closeAllPickers() {
+        if (!$headerHost || !$headerHost.length) return;
+        $headerHost.find(".ujg-sb-picker-popover").each(function() {
+            this.style.display = "none";
+        });
+    }
+
+    function singlePickerOptions(kind) {
+        var state = currentState();
+        if (kind === "project") {
+            return (state.projects || []).map(function(project) {
+                var key = project && project.key != null ? String(project.key) : "";
+                return {
+                    value: key,
+                    label: project && project.name != null ? String(project.name) : key
+                };
+            });
+        }
+        if (kind === "status") {
+            return [{ value: "", label: "Все статусы" }].concat(
+                (state.filterOptions && state.filterOptions.statuses || []).map(function(status) {
+                    return { value: String(status), label: String(status) };
+                })
+            );
+        }
+        if (kind === "sprint") {
+            return [{ value: "", label: "Все спринты" }].concat(
+                (state.filterOptions && state.filterOptions.sprints || []).map(function(sprint) {
+                    return { value: String(sprint), label: String(sprint) };
+                })
+            );
+        }
+        return [];
+    }
+
+    function epicPickerOptions() {
+        var state = currentState();
+        return [{ value: "", label: "Все эпики" }].concat(
+            (state.filterOptions && state.filterOptions.epics || []).map(function(epic) {
+                return {
+                    value: epic && epic.key != null ? String(epic.key) : "",
+                    label: epicOptionLabel(epic)
+                };
+            })
+        );
+    }
+
+    function selectedEpicKeys() {
+        var state = currentState();
+        if (Array.isArray(state.selectedEpicKeys)) {
+            return state.selectedEpicKeys.map(String);
+        }
+        if (state.filters && state.filters.epic) {
+            return [String(state.filters.epic)];
+        }
+        return [];
+    }
+
+    function triggerText(kind, options) {
+        var state = currentState();
+        var i;
+        if (kind === "project") {
+            for (i = 0; i < options.length; i += 1) {
+                if (String(options[i].value) === String(state.project || "")) {
+                    return options[i].label;
+                }
+            }
+            return "Проект";
+        }
+        if (kind === "status") {
+            for (i = 0; i < options.length; i += 1) {
+                if (String(options[i].value) === String(state.filters && state.filters.status || "")) {
+                    return options[i].label;
+                }
+            }
+            return "Все статусы";
+        }
+        if (kind === "sprint") {
+            for (i = 0; i < options.length; i += 1) {
+                if (String(options[i].value) === String(state.filters && state.filters.sprint || "")) {
+                    return options[i].label;
+                }
+            }
+            return "Все спринты";
+        }
+        if (kind === "epic") {
+            var selected = selectedEpicKeys();
+            if (!selected.length) return "Все эпики";
+            if (selected.length === 1) return selected[0];
+            return "Выбрано: " + String(selected.length);
+        }
+        return "";
+    }
+
+    function renderPicker(labelText, kind, nativeClass, options, multi) {
+        var $field = $("<label/>").addClass("ujg-sb-picker-field");
+        var $picker = $("<div/>").addClass("ujg-sb-picker ujg-sb-picker-" + kind);
+        var $native = $("<select/>").addClass("ujg-sb-native-control " + nativeClass);
+        var selected = multi ? selectedEpicKeys() : [];
+        var selectedMap = {};
+        selected.forEach(function(value) {
+            selectedMap[String(value)] = true;
+        });
+        if (multi) {
+            $native.attr("multiple", "multiple");
+        }
+        options.forEach(function(option) {
+            $native.append($("<option/>").attr("value", option.value).text(option.label));
+        });
+        var $chips = $("<div/>").addClass("ujg-sb-picker-chips");
+        if (multi) {
+            selected.forEach(function(value) {
+                $chips.append(
+                    $("<button type=\"button\"/>")
+                        .addClass("ujg-sb-picker-chip")
+                        .attr("data-picker-kind", kind)
+                        .attr("data-value", value)
+                        .text(value)
+                );
+            });
+        }
+        var $trigger = $("<button type=\"button\"/>")
+            .addClass("ujg-sb-picker-trigger")
+            .attr("data-picker-kind", kind)
+            .text(triggerText(kind, options));
+        var $popover = $("<div/>")
+            .addClass("ujg-sb-picker-popover")
+            .attr("data-picker-kind", kind)
+            .css("display", "none");
+        var $search = $("<input/>")
+            .attr("type", "text")
+            .addClass("ujg-sb-picker-search-input")
+            .attr("placeholder", "Поиск...");
+        var $options = $("<div/>").addClass("ujg-sb-picker-options");
+        options.forEach(function(option) {
+            var $button = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-picker-option")
+                .attr("data-picker-kind", kind)
+                .attr("data-value", option.value)
+                .text(option.label);
+            if (!multi && String(option.value) === String($native.val() || "")) {
+                $button.addClass("ujg-sb-picker-option-selected");
+            }
+            if (multi && selectedMap[String(option.value)]) {
+                $button.addClass("ujg-sb-picker-option-selected");
+            }
+            $options.append($button);
+        });
+        $popover.append($search, $options);
+        $picker.append($native, $chips, $trigger, $popover);
+        $field.append($("<span/>").text(labelText), $picker);
+        return $field;
     }
 
     function bindHeaderInteractions() {
@@ -452,6 +657,70 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         });
         $headerHost.find(".ujg-sb-search").on("input", function() {
             if (services.onSearchInput) services.onSearchInput($(this).val());
+        });
+        $headerHost.find(".ujg-sb-picker-trigger").on("click", function(ev) {
+            ev.preventDefault();
+            var picker = this.parentNode;
+            var popover = picker ? $(picker).find(".ujg-sb-picker-popover")[0] : null;
+            var isOpen = !!(popover && popover.style.display !== "none");
+            closeAllPickers();
+            if (popover) {
+                popover.style.display = isOpen ? "none" : "block";
+            }
+        });
+        $headerHost.find(".ujg-sb-picker-search-input").on("input", function() {
+            var picker = this.parentNode && this.parentNode.parentNode ? this.parentNode.parentNode : null;
+            var query = String(this.value || "").toLowerCase();
+            if (!picker) return;
+            $(picker)
+                .find(".ujg-sb-picker-option")
+                .each(function() {
+                    var text = String($(this).text() || "").toLowerCase();
+                    this.style.display = !query || text.indexOf(query) >= 0 ? "" : "none";
+                });
+        });
+        $headerHost.find(".ujg-sb-picker-option").on("click", function(ev) {
+            ev.preventDefault();
+            var kind = $(this).attr("data-picker-kind");
+            var value = $(this).attr("data-value") || "";
+            if (kind === "project" && services.onProjectChange) {
+                services.onProjectChange(value);
+                renderHeader();
+                return;
+            }
+            if (kind === "status" && services.onStatusChange) {
+                services.onStatusChange(value);
+                renderHeader();
+                return;
+            }
+            if (kind === "sprint" && services.onSprintChange) {
+                services.onSprintChange(value);
+                renderHeader();
+                return;
+            }
+            if (kind === "epic" && services.onEpicChange) {
+                var next = selectedEpicKeys().slice();
+                var index = next.indexOf(value);
+                if (!value) {
+                    next = [];
+                } else if (index >= 0) {
+                    next.splice(index, 1);
+                } else {
+                    next.push(value);
+                }
+                services.onEpicChange(next);
+                renderHeader();
+            }
+        });
+        $headerHost.find(".ujg-sb-picker-chip").on("click", function(ev) {
+            ev.preventDefault();
+            if (!services.onEpicChange) return;
+            var removeValue = $(this).attr("data-value") || "";
+            var next = selectedEpicKeys().filter(function(value) {
+                return String(value) !== String(removeValue);
+            });
+            services.onEpicChange(next);
+            renderHeader();
         });
         function notifyViewMode(mode) {
             if (services.onViewMode) services.onViewMode(mode);
@@ -483,37 +752,16 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
     function renderHeader() {
         if (!$headerHost) return;
         $headerHost.empty();
+        closeAllPickers();
+        var state = currentState();
         var $inner = $("<div/>").addClass("ujg-sb-header-inner");
         $inner.append($("<h1/>").addClass("ujg-sb-title text-sm font-bold w-full shrink-0").text("Stories Dashboard"));
         var $filters = $("<div/>").addClass("ujg-sb-controls");
         $filters.append(
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append($("<span/>").text("Проект"), $("<select/>").addClass("ujg-sb-project-select h-7 rounded border border-border px-1 text-[11px]")),
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append(
-                    $("<span/>").text("Статус"),
-                    $("<select/>")
-                        .addClass("ujg-sb-status-select h-7 rounded border border-border px-1 text-[11px]")
-                        .append($("<option/>").attr("value", "").text("Все статусы"))
-                ),
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append(
-                    $("<span/>").text("Эпик"),
-                    $("<select/>")
-                        .addClass("ujg-sb-epic-select h-7 rounded border border-border px-1 text-[11px]")
-                        .append($("<option/>").attr("value", "").text("Все эпики"))
-                ),
-            $("<label/>")
-                .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
-                .append(
-                    $("<span/>").text("Спринт"),
-                    $("<select/>")
-                        .addClass("ujg-sb-sprint-select h-7 rounded border border-border px-1 text-[11px]")
-                        .append($("<option/>").attr("value", "").text("Все спринты"))
-                ),
+            renderPicker("Проект", "project", "ujg-sb-project-select", singlePickerOptions("project"), false),
+            renderPicker("Статус", "status", "ujg-sb-status-select", singlePickerOptions("status"), false),
+            renderPicker("Эпик", "epic", "ujg-sb-epic-select", epicPickerOptions(), true),
+            renderPicker("Спринт", "sprint", "ujg-sb-sprint-select", singlePickerOptions("sprint"), false),
             $("<label/>")
                 .addClass("flex flex-col gap-0.5 text-[10px] text-muted-foreground")
                 .append(
@@ -522,6 +770,7 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
                         .attr("type", "text")
                         .addClass("ujg-sb-search h-7 rounded border border-border px-1 text-[11px] min-w-[140px]")
                         .attr("placeholder", "Поиск...")
+                        .attr("value", state.filters && state.filters.search ? state.filters.search : "")
                 )
         );
         var $views = $("<div/>").addClass("ujg-sb-view-buttons");

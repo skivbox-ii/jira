@@ -20,6 +20,65 @@ define("_ujgSB_main", [
         return { statuses: [], sprints: [], epics: [] };
     }
 
+    function normalizeSelectedEpicKeys(value) {
+        var list = Array.isArray(value) ? value : value != null && String(value).trim() !== "" ? [value] : [];
+        return list
+            .map(function(item) {
+                return item != null ? String(item) : "";
+            })
+            .filter(function(item) {
+                return item !== "";
+            });
+    }
+
+    function hasStagedApi(apiClient) {
+        return !!(
+            apiClient &&
+            typeof apiClient.getProjectEpics === "function" &&
+            typeof apiClient.getStoriesForEpicKeys === "function" &&
+            typeof apiClient.getIssuesByKeys === "function"
+        );
+    }
+
+    function normalizeLinkName(name) {
+        return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
+    }
+
+    function isChildLinkName(name) {
+        return (_config.CHILD_LINK_NAMES || []).some(function(linkName) {
+            return normalizeLinkName(linkName) === normalizeLinkName(name);
+        });
+    }
+
+    function collectChildIssueKeys(stories) {
+        var seen = {};
+        var out = [];
+
+        function pushKey(linkName, linkedIssue) {
+            var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key) : "";
+            var normKey = key.toLowerCase();
+            if (!isChildLinkName(linkName) || !key || seen[normKey]) {
+                return;
+            }
+            seen[normKey] = true;
+            out.push(key);
+        }
+
+        (stories || []).forEach(function(issue) {
+            var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+            links.forEach(function(link) {
+                var type = link && link.type ? link.type : {};
+                pushKey(type.outward, link && link.outwardIssue);
+                pushKey(type.inward, link && link.inwardIssue);
+            });
+        });
+        return out;
+    }
+
+    function isOpenEpicIssue(issue) {
+        return !(_utils && typeof _utils.isDone === "function" && _utils.isDone(issue && issue.fields && issue.fields.status));
+    }
+
     function shouldRenderPartialSnapshot(loaded, total, issues) {
         var ld = Number(loaded);
         var tt = Number(total);
@@ -59,14 +118,28 @@ define("_ujgSB_main", [
 
         var persisted = storage.load();
         var activeLoadToken = 0;
+        var stagedApiAvailable = hasStagedApi(api);
+        var initialSelectedEpicKeys = normalizeSelectedEpicKeys(
+            persisted.selectedEpicKeys != null ? persisted.selectedEpicKeys : persisted.epicFilter
+        );
         var state = {
             projects: [],
             project: null,
+            epicCatalog: [],
+            loadedEpics: [],
+            loadedStories: [],
+            loadedChildren: [],
+            selectedEpicKeys: initialSelectedEpicKeys,
             tree: [],
             filteredTree: [],
             filters: {
                 status: persisted.statusFilter != null ? String(persisted.statusFilter) : "",
-                epic: persisted.epicFilter != null ? String(persisted.epicFilter) : "",
+                epic:
+                    initialSelectedEpicKeys[0] != null
+                        ? String(initialSelectedEpicKeys[0])
+                        : persisted.epicFilter != null
+                          ? String(persisted.epicFilter)
+                          : "",
                 sprint: persisted.sprintFilter != null ? String(persisted.sprintFilter) : "",
                 search: ""
             },
@@ -80,15 +153,56 @@ define("_ujgSB_main", [
             storage.save({
                 project: state.project,
                 viewMode: state.viewMode,
+                selectedEpicKeys: state.selectedEpicKeys,
                 epicFilter: state.filters.epic,
                 statusFilter: state.filters.status,
                 sprintFilter: state.filters.sprint
             });
         }
 
+        function currentFilterState() {
+            return {
+                status: state.filters.status,
+                epic: state.filters.epic,
+                selectedEpicKeys: state.selectedEpicKeys,
+                sprint: state.filters.sprint,
+                search: state.filters.search
+            };
+        }
+
         function rerenderTree() {
-            state.filteredTree = data.filterTree(state.tree, state.filters);
+            state.filteredTree = data.filterTree(state.tree, currentFilterState());
             rendering.renderTree(state.filteredTree, state.viewMode, state.expanded);
+        }
+
+        function refreshFilterOptions() {
+            if (!state.tree || !state.tree.length) {
+                state.filterOptions = stagedApiAvailable ? data.collectFilters([], state.epicCatalog) : emptyFilterOptions();
+                return;
+            }
+            state.filterOptions = data.collectFilters(state.tree, stagedApiAvailable ? state.epicCatalog : null);
+        }
+
+        function syncLegacyEpicFilter() {
+            state.filters.epic = state.selectedEpicKeys[0] != null ? String(state.selectedEpicKeys[0]) : "";
+        }
+
+        function syncSelectedEpicKeysWithCatalog() {
+            var available = {};
+            state.epicCatalog.forEach(function(issue) {
+                if (issue && issue.key != null) {
+                    available[String(issue.key).toLowerCase()] = String(issue.key);
+                }
+            });
+            state.selectedEpicKeys = normalizeSelectedEpicKeys(state.selectedEpicKeys)
+                .map(function(key) {
+                    return available[String(key).toLowerCase()] || "";
+                })
+                .filter(Boolean)
+                .filter(function(key, index, list) {
+                    return list.indexOf(key) === index;
+                });
+            syncLegacyEpicFilter();
         }
 
         function fillHeaderFromState() {
@@ -167,11 +281,39 @@ define("_ujgSB_main", [
             state.filters.epic = "";
             state.filters.sprint = "";
             state.filters.search = "";
+            state.selectedEpicKeys = [];
+        }
+
+        function clearLoadedData() {
+            state.loadedEpics = [];
+            state.loadedStories = [];
+            state.loadedChildren = [];
+            state.tree = [];
+            state.filteredTree = [];
+            refreshFilterOptions();
         }
 
         function applyLoadedIssues(issues, keepLoading) {
+            state.loadedEpics = [];
+            state.loadedStories = issues || [];
+            state.loadedChildren = [];
             state.tree = data.buildTree(issues || []);
-            state.filterOptions = data.collectFilters(state.tree);
+            refreshFilterOptions();
+            state.loading = !!keepLoading;
+            rerenderHeader();
+            rerenderTree();
+        }
+
+        function applyLoadedPayload(epics, stories, children, keepLoading) {
+            state.loadedEpics = epics || [];
+            state.loadedStories = stories || [];
+            state.loadedChildren = children || [];
+            state.tree = data.buildTree({
+                epics: state.loadedEpics,
+                stories: state.loadedStories,
+                children: state.loadedChildren
+            });
+            refreshFilterOptions();
             state.loading = !!keepLoading;
             rerenderHeader();
             rerenderTree();
@@ -203,6 +345,73 @@ define("_ujgSB_main", [
             rerenderTree();
         }
 
+        function loadDisplayData(projectKey, loadToken) {
+            var selectedKeys = state.selectedEpicKeys.length
+                ? state.selectedEpicKeys.slice()
+                : state.epicCatalog.map(function(issue) {
+                      return issue && issue.key != null ? String(issue.key) : "";
+                  }).filter(Boolean);
+            var selectedEpics = (state.epicCatalog || []).filter(function(issue) {
+                var key = issue && issue.key != null ? String(issue.key) : "";
+                return key && selectedKeys.some(function(selectedKey) {
+                    return String(selectedKey).toLowerCase() === key.toLowerCase();
+                });
+            });
+            var openEpics = selectedEpics.filter(isOpenEpicIssue);
+
+            if (!openEpics.length) {
+                applyLoadedPayload([], [], [], false);
+                clearProgress();
+                persistUiState();
+                return;
+            }
+
+            api.getStoriesForEpicKeys(
+                String(projectKey),
+                openEpics.map(function(issue) {
+                    return issue.key;
+                })
+            ).then(
+                function(stories) {
+                    var safeStories = stories || [];
+                    var childKeys;
+                    if (loadToken !== activeLoadToken) {
+                        return;
+                    }
+                    childKeys = collectChildIssueKeys(safeStories);
+                    api.getIssuesByKeys(childKeys).then(
+                        function(children) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            applyLoadedPayload(openEpics, safeStories, children || [], false);
+                            clearProgress();
+                            persistUiState();
+                        },
+                        function() {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            applyLoadedPayload(openEpics, safeStories, [], false);
+                            clearProgress();
+                            persistUiState();
+                        }
+                    );
+                },
+                function() {
+                    if (loadToken !== activeLoadToken) {
+                        return;
+                    }
+                    state.loading = false;
+                    clearLoadedData();
+                    rerenderHeader();
+                    rerenderTree();
+                    clearProgress();
+                    persistUiState();
+                }
+            );
+        }
+
         function loadProject(projectKey, resetFilters) {
             if (!projectKey) {
                 return;
@@ -216,11 +425,39 @@ define("_ujgSB_main", [
                 clearFilters();
             }
             state.expanded = {};
-            state.tree = [];
-            state.filterOptions = emptyFilterOptions();
+            state.epicCatalog = [];
+            clearLoadedData();
             clearProgress();
             rerenderHeader();
             rerenderTree();
+            if (stagedApiAvailable) {
+                api.getProjectEpics(String(projectKey)).then(
+                    function(epics) {
+                        if (loadToken !== activeLoadToken) {
+                            return;
+                        }
+                        state.epicCatalog = epics || [];
+                        syncSelectedEpicKeysWithCatalog();
+                        refreshFilterOptions();
+                        rerenderHeader();
+                        rerenderTree();
+                        loadDisplayData(projectKey, loadToken);
+                    },
+                    function() {
+                        if (loadToken !== activeLoadToken) {
+                            return;
+                        }
+                        state.loading = false;
+                        state.epicCatalog = [];
+                        clearLoadedData();
+                        rerenderHeader();
+                        rerenderTree();
+                        clearProgress();
+                        persistUiState();
+                    }
+                );
+                return;
+            }
             api
                 .getProjectIssues(String(projectKey), function(loaded, total, partialIssues) {
                     if (loadToken !== activeLoadToken) {
@@ -270,7 +507,21 @@ define("_ujgSB_main", [
                 onFilterChange();
             },
             onEpicChange: function(v) {
-                state.filters.epic = v != null ? String(v) : "";
+                state.selectedEpicKeys = normalizeSelectedEpicKeys(v);
+                syncLegacyEpicFilter();
+                if (stagedApiAvailable) {
+                    persistUiState();
+                    activeLoadToken += 1;
+                    var loadToken = activeLoadToken;
+                    state.loading = true;
+                    state.expanded = {};
+                    clearLoadedData();
+                    clearProgress();
+                    rerenderHeader();
+                    rerenderTree();
+                    loadDisplayData(state.project, loadToken);
+                    return;
+                }
                 onFilterChange();
             },
             onSprintChange: function(v) {

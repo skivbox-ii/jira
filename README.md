@@ -1,6 +1,6 @@
 # jira
 
-Набор скриптов/виджетов для Jira (Sprint Health, Timesheet, Timesheet v0, Project Analytics, User Activity, Daily Diligence) и вспомогательных утилит.
+Набор скриптов/виджетов для Jira (Sprint Health, Timesheet, Timesheet v0, Project Analytics, User Activity, Daily Diligence, Story Browser) и вспомогательных утилит.
 
 ## Структура проекта
 
@@ -10,12 +10,26 @@
 ├── build-daily-diligence.js
 ├── build-project-analytics.js
 ├── build-sprint-health.js
+├── build-story-browser.js
 ├── build-user-activity.js
 ├── build-widget-bootstrap-assets.js
 ├── canvas-print-v2.js
 ├── demo-v2.html
 ├── docs/
 │   └── plans/
+│       ├── 2026-03-06-timesheet-developer-view-design.md
+│       ├── 2026-03-06-timesheet-developer-view.md
+│       ├── 2026-03-07-standalone-server-design.md
+│       ├── 2026-03-07-standalone-server.md
+│       ├── 2026-03-07-standalone-timesheet-v0-design.md
+│       ├── 2026-03-07-standalone-timesheet-v0.md
+│       ├── 2026-03-07-timesheet-report-design.md
+│       ├── 2026-03-07-timesheet-report.md
+│       ├── 2026-03-07-timesheet-summary-column-design.md
+│       ├── 2026-03-09-user-activity-repo-activity-design.md
+│       ├── 2026-03-09-user-activity-repo-activity.md
+│       ├── 2026-03-10-story-browser-epic-hierarchy-design.md
+│       ├── 2026-03-10-story-browser-epic-hierarchy.md
 │       ├── 2026-03-29-dashboard-release-ref-design.md
 │       ├── 2026-03-29-dashboard-release-ref.md
 │       ├── 2026-03-29-widget-bootstrap-design.md
@@ -23,7 +37,14 @@
 ├── jira_attach_latest_assets.py
 ├── standalone/
 │   └── public/
-│       └── daily-diligence.html
+│       ├── analytics.html
+│       ├── daily-diligence.html
+│       ├── login.html
+│       ├── sprint.html
+│       ├── stories.html
+│       ├── timesheet-v0.html
+│       ├── timesheet.html
+│       └── user-activity.html
 ├── tests/
 │   ├── helpers/
 │   ├── daily-diligence-api-bitbucket.test.js
@@ -36,7 +57,14 @@
 │   ├── daily-diligence-utils.test.js
 │   ├── standalone-daily-diligence.test.js
 │   ├── standalone-server-login.test.js
+│   ├── standalone-story-browser.test.js
 │   ├── standalone-timesheet-v0.test.js
+│   ├── story-browser-api-data.test.js
+│   ├── story-browser-build.test.js
+│   ├── story-browser-core.test.js
+│   ├── story-browser-css.test.js
+│   ├── story-browser-main.test.js
+│   ├── story-browser-rendering.test.js
 │   ├── timesheet-logic.test.js
 │   ├── user-activity-repo.test.js
 │   └── widget-bootstrap.test.js
@@ -58,6 +86,11 @@
 ├── ujg-sprint-health.deprecated.js
 ├── ujg-sprint-health.js
 ├── ujg-sprint-health.runtime.js
+├── ujg-story-browser-modules/
+├── ujg-story-browser.bootstrap.js
+├── ujg-story-browser.css
+├── ujg-story-browser.js
+├── ujg-story-browser.runtime.js
 ├── ujg-timesheet.bootstrap.js
 ├── ujg-timesheet.css
 ├── ujg-timesheet.js
@@ -74,12 +107,13 @@
 └── vba/
 ```
 
-`tests/timesheet-logic.test.js` содержит минимальные unit-тесты на чистую логику Timesheet через `node --test`, без внешних зависимостей. Точечные тесты Daily Diligence: `daily-diligence-api-jira.test.js`, `daily-diligence-api-bitbucket.test.js`, `daily-diligence-api-confluence.test.js`, `daily-diligence-data-processor.test.js`, `daily-diligence-main.test.js`, `daily-diligence-rendering.test.js`, `daily-diligence-team-manager.test.js`, `daily-diligence-utils.test.js`. Репозиторный слой User Activity покрыт `user-activity-repo.test.js`. Standalone smoke-тесты: `standalone-daily-diligence.test.js`, `standalone-server-login.test.js`, `standalone-timesheet-v0.test.js`. Генератор и поведение stable bootstrap: `widget-bootstrap.test.js` (`node --test tests/widget-bootstrap.test.js`).
+`tests/timesheet-logic.test.js` содержит минимальные unit-тесты на чистую логику Timesheet через `node --test`, без внешних зависимостей. Точечные тесты Daily Diligence: `daily-diligence-api-jira.test.js`, `daily-diligence-api-bitbucket.test.js`, `daily-diligence-api-confluence.test.js`, `daily-diligence-data-processor.test.js`, `daily-diligence-main.test.js`, `daily-diligence-rendering.test.js`, `daily-diligence-team-manager.test.js`, `daily-diligence-utils.test.js`. Story Browser покрыт наборами `story-browser-build.test.js`, `story-browser-core.test.js`, `story-browser-api-data.test.js`, `story-browser-main.test.js`, `story-browser-rendering.test.js`, `story-browser-css.test.js`. Репозиторный слой User Activity покрыт `user-activity-repo.test.js`. Standalone smoke-тесты: `standalone-daily-diligence.test.js`, `standalone-server-login.test.js`, `standalone-story-browser.test.js`, `standalone-timesheet-v0.test.js`. Генератор и поведение stable bootstrap: `widget-bootstrap.test.js` (`node --test tests/widget-bootstrap.test.js`).
 
 Документация по bootstrap и версионированию на дашборде:
 
 - актуальная модель **dashboard `releaseRef`**: `docs/plans/2026-03-29-dashboard-release-ref-design.md`, `docs/plans/2026-03-29-dashboard-release-ref.md`;
-- исторический дизайн/план только про bootstrap/runtime без property: `docs/plans/2026-03-29-widget-bootstrap-design.md`, `docs/plans/2026-03-29-widget-bootstrap.md`.
+- исторический дизайн/план только про bootstrap/runtime без property: `docs/plans/2026-03-29-widget-bootstrap-design.md`, `docs/plans/2026-03-29-widget-bootstrap.md`;
+- актуальный дизайн и план по Story Browser epic-first иерархии: `docs/plans/2026-03-10-story-browser-epic-hierarchy-design.md`, `docs/plans/2026-03-10-story-browser-epic-hierarchy.md`.
 
 ## Стабильные URL гаджетов и версия на дашборде (`releaseRef`)
 
@@ -131,6 +165,26 @@ https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-daily-diligence.bootstrap.j
 
 ```text
 _ujgDailyDiligence
+```
+
+### Story Browser
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-story-browser.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgStoryBrowser
 ```
 
 ### Timesheet

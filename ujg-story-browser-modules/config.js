@@ -75,10 +75,13 @@ define("_ujgSB_config", [], function() {
         Lowest: "ujg-sb-priority-lowest"
     };
 
-    var ISSUE_FIELDS = "summary,status,assignee,issuetype,priority,timeoriginalestimate,timetracking,timespent,components,labels,fixVersions,parent,created,updated,customfield_10014,customfield_10020";
+    var ISSUE_FIELDS = "summary,status,assignee,issuetype,priority,timeoriginalestimate,timetracking,timespent,components,labels,fixVersions,parent,issuelinks,created,updated,customfield_10014,customfield_10020";
 
     var EPIC_LINK_FIELD = "customfield_10014";
     var SPRINT_FIELD = "customfield_10020";
+    var EPIC_ISSUE_TYPE = "Epic";
+    var STORY_ISSUE_TYPE = "Story";
+    var CHILD_LINK_NAMES = ["child", "is_child"];
     var STORAGE_KEY = "ujg-sb-state";
 
     function trimSlash(s) {
@@ -119,6 +122,9 @@ define("_ujgSB_config", [], function() {
         ISSUE_FIELDS: ISSUE_FIELDS,
         EPIC_LINK_FIELD: EPIC_LINK_FIELD,
         SPRINT_FIELD: SPRINT_FIELD,
+        EPIC_ISSUE_TYPE: EPIC_ISSUE_TYPE,
+        STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
+        CHILD_LINK_NAMES: CHILD_LINK_NAMES,
         STORAGE_KEY: STORAGE_KEY
     };
 });

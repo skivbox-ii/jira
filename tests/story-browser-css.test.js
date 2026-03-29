@@ -41,6 +41,14 @@ test("story-browser CSS: 2 contract selectors and key properties", function() {
         "ujg-sb-root",
         "ujg-sb-header",
         "ujg-sb-controls",
+        "ujg-sb-picker",
+        "ujg-sb-picker-trigger",
+        "ujg-sb-picker-popover",
+        "ujg-sb-picker-search-input",
+        "ujg-sb-picker-chip",
+        "ujg-sb-key-link",
+        "ujg-sb-classification-badge",
+        "ujg-sb-classification-missing",
         "ujg-sb-view-buttons",
         "ujg-sb-action-buttons",
         "ujg-sb-view-host",
@@ -50,6 +58,7 @@ test("story-browser CSS: 2 contract selectors and key properties", function() {
         "ujg-sb-progress-fill",
         "ujg-sb-table-wrap",
         "ujg-sb-table",
+        "ujg-sb-col-classification",
         "ujg-sb-table-row-epic",
         "ujg-sb-table-row-story",
         "ujg-sb-problem-row",
@@ -145,6 +154,12 @@ test("story-browser CSS: standalone widget controls have semantic styles and tok
 
     assert.match(css, /\.ujg-sb-title\s*\{[^{}]*font-size\s*:[^{}]*\}/i, "title should size itself without utility classes");
     assert.match(css, /\.ujg-sb-title\s*\{[^{}]*margin\s*:\s*0/i, "title should reset default h1 margin");
+    assert.match(css, /\.ujg-sb-picker\s*\{[^{}]*position\s*:\s*relative/i, "picker should anchor popover");
+    assert.match(css, /\.ujg-sb-picker-popover\s*\{[^{}]*position\s*:\s*absolute/i, "picker popover should overlay");
+    assert.match(css, /\.ujg-sb-picker-search-input\s*\{[^{}]*border[^{}]*\}/i, "picker search input should be styled");
+    assert.match(css, /\.ujg-sb-picker-chip\s*\{[^{}]*border[^{}]*\}/i, "picker chip should have semantic styling");
+    assert.match(css, /\.ujg-sb-key-link\s*\{[^{}]*text-decoration\s*:\s*none/i, "key links should have semantic link styling");
+    assert.match(css, /\.ujg-sb-classification-missing\s*\{[^{}]*color\s*:/i, "missing classification should be highlighted");
     assert.match(css, /\.ujg-sb-controls\s+select\s*\{[^{}]*border[^{}]*\}/i, "controls select should have semantic border styling");
     assert.match(css, /\.ujg-sb-controls\s+input\s*\{[^{}]*border[^{}]*\}/i, "controls input should have semantic border styling");
     assert.match(css, /\.ujg-sb-view-btn\s*\{[^{}]*padding[^{}]*\}/i, "view button should size itself without utility classes");

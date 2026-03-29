@@ -3,6 +3,54 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
 
     var CONFIG = config;
 
+    function compareIssueKeys(a, b) {
+        function parseKey(value) {
+            var text = typeof value === "string" ? value : value && value.key != null ? String(value.key) : "";
+            var match = /^(.*?)-(\d+)$/.exec(text);
+            return {
+                raw: text,
+                prefix: match ? match[1] : text,
+                number: match ? Number(match[2]) : Number.NaN
+            };
+        }
+
+        var left = parseKey(a);
+        var right = parseKey(b);
+        var prefixCmp = left.prefix.localeCompare(right.prefix);
+        if (prefixCmp !== 0) {
+            return prefixCmp;
+        }
+        if (isFinite(left.number) && isFinite(right.number) && left.number !== right.number) {
+            return left.number - right.number;
+        }
+        return left.raw.localeCompare(right.raw);
+    }
+
+    function buildBrowseUrl(baseUrl, key) {
+        var issueKey = key != null ? String(key) : "";
+        var root = String(baseUrl || "").replace(/\/+$/, "");
+        if (!issueKey) {
+            return "";
+        }
+        return (root || "") + "/browse/" + issueKey;
+    }
+
+    function readClassification(summary) {
+        var match = /^\s*\[([^\]]+)\]/.exec(String(summary || ""));
+        var value = match && match[1] != null ? String(match[1]).trim().toUpperCase() : "";
+        return value || "NO PREFIX";
+    }
+
+    function normalizeLinkName(name) {
+        return normalizeText(name).replace(/\s+/g, "_");
+    }
+
+    function isAllowedChildLinkName(name) {
+        return (CONFIG.CHILD_LINK_NAMES || []).some(function(linkName) {
+            return normalizeLinkName(linkName) === normalizeLinkName(name);
+        });
+    }
+
     function readEpicLink(fields) {
         var v = fields[CONFIG.EPIC_LINK_FIELD];
         if (v == null || v === "") {
@@ -99,6 +147,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         var f = issue.fields || {};
         var st = f.status || {};
         var typeName = f.issuetype && f.issuetype.name != null ? String(f.issuetype.name) : "";
+        var classification = readClassification(f.summary);
         var est =
             f.timeoriginalestimate != null
                 ? Number(f.timeoriginalestimate)
@@ -153,9 +202,35 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             created: f.created != null ? String(f.created) : "",
             updated: f.updated != null ? String(f.updated) : "",
             isDone: utils.isDone(st),
+            browseUrl: buildBrowseUrl(CONFIG.baseUrl, issue.key),
+            classification: classification,
+            classificationMissing: classification === "NO PREFIX",
             transitions: extractTransitions(issue.changelog),
             children: []
         };
+    }
+
+    function extractChildLinkedKeys(issue) {
+        var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+        var seen = {};
+        var out = [];
+
+        function pushLinkedKey(linkName, linkedIssue) {
+            var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key) : "";
+            var norm = normalizeText(key);
+            if (!isAllowedChildLinkName(linkName) || !key || seen[norm]) {
+                return;
+            }
+            seen[norm] = true;
+            out.push(key);
+        }
+
+        links.forEach(function(link) {
+            var type = link && link.type ? link.type : {};
+            pushLinkedKey(type.outward, link && link.outwardIssue);
+            pushLinkedKey(type.inward, link && link.inwardIssue);
+        });
+        return out;
     }
 
     function resolveParentInMap(node, keyToNode) {
@@ -220,7 +295,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         node.progress = totalCount > 0 ? totalDone / totalCount : 0;
     }
 
-    function buildTree(rawIssues) {
+    function buildLegacyTree(rawIssues) {
         var list = rawIssues || [];
         var keyToNode = {};
         var order = [];
@@ -275,6 +350,75 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         return root;
     }
 
+    function buildPayloadTree(payload) {
+        var rawEpics = payload && Array.isArray(payload.epics) ? payload.epics : [];
+        var rawStories = payload && Array.isArray(payload.stories) ? payload.stories : [];
+        var rawChildren = payload && Array.isArray(payload.children) ? payload.children : [];
+        var roots = [];
+        var epicMap = {};
+        var storiesByEpic = {};
+        var childMap = {};
+
+        rawChildren.forEach(function(issue) {
+            if (!issue || !issue.key) {
+                return;
+            }
+            childMap[String(issue.key)] = normalizeIssue(issue);
+        });
+
+        rawEpics.forEach(function(issue) {
+            var epic;
+            if (!issue || !issue.key) {
+                return;
+            }
+            epic = normalizeIssue(issue);
+            if (epic.type !== CONFIG.EPIC_ISSUE_TYPE || epic.isDone) {
+                return;
+            }
+            epic.children = [];
+            epicMap[epic.key] = epic;
+            roots.push(epic);
+        });
+
+        rawStories.forEach(function(issue) {
+            var story;
+            var epicKey;
+            if (!issue || !issue.key) {
+                return;
+            }
+            story = normalizeIssue(issue);
+            epicKey = story.epicLink;
+            if (story.type !== CONFIG.STORY_ISSUE_TYPE || !epicKey || !epicMap[epicKey]) {
+                return;
+            }
+            story.children = extractChildLinkedKeys(issue)
+                .map(function(childKey) {
+                    return childMap[childKey] || null;
+                })
+                .filter(Boolean)
+                .sort(compareIssueKeys);
+            if (!storiesByEpic[epicKey]) {
+                storiesByEpic[epicKey] = [];
+            }
+            storiesByEpic[epicKey].push(story);
+        });
+
+        roots.sort(compareIssueKeys);
+        roots.forEach(function(epic) {
+            epic.children = (storiesByEpic[epic.key] || []).sort(compareIssueKeys);
+            aggregate(epic);
+            assignProblemItems(epic);
+        });
+        return roots;
+    }
+
+    function buildTree(input) {
+        if (Array.isArray(input)) {
+            return buildLegacyTree(input);
+        }
+        return buildPayloadTree(input);
+    }
+
     function walkTree(nodes, visit) {
         (nodes || []).forEach(function(n) {
             visit(n);
@@ -282,10 +426,28 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         });
     }
 
-    function collectFilters(tree) {
+    function normalizeEpicOption(item) {
+        if (!item) {
+            return null;
+        }
+        var key = item.key != null ? String(item.key) : "";
+        var summary =
+            item.summary != null
+                ? String(item.summary)
+                : item.fields && item.fields.summary != null
+                  ? String(item.fields.summary)
+                  : key;
+        if (!key) {
+            return null;
+        }
+        return { key: key, summary: summary };
+    }
+
+    function collectFilters(tree, epicCatalog) {
         var statusSet = {};
         var sprintSet = {};
         var epics = [];
+        var epicSeen = {};
         walkTree(tree, function(n) {
             if (n.key === "__orphans__") {
                 return;
@@ -296,10 +458,28 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (n.sprint) {
                 sprintSet[n.sprint] = true;
             }
-            if (n.type === "Epic") {
+            if (!epicCatalog && n.type === "Epic") {
                 epics.push({ key: n.key, summary: n.summary });
             }
         });
+        if (Array.isArray(epicCatalog)) {
+            epicCatalog.forEach(function(item) {
+                var epic = normalizeEpicOption(item);
+                var normKey;
+                if (!epic) {
+                    return;
+                }
+                normKey = normalizeText(epic.key);
+                if (epicSeen[normKey]) {
+                    return;
+                }
+                epicSeen[normKey] = true;
+                epics.push(epic);
+            });
+            epics.sort(compareIssueKeys);
+        } else {
+            epics.sort(compareIssueKeys);
+        }
         return {
             statuses: Object.keys(statusSet),
             sprints: Object.keys(sprintSet),
@@ -387,12 +567,30 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
     function filterTree(tree, filters) {
         var f = filters || {};
         var roots = tree || [];
-        if (trimText(f.epic)) {
-            var sub = findSubtree(roots, f.epic);
-            if (!sub) {
-                return [];
+        var selectedEpicKeys = Array.isArray(f.selectedEpicKeys)
+            ? f.selectedEpicKeys.filter(function(key) {
+                  return trimText(key) !== "";
+              })
+            : [];
+        if (!selectedEpicKeys.length && trimText(f.epic)) {
+            selectedEpicKeys = [f.epic];
+        }
+        if (selectedEpicKeys.length) {
+            var wanted = {};
+            roots = roots.filter(function(node) {
+                return node && node.key != null;
+            }).filter(function(node) {
+                return selectedEpicKeys.some(function(key) {
+                    return normalizeText(key) === normalizeText(node.key);
+                });
+            });
+            if (!roots.length && trimText(f.epic)) {
+                var sub = findSubtree(tree, f.epic);
+                if (!sub) {
+                    return [];
+                }
+                roots = [sub];
             }
-            roots = [sub];
         }
         var out = [];
         var i;

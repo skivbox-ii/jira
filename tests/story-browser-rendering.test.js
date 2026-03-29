@@ -368,17 +368,13 @@ function loadRendering($, config, utils) {
 }
 
 const TABLE_HEADERS = [
+    "Классификация",
     "Ключ",
     "Название",
-    "Прогресс",
-    "Оценка",
     "Статус",
     "Спринт",
-    "Исполнитель",
-    "Приоритет",
-    "Метка",
-    "Создан",
-    "Обновлён"
+    "Метки",
+    "Компоненты"
 ];
 
 function sampleTree() {
@@ -388,11 +384,15 @@ function sampleTree() {
             summary: "Root epic",
             type: "Epic",
             badge: "E",
+            classification: "EPIC",
+            classificationMissing: false,
+            browseUrl: "https://jira.example.com/browse/EPIC-1",
             status: "In Progress",
             sprint: "Sprint 1",
             assignee: "Alice",
             priority: "High",
             labels: ["x"],
+            components: ["Platform"],
             created: "2026-01-01T00:00:00.000Z",
             updated: "2026-01-02T00:00:00.000Z",
             estimate: 3600,
@@ -405,11 +405,15 @@ function sampleTree() {
                     summary: "Child story",
                     type: "Story",
                     badge: "S",
+                    classification: "STORY",
+                    classificationMissing: false,
+                    browseUrl: "https://jira.example.com/browse/STORY-1",
                     status: "Open",
                     sprint: "Sprint 1",
                     assignee: "Bob",
                     priority: "Medium",
-                    labels: [],
+                    labels: ["frontend"],
+                    components: ["UI"],
                     created: "2026-01-03T00:00:00.000Z",
                     updated: "2026-01-04T00:00:00.000Z",
                     estimate: 0,
@@ -480,17 +484,35 @@ test("header renders title, filters, view buttons, and actions", function() {
     var rendering = loadRendering($, config, utils);
     var $c = $("<div/>");
 
-    rendering.init($c, {});
+    rendering.init($c, {
+        state: {
+            project: "P1",
+            selectedEpicKeys: ["EPIC-1"],
+            filters: { status: "Open", sprint: "Sprint 1", search: "" },
+            projects: [{ key: "P1", name: "Project One" }],
+            filterOptions: {
+                statuses: ["Open", "Done"],
+                sprints: ["Sprint 1"],
+                epics: [{ key: "EPIC-1", summary: "Root epic" }]
+            }
+        }
+    });
     rendering.renderHeader();
 
     assert.match($c.text(), /Stories Dashboard/);
     assert.equal($c.find(".ujg-sb-title").length, 1);
+    assert.equal($c.find(".ujg-sb-picker-project").length, 1);
+    assert.equal($c.find(".ujg-sb-picker-status").length, 1);
+    assert.equal($c.find(".ujg-sb-picker-epic").length, 1);
+    assert.equal($c.find(".ujg-sb-picker-sprint").length, 1);
+    assert.equal($c.find(".ujg-sb-picker-trigger").length, 4);
+    assert.equal($c.find(".ujg-sb-picker-search-input").length, 4);
+    assert.equal($c.find(".ujg-sb-picker-chip").length, 1);
     assert.equal($c.find(".ujg-sb-project-select").length, 1);
     var $status = $c.find(".ujg-sb-status-select");
     assert.equal($status.length, 1);
-    assert.ok(nodeText($status[0]).indexOf("Все статусы") >= 0);
-    assert.ok(nodeText($c.find(".ujg-sb-epic-select")[0]).indexOf("Все эпики") >= 0);
-    assert.ok(nodeText($c.find(".ujg-sb-sprint-select")[0]).indexOf("Все спринты") >= 0);
+    assert.equal($c.find(".ujg-sb-picker-chip").text(), "EPIC-1");
+    assert.ok(nodeText($status[0]).indexOf("Все статусы") >= 0 || $status[0].tagName === "SELECT");
     assert.equal($c.find(".ujg-sb-search").attr("placeholder"), "Поиск...");
     assert.ok(nodeText($c.find(".ujg-sb-view-table")[0]).indexOf("Таблица") >= 0);
     assert.ok(nodeText($c.find(".ujg-sb-view-accordion")[0]).indexOf("Аккордеон") >= 0);
@@ -501,7 +523,7 @@ test("header renders title, filters, view buttons, and actions", function() {
     assert.equal($c.find(".ujg-sb-header-inner").length, 1);
 });
 
-test("table view renders 11 headers and epic or story hierarchy with indentation", function() {
+test("table view renders 7 headers and epic or story hierarchy with indentation", function() {
     var documentNode = createNode("document");
     var $ = createMiniJquery(documentNode);
     var config = loadConfig(mockWindow());
@@ -515,8 +537,8 @@ test("table view renders 11 headers and epic or story hierarchy with indentation
     rendering.renderTree(tree, "table", {});
 
     var ths = $c.find("th").toArray();
-    assert.equal(ths.length, 11);
-    for (var i = 0; i < 11; i++) {
+    assert.equal(ths.length, 7);
+    for (var i = 0; i < 7; i++) {
         assert.equal(nodeText(ths[i]).trim(), TABLE_HEADERS[i]);
     }
 
@@ -533,7 +555,7 @@ test("table view renders 11 headers and epic or story hierarchy with indentation
     assert.ok(hasClass(storyRow, "ujg-sb-depth-1"));
 });
 
-test("table view renders problem summary row with colspan 11 after epic when problemItems set", function() {
+test("table view renders problem summary row with colspan 7 after epic when problemItems set", function() {
     var documentNode = createNode("document");
     var $ = createMiniJquery(documentNode);
     var config = loadConfig(mockWindow());
@@ -570,10 +592,84 @@ test("table view renders problem summary row with colspan 11 after epic when pro
     assert.ok(hasClass(prob[0], "ujg-sb-problem-row"));
     var cell = prob[0].children[0];
     assert.ok(cell && cell.tagName === "TD");
-    assert.equal(cell.getAttribute("colspan"), "11");
+    assert.equal(cell.getAttribute("colspan"), "7");
     var rowText = nodeText(prob[0]);
     assert.ok(rowText.indexOf("CORE-115") >= 0);
     assert.ok(rowText.indexOf("Ожидание API контракта") >= 0);
+});
+
+test("table view renders clickable key links, compact metadata, and missing classification badge", function() {
+    var documentNode = createNode("document");
+    var $ = createMiniJquery(documentNode);
+    var config = loadConfig(mockWindow());
+    var utils = loadUtils(mockWindow());
+    var rendering = loadRendering($, config, utils);
+    var $c = $("<div/>");
+    var tree = [
+        {
+            key: "EPIC-7",
+            summary: "Epic root",
+            type: "Epic",
+            badge: "E",
+            classification: "EPIC",
+            classificationMissing: false,
+            browseUrl: "https://jira.example.com/browse/EPIC-7",
+            status: "Open",
+            sprint: "",
+            labels: [],
+            components: [],
+            children: [
+                {
+                    key: "STORY-7",
+                    summary: "Story row",
+                    type: "Story",
+                    badge: "S",
+                    classification: "STORY",
+                    classificationMissing: false,
+                    browseUrl: "https://jira.example.com/browse/STORY-7",
+                    status: "Open",
+                    sprint: "Sprint 7",
+                    labels: ["story"],
+                    components: ["Web"],
+                    children: [
+                        {
+                            key: "TASK-7",
+                            summary: "Task without prefix",
+                            type: "Task",
+                            badge: "T",
+                            classification: "NO PREFIX",
+                            classificationMissing: true,
+                            browseUrl: "https://jira.example.com/browse/TASK-7",
+                            status: "Open",
+                            sprint: "Sprint 7",
+                            labels: ["backend", "api"],
+                            components: ["Core", "REST"],
+                            children: []
+                        }
+                    ]
+                }
+            ]
+        }
+    ];
+
+    rendering.init($c, {});
+    rendering.renderHeader();
+    rendering.renderTree(tree, "table", { "EPIC-7": true });
+
+    var links = $c.find(".ujg-sb-key-link").toArray();
+    var componentCells = $c.find(".ujg-sb-col-components").toArray().map(function(node) {
+        return nodeText(node);
+    }).join("|");
+    var labelCells = $c.find(".ujg-sb-col-labels").toArray().map(function(node) {
+        return nodeText(node);
+    }).join("|");
+    assert.equal(links.length, 3);
+    assert.equal(links[0].getAttribute("href"), "https://jira.example.com/browse/EPIC-7");
+    assert.equal(links[2].getAttribute("href"), "https://jira.example.com/browse/TASK-7");
+    assert.ok(componentCells.indexOf("Core, REST") >= 0);
+    assert.ok(labelCells.indexOf("backend, api") >= 0);
+    assert.equal($c.find(".ujg-sb-classification-missing").length, 1);
+    assert.ok($c.find(".ujg-sb-classification-missing").text().indexOf("NO PREFIX") >= 0);
 });
 
 test("table view renders orphan bucket label and nested non-epic descendants without leaking internal key", function() {
@@ -792,78 +888,6 @@ test("rows view renders orphan bucket and nested non-epic descendants without le
     assert.equal(text.indexOf("__orphans__") >= 0, false);
 });
 
-test("table progress accepts fraction and percent inputs and clamps safely", function() {
-    var documentNode = createNode("document");
-    var $ = createMiniJquery(documentNode);
-    var config = loadConfig(mockWindow());
-    var utils = loadUtils(mockWindow());
-    var rendering = loadRendering($, config, utils);
-    var $c = $("<div/>");
-    var tree = [
-        {
-            key: "EPIC-FRAC",
-            summary: "Fraction progress",
-            type: "Epic",
-            status: "Open",
-            sprint: "",
-            assignee: "",
-            priority: "",
-            labels: [],
-            created: "",
-            updated: "",
-            estimate: 0,
-            progress: 0.25,
-            children: []
-        },
-        {
-            key: "EPIC-PCT",
-            summary: "Percent progress",
-            type: "Epic",
-            status: "Open",
-            sprint: "",
-            assignee: "",
-            priority: "",
-            labels: [],
-            created: "",
-            updated: "",
-            estimate: 0,
-            progress: 80,
-            children: []
-        },
-        {
-            key: "EPIC-CLAMP",
-            summary: "Clamped progress",
-            type: "Epic",
-            status: "Open",
-            sprint: "",
-            assignee: "",
-            priority: "",
-            labels: [],
-            created: "",
-            updated: "",
-            estimate: 0,
-            progress: 150,
-            children: []
-        }
-    ];
-
-    rendering.init($c, {});
-    rendering.renderHeader();
-    rendering.renderTree(tree, "table", {});
-
-    var rows = $c.find(".ujg-sb-tr").toArray();
-    var fracCell = rows[0].children[2];
-    var pctCell = rows[1].children[2];
-    var clampCell = rows[2].children[2];
-
-    assert.match(nodeText(fracCell), /25%/);
-    assert.match(nodeText(pctCell), /80%/);
-    assert.match(nodeText(clampCell), /100%/);
-
-    assert.equal(fracCell.children[0].children[0].children[0].style.width, "25%");
-    assert.equal(pctCell.children[0].children[0].children[0].style.width, "80%");
-    assert.equal(clampCell.children[0].children[0].children[0].style.width, "100%");
-});
 
 test("view mode and expand or collapse callbacks fire when buttons clicked", function() {
     var documentNode = createNode("document");
