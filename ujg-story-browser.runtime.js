@@ -470,6 +470,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
 
     var CONFIG = config;
     var JQL_KEY_CHUNK_SIZE = 100;
+    var STORY_SEARCH_MAX_RESULTS = 1000;
 
     function resolvedPromise(value) {
         var d = $.Deferred();
@@ -539,7 +540,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
     }
 
     function buildProjectEpicsJql(projectKey) {
-        return "project = " + toJqlToken(projectKey) + " AND issuetype = " + CONFIG.EPIC_ISSUE_TYPE + " ORDER BY key ASC";
+        return "project = " + toJqlToken(projectKey) + " AND issuetype = " + CONFIG.EPIC_ISSUE_TYPE + " ORDER BY key DESC";
     }
 
     function buildStoriesForEpicKeysJql(projectKey, epicKeys, fieldConfig) {
@@ -552,7 +553,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
             epicLinkJqlField(fieldConfig) +
             " in (" +
             (epicKeys || []).map(toJqlToken).join(", ") +
-            ") ORDER BY key ASC"
+            ") ORDER BY key DESC"
         );
     }
 
@@ -576,7 +577,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return chunks;
     }
 
-    function searchChunked(values, buildJql, onProgress, fieldConfig) {
+    function searchChunked(values, buildJql, onProgress, fieldConfig, maxResults) {
         var safeValues = normalizeKeyList(values);
         var chunks = chunkValues(safeValues, JQL_KEY_CHUNK_SIZE);
         var d = $.Deferred();
@@ -596,7 +597,8 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 onProgress ? function(loaded, total, partial) {
                     onProgress(all.length + loaded, all.length + total, all.concat(partial));
                 } : null,
-                fieldConfig
+                fieldConfig,
+                maxResults
             ).then(
                 function(batch) {
                     all = all.concat(batch || []);
@@ -616,10 +618,11 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return d.promise();
     }
 
-    function searchIssues(jql, onProgress, fieldConfig) {
+    function searchIssues(jql, onProgress, fieldConfig, maxResults) {
         var d = $.Deferred();
         var all = [];
         var fields = buildSearchFields(fieldConfig);
+        var pageSize = Number(maxResults) > 0 ? Number(maxResults) : 100;
 
         function load(startAt) {
             $.ajax({
@@ -630,7 +633,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                     jql: jql,
                     fields: fields,
                     expand: ["changelog"],
-                    maxResults: 100,
+                    maxResults: pageSize,
                     startAt: startAt
                 })
             }).then(
@@ -816,7 +819,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
             }
             return searchChunked(epicKeys, function(keys) {
                 return buildStoriesForEpicKeysJql(projectKey, keys, fieldConfig);
-            }, onProgress, fieldConfig);
+            }, onProgress, fieldConfig, STORY_SEARCH_MAX_RESULTS);
         },
         getIssuesByKeys: function(issueKeys, onProgress, fieldConfig) {
             if (!issueKeys || !issueKeys.length) {
@@ -833,19 +836,19 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
 
     var CONFIG = config;
 
-    function compareIssueKeys(a, b) {
-        function parseKey(value) {
-            var text = typeof value === "string" ? value : value && value.key != null ? String(value.key) : "";
-            var match = /^(.*?)-(\d+)$/.exec(text);
-            return {
-                raw: text,
-                prefix: match ? match[1] : text,
-                number: match ? Number(match[2]) : Number.NaN
-            };
-        }
+    function parseIssueKey(value) {
+        var text = typeof value === "string" ? value : value && value.key != null ? String(value.key) : "";
+        var match = /^(.*?)-(\d+)$/.exec(text);
+        return {
+            raw: text,
+            prefix: match ? match[1] : text,
+            number: match ? Number(match[2]) : Number.NaN
+        };
+    }
 
-        var left = parseKey(a);
-        var right = parseKey(b);
+    function compareIssueKeys(a, b) {
+        var left = parseIssueKey(a);
+        var right = parseIssueKey(b);
         var prefixCmp = left.prefix.localeCompare(right.prefix);
         if (prefixCmp !== 0) {
             return prefixCmp;
@@ -854,6 +857,15 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             return left.number - right.number;
         }
         return left.raw.localeCompare(right.raw);
+    }
+
+    function compareNewestIssueKeys(a, b) {
+        var left = parseIssueKey(a);
+        var right = parseIssueKey(b);
+        if (left.prefix === right.prefix && isFinite(left.number) && isFinite(right.number) && left.number !== right.number) {
+            return right.number - left.number;
+        }
+        return compareIssueKeys(a, b);
     }
 
     function buildBrowseUrl(baseUrl, key) {
@@ -1252,9 +1264,9 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             storiesByEpic[epicKey].push(story);
         });
 
-        roots.sort(compareIssueKeys);
+        roots.sort(compareNewestIssueKeys);
         roots.forEach(function(epic) {
-            epic.children = (storiesByEpic[epic.key] || []).sort(compareIssueKeys);
+            epic.children = (storiesByEpic[epic.key] || []).sort(compareNewestIssueKeys);
             aggregate(epic);
             assignProblemItems(epic);
         });
@@ -1325,9 +1337,9 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
                 epicSeen[normKey] = true;
                 epics.push(epic);
             });
-            epics.sort(compareIssueKeys);
+            epics.sort(compareNewestIssueKeys);
         } else {
-            epics.sort(compareIssueKeys);
+            epics.sort(compareNewestIssueKeys);
         }
         return {
             statuses: Object.keys(statusSet),

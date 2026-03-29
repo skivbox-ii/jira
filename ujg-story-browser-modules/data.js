@@ -3,19 +3,19 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
 
     var CONFIG = config;
 
-    function compareIssueKeys(a, b) {
-        function parseKey(value) {
-            var text = typeof value === "string" ? value : value && value.key != null ? String(value.key) : "";
-            var match = /^(.*?)-(\d+)$/.exec(text);
-            return {
-                raw: text,
-                prefix: match ? match[1] : text,
-                number: match ? Number(match[2]) : Number.NaN
-            };
-        }
+    function parseIssueKey(value) {
+        var text = typeof value === "string" ? value : value && value.key != null ? String(value.key) : "";
+        var match = /^(.*?)-(\d+)$/.exec(text);
+        return {
+            raw: text,
+            prefix: match ? match[1] : text,
+            number: match ? Number(match[2]) : Number.NaN
+        };
+    }
 
-        var left = parseKey(a);
-        var right = parseKey(b);
+    function compareIssueKeys(a, b) {
+        var left = parseIssueKey(a);
+        var right = parseIssueKey(b);
         var prefixCmp = left.prefix.localeCompare(right.prefix);
         if (prefixCmp !== 0) {
             return prefixCmp;
@@ -24,6 +24,15 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             return left.number - right.number;
         }
         return left.raw.localeCompare(right.raw);
+    }
+
+    function compareNewestIssueKeys(a, b) {
+        var left = parseIssueKey(a);
+        var right = parseIssueKey(b);
+        if (left.prefix === right.prefix && isFinite(left.number) && isFinite(right.number) && left.number !== right.number) {
+            return right.number - left.number;
+        }
+        return compareIssueKeys(a, b);
     }
 
     function buildBrowseUrl(baseUrl, key) {
@@ -422,9 +431,9 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             storiesByEpic[epicKey].push(story);
         });
 
-        roots.sort(compareIssueKeys);
+        roots.sort(compareNewestIssueKeys);
         roots.forEach(function(epic) {
-            epic.children = (storiesByEpic[epic.key] || []).sort(compareIssueKeys);
+            epic.children = (storiesByEpic[epic.key] || []).sort(compareNewestIssueKeys);
             aggregate(epic);
             assignProblemItems(epic);
         });
@@ -495,9 +504,9 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
                 epicSeen[normKey] = true;
                 epics.push(epic);
             });
-            epics.sort(compareIssueKeys);
+            epics.sort(compareNewestIssueKeys);
         } else {
-            epics.sort(compareIssueKeys);
+            epics.sort(compareNewestIssueKeys);
         }
         return {
             statuses: Object.keys(statusSet),

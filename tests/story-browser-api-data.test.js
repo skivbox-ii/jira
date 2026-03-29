@@ -522,7 +522,7 @@ test("getProjectEpics posts epic-only search", async function() {
     const config = loadConfig(mockWindow());
     const jquery = createJqueryStub(function(options) {
         const body = JSON.parse(options.data);
-        assert.equal(body.jql, "project = DEMO AND issuetype = Epic ORDER BY key ASC");
+        assert.equal(body.jql, "project = DEMO AND issuetype = Epic ORDER BY key DESC");
         assert.equal(body.fields.includes("issuelinks"), true);
         assert.equal(body.expand[0], "changelog");
         return resolvedAjax({ total: 0, issues: [] });
@@ -573,8 +573,9 @@ test("getStoriesForEpicKeys posts story search scoped by epic link field", async
         const body = JSON.parse(options.data);
         assert.equal(
             body.jql,
-            "project = DEMO AND issuetype = Story AND cf[10014] in (DEMO-2, DEMO-10) ORDER BY key ASC"
+            "project = DEMO AND issuetype = Story AND cf[10014] in (DEMO-2, DEMO-10) ORDER BY key DESC"
         );
+        assert.equal(body.maxResults, 1000);
         return resolvedAjax({ total: 0, issues: [] });
     });
     const api = loadApiWithConfig(jquery, config);
@@ -590,10 +591,11 @@ test("getStoriesForEpicKeys uses detected epic link field override", async funct
         const body = JSON.parse(options.data);
         assert.equal(
             body.jql,
-            "project = DEMO AND issuetype = Story AND cf[10008] in (DEMO-2) ORDER BY key ASC"
+            "project = DEMO AND issuetype = Story AND cf[10008] in (DEMO-2) ORDER BY key DESC"
         );
         assert.equal(body.fields.includes("customfield_10008"), true);
         assert.equal(body.fields.includes("customfield_10014"), false);
+        assert.equal(body.maxResults, 1000);
         return resolvedAjax({ total: 0, issues: [] });
     });
     const api = loadApiWithConfig(jquery, config);
@@ -829,7 +831,7 @@ test("collectFilters keeps full epic catalog sorted by issue number", function()
         filters.epics.map(function(epic) {
             return epic.key;
         }).join("|"),
-        "E-2|E-10|E-20"
+        "E-20|E-10|E-2"
     );
     assert.equal(filters.sprints[0], "Sprint 42");
 });
