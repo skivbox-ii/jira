@@ -84,6 +84,14 @@ define("_ujgSB_config", [], function() {
     var CHILD_LINK_NAMES = ["child", "is_child"];
     var STORAGE_KEY = "ujg-sb-state";
 
+    var CREATE_TEMPLATE_ROLES = [
+        { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
+        { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
+        { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
+        { role: "QA", issueType: "QA", summary: "Тестирование" },
+        { role: "DO", issueType: "DevOps", summary: "Подготовка окружения / деплой" }
+    ];
+
     function trimSlash(s) {
         return s.replace(/\/+$/, "");
     }
@@ -125,6 +133,7 @@ define("_ujgSB_config", [], function() {
         EPIC_ISSUE_TYPE: EPIC_ISSUE_TYPE,
         STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
         CHILD_LINK_NAMES: CHILD_LINK_NAMES,
-        STORAGE_KEY: STORAGE_KEY
+        STORAGE_KEY: STORAGE_KEY,
+        CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES
     };
 });

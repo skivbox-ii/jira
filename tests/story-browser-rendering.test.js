@@ -353,13 +353,22 @@ test("mini jquery css supports getter and object setter without shadowing", func
     assert.equal($el.css("marginLeft"), "12px");
 });
 
+function loadCreateStory($, config) {
+    return loadAmdModule(path.join(MODULE_DIR, "create-story.js"), {
+        jquery: $,
+        _ujgSB_config: config
+    });
+}
+
 function loadRendering($, config, utils) {
+    var createStory = loadCreateStory($, config);
     return loadAmdModule(
         path.join(MODULE_DIR, "rendering.js"),
         {
             jquery: $,
             _ujgSB_config: config,
-            _ujgSB_utils: utils
+            _ujgSB_utils: utils,
+            "_ujgSB_create-story": createStory
         },
         {
             window: { document: { createElement: function() {} } }
@@ -888,6 +897,95 @@ test("rows view renders orphan bucket and nested non-epic descendants without le
     assert.equal(text.indexOf("__orphans__") >= 0, false);
 });
 
+
+test("header renders История button in actions area", function() {
+    var documentNode = createNode("document");
+    var $ = createMiniJquery(documentNode);
+    var config = loadConfig(mockWindow());
+    var utils = loadUtils(mockWindow());
+    var rendering = loadRendering($, config, utils);
+    var $c = $("<div/>");
+
+    rendering.init($c, {});
+    rendering.renderHeader();
+
+    var $btn = $c.find(".ujg-sb-open-history");
+    assert.equal($btn.length, 1);
+    assert.ok(nodeText($btn[0]).indexOf("История") >= 0);
+});
+
+test("clicking История calls onOpenCreateStory", function() {
+    var documentNode = createNode("document");
+    var $ = createMiniJquery(documentNode);
+    var config = loadConfig(mockWindow());
+    var utils = loadUtils(mockWindow());
+    var rendering = loadRendering($, config, utils);
+    var $c = $("<div/>");
+    var calls = 0;
+
+    rendering.init($c, {
+        onOpenCreateStory: function() {
+            calls += 1;
+        }
+    });
+    rendering.renderHeader();
+
+    $c.find(".ujg-sb-open-history").trigger("click");
+    assert.equal(calls, 1);
+});
+
+test("init creates dedicated popup host for modal mount", function() {
+    var documentNode = createNode("document");
+    var $ = createMiniJquery(documentNode);
+    var config = loadConfig(mockWindow());
+    var utils = loadUtils(mockWindow());
+    var rendering = loadRendering($, config, utils);
+    var $c = $("<div/>");
+    var draft = {
+        projectKey: "P1",
+        mode: "draft",
+        epic: { issueType: "Epic", summary: "", description: "", ui: { editing: false, isDescriptionOpen: false } },
+        story: { issueType: "Story", summary: "S", description: "", ui: { editing: false, isDescriptionOpen: false } },
+        children: [],
+        ui: {}
+    };
+
+    rendering.init($c, {});
+    assert.equal($c.find(".ujg-sb-popup-host").length, 1);
+
+    rendering.renderTree(sampleTree(), "table", { "EPIC-1": true });
+    rendering.renderCreateStoryModal(draft);
+
+    assert.equal($c.find(".ujg-sb-view-host").find(".ujg-sb-create-overlay").length, 0);
+    assert.equal($c.find(".ujg-sb-popup-host").find(".ujg-sb-create-overlay").length, 1);
+    assert.ok($c.find(".ujg-sb-view-host").text().indexOf("STORY-1") >= 0);
+});
+
+test("clearCreateStoryModal empties popup host without touching view host", function() {
+    var documentNode = createNode("document");
+    var $ = createMiniJquery(documentNode);
+    var config = loadConfig(mockWindow());
+    var utils = loadUtils(mockWindow());
+    var rendering = loadRendering($, config, utils);
+    var $c = $("<div/>");
+    var draft = {
+        projectKey: "P1",
+        mode: "draft",
+        epic: { issueType: "Epic", summary: "", description: "", ui: { editing: false, isDescriptionOpen: false } },
+        story: { issueType: "Story", summary: "S", description: "", ui: { editing: false, isDescriptionOpen: false } },
+        children: [],
+        ui: {}
+    };
+
+    rendering.init($c, {});
+    rendering.renderTree(sampleTree(), "table", { "EPIC-1": true });
+    rendering.renderCreateStoryModal(draft);
+    assert.equal($c.find(".ujg-sb-popup-host").find(".ujg-sb-create-overlay").length, 1);
+
+    rendering.clearCreateStoryModal();
+    assert.equal($c.find(".ujg-sb-popup-host").find(".ujg-sb-create-overlay").length, 0);
+    assert.ok($c.find(".ujg-sb-view-host").text().indexOf("STORY-1") >= 0);
+});
 
 test("view mode and expand or collapse callbacks fire when buttons clicked", function() {
     var documentNode = createNode("document");

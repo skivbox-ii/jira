@@ -209,3 +209,62 @@ test("standalone TEST_MODE mocks /rest/api/2/user/search locally", async functio
     emailAddress: "dtorzok@example.com"
   }]);
 });
+
+test("standalone TEST_MODE mocks /rest/api/2/project/:projectKey/components", async function() {
+  const routes = loadServerRoutes([], { TEST_MODE: "true" });
+  const handler = routes.get["/rest/api/2/project/:projectKey/components"];
+  const req = {
+    params: { projectKey: "CORE" },
+    session: {}
+  };
+  const res = createResponse();
+
+  assert.equal(typeof handler, "function");
+
+  await handler(req, res);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(res.getResult().jsonBody)), [
+    { id: "10000", name: "API" }
+  ]);
+});
+
+test("standalone TEST_MODE mocks /rest/api/2/issue/createmeta from projectKeys query", async function() {
+  const routes = loadServerRoutes([], { TEST_MODE: "true" });
+  const handler = routes.get["/rest/api/2/issue/createmeta"];
+
+  assert.equal(typeof handler, "function");
+
+  const reqMyproj = {
+    query: {
+      projectKeys: "MYPROJ",
+      expand: "projects.issuetypes.fields"
+    },
+    session: {}
+  };
+  const resMyproj = createResponse();
+  await handler(reqMyproj, resMyproj);
+  const bodyMyproj = JSON.parse(JSON.stringify(resMyproj.getResult().jsonBody));
+  assert.equal(bodyMyproj.projects.length, 1);
+  assert.equal(bodyMyproj.projects[0].key, "MYPROJ");
+  assert.equal(bodyMyproj.projects[0].issuetypes[0].name, "Story");
+  const fields = bodyMyproj.projects[0].issuetypes[0].fields;
+  assert.ok(fields.summary);
+  assert.equal(fields.summary.required, true);
+  assert.equal(fields.summary.name, "Summary");
+  assert.equal(fields.summary.schema.type, "string");
+  assert.ok(fields.labels);
+  assert.equal(fields.labels.required, false);
+  assert.equal(fields.labels.name, "Labels");
+  assert.equal(fields.labels.schema.type, "array");
+
+  const reqDefault = { query: {}, session: {} };
+  const resDefault = createResponse();
+  await handler(reqDefault, resDefault);
+  const bodyDefault = JSON.parse(JSON.stringify(resDefault.getResult().jsonBody));
+  assert.equal(bodyDefault.projects[0].key, "CORE");
+
+  const reqFirstKey = { query: { projectKeys: "ALPHA,BETA" }, session: {} };
+  const resFirst = createResponse();
+  await handler(reqFirstKey, resFirst);
+  assert.equal(JSON.parse(JSON.stringify(resFirst.getResult().jsonBody)).projects[0].key, "ALPHA");
+});

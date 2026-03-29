@@ -141,6 +141,44 @@ if (process.env.TEST_MODE === "true") {
   app.get("/rest/api/2/user/search", (req, res) => {
     res.json(getMockUsers(req.query.username, req.query.maxResults));
   });
+
+  app.get("/rest/api/2/project/:projectKey/components", (_req, res) => {
+    res.json([{ id: "10000", name: "API" }]);
+  });
+
+  const MOCK_CREATE_META_STORY_FIELDS = {
+    summary: {
+      required: true,
+      name: "Summary",
+      schema: { type: "string", system: "summary" },
+    },
+    labels: {
+      required: false,
+      name: "Labels",
+      schema: { type: "array", items: "string", system: "labels" },
+    },
+  };
+
+  app.get("/rest/api/2/issue/createmeta", (req, res) => {
+    const raw = req.query.projectKeys;
+    let projectKey = "CORE";
+    if (raw != null && String(raw).trim() !== "") {
+      projectKey = String(raw).split(",")[0].trim();
+    }
+    res.json({
+      projects: [
+        {
+          key: projectKey,
+          issuetypes: [
+            {
+              name: "Story",
+              fields: MOCK_CREATE_META_STORY_FIELDS,
+            },
+          ],
+        },
+      ],
+    });
+  });
 }
 
 // Proxy: forward raw body to avoid JSON re-serialization

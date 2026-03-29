@@ -1,4 +1,4 @@
-define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function($, config, utils) {
+define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils", "_ujgSB_create-story"], function($, config, utils, createStory) {
     "use strict";
 
     var $container;
@@ -6,6 +6,7 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
     var $headerHost;
     var $viewHost;
     var $progressHost;
+    var $popupHost;
     var currentViewMode = "table";
 
     function typeLabel(node) {
@@ -747,6 +748,9 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $headerHost.find(".ujg-sb-collapse-all").on("click", function() {
             if (services.onCollapseAll) services.onCollapseAll();
         });
+        $headerHost.find(".ujg-sb-open-history").on("click", function() {
+            if (services.onOpenCreateStory) services.onOpenCreateStory();
+        });
     }
 
     function renderHeader() {
@@ -787,6 +791,7 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         );
         var $actions = $("<div/>").addClass("ujg-sb-action-buttons");
         $actions.append(
+            $("<button type=\"button\"/>").addClass("ujg-sb-open-history rounded border border-border px-2 py-1 text-[10px]").text("История"),
             $("<button type=\"button\"/>").addClass("ujg-sb-expand-all rounded border border-border px-2 py-1 text-[10px]").text("Развернуть"),
             $("<button type=\"button\"/>").addClass("ujg-sb-collapse-all rounded border border-border px-2 py-1 text-[10px]").text("Свернуть")
         );
@@ -854,6 +859,32 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         );
     }
 
+    function renderCreateStoryModal(draft) {
+        if (!$popupHost || !$popupHost.length || !createStory || !createStory.renderCreateModal) {
+            return;
+        }
+        var ctx = {
+            api: services.api,
+            onClose: services.onCloseCreateStory,
+            onSubmit: services.onSubmitCreateStory,
+            isDraftActive: function() {
+                return !!(services.state && services.state.createStory && services.state.createStory.isOpen && services.state.createStory.draft === draft);
+            },
+            getEpicOptions: function() {
+                var fo = services.state && services.state.filterOptions;
+                return (fo && fo.epics) || [];
+            }
+        };
+        createStory.renderCreateModal($popupHost, draft, ctx);
+    }
+
+    function clearCreateStoryModal() {
+        if (!$popupHost || !$popupHost.length) {
+            return;
+        }
+        $popupHost.empty();
+    }
+
     function init($c, svc) {
         $container = $c;
         services = svc || {};
@@ -863,7 +894,8 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $headerHost = $("<header/>").addClass("ujg-sb-header");
         $progressHost = $("<div/>").addClass("ujg-sb-progress-host");
         $viewHost = $("<div/>").addClass("ujg-sb-view-host");
-        $root.append($headerHost, $progressHost, $viewHost);
+        $popupHost = $("<div/>").addClass("ujg-sb-popup-host");
+        $root.append($headerHost, $progressHost, $viewHost, $popupHost);
         $c.append($root);
     }
 
@@ -871,6 +903,8 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         init: init,
         renderHeader: renderHeader,
         renderTree: renderTree,
-        renderProgress: renderProgress
+        renderProgress: renderProgress,
+        renderCreateStoryModal: renderCreateStoryModal,
+        clearCreateStoryModal: clearCreateStoryModal
     };
 });

@@ -89,6 +89,14 @@ define("_ujgSB_config", [], function() {
     var CHILD_LINK_NAMES = ["child", "is_child"];
     var STORAGE_KEY = "ujg-sb-state";
 
+    var CREATE_TEMPLATE_ROLES = [
+        { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
+        { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
+        { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
+        { role: "QA", issueType: "QA", summary: "Тестирование" },
+        { role: "DO", issueType: "DevOps", summary: "Подготовка окружения / деплой" }
+    ];
+
     function trimSlash(s) {
         return s.replace(/\/+$/, "");
     }
@@ -130,7 +138,8 @@ define("_ujgSB_config", [], function() {
         EPIC_ISSUE_TYPE: EPIC_ISSUE_TYPE,
         STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
         CHILD_LINK_NAMES: CHILD_LINK_NAMES,
-        STORAGE_KEY: STORAGE_KEY
+        STORAGE_KEY: STORAGE_KEY,
+        CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES
     };
 });
 
@@ -718,6 +727,23 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         };
     }
 
+    function projectEqualsClause(projectKey) {
+        var value = String(projectKey);
+        if (/^[A-Za-z0-9_]+$/.test(value)) {
+            return "project = " + value;
+        }
+        return "project = " + quoteJqlString(value);
+    }
+
+    function buildLabelSearchJql(projectKey, query) {
+        var clause = projectEqualsClause(projectKey);
+        var q = String(query || "").trim();
+        if (q) {
+            return clause + " AND labels ~ " + quoteJqlString(q) + " ORDER BY updated DESC";
+        }
+        return clause + " ORDER BY updated DESC";
+    }
+
     return {
         getProjects: function() {
             return $.ajax({
@@ -727,6 +753,57 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         },
         getFieldMetadata: getFieldMetadata,
         detectFieldConfig: detectFieldConfig,
+        getProjectCreateMeta: function(projectKey) {
+            return $.ajax({
+                url: CONFIG.baseUrl + "/rest/api/2/issue/createmeta",
+                type: "GET",
+                dataType: "json",
+                data: {
+                    projectKeys: String(projectKey || ""),
+                    expand: "projects.issuetypes.fields"
+                }
+            });
+        },
+        getProjectComponents: function(projectKey) {
+            return $.ajax({
+                url: CONFIG.baseUrl + "/rest/api/2/project/" + encodeURIComponent(projectKey) + "/components",
+                type: "GET",
+                dataType: "json"
+            });
+        },
+        searchUsers: function(query) {
+            return $.ajax({
+                url: CONFIG.baseUrl + "/rest/api/2/user/picker",
+                type: "GET",
+                dataType: "json",
+                data: {
+                    query: String(query || ""),
+                    maxResults: 10
+                }
+            });
+        },
+        searchLabels: function(projectKey, query) {
+            return $.ajax({
+                url: CONFIG.baseUrl + "/rest/api/2/search",
+                type: "POST",
+                contentType: "application/json",
+                dataType: "json",
+                data: JSON.stringify({
+                    jql: buildLabelSearchJql(projectKey, query),
+                    fields: ["labels"],
+                    maxResults: 50
+                })
+            });
+        },
+        createIssue: function(payload) {
+            return $.ajax({
+                url: CONFIG.baseUrl + "/rest/api/2/issue",
+                type: "POST",
+                contentType: "application/json",
+                dataType: "json",
+                data: JSON.stringify(payload)
+            });
+        },
         getProjectIssues: function(projectKey, onProgress) {
             return searchIssues(buildProjectJql(projectKey), onProgress);
         },
@@ -1386,8 +1463,915 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
     };
 });
 
+/* === Module: create-story.js === */
+define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
+    "use strict";
+
+    var CREATE_TEMPLATE_ROLES = config.CREATE_TEMPLATE_ROLES || [];
+    var EPIC_LINK_FIELD = config.EPIC_LINK_FIELD || "customfield_10014";
+
+    function makeNode(issueType, summary) {
+        return {
+            issueType: issueType,
+            summary: summary != null ? String(summary) : "",
+            description: "",
+            assignee: null,
+            estimate: null,
+            components: [],
+            labels: [],
+            createdKey: null,
+            errors: [],
+            ui: { editing: false, isDescriptionOpen: false }
+        };
+    }
+
+    function makeDefaultDraft(projectKey) {
+        var key = projectKey != null ? String(projectKey) : "";
+        var children = CREATE_TEMPLATE_ROLES.map(function(row) {
+            return makeNode(row.issueType, row.summary);
+        });
+        return {
+            projectKey: key,
+            mode: "draft",
+            epicMode: "newEpic",
+            existingEpicKey: "",
+            epic: makeNode("Epic", ""),
+            story: makeNode("Story", ""),
+            children: children,
+            ui: {
+                formErrors: [],
+                selector: null,
+                selectorQuery: "",
+                selectorRows: [],
+                selectorLoading: false,
+                selectorOpSeq: 0,
+                selectorError: "",
+                submitting: false
+            }
+        };
+    }
+
+    function toggleDescription(node) {
+        if (!node || !node.ui) {
+            return;
+        }
+        node.ui.isDescriptionOpen = !node.ui.isDescriptionOpen;
+    }
+
+    function isBlankSummary(summary) {
+        return !String(summary != null ? summary : "").trim();
+    }
+
+    function normalizeUserSearchRows(body) {
+        var users = (body && body.users) || [];
+        return users.map(function(u) {
+            if (!u || typeof u !== "object") {
+                return { id: "", label: "" };
+            }
+            var name = u.name != null ? String(u.name) : "";
+            var dn = u.displayName != null ? String(u.displayName) : name;
+            return {
+                id: name,
+                label: dn || name,
+                raw: u
+            };
+        });
+    }
+
+    function normalizeComponentRows(list) {
+        var arr = Array.isArray(list) ? list : [];
+        return arr.map(function(c) {
+            if (!c) {
+                return { id: "", label: "" };
+            }
+            var name = c.name != null ? String(c.name) : String(c.id != null ? c.id : "");
+            return { id: name, label: name, raw: c };
+        });
+    }
+
+    function normalizeLabelSearchRows(body) {
+        var issues = (body && body.issues) || [];
+        var seen = {};
+        var out = [];
+        issues.forEach(function(issue) {
+            var labels = (issue.fields && issue.fields.labels) || [];
+            labels.forEach(function(lab) {
+                var s = String(lab);
+                if (s && !seen[s]) {
+                    seen[s] = true;
+                    out.push({ id: s, label: s, raw: lab });
+                }
+            });
+        });
+        return out;
+    }
+
+    function hasSubmitValidationErrors(draft) {
+        if (!draft) {
+            return true;
+        }
+        if ((draft.ui.formErrors || []).length) {
+            return true;
+        }
+        var rows = [draft.epic, draft.story].concat(draft.children || []);
+        return rows.some(function(row) {
+            return row && row.errors && row.errors.length;
+        });
+    }
+
+    function validateDraft(draft, context) {
+        if (!draft) {
+            return;
+        }
+        var purpose = context && context.purpose ? String(context.purpose) : "";
+        var rows = [draft.epic, draft.story].concat(draft.children || []);
+        rows.forEach(function(row) {
+            if (row) {
+                row.errors = [];
+            }
+        });
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        draft.ui.formErrors = [];
+
+        if (draft.epicMode === "newEpic") {
+            if (draft.epic && isBlankSummary(draft.epic.summary)) {
+                draft.epic.errors.push("Summary is required");
+            }
+        } else if (draft.epicMode === "existingEpic") {
+            if (!String(draft.existingEpicKey != null ? draft.existingEpicKey : "").trim()) {
+                draft.ui.formErrors.push("Выберите эпик");
+            }
+        }
+
+        if (draft.story && isBlankSummary(draft.story.summary)) {
+            draft.story.errors.push("Summary is required");
+        }
+        (draft.children || []).forEach(function(child) {
+            if (child && isBlankSummary(child.summary)) {
+                child.errors.push("Summary is required");
+            }
+        });
+
+        if (purpose !== "submit") {
+            if (draft.epicMode === "existingEpic") {
+                draft.epic.errors = [];
+            }
+        }
+    }
+
+    function draftRows(draft) {
+        var rows = [];
+        if (draft.epicMode !== "existingEpic") {
+            rows.push({ key: "epic", node: draft.epic });
+        }
+        rows.push({ key: "story", node: draft.story });
+        (draft.children || []).forEach(function(child, i) {
+            rows.push({ key: "child-" + i, node: child });
+        });
+        return rows;
+    }
+
+    function clearAllSummaryEditing(draft) {
+        draftRows(draft).forEach(function(r) {
+            if (r.node && r.node.ui) {
+                r.node.ui.editing = false;
+            }
+        });
+    }
+
+    function rowClassSuffix(key) {
+        return String(key || "").replace(/[^a-zA-Z0-9-]/g, "-");
+    }
+
+    function descriptionToggleLabel(node) {
+        return node && node.ui && node.ui.isDescriptionOpen ? "- описание" : "+ описание";
+    }
+
+    function formatAjaxError(err) {
+        if (!err) {
+            return "Request failed";
+        }
+        var j = err.responseJSON;
+        if (j && j.errorMessages && j.errorMessages.length) {
+            return j.errorMessages.join(" ");
+        }
+        if (err.statusText) {
+            return String(err.statusText);
+        }
+        return "Request failed";
+    }
+
+    function extractCreatedKey(res) {
+        var k = res && res.key != null ? String(res.key).trim() : "";
+        return k;
+    }
+
+    function buildIssueFields(projectKey, node, issueTypeName, extra) {
+        var fields = {
+            project: { key: String(projectKey || "") },
+            summary: String(node.summary || "").trim(),
+            issuetype: { name: String(issueTypeName || "") },
+            description: node.description != null ? String(node.description) : ""
+        };
+        if (node.assignee && typeof node.assignee === "object") {
+            if (node.assignee.accountId != null && String(node.assignee.accountId).trim()) {
+                fields.assignee = { accountId: String(node.assignee.accountId).trim() };
+            } else if (node.assignee.name != null && String(node.assignee.name).trim()) {
+                fields.assignee = { name: String(node.assignee.name).trim() };
+            }
+        }
+        var comps = node.components || [];
+        if (comps.length) {
+            fields.components = comps.map(function(c) {
+                if (typeof c === "string") {
+                    return { name: c };
+                }
+                var nm = c && c.name != null ? String(c.name) : "";
+                return { name: nm };
+            });
+        }
+        var labs = node.labels || [];
+        if (labs.length) {
+            fields.labels = labs.map(function(l) {
+                if (typeof l === "string") {
+                    return l;
+                }
+                return l && l.name != null ? String(l.name) : String(l.id != null ? l.id : "");
+            });
+        }
+        extra = extra || {};
+        if (extra.parentKey) {
+            fields.parent = { key: String(extra.parentKey) };
+        }
+        if (extra.epicKey && EPIC_LINK_FIELD) {
+            fields[EPIC_LINK_FIELD] = { key: String(extra.epicKey) };
+        }
+        return fields;
+    }
+
+    function createChildrenSequential(api, draft, startIndex) {
+        var children = draft.children || [];
+        if (startIndex >= children.length) {
+            return Promise.resolve({ ok: true });
+        }
+        var ch = children[startIndex];
+        if (ch.createdKey || isBlankSummary(ch.summary)) {
+            return createChildrenSequential(api, draft, startIndex + 1);
+        }
+        ch.errors = [];
+        var fields = buildIssueFields(draft.projectKey, ch, ch.issueType, {
+            parentKey: draft.story.createdKey
+        });
+        return Promise.resolve(api.createIssue({ fields: fields })).then(
+            function(res) {
+                var ck = extractCreatedKey(res);
+                if (!ck) {
+                    ch.errors.push("Invalid create response (missing issue key)");
+                    return { ok: false };
+                }
+                ch.createdKey = ck;
+                return createChildrenSequential(api, draft, startIndex + 1);
+            },
+            function(err) {
+                ch.errors.push(formatAjaxError(err));
+                return { ok: false };
+            }
+        );
+    }
+
+    function submitCreateDraft(api, draft) {
+        if (!api || !draft) {
+            return Promise.resolve({ ok: false });
+        }
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        if (draft.ui.submitting) {
+            return Promise.resolve({ ok: false, skipped: true });
+        }
+        draft.ui.submitting = true;
+
+        function finish(out) {
+            draft.ui.submitting = false;
+            return out;
+        }
+
+        function epicKeyResolved() {
+            if (draft.epicMode === "existingEpic") {
+                return String(draft.existingEpicKey != null ? draft.existingEpicKey : "").trim();
+            }
+            return draft.epic && draft.epic.createdKey ? String(draft.epic.createdKey) : "";
+        }
+
+        var p = Promise.resolve({ ok: true });
+
+        p = p.then(function(prev) {
+            if (!prev || prev.ok === false) {
+                return prev;
+            }
+            if (draft.epicMode !== "newEpic") {
+                return { ok: true };
+            }
+            if (draft.epic.createdKey) {
+                return { ok: true };
+            }
+            var ef = buildIssueFields(draft.projectKey, draft.epic, "Epic", {});
+            return Promise.resolve(api.createIssue({ fields: ef })).then(
+                function(res) {
+                    var ek = extractCreatedKey(res);
+                    if (!ek) {
+                        draft.epic.errors.push("Invalid create response (missing issue key)");
+                        return { ok: false };
+                    }
+                    draft.epic.createdKey = ek;
+                    return { ok: true };
+                },
+                function(err) {
+                    draft.epic.errors.push(formatAjaxError(err));
+                    return { ok: false };
+                }
+            );
+        });
+
+        p = p.then(function(prev) {
+            if (!prev || prev.ok === false) {
+                return prev;
+            }
+            var ek = epicKeyResolved();
+            if (draft.story.createdKey) {
+                return { ok: true };
+            }
+            var sf = buildIssueFields(draft.projectKey, draft.story, "Story", { epicKey: ek });
+            return Promise.resolve(api.createIssue({ fields: sf })).then(
+                function(res) {
+                    var sk = extractCreatedKey(res);
+                    if (!sk) {
+                        draft.story.errors.push("Invalid create response (missing issue key)");
+                        return { ok: false };
+                    }
+                    draft.story.createdKey = sk;
+                    return { ok: true };
+                },
+                function(err) {
+                    draft.story.errors.push(formatAjaxError(err));
+                    return { ok: false };
+                }
+            );
+        });
+
+        p = p.then(function(prev) {
+            if (!prev || prev.ok === false) {
+                return prev;
+            }
+            return createChildrenSequential(api, draft, 0);
+        });
+
+        return p.then(
+            function(result) {
+                if (result && result.ok === false) {
+                    return finish({ ok: false });
+                }
+                return finish({ ok: true });
+            },
+            function() {
+                return finish({ ok: false });
+            }
+        );
+    }
+
+    function closeSelector(draft) {
+        if (!draft.ui) {
+            return;
+        }
+        draft.ui.selectorOpSeq = (draft.ui.selectorOpSeq || 0) + 1;
+        draft.ui.selector = null;
+        draft.ui.selectorQuery = "";
+        draft.ui.selectorRows = [];
+        draft.ui.selectorLoading = false;
+        draft.ui.selectorError = "";
+    }
+
+    function applySelectorFailure($mount, draft, ctx, seq, startKind, startRowKey, err) {
+        if (!selectorResponseStillValid(draft, ctx, seq, startKind, startRowKey)) {
+            return;
+        }
+        if (!draft.ui) {
+            return;
+        }
+        draft.ui.selectorLoading = false;
+        draft.ui.selectorError = formatAjaxError(err);
+        draft.ui.selectorRows = [];
+        renderCreateModal($mount, draft, ctx);
+    }
+
+    function selectorResponseStillValid(draft, ctx, seq, startKind, startRowKey) {
+        if (!draft || !draft.ui) {
+            return false;
+        }
+        if (ctx && typeof ctx.isDraftActive === "function" && !ctx.isDraftActive()) {
+            return false;
+        }
+        var sel = draft.ui.selector;
+        if (!sel || sel.kind !== startKind || sel.rowKey !== startRowKey) {
+            return false;
+        }
+        if (seq !== draft.ui.selectorOpSeq) {
+            return false;
+        }
+        return true;
+    }
+
+    function openSelector(draft, rowKey, kind) {
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        draft.ui.selector = { rowKey: rowKey, kind: kind };
+        draft.ui.selectorQuery = "";
+        draft.ui.selectorRows = [];
+        draft.ui.selectorError = "";
+    }
+
+    function rowNodeByKey(draft, rowKey) {
+        if (rowKey === "epic") {
+            return draft.epic;
+        }
+        if (rowKey === "story") {
+            return draft.story;
+        }
+        var m = /^child-(\d+)$/.exec(String(rowKey || ""));
+        if (m) {
+            return (draft.children || [])[Number(m[1])];
+        }
+        return null;
+    }
+
+    function renderSelectorPanel($mount, draft, ctx, rowKey) {
+        var ui = draft.ui || {};
+        var sel = ui.selector;
+        if (!sel || sel.rowKey !== rowKey || !ctx || !ctx.api) {
+            return null;
+        }
+        var $panel = $("<div/>").addClass("ujg-sb-create-selector-panel");
+        var $inp = $("<input/>")
+            .attr("type", "text")
+            .addClass("ujg-sb-inline-editor ujg-sb-create-selector-search")
+            .val(ui.selectorQuery || "");
+        $inp.on("click", function(ev) {
+            if (ev.stopPropagation) {
+                ev.stopPropagation();
+            }
+        });
+        $inp.on("input", function() {
+            var q = $inp.val();
+            draft.ui.selectorQuery = q;
+            var kind = sel.kind;
+            var pk = draft.projectKey;
+            var startKind = kind;
+            var startRowKey = rowKey;
+            draft.ui.selectorOpSeq = (draft.ui.selectorOpSeq || 0) + 1;
+            var seq = draft.ui.selectorOpSeq;
+            draft.ui.selectorError = "";
+            if (kind === "assignee") {
+                draft.ui.selectorLoading = true;
+                Promise.resolve(ctx.api.searchUsers(q)).then(
+                    function(body) {
+                        if (!selectorResponseStillValid(draft, ctx, seq, startKind, startRowKey)) {
+                            return;
+                        }
+                        draft.ui.selectorRows = normalizeUserSearchRows(body);
+                        draft.ui.selectorLoading = false;
+                        draft.ui.selectorError = "";
+                        renderCreateModal($mount, draft, ctx);
+                    },
+                    function(err) {
+                        applySelectorFailure($mount, draft, ctx, seq, startKind, startRowKey, err);
+                    }
+                );
+            } else if (kind === "component") {
+                Promise.resolve(ctx.api.getProjectComponents(pk)).then(
+                    function(raw) {
+                        if (!selectorResponseStillValid(draft, ctx, seq, startKind, startRowKey)) {
+                            return;
+                        }
+                        var all = normalizeComponentRows(raw);
+                        var qq = String(q || "").toLowerCase();
+                        draft.ui.selectorRows = all.filter(function(r) {
+                            return !qq || String(r.label || "").toLowerCase().indexOf(qq) >= 0;
+                        });
+                        draft.ui.selectorError = "";
+                        renderCreateModal($mount, draft, ctx);
+                    },
+                    function(err) {
+                        applySelectorFailure($mount, draft, ctx, seq, startKind, startRowKey, err);
+                    }
+                );
+            } else if (kind === "label") {
+                Promise.resolve(ctx.api.searchLabels(pk, q)).then(
+                    function(body) {
+                        if (!selectorResponseStillValid(draft, ctx, seq, startKind, startRowKey)) {
+                            return;
+                        }
+                        draft.ui.selectorRows = normalizeLabelSearchRows(body);
+                        draft.ui.selectorError = "";
+                        renderCreateModal($mount, draft, ctx);
+                    },
+                    function(err) {
+                        applySelectorFailure($mount, draft, ctx, seq, startKind, startRowKey, err);
+                    }
+                );
+            }
+        });
+        $panel.append($inp);
+        if (ui.selectorLoading) {
+            $panel.append($("<div/>").addClass("ujg-sb-create-selector-loading").text("…"));
+        }
+        if (ui.selectorError) {
+            $panel.append(
+                $("<div/>")
+                    .addClass("ujg-sb-create-selector-error")
+                    .text(String(ui.selectorError))
+            );
+        }
+        (ui.selectorRows || []).forEach(function(row) {
+            var $opt = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-create-selector-option")
+                .text(row.label || row.id || "");
+            $opt.on("click", function() {
+                var node = rowNodeByKey(draft, rowKey);
+                if (!node) {
+                    return;
+                }
+                if (sel.kind === "assignee") {
+                    node.assignee = row.raw && typeof row.raw === "object" ? row.raw : { name: row.id, displayName: row.label };
+                } else if (sel.kind === "component") {
+                    var nm = row.id || row.label;
+                    if (nm && !node.components.some(function(c) {
+                        return (typeof c === "string" ? c : c.name) === nm;
+                    })) {
+                        node.components.push({ name: nm });
+                    }
+                } else if (sel.kind === "label") {
+                    var lb = row.id || row.label;
+                    if (lb && node.labels.indexOf(lb) < 0) {
+                        node.labels.push(lb);
+                    }
+                }
+                closeSelector(draft);
+                renderCreateModal($mount, draft, ctx);
+            });
+            $panel.append($opt);
+        });
+        setTimeout(function() {
+            $inp.trigger("focus");
+        }, 0);
+        if (
+            sel.kind === "assignee" &&
+            !(ui.selectorRows && ui.selectorRows.length) &&
+            !ui.selectorLoading &&
+            !ui.selectorError
+        ) {
+            draft.ui.selectorOpSeq = (draft.ui.selectorOpSeq || 0) + 1;
+            var seqA = draft.ui.selectorOpSeq;
+            var skA = sel.kind;
+            var srA = rowKey;
+            draft.ui.selectorLoading = true;
+            draft.ui.selectorError = "";
+            Promise.resolve(ctx.api.searchUsers("")).then(
+                function(body) {
+                    if (!selectorResponseStillValid(draft, ctx, seqA, skA, srA)) {
+                        return;
+                    }
+                    draft.ui.selectorRows = normalizeUserSearchRows(body);
+                    draft.ui.selectorLoading = false;
+                    draft.ui.selectorError = "";
+                    renderCreateModal($mount, draft, ctx);
+                },
+                function(err) {
+                    applySelectorFailure($mount, draft, ctx, seqA, skA, srA, err);
+                }
+            );
+        }
+        if (sel.kind === "component" && !(ui.selectorRows && ui.selectorRows.length) && !ui.selectorError) {
+            draft.ui.selectorOpSeq = (draft.ui.selectorOpSeq || 0) + 1;
+            var seqC = draft.ui.selectorOpSeq;
+            var skC = sel.kind;
+            var srC = rowKey;
+            draft.ui.selectorError = "";
+            Promise.resolve(ctx.api.getProjectComponents(draft.projectKey)).then(
+                function(raw) {
+                    if (!selectorResponseStillValid(draft, ctx, seqC, skC, srC)) {
+                        return;
+                    }
+                    draft.ui.selectorRows = normalizeComponentRows(raw);
+                    draft.ui.selectorError = "";
+                    renderCreateModal($mount, draft, ctx);
+                },
+                function(err) {
+                    applySelectorFailure($mount, draft, ctx, seqC, skC, srC, err);
+                }
+            );
+        }
+        if (sel.kind === "label" && !(ui.selectorRows && ui.selectorRows.length) && !ui.selectorError) {
+            draft.ui.selectorOpSeq = (draft.ui.selectorOpSeq || 0) + 1;
+            var seqL = draft.ui.selectorOpSeq;
+            var skL = sel.kind;
+            var srL = rowKey;
+            draft.ui.selectorError = "";
+            Promise.resolve(ctx.api.searchLabels(draft.projectKey, "")).then(
+                function(body) {
+                    if (!selectorResponseStillValid(draft, ctx, seqL, skL, srL)) {
+                        return;
+                    }
+                    draft.ui.selectorRows = normalizeLabelSearchRows(body);
+                    draft.ui.selectorError = "";
+                    renderCreateModal($mount, draft, ctx);
+                },
+                function(err) {
+                    applySelectorFailure($mount, draft, ctx, seqL, skL, srL, err);
+                }
+            );
+        }
+        return $panel;
+    }
+
+    function renderCreateModal($mount, draft, ctx) {
+        if (!$mount || !draft) {
+            return;
+        }
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        if (draft.ui.selectorError == null) {
+            draft.ui.selectorError = "";
+        }
+        ctx = ctx || {};
+        $mount.empty();
+        $mount.addClass("ujg-sb-popup-host");
+        var $overlay = $("<div/>").addClass("ujg-sb-create-overlay");
+        var $dialog = $("<div/>").addClass("ujg-sb-create-dialog");
+        var $header = $("<div/>").addClass("ujg-sb-create-header");
+        $header.append($("<span/>").addClass("ujg-sb-create-title").text("Создание истории"));
+        if (ctx.onClose && ctx.onSubmit) {
+            var $actions = $("<div/>").addClass("ujg-sb-create-header-actions");
+            $actions.append(
+                (function() {
+                    var $sub = $("<button type=\"button\"/>")
+                        .addClass("ujg-sb-create-submit")
+                        .text("Создать")
+                        .on("click", function() {
+                            if (draft.ui && draft.ui.submitting) {
+                                return;
+                            }
+                            if (ctx.onSubmit) {
+                                ctx.onSubmit();
+                            }
+                        });
+                    if (draft.ui && draft.ui.submitting) {
+                        $sub.attr("disabled", "disabled");
+                    }
+                    return $sub;
+                })()
+            );
+            $actions.append(
+                $("<button type=\"button\"/>")
+                    .addClass("ujg-sb-create-close")
+                    .text("Закрыть")
+                    .on("click", function() {
+                        if (ctx.onClose) {
+                            ctx.onClose();
+                        }
+                    })
+            );
+            $header.append($actions);
+        }
+
+        var $tree = $("<div/>").addClass("ujg-sb-create-tree");
+
+        if (ctx.onClose && ctx.onSubmit) {
+            var $epicBar = $("<div/>").addClass("ujg-sb-create-epic-toolbar");
+            $epicBar.append($("<span/>").addClass("ujg-sb-create-epic-label").text("Эпик:"));
+            var $modeNew = $("<label/>").append(
+                $("<input type=\"radio\" name=\"ujg-sb-epic-mode\" value=\"newEpic\"/>")
+                    .prop("checked", draft.epicMode === "newEpic")
+                    .on("change", function() {
+                        draft.epicMode = "newEpic";
+                        renderCreateModal($mount, draft, ctx);
+                    }),
+                $("<span/>").text(" Новый")
+            );
+            var $modeEx = $("<label/>").append(
+                $("<input type=\"radio\" name=\"ujg-sb-epic-mode\" value=\"existingEpic\"/>")
+                    .prop("checked", draft.epicMode === "existingEpic")
+                    .on("change", function() {
+                        draft.epicMode = "existingEpic";
+                        renderCreateModal($mount, draft, ctx);
+                    }),
+                $("<span/>").text(" Существующий")
+            );
+            $epicBar.append($modeNew, $modeEx);
+            if (draft.epicMode === "existingEpic") {
+                var $sel = $("<select/>").addClass("ujg-sb-inline-editor ujg-sb-create-epic-existing");
+                $sel.append($("<option value=\"\">").text("— эпик —"));
+                (ctx.getEpicOptions ? ctx.getEpicOptions() : []).forEach(function(opt) {
+                    var k = opt && opt.key != null ? String(opt.key) : "";
+                    var lab = opt && opt.summary != null ? String(opt.summary) : k;
+                    $sel.append($("<option/>").attr("value", k).text(k + (lab && lab !== k ? " — " + lab : "")));
+                });
+                $sel.val(draft.existingEpicKey || "");
+                $sel.on("change", function() {
+                    draft.existingEpicKey = $sel.val();
+                });
+                $epicBar.append($sel);
+            }
+            $tree.append($epicBar);
+        }
+
+        var bannerMsgs = [].concat(draft.ui.formErrors || []);
+        draftRows(draft).forEach(function(dr) {
+            if (dr.node && dr.node.errors && dr.node.errors.length) {
+                dr.node.errors.forEach(function(er) {
+                    bannerMsgs.push(er);
+                });
+            }
+        });
+        if (bannerMsgs.length) {
+            var $fe = $("<div/>").addClass("ujg-sb-create-form-errors");
+            bannerMsgs.forEach(function(msg) {
+                $fe.append($("<div/>").text(String(msg)));
+            });
+            $tree.append($fe);
+        }
+
+        draftRows(draft).forEach(function(row) {
+            var node = row.node;
+            if (!node) {
+                return;
+            }
+            if (!node.ui) {
+                node.ui = { editing: false, isDescriptionOpen: false };
+            }
+            if (!Array.isArray(node.errors)) {
+                node.errors = [];
+            }
+            if (!Array.isArray(node.components)) {
+                node.components = [];
+            }
+            if (!Array.isArray(node.labels)) {
+                node.labels = [];
+            }
+            var $r = $("<div/>").addClass(
+                "ujg-sb-create-tree-row ujg-sb-create-row-" + rowClassSuffix(row.key)
+            );
+            if (node.errors && node.errors.length) {
+                $r.addClass("ujg-sb-create-row-error");
+            }
+
+            $r.append(
+                $("<span/>")
+                    .addClass("ujg-sb-create-type-label")
+                    .text(node.issueType)
+            );
+
+            if (node.ui.editing) {
+                var $summaryInput = $("<input/>")
+                    .attr("type", "text")
+                    .addClass("ujg-sb-inline-editor ujg-sb-create-summary-input")
+                    .val(node.summary);
+                $summaryInput.on("input", function() {
+                    node.summary = $summaryInput.val();
+                });
+                $summaryInput.on("click", function(ev) {
+                    if (ev.stopPropagation) {
+                        ev.stopPropagation();
+                    }
+                });
+                $r.append($summaryInput);
+            } else {
+                var $summary = $("<span/>").addClass("ujg-sb-create-summary");
+                var summaryText = node.summary && String(node.summary).trim() ? node.summary : "\u2014";
+                $summary.text(summaryText);
+                $summary.on("click", function() {
+                    clearAllSummaryEditing(draft);
+                    node.ui.editing = true;
+                    renderCreateModal($mount, draft, ctx);
+                });
+                $r.append($summary);
+            }
+
+            var $addDesc = $("<button/>")
+                .attr("type", "button")
+                .addClass("ujg-sb-create-add-desc")
+                .text(descriptionToggleLabel(node));
+            $addDesc.on("click", function() {
+                toggleDescription(node);
+                renderCreateModal($mount, draft, ctx);
+            });
+            $r.append($addDesc);
+
+            var assigneeLabel = "Исполнитель";
+            if (node.assignee && typeof node.assignee === "object" && node.assignee.displayName) {
+                assigneeLabel = String(node.assignee.displayName);
+            } else if (node.assignee && typeof node.assignee === "object" && node.assignee.name) {
+                assigneeLabel = String(node.assignee.name);
+            }
+            var $asTr = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-create-assignee-trigger")
+                .text(assigneeLabel);
+            $asTr.on("click", function() {
+                openSelector(draft, row.key, "assignee");
+                renderCreateModal($mount, draft, ctx);
+            });
+            $r.append($asTr);
+
+            var $compTr = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-create-component-trigger")
+                .text("Компонент");
+            $compTr.on("click", function() {
+                openSelector(draft, row.key, "component");
+                renderCreateModal($mount, draft, ctx);
+            });
+            $r.append($compTr);
+
+            var $labTr = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-create-label-trigger")
+                .text("Метка");
+            $labTr.on("click", function() {
+                openSelector(draft, row.key, "label");
+                renderCreateModal($mount, draft, ctx);
+            });
+            $r.append($labTr);
+
+            var $chips = $("<div/>").addClass("ujg-sb-chip-list");
+            (node.components || []).forEach(function(c) {
+                var nm = typeof c === "string" ? c : c && c.name;
+                if (nm) {
+                    $chips.append($("<span/>").addClass("ujg-sb-chip").text(String(nm)));
+                }
+            });
+            (node.labels || []).forEach(function(lb) {
+                $chips.append($("<span/>").addClass("ujg-sb-chip ujg-sb-chip-label").text(String(lb)));
+            });
+            $r.append($chips);
+            $r.append($("<span/>").addClass("ujg-sb-chip-trigger").attr("aria-hidden", "true"));
+
+            if (node.createdKey) {
+                $r.append(
+                    $("<span/>")
+                        .addClass("ujg-sb-create-created-key")
+                        .text(String(node.createdKey))
+                );
+            }
+
+            if (node.errors && node.errors.length) {
+                var $re = $("<div/>").addClass("ujg-sb-create-row-errors");
+                node.errors.forEach(function(er) {
+                    $re.append($("<div/>").text(String(er)));
+                });
+                $r.append($re);
+            }
+
+            if (node.ui.isDescriptionOpen) {
+                var $desc = $("<textarea/>")
+                    .addClass("ujg-sb-inline-editor ujg-sb-create-desc-input")
+                    .val(node.description);
+                $desc.on("input", function() {
+                    node.description = $desc.val();
+                });
+                $r.append($desc);
+            }
+
+            var $selPan = renderSelectorPanel($mount, draft, ctx, row.key);
+            if ($selPan) {
+                $r.append($selPan);
+            }
+
+            $tree.append($r);
+        });
+
+        $dialog.append($header).append($tree);
+        $overlay.append($dialog);
+        $mount.append($overlay);
+    }
+
+    return {
+        makeDefaultDraft: makeDefaultDraft,
+        toggleDescription: toggleDescription,
+        validateDraft: validateDraft,
+        hasSubmitValidationErrors: hasSubmitValidationErrors,
+        renderCreateModal: renderCreateModal,
+        submitCreateDraft: submitCreateDraft,
+        normalizeUserSearchRows: normalizeUserSearchRows,
+        normalizeComponentRows: normalizeComponentRows,
+        normalizeLabelSearchRows: normalizeLabelSearchRows,
+        draftRows: draftRows,
+        buildIssueFields: buildIssueFields
+    };
+});
+
 /* === Module: rendering.js === */
-define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function($, config, utils) {
+define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils", "_ujgSB_create-story"], function($, config, utils, createStory) {
     "use strict";
 
     var $container;
@@ -1395,6 +2379,7 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
     var $headerHost;
     var $viewHost;
     var $progressHost;
+    var $popupHost;
     var currentViewMode = "table";
 
     function typeLabel(node) {
@@ -2136,6 +3121,9 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $headerHost.find(".ujg-sb-collapse-all").on("click", function() {
             if (services.onCollapseAll) services.onCollapseAll();
         });
+        $headerHost.find(".ujg-sb-open-history").on("click", function() {
+            if (services.onOpenCreateStory) services.onOpenCreateStory();
+        });
     }
 
     function renderHeader() {
@@ -2176,6 +3164,7 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         );
         var $actions = $("<div/>").addClass("ujg-sb-action-buttons");
         $actions.append(
+            $("<button type=\"button\"/>").addClass("ujg-sb-open-history rounded border border-border px-2 py-1 text-[10px]").text("История"),
             $("<button type=\"button\"/>").addClass("ujg-sb-expand-all rounded border border-border px-2 py-1 text-[10px]").text("Развернуть"),
             $("<button type=\"button\"/>").addClass("ujg-sb-collapse-all rounded border border-border px-2 py-1 text-[10px]").text("Свернуть")
         );
@@ -2243,6 +3232,32 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         );
     }
 
+    function renderCreateStoryModal(draft) {
+        if (!$popupHost || !$popupHost.length || !createStory || !createStory.renderCreateModal) {
+            return;
+        }
+        var ctx = {
+            api: services.api,
+            onClose: services.onCloseCreateStory,
+            onSubmit: services.onSubmitCreateStory,
+            isDraftActive: function() {
+                return !!(services.state && services.state.createStory && services.state.createStory.isOpen && services.state.createStory.draft === draft);
+            },
+            getEpicOptions: function() {
+                var fo = services.state && services.state.filterOptions;
+                return (fo && fo.epics) || [];
+            }
+        };
+        createStory.renderCreateModal($popupHost, draft, ctx);
+    }
+
+    function clearCreateStoryModal() {
+        if (!$popupHost || !$popupHost.length) {
+            return;
+        }
+        $popupHost.empty();
+    }
+
     function init($c, svc) {
         $container = $c;
         services = svc || {};
@@ -2252,7 +3267,8 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         $headerHost = $("<header/>").addClass("ujg-sb-header");
         $progressHost = $("<div/>").addClass("ujg-sb-progress-host");
         $viewHost = $("<div/>").addClass("ujg-sb-view-host");
-        $root.append($headerHost, $progressHost, $viewHost);
+        $popupHost = $("<div/>").addClass("ujg-sb-popup-host");
+        $root.append($headerHost, $progressHost, $viewHost, $popupHost);
         $c.append($root);
     }
 
@@ -2260,7 +3276,9 @@ define("_ujgSB_rendering", ["jquery", "_ujgSB_config", "_ujgSB_utils"], function
         init: init,
         renderHeader: renderHeader,
         renderTree: renderTree,
-        renderProgress: renderProgress
+        renderProgress: renderProgress,
+        renderCreateStoryModal: renderCreateStoryModal,
+        clearCreateStoryModal: clearCreateStoryModal
     };
 });
 
@@ -2272,8 +3290,9 @@ define("_ujgSB_main", [
     "_ujgSB_storage",
     "_ujgSB_api",
     "_ujgSB_data",
-    "_ujgSB_rendering"
-], function($, _config, _utils, storage, api, data, rendering) {
+    "_ujgSB_rendering",
+    "_ujgSB_create-story"
+], function($, _config, _utils, storage, api, data, rendering, createStory) {
     "use strict";
 
     function normalizeViewMode(mode) {
@@ -2458,7 +3477,12 @@ define("_ujgSB_main", [
             expanded: {},
             loading: false,
             fieldConfig: defaultFieldConfig(),
-            fieldConfigReady: false
+            fieldConfigReady: false,
+            createStory: {
+                isOpen: false,
+                draft: null,
+                context: null
+            }
         };
 
         function persistUiState() {
@@ -2786,6 +3810,15 @@ define("_ujgSB_main", [
                 return;
             }
             var previousProject = state.project;
+            if (
+                state.createStory.isOpen ||
+                (previousProject != null && String(previousProject) !== String(projectKey))
+            ) {
+                state.createStory.isOpen = false;
+                state.createStory.draft = null;
+                state.createStory.context = null;
+                rendering.clearCreateStoryModal();
+            }
             activeLoadToken += 1;
             var loadToken = activeLoadToken;
             state.loading = true;
@@ -2883,6 +3916,7 @@ define("_ujgSB_main", [
 
         var services = {
             state: state,
+            api: api,
             onProjectChange: function(key) {
                 loadProject(key);
             },
@@ -2938,6 +3972,59 @@ define("_ujgSB_main", [
             },
             onToggleEpic: function(key) {
                 toggleExpandedKey(key);
+            },
+            onOpenCreateStory: function() {
+                state.createStory.isOpen = true;
+                state.createStory.context = null;
+                state.createStory.draft = createStory.makeDefaultDraft(state.project);
+                rendering.renderCreateStoryModal(state.createStory.draft);
+            },
+            onCloseCreateStory: function() {
+                state.createStory.isOpen = false;
+                state.createStory.draft = null;
+                state.createStory.context = null;
+                rendering.clearCreateStoryModal();
+            },
+            onSubmitCreateStory: function() {
+                var draft = state.createStory.draft;
+                if (!draft) {
+                    return;
+                }
+                createStory.validateDraft(draft, { purpose: "submit" });
+                if (createStory.hasSubmitValidationErrors(draft)) {
+                    rendering.renderCreateStoryModal(draft);
+                    return;
+                }
+                createStory.submitCreateDraft(api, draft).then(
+                    function(result) {
+                        if (result && result.skipped) {
+                            return;
+                        }
+                        if (!result || !result.ok) {
+                            if (state.createStory.isOpen && state.createStory.draft === draft) {
+                                rendering.renderCreateStoryModal(draft);
+                            }
+                            return;
+                        }
+                        var currentDraft = state.createStory.draft;
+                        if (currentDraft === draft) {
+                            if (state.createStory.isOpen) {
+                                state.createStory.isOpen = false;
+                                state.createStory.draft = null;
+                                state.createStory.context = null;
+                                rendering.clearCreateStoryModal();
+                            }
+                            loadProject(state.project, false);
+                        } else if (!state.createStory.isOpen) {
+                            loadProject(state.project, false);
+                        }
+                    },
+                    function() {
+                        if (state.createStory.isOpen && state.createStory.draft === draft) {
+                            rendering.renderCreateStoryModal(draft);
+                        }
+                    }
+                );
             }
         };
 
