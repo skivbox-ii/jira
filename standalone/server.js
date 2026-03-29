@@ -12,6 +12,7 @@ const WIDGET_FILES = [
   "_ujgCommon.js",
   "ujg-sprint-health.js", "ujg-sprint-health.css",
   "ujg-project-analytics.js", "ujg-project-analytics.css",
+  "ujg-daily-diligence.js", "ujg-daily-diligence.css",
   "ujg-timesheet.js", "ujg-timesheet.css",
   "ujg-timesheet.v0.js", "ujg-timesheet.v0.css",
   "ujg-user-activity.js", "ujg-user-activity.css",
@@ -75,7 +76,13 @@ app.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Неверные данные для входа в Jira" });
     }
 
-    const user = JSON.parse(result.body);
+    let user;
+    try {
+      user = JSON.parse(result.body);
+    } catch (_err) {
+      return res.status(502).json({ error: "Jira вернула некорректный JSON в ответе /myself" });
+    }
+
     req.session.jiraUrl = trimmedUrl;
     req.session.authHeader = authHeader;
     req.session.username = user.name || username;
@@ -110,20 +117,28 @@ app.get("/api/session", (req, res) => {
   });
 });
 
-// Test mode: mock user picker API
+function getMockUsers(query, maxResults) {
+  const q = String(query || "").toLowerCase();
+  const mockUsers = [
+    { name: "dtorzok", displayName: "Dima Torzok", emailAddress: "dtorzok@example.com" },
+    { name: "testuser", displayName: "Test User", emailAddress: "test@example.com" },
+    { name: "admin", displayName: "Admin User", emailAddress: "admin@example.com" },
+  ];
+
+  return mockUsers.filter((u) =>
+    u.name.toLowerCase().includes(q) ||
+    u.displayName.toLowerCase().includes(q)
+  ).slice(0, parseInt(maxResults, 10) || 10);
+}
+
+// Test mode: mock user lookup APIs
 if (process.env.TEST_MODE === "true") {
   app.get("/rest/api/2/user/picker", (req, res) => {
-    const query = req.query.query || "";
-    const mockUsers = [
-      { name: "dtorzok", displayName: "Dima Torzok", emailAddress: "dtorzok@example.com" },
-      { name: "testuser", displayName: "Test User", emailAddress: "test@example.com" },
-      { name: "admin", displayName: "Admin User", emailAddress: "admin@example.com" },
-    ];
-    const filtered = mockUsers.filter(u => 
-      u.name.toLowerCase().includes(query.toLowerCase()) || 
-      u.displayName.toLowerCase().includes(query.toLowerCase())
-    );
-    res.json({ users: filtered.slice(0, parseInt(req.query.maxResults) || 10) });
+    res.json({ users: getMockUsers(req.query.query, req.query.maxResults) });
+  });
+
+  app.get("/rest/api/2/user/search", (req, res) => {
+    res.json(getMockUsers(req.query.username, req.query.maxResults));
   });
 }
 
@@ -168,6 +183,10 @@ app.get("/sprint", (_req, res) => {
 
 app.get("/analytics", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "analytics.html"));
+});
+
+app.get("/daily-diligence", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "daily-diligence.html"));
 });
 
 app.get("/timesheet", (_req, res) => {

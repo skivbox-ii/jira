@@ -819,8 +819,10 @@ function createRenderingHarness(options) {
         reinit: function() {
             initInto(jquery.createNode("root"));
         },
-        getFullscreenHandlerCount: function() {
-            return (documentStub.__node.handlers.fullscreenchange || []).length;
+        getRenderKeydownHandlerCount: function() {
+            return (documentStub.__node.handlers.keydown || []).filter(function(binding) {
+                return binding.namespace === "ujgUA_rendering";
+            }).length;
         },
         getDashboardLabels: function() {
             var main = root.__el.children[1];
@@ -2065,14 +2067,14 @@ test("rendering processes repo activity for request user snapshot, not later mut
     assert.equal(harness.events.processRepoArgs.user.displayName, "First User");
 });
 
-test("rendering reinit does not accumulate fullscreenchange handlers", function() {
+test("rendering reinit does not accumulate keydown handlers", function() {
     var harness = createRenderingHarness();
 
-    assert.equal(harness.getFullscreenHandlerCount(), 1);
+    assert.equal(harness.getRenderKeydownHandlerCount(), 1);
 
     harness.reinit();
-    assert.equal(harness.getFullscreenHandlerCount(), 1);
+    assert.equal(harness.getRenderKeydownHandlerCount(), 1);
 
     harness.reinit();
-    assert.equal(harness.getFullscreenHandlerCount(), 1);
+    assert.equal(harness.getRenderKeydownHandlerCount(), 1);
 });
