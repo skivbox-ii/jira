@@ -220,6 +220,67 @@ function resolveBuildReleaseRef(options) {
   });
 }
 
+function isGeneratedBootstrapRuntimeAsset(relPath) {
+  var base = path.basename(String(relPath));
+  return /\.bootstrap\.js$/.test(base) || /\.runtime\.js$/.test(base);
+}
+
+function gitHeadCommitChangesOnlyBootstrapRuntimeAssets(options) {
+  var opts = options || {};
+  var execSync = opts.execSync || childProcess.execSync;
+  var cwd = opts.cwd !== undefined ? opts.cwd : REPO_ROOT;
+  try {
+    execSync("git rev-parse --verify HEAD^", {
+      encoding: "utf8",
+      cwd: cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+  } catch (e) {
+    return false;
+  }
+  var out = execSync("git diff --name-only HEAD^ HEAD", {
+    encoding: "utf8",
+    cwd: cwd
+  });
+  var raw = Buffer.isBuffer(out) ? out.toString("utf8") : String(out);
+  var names = raw
+    .split(/\n/)
+    .map(function(s) {
+      return s.replace(/\r$/, "").trim();
+    })
+    .filter(Boolean);
+  if (names.length === 0) {
+    return false;
+  }
+  return names.every(isGeneratedBootstrapRuntimeAsset);
+}
+
+function resolveCliWriteReleaseRef(options) {
+  var opts = options || {};
+  if (opts.releaseRef != null && opts.releaseRef !== "") {
+    return String(opts.releaseRef);
+  }
+  var env = opts.env !== undefined ? opts.env : process.env;
+  var fromEnv = env && env.UJG_RELEASE_REF;
+  if (fromEnv != null && String(fromEnv).trim() !== "") {
+    return String(fromEnv).trim();
+  }
+  if (gitHeadCommitChangesOnlyBootstrapRuntimeAssets(opts)) {
+    var execSync = opts.execSync || childProcess.execSync;
+    var cwd = opts.cwd !== undefined ? opts.cwd : REPO_ROOT;
+    var parent = execSync("git rev-parse --short HEAD^", {
+      encoding: "utf8",
+      cwd: cwd
+    });
+    return Buffer.isBuffer(parent) ? parent.toString("utf8").trim() : String(parent).trim();
+  }
+  return resolveReleaseRef({
+    env: opts.env,
+    execSync: opts.execSync,
+    cwd: opts.cwd
+  });
+}
+
 function defaultAssetBaseUrl(options) {
   var opts = options || {};
   if (opts.assetBaseUrl != null && opts.assetBaseUrl !== "") {
@@ -278,7 +339,7 @@ function normalizeTextNewlines(value) {
 function writeBootstrapArtifactsToDisk(options) {
   var opts = options || {};
   var widgets = opts.widgets !== undefined ? opts.widgets : allWidgetIds();
-  var releaseRef = resolveBuildReleaseRef(opts);
+  var releaseRef = resolveCliWriteReleaseRef(opts);
   var assets = buildAssets(
     Object.assign({}, opts, { widgets: widgets, releaseRef: releaseRef })
   );
@@ -302,6 +363,7 @@ module.exports = {
   WIDGETS: WIDGETS,
   buildAssets: buildAssets,
   resolveReleaseRef: resolveReleaseRef,
+  resolveCliWriteReleaseRef: resolveCliWriteReleaseRef,
   transformRuntimeAmdRename: transformRuntimeAmdRename,
   allWidgetIds: allWidgetIds,
   normalizeTextNewlines: normalizeTextNewlines

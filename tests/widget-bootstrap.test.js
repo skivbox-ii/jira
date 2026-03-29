@@ -159,6 +159,58 @@ test("resolveReleaseRef falls back to git rev-parse --short HEAD", function() {
   );
 });
 
+test("resolveCliWriteReleaseRef pins to HEAD^ when HEAD only changes bootstrap/runtime assets", function() {
+  var mod = require(MOD_PATH);
+  assert.equal(
+    mod.resolveCliWriteReleaseRef({
+      env: {},
+      execSync: function(cmd) {
+        var c = String(cmd);
+        if (/rev-parse --verify HEAD\^/.test(c)) {
+          return "";
+        }
+        if (/diff --name-only HEAD\^ HEAD/.test(c)) {
+          return (
+            "ujg-daily-diligence.bootstrap.js\n" +
+            "ujg-daily-diligence.runtime.js\n"
+          );
+        }
+        if (/rev-parse --short HEAD\^/.test(c)) {
+          return Buffer.from("parentab\n");
+        }
+        if (/rev-parse --short HEAD/.test(c)) {
+          throw new Error("unexpected HEAD (not HEAD^) rev-parse: " + c);
+        }
+        throw new Error("unexpected git command: " + c);
+      }
+    }),
+    "parentab"
+  );
+});
+
+test("resolveCliWriteReleaseRef uses HEAD when HEAD changes non-bootstrap files", function() {
+  var mod = require(MOD_PATH);
+  assert.equal(
+    mod.resolveCliWriteReleaseRef({
+      env: {},
+      execSync: function(cmd) {
+        var c = String(cmd);
+        if (/rev-parse --verify HEAD\^/.test(c)) {
+          return "";
+        }
+        if (/diff --name-only HEAD\^ HEAD/.test(c)) {
+          return "ujg-sprint-health.js\nujg-sprint-health.bootstrap.js\n";
+        }
+        if (/rev-parse --short HEAD/.test(c) && !/HEAD\^/.test(c)) {
+          return Buffer.from("currentz\n");
+        }
+        throw new Error("unexpected git command: " + c);
+      }
+    }),
+    "currentz"
+  );
+});
+
 test("buildAssets uses resolveReleaseRef when releaseRef omitted", function() {
   var mod = require(MOD_PATH);
   var out = mod.buildAssets({
