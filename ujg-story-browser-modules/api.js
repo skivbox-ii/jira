@@ -22,27 +22,67 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return quoteJqlString(token);
     }
 
+    function normalizeText(value) {
+        return value != null ? String(value).trim().toLowerCase() : "";
+    }
+
+    function normalizeFieldConfig(fieldConfig) {
+        return {
+            epicLinkField:
+                fieldConfig && fieldConfig.epicLinkField
+                    ? String(fieldConfig.epicLinkField)
+                    : String(CONFIG.EPIC_LINK_FIELD || ""),
+            sprintField:
+                fieldConfig && fieldConfig.sprintField
+                    ? String(fieldConfig.sprintField)
+                    : String(CONFIG.SPRINT_FIELD || "")
+        };
+    }
+
+    function buildSearchFields(fieldConfig) {
+        var resolved = normalizeFieldConfig(fieldConfig);
+        var fields = String(CONFIG.ISSUE_FIELDS || "").split(",").filter(Boolean);
+        if (resolved.epicLinkField && resolved.epicLinkField !== CONFIG.EPIC_LINK_FIELD) {
+            fields = fields.filter(function(field) {
+                return field !== CONFIG.EPIC_LINK_FIELD;
+            });
+        }
+        if (resolved.sprintField && resolved.sprintField !== CONFIG.SPRINT_FIELD) {
+            fields = fields.filter(function(field) {
+                return field !== CONFIG.SPRINT_FIELD;
+            });
+        }
+        if (resolved.epicLinkField && fields.indexOf(resolved.epicLinkField) < 0) {
+            fields.push(resolved.epicLinkField);
+        }
+        if (resolved.sprintField && fields.indexOf(resolved.sprintField) < 0) {
+            fields.push(resolved.sprintField);
+        }
+        return fields;
+    }
+
     function buildProjectJql(projectKey) {
         return "project = " + toJqlToken(projectKey) + " ORDER BY issuetype ASC, key ASC";
     }
 
-    function epicLinkJqlField() {
-        var match = /customfield_(\d+)/.exec(String(CONFIG.EPIC_LINK_FIELD || ""));
-        return match ? "cf[" + match[1] + "]" : quoteJqlString(CONFIG.EPIC_LINK_FIELD);
+    function epicLinkJqlField(fieldConfig) {
+        var epicLinkField = normalizeFieldConfig(fieldConfig).epicLinkField;
+        var match = /customfield_(\d+)/.exec(epicLinkField);
+        return match ? "cf[" + match[1] + "]" : quoteJqlString(epicLinkField);
     }
 
     function buildProjectEpicsJql(projectKey) {
         return "project = " + toJqlToken(projectKey) + " AND issuetype = " + CONFIG.EPIC_ISSUE_TYPE + " ORDER BY key ASC";
     }
 
-    function buildStoriesForEpicKeysJql(projectKey, epicKeys) {
+    function buildStoriesForEpicKeysJql(projectKey, epicKeys, fieldConfig) {
         return (
             "project = " +
             toJqlToken(projectKey) +
             " AND issuetype = " +
             CONFIG.STORY_ISSUE_TYPE +
             " AND " +
-            epicLinkJqlField() +
+            epicLinkJqlField(fieldConfig) +
             " in (" +
             (epicKeys || []).map(toJqlToken).join(", ") +
             ") ORDER BY key ASC"
@@ -69,7 +109,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return chunks;
     }
 
-    function searchChunked(values, buildJql, onProgress) {
+    function searchChunked(values, buildJql, onProgress, fieldConfig) {
         var safeValues = normalizeKeyList(values);
         var chunks = chunkValues(safeValues, JQL_KEY_CHUNK_SIZE);
         var d = $.Deferred();
@@ -84,9 +124,13 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 d.resolve(all);
                 return;
             }
-            searchIssues(buildJql(chunks[index]), onProgress ? function(loaded, total, partial) {
-                onProgress(all.length + loaded, all.length + total, all.concat(partial));
-            } : null).then(
+            searchIssues(
+                buildJql(chunks[index]),
+                onProgress ? function(loaded, total, partial) {
+                    onProgress(all.length + loaded, all.length + total, all.concat(partial));
+                } : null,
+                fieldConfig
+            ).then(
                 function(batch) {
                     all = all.concat(batch || []);
                     loadChunk(index + 1);
@@ -105,9 +149,10 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return d.promise();
     }
 
-    function searchIssues(jql, onProgress) {
+    function searchIssues(jql, onProgress, fieldConfig) {
         var d = $.Deferred();
         var all = [];
+        var fields = buildSearchFields(fieldConfig);
 
         function load(startAt) {
             $.ajax({
@@ -116,7 +161,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 contentType: "application/json",
                 data: JSON.stringify({
                     jql: jql,
-                    fields: CONFIG.ISSUE_FIELDS.split(","),
+                    fields: fields,
                     expand: ["changelog"],
                     maxResults: 100,
                     startAt: startAt
@@ -151,6 +196,70 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return d.promise();
     }
 
+    function getFieldMetadata() {
+        return $.ajax({
+            url: CONFIG.baseUrl + "/rest/api/2/field",
+            type: "GET"
+        });
+    }
+
+    function detectFieldId(fields, fallbackId, schemaToken, nameTokens) {
+        var list = Array.isArray(fields) ? fields : [];
+        var normalizedFallback = normalizeText(fallbackId);
+        var field;
+        var i;
+        var ti;
+
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            if (normalizeText(field && field.id) === normalizedFallback && field && field.id != null) {
+                return String(field.id);
+            }
+        }
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            if (normalizeText(field && field.schema && field.schema.custom).indexOf(schemaToken) >= 0 && field && field.id != null) {
+                return String(field.id);
+            }
+        }
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            var name = normalizeText(field && field.name);
+            for (ti = 0; ti < (nameTokens || []).length; ti += 1) {
+                if (name === nameTokens[ti] && field && field.id != null) {
+                    return String(field.id);
+                }
+            }
+        }
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            var hay = normalizeText(field && field.name);
+            for (ti = 0; ti < (nameTokens || []).length; ti += 1) {
+                if (hay.indexOf(nameTokens[ti]) >= 0 && field && field.id != null) {
+                    return String(field.id);
+                }
+            }
+        }
+        return String(fallbackId || "");
+    }
+
+    function detectFieldConfig(fields) {
+        return {
+            epicLinkField: detectFieldId(
+                fields,
+                CONFIG.EPIC_LINK_FIELD,
+                "gh-epic-link",
+                ["epic link", "эпик"]
+            ),
+            sprintField: detectFieldId(
+                fields,
+                CONFIG.SPRINT_FIELD,
+                "gh-sprint",
+                ["sprint", "спринт"]
+            )
+        };
+    }
+
     return {
         getProjects: function() {
             return $.ajax({
@@ -158,25 +267,27 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 type: "GET"
             });
         },
+        getFieldMetadata: getFieldMetadata,
+        detectFieldConfig: detectFieldConfig,
         getProjectIssues: function(projectKey, onProgress) {
             return searchIssues(buildProjectJql(projectKey), onProgress);
         },
         getProjectEpics: function(projectKey, onProgress) {
             return searchIssues(buildProjectEpicsJql(projectKey), onProgress);
         },
-        getStoriesForEpicKeys: function(projectKey, epicKeys, onProgress) {
+        getStoriesForEpicKeys: function(projectKey, epicKeys, onProgress, fieldConfig) {
             if (!epicKeys || !epicKeys.length) {
                 return resolvedPromise([]);
             }
             return searchChunked(epicKeys, function(keys) {
-                return buildStoriesForEpicKeysJql(projectKey, keys);
-            }, onProgress);
+                return buildStoriesForEpicKeysJql(projectKey, keys, fieldConfig);
+            }, onProgress, fieldConfig);
         },
-        getIssuesByKeys: function(issueKeys, onProgress) {
+        getIssuesByKeys: function(issueKeys, onProgress, fieldConfig) {
             if (!issueKeys || !issueKeys.length) {
                 return resolvedPromise([]);
             }
-            return searchChunked(issueKeys, buildKeysJql, onProgress);
+            return searchChunked(issueKeys, buildKeysJql, onProgress, fieldConfig);
         }
     };
 });

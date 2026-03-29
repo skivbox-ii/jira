@@ -480,27 +480,67 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return quoteJqlString(token);
     }
 
+    function normalizeText(value) {
+        return value != null ? String(value).trim().toLowerCase() : "";
+    }
+
+    function normalizeFieldConfig(fieldConfig) {
+        return {
+            epicLinkField:
+                fieldConfig && fieldConfig.epicLinkField
+                    ? String(fieldConfig.epicLinkField)
+                    : String(CONFIG.EPIC_LINK_FIELD || ""),
+            sprintField:
+                fieldConfig && fieldConfig.sprintField
+                    ? String(fieldConfig.sprintField)
+                    : String(CONFIG.SPRINT_FIELD || "")
+        };
+    }
+
+    function buildSearchFields(fieldConfig) {
+        var resolved = normalizeFieldConfig(fieldConfig);
+        var fields = String(CONFIG.ISSUE_FIELDS || "").split(",").filter(Boolean);
+        if (resolved.epicLinkField && resolved.epicLinkField !== CONFIG.EPIC_LINK_FIELD) {
+            fields = fields.filter(function(field) {
+                return field !== CONFIG.EPIC_LINK_FIELD;
+            });
+        }
+        if (resolved.sprintField && resolved.sprintField !== CONFIG.SPRINT_FIELD) {
+            fields = fields.filter(function(field) {
+                return field !== CONFIG.SPRINT_FIELD;
+            });
+        }
+        if (resolved.epicLinkField && fields.indexOf(resolved.epicLinkField) < 0) {
+            fields.push(resolved.epicLinkField);
+        }
+        if (resolved.sprintField && fields.indexOf(resolved.sprintField) < 0) {
+            fields.push(resolved.sprintField);
+        }
+        return fields;
+    }
+
     function buildProjectJql(projectKey) {
         return "project = " + toJqlToken(projectKey) + " ORDER BY issuetype ASC, key ASC";
     }
 
-    function epicLinkJqlField() {
-        var match = /customfield_(\d+)/.exec(String(CONFIG.EPIC_LINK_FIELD || ""));
-        return match ? "cf[" + match[1] + "]" : quoteJqlString(CONFIG.EPIC_LINK_FIELD);
+    function epicLinkJqlField(fieldConfig) {
+        var epicLinkField = normalizeFieldConfig(fieldConfig).epicLinkField;
+        var match = /customfield_(\d+)/.exec(epicLinkField);
+        return match ? "cf[" + match[1] + "]" : quoteJqlString(epicLinkField);
     }
 
     function buildProjectEpicsJql(projectKey) {
         return "project = " + toJqlToken(projectKey) + " AND issuetype = " + CONFIG.EPIC_ISSUE_TYPE + " ORDER BY key ASC";
     }
 
-    function buildStoriesForEpicKeysJql(projectKey, epicKeys) {
+    function buildStoriesForEpicKeysJql(projectKey, epicKeys, fieldConfig) {
         return (
             "project = " +
             toJqlToken(projectKey) +
             " AND issuetype = " +
             CONFIG.STORY_ISSUE_TYPE +
             " AND " +
-            epicLinkJqlField() +
+            epicLinkJqlField(fieldConfig) +
             " in (" +
             (epicKeys || []).map(toJqlToken).join(", ") +
             ") ORDER BY key ASC"
@@ -527,7 +567,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return chunks;
     }
 
-    function searchChunked(values, buildJql, onProgress) {
+    function searchChunked(values, buildJql, onProgress, fieldConfig) {
         var safeValues = normalizeKeyList(values);
         var chunks = chunkValues(safeValues, JQL_KEY_CHUNK_SIZE);
         var d = $.Deferred();
@@ -542,9 +582,13 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 d.resolve(all);
                 return;
             }
-            searchIssues(buildJql(chunks[index]), onProgress ? function(loaded, total, partial) {
-                onProgress(all.length + loaded, all.length + total, all.concat(partial));
-            } : null).then(
+            searchIssues(
+                buildJql(chunks[index]),
+                onProgress ? function(loaded, total, partial) {
+                    onProgress(all.length + loaded, all.length + total, all.concat(partial));
+                } : null,
+                fieldConfig
+            ).then(
                 function(batch) {
                     all = all.concat(batch || []);
                     loadChunk(index + 1);
@@ -563,9 +607,10 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return d.promise();
     }
 
-    function searchIssues(jql, onProgress) {
+    function searchIssues(jql, onProgress, fieldConfig) {
         var d = $.Deferred();
         var all = [];
+        var fields = buildSearchFields(fieldConfig);
 
         function load(startAt) {
             $.ajax({
@@ -574,7 +619,7 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 contentType: "application/json",
                 data: JSON.stringify({
                     jql: jql,
-                    fields: CONFIG.ISSUE_FIELDS.split(","),
+                    fields: fields,
                     expand: ["changelog"],
                     maxResults: 100,
                     startAt: startAt
@@ -609,6 +654,70 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
         return d.promise();
     }
 
+    function getFieldMetadata() {
+        return $.ajax({
+            url: CONFIG.baseUrl + "/rest/api/2/field",
+            type: "GET"
+        });
+    }
+
+    function detectFieldId(fields, fallbackId, schemaToken, nameTokens) {
+        var list = Array.isArray(fields) ? fields : [];
+        var normalizedFallback = normalizeText(fallbackId);
+        var field;
+        var i;
+        var ti;
+
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            if (normalizeText(field && field.id) === normalizedFallback && field && field.id != null) {
+                return String(field.id);
+            }
+        }
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            if (normalizeText(field && field.schema && field.schema.custom).indexOf(schemaToken) >= 0 && field && field.id != null) {
+                return String(field.id);
+            }
+        }
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            var name = normalizeText(field && field.name);
+            for (ti = 0; ti < (nameTokens || []).length; ti += 1) {
+                if (name === nameTokens[ti] && field && field.id != null) {
+                    return String(field.id);
+                }
+            }
+        }
+        for (i = 0; i < list.length; i += 1) {
+            field = list[i];
+            var hay = normalizeText(field && field.name);
+            for (ti = 0; ti < (nameTokens || []).length; ti += 1) {
+                if (hay.indexOf(nameTokens[ti]) >= 0 && field && field.id != null) {
+                    return String(field.id);
+                }
+            }
+        }
+        return String(fallbackId || "");
+    }
+
+    function detectFieldConfig(fields) {
+        return {
+            epicLinkField: detectFieldId(
+                fields,
+                CONFIG.EPIC_LINK_FIELD,
+                "gh-epic-link",
+                ["epic link", "эпик"]
+            ),
+            sprintField: detectFieldId(
+                fields,
+                CONFIG.SPRINT_FIELD,
+                "gh-sprint",
+                ["sprint", "спринт"]
+            )
+        };
+    }
+
     return {
         getProjects: function() {
             return $.ajax({
@@ -616,25 +725,27 @@ define("_ujgSB_api", ["jquery", "_ujgSB_config"], function($, config) {
                 type: "GET"
             });
         },
+        getFieldMetadata: getFieldMetadata,
+        detectFieldConfig: detectFieldConfig,
         getProjectIssues: function(projectKey, onProgress) {
             return searchIssues(buildProjectJql(projectKey), onProgress);
         },
         getProjectEpics: function(projectKey, onProgress) {
             return searchIssues(buildProjectEpicsJql(projectKey), onProgress);
         },
-        getStoriesForEpicKeys: function(projectKey, epicKeys, onProgress) {
+        getStoriesForEpicKeys: function(projectKey, epicKeys, onProgress, fieldConfig) {
             if (!epicKeys || !epicKeys.length) {
                 return resolvedPromise([]);
             }
             return searchChunked(epicKeys, function(keys) {
-                return buildStoriesForEpicKeysJql(projectKey, keys);
-            }, onProgress);
+                return buildStoriesForEpicKeysJql(projectKey, keys, fieldConfig);
+            }, onProgress, fieldConfig);
         },
-        getIssuesByKeys: function(issueKeys, onProgress) {
+        getIssuesByKeys: function(issueKeys, onProgress, fieldConfig) {
             if (!issueKeys || !issueKeys.length) {
                 return resolvedPromise([]);
             }
-            return searchChunked(issueKeys, buildKeysJql, onProgress);
+            return searchChunked(issueKeys, buildKeysJql, onProgress, fieldConfig);
         }
     };
 });
@@ -693,8 +804,22 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         });
     }
 
-    function readEpicLink(fields) {
-        var v = fields[CONFIG.EPIC_LINK_FIELD];
+    function resolveFieldConfig(fieldConfig) {
+        return {
+            epicLinkField:
+                fieldConfig && fieldConfig.epicLinkField
+                    ? String(fieldConfig.epicLinkField)
+                    : String(CONFIG.EPIC_LINK_FIELD || ""),
+            sprintField:
+                fieldConfig && fieldConfig.sprintField
+                    ? String(fieldConfig.sprintField)
+                    : String(CONFIG.SPRINT_FIELD || "")
+        };
+    }
+
+    function readEpicLink(fields, fieldConfig) {
+        var resolved = resolveFieldConfig(fieldConfig);
+        var v = fields[resolved.epicLinkField];
         if (v == null || v === "") {
             return "";
         }
@@ -705,6 +830,11 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             return String(v.key);
         }
         return "";
+    }
+
+    function readSprint(fields, fieldConfig) {
+        var resolved = resolveFieldConfig(fieldConfig);
+        return fields[resolved.sprintField];
     }
 
     function extractTransitions(changelog) {
@@ -785,7 +915,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         (node.children || []).forEach(assignProblemItems);
     }
 
-    function normalizeIssue(issue) {
+    function normalizeIssue(issue, fieldConfig) {
         var f = issue.fields || {};
         var st = f.status || {};
         var typeName = f.issuetype && f.issuetype.name != null ? String(f.issuetype.name) : "";
@@ -825,7 +955,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             badge: utils.getTypeBadge(f.issuetype),
             priority: utils.getPriorityName(f.priority),
             assignee: assignee,
-            sprint: utils.getSprintName(f[CONFIG.SPRINT_FIELD]),
+            sprint: utils.getSprintName(readSprint(f, fieldConfig)),
             estimate: isFinite(est) ? est : 0,
             spent: isFinite(spent) ? spent : 0,
             components: (f.components || [])
@@ -840,7 +970,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
                 })
                 .filter(Boolean),
             parentKey: f.parent && f.parent.key != null ? String(f.parent.key) : "",
-            epicLink: readEpicLink(f),
+            epicLink: readEpicLink(f, fieldConfig),
             created: f.created != null ? String(f.created) : "",
             updated: f.updated != null ? String(f.updated) : "",
             isDone: utils.isDone(st),
@@ -937,7 +1067,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         node.progress = totalCount > 0 ? totalDone / totalCount : 0;
     }
 
-    function buildLegacyTree(rawIssues) {
+    function buildLegacyTree(rawIssues, fieldConfig) {
         var list = rawIssues || [];
         var keyToNode = {};
         var order = [];
@@ -945,7 +1075,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            var n = normalizeIssue(issue);
+            var n = normalizeIssue(issue, fieldConfig);
             keyToNode[issue.key] = n;
             order.push(issue.key);
         });
@@ -992,7 +1122,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         return root;
     }
 
-    function buildPayloadTree(payload) {
+    function buildPayloadTree(payload, fieldConfig) {
         var rawEpics = payload && Array.isArray(payload.epics) ? payload.epics : [];
         var rawStories = payload && Array.isArray(payload.stories) ? payload.stories : [];
         var rawChildren = payload && Array.isArray(payload.children) ? payload.children : [];
@@ -1005,7 +1135,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            childMap[String(issue.key)] = normalizeIssue(issue);
+            childMap[String(issue.key)] = normalizeIssue(issue, fieldConfig);
         });
 
         rawEpics.forEach(function(issue) {
@@ -1013,7 +1143,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            epic = normalizeIssue(issue);
+            epic = normalizeIssue(issue, fieldConfig);
             if (epic.type !== CONFIG.EPIC_ISSUE_TYPE || epic.isDone) {
                 return;
             }
@@ -1028,7 +1158,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            story = normalizeIssue(issue);
+            story = normalizeIssue(issue, fieldConfig);
             epicKey = story.epicLink;
             if (story.type !== CONFIG.STORY_ISSUE_TYPE || !epicKey || !epicMap[epicKey]) {
                 return;
@@ -1054,11 +1184,11 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         return roots;
     }
 
-    function buildTree(input) {
+    function buildTree(input, fieldConfig) {
         if (Array.isArray(input)) {
-            return buildLegacyTree(input);
+            return buildLegacyTree(input, fieldConfig);
         }
-        return buildPayloadTree(input);
+        return buildPayloadTree(input, fieldConfig);
     }
 
     function walkTree(nodes, visit) {
@@ -2157,6 +2287,41 @@ define("_ujgSB_main", [
         return { statuses: [], sprints: [], epics: [] };
     }
 
+    function resolvedPromise(value) {
+        return {
+            then: function(onFulfilled) {
+                try {
+                    var out = onFulfilled ? onFulfilled(value) : value;
+                    return out && typeof out.then === "function" ? out : resolvedPromise(out);
+                } catch (err) {
+                    return rejectedPromise(err);
+                }
+            },
+            catch: function(onRejected) {
+                return this.then(null, onRejected);
+            }
+        };
+    }
+
+    function rejectedPromise(reason) {
+        return {
+            then: function(onFulfilled, onRejected) {
+                if (!onRejected) {
+                    return rejectedPromise(reason);
+                }
+                try {
+                    var out = onRejected(reason);
+                    return out && typeof out.then === "function" ? out : resolvedPromise(out);
+                } catch (err) {
+                    return rejectedPromise(err);
+                }
+            },
+            catch: function(onRejected) {
+                return this.then(null, onRejected);
+            }
+        };
+    }
+
     function normalizeSelectedEpicKeys(value) {
         var list = Array.isArray(value) ? value : value != null && String(value).trim() !== "" ? [value] : [];
         return list
@@ -2229,6 +2394,13 @@ define("_ujgSB_main", [
         return ld <= 200 || ld % 500 === 0;
     }
 
+    function defaultFieldConfig() {
+        return {
+            epicLinkField: _config.EPIC_LINK_FIELD,
+            sprintField: _config.SPRINT_FIELD
+        };
+    }
+
     function StoryBrowserGadget(API) {
         if (!API) {
             console.error("[UJG-StoryBrowser] API object is missing!");
@@ -2256,6 +2428,7 @@ define("_ujgSB_main", [
         var persisted = storage.load();
         var activeLoadToken = 0;
         var stagedApiAvailable = hasStagedApi(api);
+        var fieldConfigPromise = null;
         var initialSelectedEpicKeys = normalizeSelectedEpicKeys(
             persisted.selectedEpicKeys != null ? persisted.selectedEpicKeys : persisted.epicFilter
         );
@@ -2283,7 +2456,9 @@ define("_ujgSB_main", [
             filterOptions: emptyFilterOptions(),
             viewMode: normalizeViewMode(persisted.viewMode),
             expanded: {},
-            loading: false
+            loading: false,
+            fieldConfig: defaultFieldConfig(),
+            fieldConfigReady: false
         };
 
         function persistUiState() {
@@ -2413,6 +2588,45 @@ define("_ujgSB_main", [
             rendering.renderProgress(0, 0);
         }
 
+        function ensureFieldConfig() {
+            if (
+                !stagedApiAvailable ||
+                typeof api.getFieldMetadata !== "function" ||
+                typeof api.detectFieldConfig !== "function"
+            ) {
+                return resolvedPromise(state.fieldConfig);
+            }
+            if (state.fieldConfigReady) {
+                return resolvedPromise(state.fieldConfig);
+            }
+            if (fieldConfigPromise) {
+                return fieldConfigPromise;
+            }
+            fieldConfigPromise = api.getFieldMetadata().then(
+                function(fields) {
+                    var detected = api.detectFieldConfig(fields || []);
+                    state.fieldConfig = {
+                        epicLinkField:
+                            detected && detected.epicLinkField
+                                ? String(detected.epicLinkField)
+                                : state.fieldConfig.epicLinkField,
+                        sprintField:
+                            detected && detected.sprintField
+                                ? String(detected.sprintField)
+                                : state.fieldConfig.sprintField
+                    };
+                    state.fieldConfigReady = true;
+                    fieldConfigPromise = null;
+                    return state.fieldConfig;
+                },
+                function() {
+                    fieldConfigPromise = null;
+                    return state.fieldConfig;
+                }
+            );
+            return fieldConfigPromise;
+        }
+
         function clearFilters() {
             state.filters.status = "";
             state.filters.epic = "";
@@ -2434,7 +2648,7 @@ define("_ujgSB_main", [
             state.loadedEpics = [];
             state.loadedStories = issues || [];
             state.loadedChildren = [];
-            state.tree = data.buildTree(issues || []);
+            state.tree = data.buildTree(issues || [], state.fieldConfig);
             refreshFilterOptions();
             state.loading = !!keepLoading;
             rerenderHeader();
@@ -2449,7 +2663,7 @@ define("_ujgSB_main", [
                 epics: state.loadedEpics,
                 stories: state.loadedStories,
                 children: state.loadedChildren
-            });
+            }, state.fieldConfig);
             refreshFilterOptions();
             state.loading = !!keepLoading;
             rerenderHeader();
@@ -2503,11 +2717,19 @@ define("_ujgSB_main", [
                 return;
             }
 
+            rendering.renderProgress(0, 1);
             api.getStoriesForEpicKeys(
                 String(projectKey),
                 openEpics.map(function(issue) {
                     return issue.key;
-                })
+                }),
+                function(loaded, total) {
+                    if (loadToken !== activeLoadToken) {
+                        return;
+                    }
+                    rendering.renderProgress(loaded, total);
+                },
+                state.fieldConfig
             ).then(
                 function(stories) {
                     var safeStories = stories || [];
@@ -2516,7 +2738,17 @@ define("_ujgSB_main", [
                         return;
                     }
                     childKeys = collectChildIssueKeys(safeStories);
-                    api.getIssuesByKeys(childKeys).then(
+                    rendering.renderProgress(0, 1);
+                    api.getIssuesByKeys(
+                        childKeys,
+                        function(loaded, total) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            rendering.renderProgress(loaded, total);
+                        },
+                        state.fieldConfig
+                    ).then(
                         function(children) {
                             if (loadToken !== activeLoadToken) {
                                 return;
@@ -2568,31 +2800,46 @@ define("_ujgSB_main", [
             rerenderHeader();
             rerenderTree();
             if (stagedApiAvailable) {
-                api.getProjectEpics(String(projectKey)).then(
-                    function(epics) {
-                        if (loadToken !== activeLoadToken) {
-                            return;
-                        }
-                        state.epicCatalog = epics || [];
-                        syncSelectedEpicKeysWithCatalog();
-                        refreshFilterOptions();
-                        rerenderHeader();
-                        rerenderTree();
-                        loadDisplayData(projectKey, loadToken);
-                    },
-                    function() {
-                        if (loadToken !== activeLoadToken) {
-                            return;
-                        }
-                        state.loading = false;
-                        state.epicCatalog = [];
-                        clearLoadedData();
-                        rerenderHeader();
-                        rerenderTree();
-                        clearProgress();
-                        persistUiState();
+                rendering.renderProgress(0, 1);
+                ensureFieldConfig().then(function() {
+                    if (loadToken !== activeLoadToken) {
+                        return;
                     }
-                );
+                    rendering.renderProgress(0, 1);
+                    api.getProjectEpics(
+                        String(projectKey),
+                        function(loaded, total) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            rendering.renderProgress(loaded, total);
+                        }
+                    ).then(
+                        function(epics) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            state.epicCatalog = epics || [];
+                            syncSelectedEpicKeysWithCatalog();
+                            refreshFilterOptions();
+                            rerenderHeader();
+                            rerenderTree();
+                            loadDisplayData(projectKey, loadToken);
+                        },
+                        function() {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            state.loading = false;
+                            state.epicCatalog = [];
+                            clearLoadedData();
+                            rerenderHeader();
+                            rerenderTree();
+                            clearProgress();
+                            persistUiState();
+                        }
+                    );
+                });
                 return;
             }
             api

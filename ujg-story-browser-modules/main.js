@@ -20,6 +20,41 @@ define("_ujgSB_main", [
         return { statuses: [], sprints: [], epics: [] };
     }
 
+    function resolvedPromise(value) {
+        return {
+            then: function(onFulfilled) {
+                try {
+                    var out = onFulfilled ? onFulfilled(value) : value;
+                    return out && typeof out.then === "function" ? out : resolvedPromise(out);
+                } catch (err) {
+                    return rejectedPromise(err);
+                }
+            },
+            catch: function(onRejected) {
+                return this.then(null, onRejected);
+            }
+        };
+    }
+
+    function rejectedPromise(reason) {
+        return {
+            then: function(onFulfilled, onRejected) {
+                if (!onRejected) {
+                    return rejectedPromise(reason);
+                }
+                try {
+                    var out = onRejected(reason);
+                    return out && typeof out.then === "function" ? out : resolvedPromise(out);
+                } catch (err) {
+                    return rejectedPromise(err);
+                }
+            },
+            catch: function(onRejected) {
+                return this.then(null, onRejected);
+            }
+        };
+    }
+
     function normalizeSelectedEpicKeys(value) {
         var list = Array.isArray(value) ? value : value != null && String(value).trim() !== "" ? [value] : [];
         return list
@@ -92,6 +127,13 @@ define("_ujgSB_main", [
         return ld <= 200 || ld % 500 === 0;
     }
 
+    function defaultFieldConfig() {
+        return {
+            epicLinkField: _config.EPIC_LINK_FIELD,
+            sprintField: _config.SPRINT_FIELD
+        };
+    }
+
     function StoryBrowserGadget(API) {
         if (!API) {
             console.error("[UJG-StoryBrowser] API object is missing!");
@@ -119,6 +161,7 @@ define("_ujgSB_main", [
         var persisted = storage.load();
         var activeLoadToken = 0;
         var stagedApiAvailable = hasStagedApi(api);
+        var fieldConfigPromise = null;
         var initialSelectedEpicKeys = normalizeSelectedEpicKeys(
             persisted.selectedEpicKeys != null ? persisted.selectedEpicKeys : persisted.epicFilter
         );
@@ -146,7 +189,9 @@ define("_ujgSB_main", [
             filterOptions: emptyFilterOptions(),
             viewMode: normalizeViewMode(persisted.viewMode),
             expanded: {},
-            loading: false
+            loading: false,
+            fieldConfig: defaultFieldConfig(),
+            fieldConfigReady: false
         };
 
         function persistUiState() {
@@ -276,6 +321,45 @@ define("_ujgSB_main", [
             rendering.renderProgress(0, 0);
         }
 
+        function ensureFieldConfig() {
+            if (
+                !stagedApiAvailable ||
+                typeof api.getFieldMetadata !== "function" ||
+                typeof api.detectFieldConfig !== "function"
+            ) {
+                return resolvedPromise(state.fieldConfig);
+            }
+            if (state.fieldConfigReady) {
+                return resolvedPromise(state.fieldConfig);
+            }
+            if (fieldConfigPromise) {
+                return fieldConfigPromise;
+            }
+            fieldConfigPromise = api.getFieldMetadata().then(
+                function(fields) {
+                    var detected = api.detectFieldConfig(fields || []);
+                    state.fieldConfig = {
+                        epicLinkField:
+                            detected && detected.epicLinkField
+                                ? String(detected.epicLinkField)
+                                : state.fieldConfig.epicLinkField,
+                        sprintField:
+                            detected && detected.sprintField
+                                ? String(detected.sprintField)
+                                : state.fieldConfig.sprintField
+                    };
+                    state.fieldConfigReady = true;
+                    fieldConfigPromise = null;
+                    return state.fieldConfig;
+                },
+                function() {
+                    fieldConfigPromise = null;
+                    return state.fieldConfig;
+                }
+            );
+            return fieldConfigPromise;
+        }
+
         function clearFilters() {
             state.filters.status = "";
             state.filters.epic = "";
@@ -297,7 +381,7 @@ define("_ujgSB_main", [
             state.loadedEpics = [];
             state.loadedStories = issues || [];
             state.loadedChildren = [];
-            state.tree = data.buildTree(issues || []);
+            state.tree = data.buildTree(issues || [], state.fieldConfig);
             refreshFilterOptions();
             state.loading = !!keepLoading;
             rerenderHeader();
@@ -312,7 +396,7 @@ define("_ujgSB_main", [
                 epics: state.loadedEpics,
                 stories: state.loadedStories,
                 children: state.loadedChildren
-            });
+            }, state.fieldConfig);
             refreshFilterOptions();
             state.loading = !!keepLoading;
             rerenderHeader();
@@ -366,11 +450,19 @@ define("_ujgSB_main", [
                 return;
             }
 
+            rendering.renderProgress(0, 1);
             api.getStoriesForEpicKeys(
                 String(projectKey),
                 openEpics.map(function(issue) {
                     return issue.key;
-                })
+                }),
+                function(loaded, total) {
+                    if (loadToken !== activeLoadToken) {
+                        return;
+                    }
+                    rendering.renderProgress(loaded, total);
+                },
+                state.fieldConfig
             ).then(
                 function(stories) {
                     var safeStories = stories || [];
@@ -379,7 +471,17 @@ define("_ujgSB_main", [
                         return;
                     }
                     childKeys = collectChildIssueKeys(safeStories);
-                    api.getIssuesByKeys(childKeys).then(
+                    rendering.renderProgress(0, 1);
+                    api.getIssuesByKeys(
+                        childKeys,
+                        function(loaded, total) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            rendering.renderProgress(loaded, total);
+                        },
+                        state.fieldConfig
+                    ).then(
                         function(children) {
                             if (loadToken !== activeLoadToken) {
                                 return;
@@ -431,31 +533,46 @@ define("_ujgSB_main", [
             rerenderHeader();
             rerenderTree();
             if (stagedApiAvailable) {
-                api.getProjectEpics(String(projectKey)).then(
-                    function(epics) {
-                        if (loadToken !== activeLoadToken) {
-                            return;
-                        }
-                        state.epicCatalog = epics || [];
-                        syncSelectedEpicKeysWithCatalog();
-                        refreshFilterOptions();
-                        rerenderHeader();
-                        rerenderTree();
-                        loadDisplayData(projectKey, loadToken);
-                    },
-                    function() {
-                        if (loadToken !== activeLoadToken) {
-                            return;
-                        }
-                        state.loading = false;
-                        state.epicCatalog = [];
-                        clearLoadedData();
-                        rerenderHeader();
-                        rerenderTree();
-                        clearProgress();
-                        persistUiState();
+                rendering.renderProgress(0, 1);
+                ensureFieldConfig().then(function() {
+                    if (loadToken !== activeLoadToken) {
+                        return;
                     }
-                );
+                    rendering.renderProgress(0, 1);
+                    api.getProjectEpics(
+                        String(projectKey),
+                        function(loaded, total) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            rendering.renderProgress(loaded, total);
+                        }
+                    ).then(
+                        function(epics) {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            state.epicCatalog = epics || [];
+                            syncSelectedEpicKeysWithCatalog();
+                            refreshFilterOptions();
+                            rerenderHeader();
+                            rerenderTree();
+                            loadDisplayData(projectKey, loadToken);
+                        },
+                        function() {
+                            if (loadToken !== activeLoadToken) {
+                                return;
+                            }
+                            state.loading = false;
+                            state.epicCatalog = [];
+                            clearLoadedData();
+                            rerenderHeader();
+                            rerenderTree();
+                            clearProgress();
+                            persistUiState();
+                        }
+                    );
+                });
                 return;
             }
             api

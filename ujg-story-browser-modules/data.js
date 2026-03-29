@@ -51,8 +51,22 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         });
     }
 
-    function readEpicLink(fields) {
-        var v = fields[CONFIG.EPIC_LINK_FIELD];
+    function resolveFieldConfig(fieldConfig) {
+        return {
+            epicLinkField:
+                fieldConfig && fieldConfig.epicLinkField
+                    ? String(fieldConfig.epicLinkField)
+                    : String(CONFIG.EPIC_LINK_FIELD || ""),
+            sprintField:
+                fieldConfig && fieldConfig.sprintField
+                    ? String(fieldConfig.sprintField)
+                    : String(CONFIG.SPRINT_FIELD || "")
+        };
+    }
+
+    function readEpicLink(fields, fieldConfig) {
+        var resolved = resolveFieldConfig(fieldConfig);
+        var v = fields[resolved.epicLinkField];
         if (v == null || v === "") {
             return "";
         }
@@ -63,6 +77,11 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             return String(v.key);
         }
         return "";
+    }
+
+    function readSprint(fields, fieldConfig) {
+        var resolved = resolveFieldConfig(fieldConfig);
+        return fields[resolved.sprintField];
     }
 
     function extractTransitions(changelog) {
@@ -143,7 +162,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         (node.children || []).forEach(assignProblemItems);
     }
 
-    function normalizeIssue(issue) {
+    function normalizeIssue(issue, fieldConfig) {
         var f = issue.fields || {};
         var st = f.status || {};
         var typeName = f.issuetype && f.issuetype.name != null ? String(f.issuetype.name) : "";
@@ -183,7 +202,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             badge: utils.getTypeBadge(f.issuetype),
             priority: utils.getPriorityName(f.priority),
             assignee: assignee,
-            sprint: utils.getSprintName(f[CONFIG.SPRINT_FIELD]),
+            sprint: utils.getSprintName(readSprint(f, fieldConfig)),
             estimate: isFinite(est) ? est : 0,
             spent: isFinite(spent) ? spent : 0,
             components: (f.components || [])
@@ -198,7 +217,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
                 })
                 .filter(Boolean),
             parentKey: f.parent && f.parent.key != null ? String(f.parent.key) : "",
-            epicLink: readEpicLink(f),
+            epicLink: readEpicLink(f, fieldConfig),
             created: f.created != null ? String(f.created) : "",
             updated: f.updated != null ? String(f.updated) : "",
             isDone: utils.isDone(st),
@@ -295,7 +314,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         node.progress = totalCount > 0 ? totalDone / totalCount : 0;
     }
 
-    function buildLegacyTree(rawIssues) {
+    function buildLegacyTree(rawIssues, fieldConfig) {
         var list = rawIssues || [];
         var keyToNode = {};
         var order = [];
@@ -303,7 +322,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            var n = normalizeIssue(issue);
+            var n = normalizeIssue(issue, fieldConfig);
             keyToNode[issue.key] = n;
             order.push(issue.key);
         });
@@ -350,7 +369,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         return root;
     }
 
-    function buildPayloadTree(payload) {
+    function buildPayloadTree(payload, fieldConfig) {
         var rawEpics = payload && Array.isArray(payload.epics) ? payload.epics : [];
         var rawStories = payload && Array.isArray(payload.stories) ? payload.stories : [];
         var rawChildren = payload && Array.isArray(payload.children) ? payload.children : [];
@@ -363,7 +382,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            childMap[String(issue.key)] = normalizeIssue(issue);
+            childMap[String(issue.key)] = normalizeIssue(issue, fieldConfig);
         });
 
         rawEpics.forEach(function(issue) {
@@ -371,7 +390,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            epic = normalizeIssue(issue);
+            epic = normalizeIssue(issue, fieldConfig);
             if (epic.type !== CONFIG.EPIC_ISSUE_TYPE || epic.isDone) {
                 return;
             }
@@ -386,7 +405,7 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
             if (!issue || !issue.key) {
                 return;
             }
-            story = normalizeIssue(issue);
+            story = normalizeIssue(issue, fieldConfig);
             epicKey = story.epicLink;
             if (story.type !== CONFIG.STORY_ISSUE_TYPE || !epicKey || !epicMap[epicKey]) {
                 return;
@@ -412,11 +431,11 @@ define("_ujgSB_data", ["_ujgSB_config", "_ujgSB_utils"], function(config, utils)
         return roots;
     }
 
-    function buildTree(input) {
+    function buildTree(input, fieldConfig) {
         if (Array.isArray(input)) {
-            return buildLegacyTree(input);
+            return buildLegacyTree(input, fieldConfig);
         }
-        return buildPayloadTree(input);
+        return buildPayloadTree(input, fieldConfig);
     }
 
     function walkTree(nodes, visit) {

@@ -1197,7 +1197,7 @@ test("story browser main staged load fetches full epic catalog before display da
     }
   });
 
-  await flushTurns(4);
+  await flushTurns(5);
   var svc = d.rendering.initCalls[0].services;
 
   assert.equal(log.join(">"), "epics:P1>stories:P1:E-10>children:C-1");
@@ -1209,6 +1209,140 @@ test("story browser main staged load fetches full epic catalog before display da
   assert.equal(svc.state.filterOptions.epics.length, 2);
   assert.equal(svc.state.filterOptions.epics[0].key, "E-10");
   assert.equal(svc.state.filterOptions.epics[1].key, "E-20");
+});
+
+test("story browser main detects field ids before staged loading and shows progress", async function() {
+  var d = baseDeps();
+  var storyFieldConfig = null;
+  var childFieldConfig = null;
+  var buildFieldConfig = null;
+
+  d.api.getProjects = function() {
+    return resolved([{ key: "P1", name: "One" }]);
+  };
+  d.api.getFieldMetadata = function() {
+    return resolved([
+      {
+        id: "customfield_10008",
+        name: "Epic Link",
+        schema: { custom: "com.pyxis.greenhopper.jira:gh-epic-link" }
+      },
+      {
+        id: "customfield_10007",
+        name: "Sprint",
+        schema: { custom: "com.pyxis.greenhopper.jira:gh-sprint" }
+      }
+    ]);
+  };
+  d.api.detectFieldConfig = function() {
+    return {
+      epicLinkField: "customfield_10008",
+      sprintField: "customfield_10007"
+    };
+  };
+  d.api.getProjectEpics = function(_projectKey, onProgress) {
+    if (onProgress) {
+      onProgress(1, 1, [makeIssue("E-1", "Epic")]);
+    }
+    return resolved([makeIssue("E-1", "Epic")]);
+  };
+  d.api.getStoriesForEpicKeys = function(_projectKey, epicKeys, onProgress, fieldConfig) {
+    storyFieldConfig = fieldConfig;
+    if (onProgress) {
+      onProgress(1, 1, [
+        makeIssue("S-1", "Story", {
+          customfield_10008: epicKeys[0],
+          issuelinks: [
+            {
+              type: { outward: "child", inward: "parent" },
+              outwardIssue: { key: "C-1" }
+            }
+          ]
+        })
+      ]);
+    }
+    return resolved([
+      makeIssue("S-1", "Story", {
+        customfield_10008: epicKeys[0],
+        issuelinks: [
+          {
+            type: { outward: "child", inward: "parent" },
+            outwardIssue: { key: "C-1" }
+          }
+        ]
+      })
+    ]);
+  };
+  d.api.getIssuesByKeys = function(_issueKeys, onProgress, fieldConfig) {
+    childFieldConfig = fieldConfig;
+    if (onProgress) {
+      onProgress(1, 1, [
+        makeIssue("C-1", "Task", {
+          customfield_10007: [{ name: "Sprint override" }]
+        })
+      ]);
+    }
+    return resolved([
+      makeIssue("C-1", "Task", {
+        customfield_10007: [{ name: "Sprint override" }]
+      })
+    ]);
+  };
+  d.data.buildTree = function(payload, fieldConfig) {
+    buildFieldConfig = fieldConfig;
+    return [
+      {
+        key: payload.epics[0].key,
+        type: "Epic",
+        children: payload.stories.map(function(issue) {
+          return { key: issue.key, type: "Story", children: [] };
+        })
+      }
+    ];
+  };
+  d.data.collectFilters = function(_tree, epicCatalog) {
+    return {
+      statuses: [],
+      sprints: [],
+      epics: epicCatalog.map(function(issue) {
+        return { key: issue.key, summary: issue.fields.summary };
+      })
+    };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await flushTurns(5);
+
+  assert.ok(storyFieldConfig);
+  assert.equal(storyFieldConfig.epicLinkField, "customfield_10008");
+  assert.equal(storyFieldConfig.sprintField, "customfield_10007");
+  assert.ok(childFieldConfig);
+  assert.equal(childFieldConfig.epicLinkField, "customfield_10008");
+  assert.equal(childFieldConfig.sprintField, "customfield_10007");
+  assert.ok(buildFieldConfig);
+  assert.equal(buildFieldConfig.epicLinkField, "customfield_10008");
+  assert.equal(buildFieldConfig.sprintField, "customfield_10007");
+  assert.equal(
+    d.rendering.progressCalls.some(function(call) {
+      return call.loaded === 0 && call.total === 1;
+    }),
+    true
+  );
+  assert.equal(
+    d.rendering.progressCalls.some(function(call) {
+      return call.loaded === 1 && call.total === 1;
+    }),
+    true
+  );
 });
 
 test("story browser main refetches only when epic selection changes", async function() {
@@ -1262,12 +1396,12 @@ test("story browser main refetches only when epic selection changes", async func
     }
   });
 
-  await flushTurns(4);
+  await flushTurns(5);
   var svc = d.rendering.initCalls[0].services;
   assert.equal(storyCalls[0], "E-1|E-2");
 
   svc.onEpicChange("E-2");
-  await flushTurns(4);
+  await flushTurns(5);
 
   assert.equal(storyCalls[1], "E-2");
   assert.equal(Array.isArray(svc.state.selectedEpicKeys), true);
@@ -1338,10 +1472,10 @@ test("story browser main selecting only closed epics yields empty tree without l
     }
   });
 
-  await flushTurns(4);
+  await flushTurns(5);
   var svc = d.rendering.initCalls[0].services;
   svc.onEpicChange("E-2");
-  await flushTurns(4);
+  await flushTurns(5);
 
   assert.equal(svc.state.tree.length, 0);
   assert.equal(svc.state.filteredTree.length, 0);
@@ -1407,7 +1541,7 @@ test("story browser main keeps stories when child issue fetch fails", async func
     }
   });
 
-  await flushTurns(4);
+  await flushTurns(5);
   var svc = d.rendering.initCalls[0].services;
 
   assert.ok(buildPayload);

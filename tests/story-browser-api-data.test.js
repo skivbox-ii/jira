@@ -397,6 +397,39 @@ test("getProjectEpics posts epic-only search", async function() {
     assert.equal(issues.length, 0);
 });
 
+test("getFieldMetadata requests Jira field catalog", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.type, "GET");
+        assert.equal(options.url, "https://jira.example.com/rest/api/2/field");
+        return resolvedAjax([{ id: "customfield_10008", name: "Epic Link" }]);
+    });
+    const api = loadApi(jquery);
+    const fields = await api.getFieldMetadata();
+    assert.equal(Array.isArray(fields), true);
+    assert.equal(fields[0].id, "customfield_10008");
+});
+
+test("detectFieldConfig derives epic and sprint fields from metadata", function() {
+    const jquery = createJqueryStub(function() {
+        return resolvedAjax([]);
+    });
+    const api = loadApi(jquery);
+    const detected = api.detectFieldConfig([
+        {
+            id: "customfield_10008",
+            name: "Epic Link",
+            schema: { custom: "com.pyxis.greenhopper.jira:gh-epic-link" }
+        },
+        {
+            id: "customfield_10007",
+            name: "Sprint",
+            schema: { custom: "com.pyxis.greenhopper.jira:gh-sprint" }
+        }
+    ]);
+    assert.equal(detected.epicLinkField, "customfield_10008");
+    assert.equal(detected.sprintField, "customfield_10007");
+});
+
 test("getStoriesForEpicKeys posts story search scoped by epic link field", async function() {
     const config = loadConfig(mockWindow());
     const jquery = createJqueryStub(function(options) {
@@ -410,6 +443,30 @@ test("getStoriesForEpicKeys posts story search scoped by epic link field", async
     const api = loadApiWithConfig(jquery, config);
 
     const issues = await api.getStoriesForEpicKeys("DEMO", ["DEMO-2", "DEMO-10"]);
+    assert.ok(Array.isArray(issues));
+    assert.equal(issues.length, 0);
+});
+
+test("getStoriesForEpicKeys uses detected epic link field override", async function() {
+    const config = loadConfig(mockWindow());
+    const jquery = createJqueryStub(function(options) {
+        const body = JSON.parse(options.data);
+        assert.equal(
+            body.jql,
+            "project = DEMO AND issuetype = Story AND cf[10008] in (DEMO-2) ORDER BY key ASC"
+        );
+        assert.equal(body.fields.includes("customfield_10008"), true);
+        assert.equal(body.fields.includes("customfield_10014"), false);
+        return resolvedAjax({ total: 0, issues: [] });
+    });
+    const api = loadApiWithConfig(jquery, config);
+
+    const issues = await api.getStoriesForEpicKeys(
+        "DEMO",
+        ["DEMO-2"],
+        null,
+        { epicLinkField: "customfield_10008", sprintField: "customfield_10020" }
+    );
     assert.ok(Array.isArray(issues));
     assert.equal(issues.length, 0);
 });
@@ -541,6 +598,46 @@ test("buildTree payload keeps only open epics, only stories, and linked child is
     assert.equal(tree[0].children[0].children[1].classification, "NO PREFIX");
     assert.equal(tree[0].children[0].children[1].classificationMissing, true);
     assert.equal(tree[0].children[0].children[0].browseUrl, "https://jira.example.com/browse/BE-1");
+});
+
+test("buildTree respects provided epic and sprint field overrides", function() {
+    const data = loadData();
+    const tree = data.buildTree(
+        {
+            epics: [
+                issueFixture({
+                    key: "E-1",
+                    fields: {
+                        summary: "Epic override",
+                        issuetype: { name: "Epic" }
+                    }
+                })
+            ],
+            stories: [
+                issueFixture({
+                    key: "S-1",
+                    fields: {
+                        summary: "Story via override",
+                        issuetype: { name: "Story" },
+                        customfield_10014: null,
+                        customfield_10008: "E-1",
+                        customfield_10007: [{ name: "Sprint Override" }]
+                    }
+                })
+            ],
+            children: []
+        },
+        {
+            epicLinkField: "customfield_10008",
+            sprintField: "customfield_10007"
+        }
+    );
+
+    assert.equal(tree.length, 1);
+    assert.equal(tree[0].key, "E-1");
+    assert.equal(tree[0].children.length, 1);
+    assert.equal(tree[0].children[0].key, "S-1");
+    assert.equal(tree[0].children[0].sprint, "Sprint Override");
 });
 
 test("collectFilters keeps full epic catalog sorted by issue number", function() {
