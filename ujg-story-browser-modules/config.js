@@ -81,6 +81,14 @@ define("_ujgSB_config", [], function() {
     var SPRINT_FIELD = "customfield_10020";
     var STORAGE_KEY = "ujg-sb-state";
 
+    var CREATE_TEMPLATE_ROLES = [
+        { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
+        { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
+        { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
+        { role: "QA", issueType: "QA", summary: "Тестирование" },
+        { role: "DO", issueType: "DevOps", summary: "Подготовка окружения / деплой" }
+    ];
+
     function trimSlash(s) {
         return s.replace(/\/+$/, "");
     }
@@ -119,6 +127,7 @@ define("_ujgSB_config", [], function() {
         ISSUE_FIELDS: ISSUE_FIELDS,
         EPIC_LINK_FIELD: EPIC_LINK_FIELD,
         SPRINT_FIELD: SPRINT_FIELD,
-        STORAGE_KEY: STORAGE_KEY
+        STORAGE_KEY: STORAGE_KEY,
+        CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES
     };
 });

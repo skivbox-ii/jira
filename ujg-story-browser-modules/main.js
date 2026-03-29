@@ -5,8 +5,9 @@ define("_ujgSB_main", [
     "_ujgSB_storage",
     "_ujgSB_api",
     "_ujgSB_data",
-    "_ujgSB_rendering"
-], function($, _config, _utils, storage, api, data, rendering) {
+    "_ujgSB_rendering",
+    "_ujgSB_create-story"
+], function($, _config, _utils, storage, api, data, rendering, createStory) {
     "use strict";
 
     function normalizeViewMode(mode) {
@@ -73,7 +74,12 @@ define("_ujgSB_main", [
             filterOptions: emptyFilterOptions(),
             viewMode: normalizeViewMode(persisted.viewMode),
             expanded: {},
-            loading: false
+            loading: false,
+            createStory: {
+                isOpen: false,
+                draft: null,
+                context: null
+            }
         };
 
         function persistUiState() {
@@ -208,6 +214,15 @@ define("_ujgSB_main", [
                 return;
             }
             var previousProject = state.project;
+            if (
+                state.createStory.isOpen ||
+                (previousProject != null && String(previousProject) !== String(projectKey))
+            ) {
+                state.createStory.isOpen = false;
+                state.createStory.draft = null;
+                state.createStory.context = null;
+                rendering.clearCreateStoryModal();
+            }
             activeLoadToken += 1;
             var loadToken = activeLoadToken;
             state.loading = true;
@@ -262,6 +277,7 @@ define("_ujgSB_main", [
 
         var services = {
             state: state,
+            api: api,
             onProjectChange: function(key) {
                 loadProject(key);
             },
@@ -303,6 +319,59 @@ define("_ujgSB_main", [
             },
             onToggleEpic: function(key) {
                 toggleExpandedKey(key);
+            },
+            onOpenCreateStory: function() {
+                state.createStory.isOpen = true;
+                state.createStory.context = null;
+                state.createStory.draft = createStory.makeDefaultDraft(state.project);
+                rendering.renderCreateStoryModal(state.createStory.draft);
+            },
+            onCloseCreateStory: function() {
+                state.createStory.isOpen = false;
+                state.createStory.draft = null;
+                state.createStory.context = null;
+                rendering.clearCreateStoryModal();
+            },
+            onSubmitCreateStory: function() {
+                var draft = state.createStory.draft;
+                if (!draft) {
+                    return;
+                }
+                createStory.validateDraft(draft, { purpose: "submit" });
+                if (createStory.hasSubmitValidationErrors(draft)) {
+                    rendering.renderCreateStoryModal(draft);
+                    return;
+                }
+                createStory.submitCreateDraft(api, draft).then(
+                    function(result) {
+                        if (result && result.skipped) {
+                            return;
+                        }
+                        if (!result || !result.ok) {
+                            if (state.createStory.isOpen && state.createStory.draft === draft) {
+                                rendering.renderCreateStoryModal(draft);
+                            }
+                            return;
+                        }
+                        var currentDraft = state.createStory.draft;
+                        if (currentDraft === draft) {
+                            if (state.createStory.isOpen) {
+                                state.createStory.isOpen = false;
+                                state.createStory.draft = null;
+                                state.createStory.context = null;
+                                rendering.clearCreateStoryModal();
+                            }
+                            loadProject(state.project, false);
+                        } else if (!state.createStory.isOpen) {
+                            loadProject(state.project, false);
+                        }
+                    },
+                    function() {
+                        if (state.createStory.isOpen && state.createStory.draft === draft) {
+                            rendering.renderCreateStoryModal(draft);
+                        }
+                    }
+                );
             }
         };
 

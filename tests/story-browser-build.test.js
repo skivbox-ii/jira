@@ -74,3 +74,15 @@ test("CLI: node build-story-browser.js from worktree root updates output", () =>
     });
     assert.ok(fs.existsSync(OUTPUT_FILE));
 });
+
+test("MODULE_ORDER includes create-story.js after data.js and before rendering.js", () => {
+    const { build } = require(BUILD_SCRIPT);
+    const order = build.MODULE_ORDER;
+    assert.ok(order.includes("create-story.js"), "create-story.js is bundled");
+    const iData = order.indexOf("data.js");
+    const iCreate = order.indexOf("create-story.js");
+    const iRendering = order.indexOf("rendering.js");
+    assert.ok(iData >= 0 && iRendering >= 0);
+    assert.ok(iCreate > iData, "create-story.js after data.js");
+    assert.ok(iCreate < iRendering, "create-story.js before rendering.js");
+});

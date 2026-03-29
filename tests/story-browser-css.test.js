@@ -79,7 +79,32 @@ test("story-browser CSS: 2 contract selectors and key properties", function() {
         "ujg-sb-priority-medium",
         "ujg-sb-priority-low",
         "ujg-sb-priority-lowest",
-        "ujg-sb-priority-default"
+        "ujg-sb-priority-default",
+        "ujg-sb-popup-host",
+        "ujg-sb-create-overlay",
+        "ujg-sb-create-dialog",
+        "ujg-sb-create-header",
+        "ujg-sb-create-tree",
+        "ujg-sb-inline-editor",
+        "ujg-sb-chip-trigger",
+        "ujg-sb-chip-list",
+        "ujg-sb-create-header-actions",
+        "ujg-sb-create-submit",
+        "ujg-sb-create-close",
+        "ujg-sb-create-form-errors",
+        "ujg-sb-create-epic-toolbar",
+        "ujg-sb-create-epic-existing",
+        "ujg-sb-create-row-error",
+        "ujg-sb-create-assignee-trigger",
+        "ujg-sb-create-component-trigger",
+        "ujg-sb-create-label-trigger",
+        "ujg-sb-create-selector-panel",
+        "ujg-sb-create-selector-option",
+        "ujg-sb-create-selector-search",
+        "ujg-sb-create-selector-error",
+        "ujg-sb-create-row-errors",
+        "ujg-sb-create-created-key",
+        "ujg-sb-chip"
     ];
     var si;
     for (si = 0; si < selectors.length; si++) {
@@ -153,4 +178,36 @@ test("story-browser CSS: standalone widget controls have semantic styles and tok
     assert.match(css, /var\(--foreground,\s*[^)]+\)/i, "theme tokens should provide foreground fallback");
     assert.match(css, /var\(--border,\s*[^)]+\)/i, "theme tokens should provide border fallback");
     assert.match(css, /var\(--primary,\s*[^)]+\)/i, "theme tokens should provide primary fallback");
+});
+
+test("story-browser CSS: 4 create-modal shell and inline editor layout", function() {
+    const css = readCss();
+
+    assert.match(css, /\.ujg-story-browser\s+\.ujg-sb-popup-host\b/, "popup host scoped under widget");
+    assert.match(css, /\.ujg-sb-popup-host\s+\.ujg-sb-create-overlay\b/, "create overlay under dedicated popup host mount");
+    assert.match(css, /\.ujg-story-browser\s+\.ujg-sb-create-overlay\b/, "create overlay scoped under widget");
+
+    const overlay = blockForClass(css, "ujg-sb-create-overlay");
+    assert.ok(overlay, ".ujg-sb-create-overlay block");
+    assert.match(overlay, /position\s*:\s*fixed|position\s*:\s*absolute/i, "overlay covers viewport");
+
+    const dialog = blockForClass(css, "ujg-sb-create-dialog");
+    assert.ok(dialog, ".ujg-sb-create-dialog block");
+    assert.match(dialog, /max-width|width/i, "dialog sized");
+
+    const createHeader = blockForClass(css, "ujg-sb-create-header");
+    assert.ok(createHeader, ".ujg-sb-create-header block");
+    assert.match(createHeader, /position\s*:\s*sticky/i, "create header sticky");
+
+    const tree = blockForClass(css, "ujg-sb-create-tree");
+    assert.ok(tree, ".ujg-sb-create-tree block");
+    assert.match(tree, /display\s*:\s*flex|flex-direction|gap/i, "tree row layout");
+
+    const inlineEd = blockForClass(css, "ujg-sb-inline-editor");
+    assert.ok(inlineEd, ".ujg-sb-inline-editor block");
+    assert.match(inlineEd, /border|box-sizing/i, "inline editor bordered");
+
+    const chipList = blockForClass(css, "ujg-sb-chip-list");
+    const chipTrig = blockForClass(css, "ujg-sb-chip-trigger");
+    assert.ok(chipList && chipTrig, "chip list and trigger blocks");
 });

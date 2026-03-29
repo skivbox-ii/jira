@@ -16,6 +16,7 @@ var MODULE_ORDER = [
     "storage.js",
     "api.js",
     "data.js",
+    "create-story.js",
     "rendering.js",
     "main.js"
 ];

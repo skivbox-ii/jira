@@ -195,6 +195,143 @@ test("getProjects requests Jira project list", async function() {
     assert.equal(projects[0].key, "P");
 });
 
+test("api module exposes create-history helper methods", async function() {
+    const jquery = createJqueryStub(function() {
+        return resolvedAjax({});
+    });
+    const api = loadApi(jquery);
+    assert.equal(typeof api.getProjectCreateMeta, "function");
+    assert.equal(typeof api.getProjectComponents, "function");
+    assert.equal(typeof api.searchUsers, "function");
+    assert.equal(typeof api.searchLabels, "function");
+    assert.equal(typeof api.createIssue, "function");
+});
+
+test("getProjectComponents GETs project components endpoint", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.type, "GET");
+        assert.equal(options.url, "https://jira.example.com/rest/api/2/project/CORE/components");
+        assert.equal(options.dataType, "json");
+        return resolvedAjax([{ id: "10000", name: "Frontend" }]);
+    });
+    const api = loadApi(jquery);
+    return api.getProjectComponents("CORE").then(function(comps) {
+        assert.deepEqual(comps, [{ id: "10000", name: "Frontend" }]);
+    });
+});
+
+test("getProjectCreateMeta GETs createmeta with projectKeys and expand", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.type, "GET");
+        assert.equal(options.url, "https://jira.example.com/rest/api/2/issue/createmeta");
+        assert.equal(options.dataType, "json");
+        assert.equal(options.data.projectKeys, "CORE");
+        assert.equal(options.data.expand, "projects.issuetypes.fields");
+        return resolvedAjax({ projects: [{ key: "CORE", name: "Core" }] });
+    });
+    const api = loadApi(jquery);
+    return api.getProjectCreateMeta("CORE").then(function(meta) {
+        assert.deepEqual(meta.projects[0].key, "CORE");
+    });
+});
+
+test("getProjectCreateMeta coerces missing projectKey to empty projectKeys", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.data.projectKeys, "");
+        assert.equal(options.data.expand, "projects.issuetypes.fields");
+        return resolvedAjax({ projects: [] });
+    });
+    const api = loadApi(jquery);
+    return api.getProjectCreateMeta();
+});
+
+test("searchUsers GETs user picker with query and maxResults", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.type, "GET");
+        assert.equal(options.url, "https://jira.example.com/rest/api/2/user/picker");
+        assert.equal(options.dataType, "json");
+        assert.equal(options.data.query, "alice");
+        assert.equal(options.data.maxResults, 10);
+        return resolvedAjax({ users: [{ name: "alice" }] });
+    });
+    const api = loadApi(jquery);
+    return api.searchUsers("alice").then(function(body) {
+        assert.deepEqual(body.users, [{ name: "alice" }]);
+    });
+});
+
+test("searchUsers coerces missing query to empty string", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.data.query, "");
+        assert.equal(options.data.maxResults, 10);
+        return resolvedAjax({ users: [] });
+    });
+    const api = loadApi(jquery);
+    return api.searchUsers();
+});
+
+test("searchLabels POSTs search for recent project issues with labels field only", async function() {
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.type, "POST");
+        assert.equal(options.url, "https://jira.example.com/rest/api/2/search");
+        assert.equal(options.contentType, "application/json");
+        assert.equal(options.dataType, "json");
+        const body = JSON.parse(options.data);
+        assert.deepEqual(body.fields, ["labels"]);
+        assert.equal(body.jql, "project = DEMO ORDER BY updated DESC");
+        assert.equal(body.maxResults, 50);
+        return resolvedAjax({ issues: [], total: 0 });
+    });
+    const api = loadApi(jquery);
+    return api.searchLabels("DEMO", "");
+});
+
+test("searchLabels adds labels JQL clause when query is non-empty", async function() {
+    const jquery = createJqueryStub(function(options) {
+        const body = JSON.parse(options.data);
+        assert.equal(body.jql, 'project = DEMO AND labels ~ "api" ORDER BY updated DESC');
+        return resolvedAjax({ issues: [], total: 0 });
+    });
+    const api = loadApi(jquery);
+    return api.searchLabels("DEMO", "api");
+});
+
+test("searchLabels quotes unusual project keys in JQL", async function() {
+    const jquery = createJqueryStub(function(options) {
+        const body = JSON.parse(options.data);
+        assert.deepEqual(body.fields, ["labels"]);
+        assert.equal(
+            body.jql,
+            'project = "QA \\"Ops\\" / Team" ORDER BY updated DESC'
+        );
+        return resolvedAjax({ issues: [], total: 0 });
+    });
+    const api = loadApi(jquery);
+    return api.searchLabels('QA "Ops" / Team', "");
+});
+
+test("createIssue POSTs JSON body to issue endpoint", async function() {
+    const payload = {
+        fields: {
+            project: { key: "CORE" },
+            summary: "New story",
+            issuetype: { name: "Story" }
+        }
+    };
+    const jquery = createJqueryStub(function(options) {
+        assert.equal(options.type, "POST");
+        assert.equal(options.url, "https://jira.example.com/rest/api/2/issue");
+        assert.equal(options.contentType, "application/json");
+        assert.equal(options.dataType, "json");
+        assert.deepEqual(JSON.parse(options.data), payload);
+        return resolvedAjax({ id: "10001", key: "CORE-42", self: "https://jira.example.com/rest/api/2/issue/10001" });
+    });
+    const api = loadApi(jquery);
+    return api.createIssue(payload).then(function(created) {
+        assert.equal(created.key, "CORE-42");
+    });
+});
+
 test("getProjectIssues posts search with expected body and paginates", async function() {
     const config = loadConfig(mockWindow());
     const fieldsList = config.ISSUE_FIELDS.split(",");

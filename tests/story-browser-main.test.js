@@ -240,7 +240,8 @@ function loadMain(deps) {
     _ujgSB_storage: deps.storage,
     _ujgSB_api: deps.api,
     _ujgSB_data: deps.data,
-    _ujgSB_rendering: deps.rendering
+    _ujgSB_rendering: deps.rendering,
+    "_ujgSB_create-story": deps.createStory
   });
 }
 
@@ -269,9 +270,40 @@ function baseDeps(overrides) {
     renderProgress: function(loaded, total) {
       rendering.progressCalls.push({ loaded: loaded, total: total });
     },
+    renderCreateStoryModalCalls: [],
+    renderCreateStoryModal: function(draft) {
+      rendering.renderCreateStoryModalCalls.push(draft);
+    },
+    clearCreateStoryModalCalls: 0,
+    clearCreateStoryModal: function() {
+      rendering.clearCreateStoryModalCalls += 1;
+    },
     headerCalls: 0,
     treeCalls: [],
     progressCalls: []
+  };
+  var createStory = {
+    makeDefaultDraftCalls: [],
+    makeDefaultDraft: function(projectKey) {
+      createStory.makeDefaultDraftCalls.push(projectKey);
+      return {
+        projectKey: projectKey != null ? String(projectKey) : "",
+        mode: "draft",
+        epicMode: "existingEpic",
+        existingEpicKey: "P1-EP",
+        story: { summary: "S", errors: [], assignee: null, components: [], labels: [] },
+        children: [],
+        ui: { formErrors: [] },
+        _fromTest: true
+      };
+    },
+    validateDraft: function() {},
+    hasSubmitValidationErrors: function() {
+      return false;
+    },
+    submitCreateDraft: function() {
+      return resolved({ ok: true });
+    }
   };
   var api = {
     getProjects: function() {
@@ -312,6 +344,7 @@ function baseDeps(overrides) {
     storage: storage,
     data: data,
     rendering: rendering,
+    createStory: createStory,
     api: api,
     jquery: createJQuery()
   };
@@ -423,6 +456,10 @@ test("story browser main passes callbacks and state to rendering.init", async fu
   assert.ok(typeof svc.onCollapseAll === "function");
   assert.ok(typeof svc.onToggleExpandedKey === "function");
   assert.ok(typeof svc.onToggleEpic === "function");
+  assert.ok(typeof svc.onOpenCreateStory === "function");
+  assert.ok(typeof svc.onCloseCreateStory === "function");
+  assert.ok(typeof svc.onSubmitCreateStory === "function");
+  assert.ok(svc.api);
   assert.ok(svc.state);
   assert.equal(svc.state.filters.status, "");
   assert.equal(svc.state.filters.epic, "");
@@ -1101,4 +1138,383 @@ test("story browser main surfaces partial tree and filter options while project 
   assert.equal(svc.state.loading, false);
   assert.equal(svc.state.tree[0].key, "final-tree");
   assert.equal(svc.state.filterOptions.epics[0].key, "final-tree");
+});
+
+test("story browser main onOpenCreateStory sets state and renders modal via popup host helper", async function() {
+  var d = baseDeps();
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  assert.ok(svc.state.createStory);
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(svc.state.createStory.draft, null);
+
+  svc.onOpenCreateStory();
+
+  assert.equal(svc.state.createStory.isOpen, true);
+  assert.ok(svc.state.createStory.draft);
+  assert.equal(svc.state.createStory.draft.projectKey, "P1");
+  assert.equal(d.createStory.makeDefaultDraftCalls.length, 1);
+  assert.equal(d.createStory.makeDefaultDraftCalls[0], "P1");
+  assert.equal(d.rendering.renderCreateStoryModalCalls.length, 1);
+  assert.strictEqual(d.rendering.renderCreateStoryModalCalls[0], svc.state.createStory.draft);
+});
+
+test("story browser main onCloseCreateStory clears modal without reloading project issues", async function() {
+  var d = baseDeps();
+  var issuesSpy = 0;
+  d.api.getProjectIssues = function(key, onProgress) {
+    issuesSpy += 1;
+    if (onProgress) {
+      onProgress(1, 1);
+    }
+    return resolved([]);
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  var issuesAfterLoad = issuesSpy;
+
+  svc.onOpenCreateStory();
+  assert.equal(issuesSpy, issuesAfterLoad);
+
+  svc.onCloseCreateStory();
+
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(svc.state.createStory.draft, null);
+  assert.equal(d.rendering.clearCreateStoryModalCalls, 1);
+  assert.equal(issuesSpy, issuesAfterLoad);
+});
+
+test("story browser main closes create-story modal and resets state when project load starts (switch)", async function() {
+  var d = baseDeps();
+  d.api.getProjects = function() {
+    return resolved([
+      { key: "P1", name: "One" },
+      { key: "P2", name: "Two" }
+    ]);
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  assert.equal(svc.state.project, "P1");
+
+  svc.onOpenCreateStory();
+  assert.equal(svc.state.createStory.isOpen, true);
+  assert.ok(svc.state.createStory.draft);
+  assert.equal(d.rendering.clearCreateStoryModalCalls, 0);
+
+  svc.onProjectChange("P2");
+
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(svc.state.createStory.draft, null);
+  assert.equal(svc.state.createStory.context, null);
+  assert.equal(d.rendering.clearCreateStoryModalCalls, 1);
+  assert.equal(svc.state.project, "P2");
+});
+
+test("story browser main closes create-story when switching projects while prior load is in flight", async function() {
+  var d = baseDeps();
+  var p1 = createDeferred();
+  d.api.getProjects = function() {
+    return resolved([
+      { key: "P1", name: "One" },
+      { key: "P2", name: "Two" }
+    ]);
+  };
+  d.api.getProjectIssues = function(key) {
+    if (key === "P1") {
+      return p1.promise();
+    }
+    if (key === "P2") {
+      return resolved([]);
+    }
+    throw new Error("Unexpected project key: " + key);
+  };
+  d.data.buildTree = function(issues) {
+    if (!issues || !issues.length) {
+      return [];
+    }
+    return [{ key: issues[0].treeKey, type: "Epic", children: [] }];
+  };
+  d.data.collectFilters = function(tree) {
+    return { statuses: [], sprints: [], epics: [] };
+  };
+  d.data.filterTree = function(tree) {
+    return tree;
+  };
+
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  assert.equal(svc.state.loading, true);
+  assert.equal(svc.state.project, "P1");
+
+  svc.onOpenCreateStory();
+  assert.equal(svc.state.createStory.isOpen, true);
+
+  svc.onProjectChange("P2");
+  await nextTurn();
+
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(svc.state.createStory.draft, null);
+  assert.equal(d.rendering.clearCreateStoryModalCalls, 1);
+  assert.equal(svc.state.project, "P2");
+
+  p1.resolve([]);
+  await nextTurn();
+  assert.equal(svc.state.project, "P2");
+});
+
+test("story browser main onSubmitCreateStory with validation errors rerenders modal without reloading issues", async function() {
+  var d = baseDeps();
+  var issuesSpy = 0;
+  d.api.getProjectIssues = function(key, onProgress) {
+    issuesSpy += 1;
+    if (onProgress) {
+      onProgress(1, 1);
+    }
+    return resolved([]);
+  };
+  d.createStory.hasSubmitValidationErrors = function() {
+    return true;
+  };
+  var modalCalls = 0;
+  var origRender = d.rendering.renderCreateStoryModal;
+  d.rendering.renderCreateStoryModal = function(draft) {
+    modalCalls += 1;
+    return origRender.call(d.rendering, draft);
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  var afterLoad = issuesSpy;
+  svc.onOpenCreateStory();
+  var afterOpen = modalCalls;
+  svc.onSubmitCreateStory();
+  assert.ok(modalCalls > afterOpen, "modal rerender on validation failure");
+  assert.equal(issuesSpy, afterLoad, "no project reload when validation fails");
+});
+
+test("story browser main onSubmitCreateStory success closes modal and reloads current project", async function() {
+  var d = baseDeps();
+  var issuesSpy = 0;
+  d.api.getProjectIssues = function(key, onProgress) {
+    issuesSpy += 1;
+    if (onProgress) {
+      onProgress(1, 1);
+    }
+    return resolved([]);
+  };
+  d.createStory.submitCreateDraft = function() {
+    return resolved({ ok: true });
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  var afterLoad = issuesSpy;
+  svc.onOpenCreateStory();
+  assert.equal(svc.state.createStory.isOpen, true);
+  svc.onSubmitCreateStory();
+  await nextTurn();
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(svc.state.createStory.draft, null);
+  assert.equal(d.rendering.clearCreateStoryModalCalls, 1);
+  assert.ok(issuesSpy > afterLoad, "loadProject refreshes issues after successful submit");
+});
+
+test("story browser main does not rerender create modal on submit failure after user closed modal", async function() {
+  var d = baseDeps();
+  var pSubmit = createDeferred();
+  d.createStory.submitCreateDraft = function() {
+    return pSubmit.promise();
+  };
+  var svc;
+  var modalRenderWhileClosed = 0;
+  var origRender = d.rendering.renderCreateStoryModal;
+  d.rendering.renderCreateStoryModal = function(draft) {
+    if (svc && !svc.state.createStory.isOpen) {
+      modalRenderWhileClosed += 1;
+    }
+    return origRender.call(d.rendering, draft);
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  svc = d.rendering.initCalls[0].services;
+  svc.onOpenCreateStory();
+  svc.onSubmitCreateStory();
+  svc.onCloseCreateStory();
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(svc.state.createStory.draft, null);
+
+  pSubmit.resolve({ ok: false });
+  await nextTurn();
+
+  assert.equal(
+    modalRenderWhileClosed,
+    0,
+    "must not mount modal into popup host after close when submit completes with failure"
+  );
+});
+
+test("story browser main does not rerender create modal on submit rejection after user closed modal", async function() {
+  var d = baseDeps();
+  var pSubmit = createDeferred();
+  d.createStory.submitCreateDraft = function() {
+    return pSubmit.promise();
+  };
+  var svc;
+  var modalRenderWhileClosed = 0;
+  var origRender = d.rendering.renderCreateStoryModal;
+  d.rendering.renderCreateStoryModal = function(draft) {
+    if (svc && !svc.state.createStory.isOpen) {
+      modalRenderWhileClosed += 1;
+    }
+    return origRender.call(d.rendering, draft);
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  svc = d.rendering.initCalls[0].services;
+  svc.onOpenCreateStory();
+  svc.onSubmitCreateStory();
+  svc.onCloseCreateStory();
+
+  pSubmit.reject({ status: 500 });
+  await nextTurn();
+
+  assert.equal(modalRenderWhileClosed, 0, "must not rerender modal after close on rejected submit chain");
+});
+
+test("story browser main stale submit success after close refreshes project without reopening modal", async function() {
+  var d = baseDeps();
+  var pSubmit = createDeferred();
+  var issuesSpy = 0;
+  d.api.getProjectIssues = function(key, onProgress) {
+    issuesSpy += 1;
+    if (onProgress) {
+      onProgress(1, 1);
+    }
+    return resolved([]);
+  };
+  d.createStory.submitCreateDraft = function() {
+    return pSubmit.promise();
+  };
+  var svc;
+  var modalRenderWhileClosed = 0;
+  var origRender = d.rendering.renderCreateStoryModal;
+  d.rendering.renderCreateStoryModal = function(draft) {
+    if (svc && !svc.state.createStory.isOpen) {
+      modalRenderWhileClosed += 1;
+    }
+    return origRender.call(d.rendering, draft);
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  svc = d.rendering.initCalls[0].services;
+  var afterInitLoad = issuesSpy;
+  svc.onOpenCreateStory();
+  svc.onSubmitCreateStory();
+  svc.onCloseCreateStory();
+  pSubmit.resolve({ ok: true });
+  await nextTurn();
+
+  assert.equal(svc.state.createStory.isOpen, false);
+  assert.equal(modalRenderWhileClosed, 0, "must not reopen create modal after stale success");
+  assert.ok(issuesSpy > afterInitLoad, "stale success after close should refresh current project");
+});
+
+test("story browser main stale submit success does not reload or clear when a new create draft is active", async function() {
+  var d = baseDeps();
+  var pSubmit = createDeferred();
+  var issuesSpy = 0;
+  d.api.getProjectIssues = function(key, onProgress) {
+    issuesSpy += 1;
+    if (onProgress) {
+      onProgress(1, 1);
+    }
+    return resolved([]);
+  };
+  d.createStory.submitCreateDraft = function() {
+    return pSubmit.promise();
+  };
+  var Gadget = loadMain(d);
+  new Gadget({
+    getGadgetContentEl: function() {
+      return createElement("page-shell");
+    }
+  });
+
+  await nextTurn();
+  var svc = d.rendering.initCalls[0].services;
+  var afterInitLoad = issuesSpy;
+  svc.onOpenCreateStory();
+  svc.onSubmitCreateStory();
+  svc.onCloseCreateStory();
+  svc.onOpenCreateStory();
+  var draftAfterReopen = svc.state.createStory.draft;
+  assert.equal(svc.state.createStory.isOpen, true);
+  pSubmit.resolve({ ok: true });
+  await nextTurn();
+
+  assert.equal(svc.state.createStory.isOpen, true, "new create flow must stay open");
+  assert.equal(svc.state.createStory.draft, draftAfterReopen, "new draft must not be cleared");
+  assert.equal(
+    issuesSpy,
+    afterInitLoad,
+    "must not loadProject while new create modal open (would clear create state)"
+  );
 });
