@@ -4,7 +4,7 @@ define("_ujgStoryBrowser", [], function() {
   var widgetCssFile = "ujg-story-browser.css";
   var widgetRuntimeFile = "ujg-story-browser.runtime.js";
   var runtimeAmd = "_ujgStoryBrowserRuntime";
-  var releaseRef = "b0620d0";
+  var releaseRef = "39106b9";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
@@ -20,6 +20,12 @@ define("_ujgStoryBrowser", [], function() {
   }
   if (cache.refreshPromise && typeof cache.refreshPromise.then !== "function") {
     cache.refreshPromise = null;
+  }
+  if (typeof cache.commitMetadataByRef !== "object" || cache.commitMetadataByRef === null) {
+    cache.commitMetadataByRef = {};
+  }
+  if (typeof cache.commitMetadataPromises !== "object" || cache.commitMetadataPromises === null) {
+    cache.commitMetadataPromises = {};
   }
   function loadScriptOnce(url) {
     if (cache.scriptPromises[url]) return cache.scriptPromises[url];
@@ -180,6 +186,86 @@ define("_ujgStoryBrowser", [], function() {
         return String(data.sha);
       });
   }
+  function ujgGithubCommitsApiUrl(ref) {
+    return "https://api.github.com/repos/skivbox-ii/jira/commits/" + encodeURIComponent(String(ref));
+  }
+  function formatCommitDateTime(iso) {
+    var d = new Date(String(iso || ""));
+    if (isNaN(d.getTime())) {
+      return "";
+    }
+    function z(n) {
+      return (n < 10 ? "0" : "") + n;
+    }
+    return (
+      d.getUTCFullYear() +
+      "-" +
+      z(d.getUTCMonth() + 1) +
+      "-" +
+      z(d.getUTCDate()) +
+      " " +
+      z(d.getUTCHours()) +
+      ":" +
+      z(d.getUTCMinutes())
+    );
+  }
+  function fetchGithubCommitMetadata(ref) {
+    return fetch(ujgGithubCommitsApiUrl(ref), {
+      headers: { Accept: "application/vnd.github+json" }
+    })
+      .then(function(r) {
+        if (!r.ok) {
+          return r.text().then(function(t) {
+            throw new Error("GitHub commit API " + r.status + ": " + t);
+          });
+        }
+        return r.json();
+      })
+      .then(function(data) {
+        if (!data || !data.sha) {
+          throw new Error("GitHub commit API: missing sha");
+        }
+        var iso = "";
+        if (data.commit) {
+          if (data.commit.committer && data.commit.committer.date) {
+            iso = data.commit.committer.date;
+          } else if (data.commit.author && data.commit.author.date) {
+            iso = data.commit.author.date;
+          }
+        }
+        return {
+          sha: String(data.sha),
+          formattedTime: formatCommitDateTime(iso)
+        };
+      });
+  }
+  function loadCommitMetadataForRef(ref) {
+    var key = String(ref || "");
+    if (!key) {
+      return Promise.resolve(null);
+    }
+    if (cache.commitMetadataByRef[key]) {
+      return Promise.resolve(cache.commitMetadataByRef[key]);
+    }
+    if (cache.commitMetadataPromises[key]) {
+      return cache.commitMetadataPromises[key];
+    }
+    var p = fetchGithubCommitMetadata(key).then(
+      function(meta) {
+        delete cache.commitMetadataPromises[key];
+        if (meta && meta.formattedTime) {
+          cache.commitMetadataByRef[key] = meta;
+        }
+        return meta;
+      },
+      function() {
+        delete cache.commitMetadataPromises[key];
+        return null;
+      }
+    );
+    cache.commitMetadataPromises[key] = p;
+    return p;
+  }
   function buildPinnedAssetUrl(activeRef, fileName) {
     var base = String(assetBaseUrl).replace(/\/+$/, "");
     return base + "@" + encodeURIComponent(String(activeRef)) + "/" + fileName;
@@ -286,7 +372,19 @@ define("_ujgStoryBrowser", [], function() {
   function updateToolbarVersionDisplay(toolbarRoot, ref) {
     if (!toolbarRoot || !toolbarRoot.querySelector) return;
     var span = toolbarRoot.querySelector(".ujg-bootstrap-version");
-    if (span) span.textContent = shortRefForToolbar(ref) || "";
+    if (!span) return;
+    var base = shortRefForToolbar(ref) || "";
+    span.textContent = base;
+    if (!base) return;
+    var refKey = String(ref);
+    toolbarRoot.__ujgBootstrapVersionRef = refKey;
+    loadCommitMetadataForRef(refKey).then(function(meta) {
+      if (toolbarRoot.__ujgBootstrapVersionRef !== refKey) return;
+      if (!meta || !meta.formattedTime) return;
+      var cur = toolbarRoot.querySelector(".ujg-bootstrap-version");
+      if (cur !== span) return;
+      span.textContent = base + " \u2022 " + meta.formattedTime;
+    });
   }
   function normalizeBootstrapBodyNode(body) {
     if (!body) return null;
@@ -408,6 +506,7 @@ define("_ujgStoryBrowser", [], function() {
     return saveDashboardReleaseRef(targetApi, releaseRefVal);
   };
   UjgWidgetGadget.prototype.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;
+  UjgWidgetGadget.prototype.loadCommitMetadataForRef = loadCommitMetadataForRef;
   syncExportedAssetUrls(cache.runtimeReleaseRef != null && cache.runtimeReleaseRef !== "" ? cache.runtimeReleaseRef : releaseRef);
   UjgWidgetGadget.runtimeAmd = runtimeAmd;
   UjgWidgetGadget.loadScriptOnce = loadScriptOnce;
@@ -416,5 +515,7 @@ define("_ujgStoryBrowser", [], function() {
   UjgWidgetGadget.loadDashboardReleaseRef = loadDashboardReleaseRef;
   UjgWidgetGadget.saveDashboardReleaseRef = saveDashboardReleaseRef;
   UjgWidgetGadget.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;
+  UjgWidgetGadget.loadCommitMetadataForRef = loadCommitMetadataForRef;
+  UjgWidgetGadget.updateToolbarVersionDisplay = updateToolbarVersionDisplay;
   return UjgWidgetGadget;
 });
