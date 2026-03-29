@@ -410,6 +410,9 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "          });\n" +
     "        });\n" +
     "    }).then(function(runtimeInst) {\n" +
+    "      try {\n" +
+    "        mountBootstrapUpdateControls(api, gadgetInstance);\n" +
+    "      } catch (eRemount) {}\n" +
     "      tryRefreshToolbarVersionForApi(api);\n" +
     "      return runtimeInst;\n" +
     "    });\n" +

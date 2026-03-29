@@ -4,7 +4,7 @@ define("_ujgStoryBrowser", [], function() {
   var widgetCssFile = "ujg-story-browser.css";
   var widgetRuntimeFile = "ujg-story-browser.runtime.js";
   var runtimeAmd = "_ujgStoryBrowserRuntime";
-  var releaseRef = "d1f88ab";
+  var releaseRef = "e6eacfd";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
@@ -272,6 +272,9 @@ define("_ujgStoryBrowser", [], function() {
           });
         });
     }).then(function(runtimeInst) {
+      try {
+        mountBootstrapUpdateControls(api, gadgetInstance);
+      } catch (eRemount) {}
       tryRefreshToolbarVersionForApi(api);
       return runtimeInst;
     });

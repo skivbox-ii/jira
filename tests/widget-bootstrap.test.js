@@ -146,6 +146,42 @@ function wrapGadgetBodyAsJquery(body) {
   };
 }
 
+function createSharedContentCollectionForBody(body, className) {
+  var classes = String(className || "").split(/\s+/).filter(Boolean);
+  return {
+    0: body,
+    length: 1,
+    hasClass: function(name) {
+      return classes.indexOf(String(name)) !== -1;
+    },
+    removeAttr: function() {},
+    empty: function() {
+      body._nodes = [];
+      body.firstChild = null;
+      return this;
+    },
+    append: function(node) {
+      if (Array.isArray(node)) {
+        node.forEach(function(item) {
+          body.appendChild(item);
+        });
+      } else {
+        body.appendChild(node);
+      }
+      return this;
+    },
+    find: function() {
+      return {
+        length: 0,
+        hasClass: function() { return false; },
+        removeAttr: function() {},
+        append: function() {},
+        find: function() { return this; }
+      };
+    }
+  };
+}
+
 function createDeferred() {
   var resolve;
   var reject;
@@ -1803,6 +1839,126 @@ test("gadget constructor renders refresh control when getBody returns jQuery-lik
   );
   var btn = body.querySelector(".ujg-bootstrap-refresh");
   assert.ok(btn, "expected refresh button even with jQuery-like body wrapper");
+  assert.ok(body.querySelector(".ujg-bootstrap-version"));
+});
+
+test("bootstrap restores refresh control after runtime clears a shared root content node", async function() {
+  var mod = require(MOD_PATH);
+  var baseUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira";
+  var runtimeRef = "sharedrootref";
+  var out = mod.buildAssets({
+    releaseRef: "build-not-used",
+    assetBaseUrl: baseUrl,
+    widgets: [mod.WIDGETS.dailyDiligence]
+  });
+  var bootstrapSrc = out["ujg-daily-diligence.bootstrap.js"];
+  var appendedScripts = [];
+  var appendedLinks = [];
+  var amdRegistry = {};
+  var defineCapture = null;
+  function defineShim(name, deps, factory) {
+    if (typeof deps === "function") {
+      factory = deps;
+      deps = [];
+    }
+    defineCapture = { name: name, factory: factory };
+  }
+  function requireShim(deps, onSuccess, onFailure) {
+    queueMicrotask(function() {
+      try {
+        var resolved = deps.map(function(d) {
+          if (!Object.prototype.hasOwnProperty.call(amdRegistry, d)) {
+            throw new Error("missing AMD module: " + d);
+          }
+          return amdRegistry[d];
+        });
+        onSuccess.apply(null, resolved);
+      } catch (err) {
+        if (typeof onFailure === "function") {
+          onFailure(err);
+        }
+      }
+    });
+  }
+  var head = {
+    appendChild: function(node) {
+      if (node.tagName === "SCRIPT") {
+        appendedScripts.push(node);
+      } else if (node.tagName === "LINK") {
+        appendedLinks.push(node);
+      }
+    }
+  };
+  var body = createMockGadgetBody();
+  var content = createSharedContentCollectionForBody(body, "ujg-daily-diligence");
+  var ctx = vm.createContext({
+    define: defineShim,
+    require: requireShim,
+    document: { head: head, createElement: bootstrapTestCreateElement },
+    window: {},
+    globalThis: null,
+    queueMicrotask: queueMicrotask,
+    Promise: Promise
+  });
+  ctx.globalThis = ctx.window;
+  ctx.__ujgBody = body;
+  ctx.__ujgContent = content;
+  vm.runInContext(bootstrapSrc, ctx);
+  var Ctor = defineCapture.factory();
+  ctx.__ujgCtor = Ctor;
+  vm.runInContext(
+    "__ujgApi = {" +
+      "getDashboardProperty: function() { return Promise.resolve(" +
+      JSON.stringify(runtimeRef) +
+      "); }," +
+      "getGadget: function() { return { getBody: function() { return __ujgBody; } }; }," +
+      "getGadgetContentEl: function() { return __ujgContent; }" +
+      "};" +
+      "__ujgG = new __ujgCtor(__ujgApi);" +
+      "__ujgReady = __ujgG.readyPromise;",
+    ctx
+  );
+
+  var commonUrl = pinnedAssetUrlForTest(baseUrl, runtimeRef, "_ujgCommon.js");
+  for (var waitCommon = 0; waitCommon < 40; waitCommon++) {
+    await new Promise(function(r) {
+      queueMicrotask(r);
+    });
+    if (appendedScripts.some(function(n) { return n.src === commonUrl; })) {
+      break;
+    }
+  }
+  appendedScripts.forEach(function(n) {
+    if (n.src === commonUrl && typeof n.onload === "function") {
+      n.onload();
+    }
+  });
+  await new Promise(function(r) {
+    queueMicrotask(r);
+  });
+  appendedLinks.forEach(function(n) {
+    if (typeof n.onload === "function") {
+      n.onload();
+    }
+  });
+  var runtimeUrl = pinnedAssetUrlForTest(baseUrl, runtimeRef, "ujg-daily-diligence.runtime.js");
+  appendedScripts.forEach(function(n) {
+    if (n.src === runtimeUrl && typeof n.onload === "function") {
+      amdRegistry["_ujgDailyDiligenceRuntime"] = function RuntimeGadget(api) {
+        var sharedContent = api.getGadgetContentEl();
+        if (sharedContent && typeof sharedContent.empty === "function") {
+          sharedContent.empty();
+        }
+      };
+      n.onload();
+    }
+  });
+  await ctx.__ujgReady;
+
+  assert.ok(
+    body.querySelector(".ujg-bootstrap-refresh"),
+    "expected refresh button to survive runtime clearing of shared root content"
+  );
   assert.ok(body.querySelector(".ujg-bootstrap-version"));
 });
 

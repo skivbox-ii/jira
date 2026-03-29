@@ -4,7 +4,7 @@ define("_ujgTimesheet", [], function() {
   var widgetCssFile = "ujg-timesheet.v0.css";
   var widgetRuntimeFile = "ujg-timesheet.v0.runtime.js";
   var runtimeAmd = "_ujgTimesheetV0Runtime";
-  var releaseRef = "d1f88ab";
+  var releaseRef = "e6eacfd";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
@@ -272,6 +272,9 @@ define("_ujgTimesheet", [], function() {
           });
         });
     }).then(function(runtimeInst) {
+      try {
+        mountBootstrapUpdateControls(api, gadgetInstance);
+      } catch (eRemount) {}
       tryRefreshToolbarVersionForApi(api);
       return runtimeInst;
     });
