@@ -523,7 +523,10 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "    var base = shortRefForToolbar(ref) || \"\";\n" +
     "    span.textContent = base;\n" +
     "    if (!base) return;\n" +
-    "    loadCommitMetadataForRef(String(ref)).then(function(meta) {\n" +
+    "    var refKey = String(ref);\n" +
+    "    toolbarRoot.__ujgBootstrapVersionRef = refKey;\n" +
+    "    loadCommitMetadataForRef(refKey).then(function(meta) {\n" +
+    "      if (toolbarRoot.__ujgBootstrapVersionRef !== refKey) return;\n" +
     "      if (!meta || !meta.formattedTime) return;\n" +
     "      var cur = toolbarRoot.querySelector(\".ujg-bootstrap-version\");\n" +
     "      if (cur !== span) return;\n" +
@@ -660,6 +663,7 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "  UjgWidgetGadget.saveDashboardReleaseRef = saveDashboardReleaseRef;\n" +
     "  UjgWidgetGadget.fetchLatestGithubReleaseRef = fetchLatestGithubReleaseRef;\n" +
     "  UjgWidgetGadget.loadCommitMetadataForRef = loadCommitMetadataForRef;\n" +
+    "  UjgWidgetGadget.updateToolbarVersionDisplay = updateToolbarVersionDisplay;\n" +
     "  return UjgWidgetGadget;\n" +
     "});\n"
   );

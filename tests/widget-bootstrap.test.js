@@ -942,6 +942,109 @@ test("active releaseRef loads commit metadata via GitHub commits API and version
   assert.equal(commitFetchCount, 1);
 });
 
+test("updateToolbarVersionDisplay does not apply stale commit metadata after ref changes", async function() {
+  var mod = require(MOD_PATH);
+  var commitsPrefix = mod.UJG_GITHUB_COMMITS_REF_URL_PREFIX;
+  var ref1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  var ref2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  var url1 = commitsPrefix + encodeURIComponent(ref1);
+  var url2 = commitsPrefix + encodeURIComponent(ref2);
+  var deferred1 = createDeferred();
+  var out = mod.buildAssets({
+    releaseRef: "unused",
+    assetBaseUrl: "https://cdn.jsdelivr.net/gh/skivbox-ii/jira",
+    widgets: [mod.WIDGETS.dailyDiligence]
+  });
+  var bootstrapSrc = out["ujg-daily-diligence.bootstrap.js"];
+  var defineCapture = null;
+  function defineShim(name, deps, factory) {
+    if (typeof deps === "function") {
+      factory = deps;
+      deps = [];
+    }
+    defineCapture = { name: name, factory: factory };
+  }
+  var sandboxWindow = {};
+  var ctx = vm.createContext({
+    define: defineShim,
+    require: function() {},
+    document: {
+      head: { appendChild: function() {} },
+      createElement: bootstrapTestCreateElement
+    },
+    window: sandboxWindow,
+    globalThis: sandboxWindow,
+    fetch: function(input) {
+      var u = String(input);
+      if (u === url1) {
+        return deferred1.promise;
+      }
+      if (u === url2) {
+        return Promise.resolve({
+          ok: true,
+          json: function() {
+            return Promise.resolve({
+              sha: ref2,
+              commit: { committer: { date: "2030-06-06T12:00:00Z" } }
+            });
+          },
+          text: function() {
+            return Promise.resolve("");
+          }
+        });
+      }
+      return Promise.reject(new Error("unexpected fetch: " + u));
+    },
+    queueMicrotask: queueMicrotask,
+    Promise: Promise
+  });
+  var toolbar = bootstrapTestCreateElement("div");
+  toolbar.className = "ujg-bootstrap-toolbar";
+  var verSpan = bootstrapTestCreateElement("span");
+  verSpan.className = "ujg-bootstrap-version";
+  toolbar.appendChild(verSpan);
+
+  vm.runInContext(bootstrapSrc, ctx);
+  ctx.__bootstrapFactory = defineCapture.factory;
+  ctx.__toolbar = toolbar;
+  ctx.__ref1 = ref1;
+  ctx.__ref2 = ref2;
+  vm.runInContext(
+    "__ujgCtor = __bootstrapFactory();" +
+      "__ujgCtor.updateToolbarVersionDisplay(__toolbar, __ref1);" +
+      "__ujgCtor.updateToolbarVersionDisplay(__toolbar, __ref2);",
+    ctx
+  );
+
+  for (var w = 0; w < 40 && String(verSpan.textContent || "").indexOf("2030-06-06 12:00") === -1; w++) {
+    await new Promise(function(r) {
+      queueMicrotask(r);
+    });
+  }
+  assert.match(String(verSpan.textContent || ""), /2030-06-06 12:00/);
+
+  deferred1.resolve({
+    ok: true,
+    json: function() {
+      return Promise.resolve({
+        sha: ref1,
+        commit: { committer: { date: "2020-01-01T00:00:00Z" } }
+      });
+    },
+    text: function() {
+      return Promise.resolve("");
+    }
+  });
+
+  for (var i = 0; i < 25; i++) {
+    await new Promise(function(r) {
+      queueMicrotask(r);
+    });
+  }
+  assert.match(String(verSpan.textContent || ""), /2030-06-06 12:00/);
+  assert.doesNotMatch(String(verSpan.textContent || ""), /2020-01-01 00:00/);
+});
+
 test("fetchLatestGithubReleaseRef rejects when GitHub main commit API is non-OK", async function() {
   var mod = require(MOD_PATH);
   var url = mod.UJG_GITHUB_MAIN_COMMIT_URL || mod.UJG_GITHUB_COMMITS_MAIN_URL;
