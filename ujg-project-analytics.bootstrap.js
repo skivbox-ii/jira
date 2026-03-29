@@ -4,7 +4,7 @@ define("_ujgProjectAnalytics", [], function() {
   var widgetCssFile = "ujg-project-analytics.css";
   var widgetRuntimeFile = "ujg-project-analytics.runtime.js";
   var runtimeAmd = "_ujgProjectAnalyticsRuntime";
-  var releaseRef = "b11ddba";
+  var releaseRef = "d1f88ab";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
