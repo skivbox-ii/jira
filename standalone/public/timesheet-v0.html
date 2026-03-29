@@ -15,6 +15,7 @@
       <li><a href="/timesheet">Timesheet</a></li>
       <li><a href="/timesheet-v0" class="nav-active">Timesheet v0</a></li>
       <li><a href="/user-activity">User Activity</a></li>
+      <li><a href="/daily-diligence">Daily Diligence</a></li>
     </ul>
     <div class="navbar-right">
       <span class="navbar-user" id="navUser"></span>
@@ -31,9 +32,14 @@
   <script src="/widgets/_ujgCommon.js"></script>
   <script src="/widgets/ujg-timesheet.v0.js"></script>
   <script>
-    fetch("/api/session").then(r => r.json()).then(data => {
-      document.getElementById("navUser").textContent = data.displayName || data.username || "";
-    });
+    fetch("/api/session")
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        var navUser = document.getElementById("navUser");
+        if (!navUser || !data) return;
+        navUser.textContent = data.displayName || data.username || "";
+      })
+      .catch(function() {});
     require(["_ujgTimesheet"], function(Gadget) {
       var API = {
         getGadgetContentEl: function() { return jQuery("#widget-container"); },

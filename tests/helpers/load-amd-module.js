@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-module.exports = function loadAmdModule(filePath, deps) {
+module.exports = function loadAmdModule(filePath, deps, extraGlobals) {
     var code = fs.readFileSync(filePath, "utf8");
     var exported;
     var sandbox = {
@@ -33,6 +33,11 @@ module.exports = function loadAmdModule(filePath, deps) {
             }));
         }
     };
+    if (extraGlobals && typeof extraGlobals === "object") {
+        Object.keys(extraGlobals).forEach(function(k) {
+            sandbox[k] = extraGlobals[k];
+        });
+    }
     sandbox.define.amd = true;
     vm.runInNewContext(code, sandbox, {
         filename: path.resolve(filePath)

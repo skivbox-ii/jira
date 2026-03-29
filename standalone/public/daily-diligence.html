@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Project Analytics — UJG</title>
+  <title>Daily Diligence — UJG</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/widgets/ujg-project-analytics.css">
+  <link rel="stylesheet" href="/widgets/ujg-daily-diligence.css">
 </head>
 <body>
   <nav class="navbar">
     <ul class="navbar-links">
       <li><a href="/sprint">Sprint Health</a></li>
-      <li><a href="/analytics" class="nav-active">Project Analytics</a></li>
+      <li><a href="/analytics">Project Analytics</a></li>
       <li><a href="/timesheet">Timesheet</a></li>
       <li><a href="/timesheet-v0">Timesheet v0</a></li>
       <li><a href="/user-activity">User Activity</a></li>
-      <li><a href="/daily-diligence">Daily Diligence</a></li>
+      <li><a href="/daily-diligence" class="nav-active">Daily Diligence</a></li>
     </ul>
     <div class="navbar-right">
       <span class="navbar-user" id="navUser"></span>
@@ -30,7 +30,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.7/require.min.js"></script>
   <script>define("jquery", [], function() { return jQuery; });</script>
   <script src="/widgets/_ujgCommon.js"></script>
-  <script src="/widgets/ujg-project-analytics.js"></script>
+  <script src="/widgets/ujg-daily-diligence.js"></script>
   <script>
     fetch("/api/session")
       .then(function(r) { return r.ok ? r.json() : null; })
@@ -40,7 +40,7 @@
         navUser.textContent = data.displayName || data.username || "";
       })
       .catch(function() {});
-    require(["_ujgProjectAnalytics"], function(Gadget) {
+    require(["_ujgDailyDiligence"], function(Gadget) {
       var API = {
         getGadgetContentEl: function() { return jQuery("#widget-container"); },
         resize: function() {}
