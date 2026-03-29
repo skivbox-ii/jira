@@ -32,6 +32,8 @@
 │       ├── 2026-03-10-story-browser-epic-hierarchy.md
 │       ├── 2026-03-29-dashboard-release-ref-design.md
 │       ├── 2026-03-29-dashboard-release-ref.md
+│       ├── 2026-03-29-dashboard-version-display-design.md
+│       ├── 2026-03-29-dashboard-version-display.md
 │       ├── 2026-03-29-widget-bootstrap-design.md
 │       └── 2026-03-29-widget-bootstrap.md
 ├── jira_attach_latest_assets.py
@@ -112,6 +114,7 @@
 Документация по bootstrap и версионированию на дашборде:
 
 - актуальная модель **dashboard `releaseRef`**: `docs/plans/2026-03-29-dashboard-release-ref-design.md`, `docs/plans/2026-03-29-dashboard-release-ref.md`;
+- дизайн и план отображения `Dashboard v<hash> • <commit date time>` в bootstrap UI: `docs/plans/2026-03-29-dashboard-version-display-design.md`, `docs/plans/2026-03-29-dashboard-version-display.md`;
 - исторический дизайн/план только про bootstrap/runtime без property: `docs/plans/2026-03-29-widget-bootstrap-design.md`, `docs/plans/2026-03-29-widget-bootstrap.md`;
 - актуальный дизайн и план по Story Browser epic-first иерархии: `docs/plans/2026-03-10-story-browser-epic-hierarchy-design.md`, `docs/plans/2026-03-10-story-browser-epic-hierarchy.md`.
 
