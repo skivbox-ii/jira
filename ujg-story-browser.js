@@ -1625,6 +1625,33 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         draft.children.push(makeNode(tpl.issueType, tpl.summary, rowId));
     }
 
+    function removeChildRow(draft, rowKey) {
+        if (!draft || !Array.isArray(draft.children)) {
+            return;
+        }
+        var target = String(rowKey || "");
+        var kept = [];
+        var removed = false;
+        draft.children.forEach(function(child, i) {
+            var childKey =
+                child && child.ui && child.ui.rowId != null && String(child.ui.rowId).length
+                    ? String(child.ui.rowId)
+                    : "child-" + i;
+            if (!removed && childKey === target) {
+                removed = true;
+                return;
+            }
+            kept.push(child);
+        });
+        if (!removed) {
+            return;
+        }
+        draft.children = kept;
+        if (draft.ui && draft.ui.selector && draft.ui.selector.rowKey === target) {
+            closeSelector(draft);
+        }
+    }
+
     function toggleDescription(node) {
         if (!node || !node.ui) {
             return;
@@ -2300,15 +2327,65 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
     }
 
     function renderBlockerTrigger($mount, draft, ctx, row) {
-        return compactTextButton(
-            "+ блокер",
-            "ujg-sb-create-blocker-trigger text-[7px] text-primary/50 hover:text-primary px-1",
-            function() {
-                ensureRenderableNode(row.node);
-                row.node.ui.isBlockerOpen = !row.node.ui.isBlockerOpen;
-                renderCreateModal($mount, draft, ctx);
+        function activateBlocker(ev) {
+            if (ev && ev.stopPropagation) {
+                ev.stopPropagation();
             }
+            if (ev && ev.preventDefault) {
+                ev.preventDefault();
+            }
+            ensureRenderableNode(row.node);
+            row.node.ui.isBlockerOpen = !row.node.ui.isBlockerOpen;
+            renderCreateModal($mount, draft, ctx);
+        }
+        var $btn = $("<span/>")
+            .addClass(
+                "ujg-sb-create-blocker-trigger text-[7px] text-red-400 cursor-pointer hover:bg-muted/20 rounded px-1 -mx-1 transition-colors"
+            )
+            .attr("role", "button")
+            .attr("tabindex", "0")
+            .append($("<span/>").addClass("text-muted-foreground/40 italic").text("+ блокер"));
+        $btn.on("click", function(ev) {
+            activateBlocker(ev);
+        });
+        $btn.on("keydown", function(ev) {
+            var key = ev && ev.key != null ? String(ev.key) : "";
+            if (key === "Enter" || key === " " || key === "Spacebar") {
+                activateBlocker(ev);
+            }
+        });
+        return $btn;
+    }
+
+    function renderChildRowRemoveButton($mount, draft, ctx, row) {
+        var $btn = $("<button type=\"button\"/>").addClass(
+            "ujg-sb-create-child-remove p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-auto"
         );
+        var $svg = $("<svg/>")
+            .attr("xmlns", "http://www.w3.org/2000/svg")
+            .attr("width", "24")
+            .attr("height", "24")
+            .attr("viewBox", "0 0 24 24")
+            .attr("fill", "none")
+            .attr("stroke", "currentColor")
+            .attr("stroke-width", "2")
+            .attr("stroke-linecap", "round")
+            .attr("stroke-linejoin", "round")
+            .addClass("lucide lucide-trash2 w-2.5 h-2.5");
+        $svg.append($("<path/>").attr("d", "M3 6h18"));
+        $svg.append($("<path/>").attr("d", "M8 6V4h8v2"));
+        $svg.append($("<path/>").attr("d", "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"));
+        $svg.append($("<path/>").attr("d", "M10 11v6"));
+        $svg.append($("<path/>").attr("d", "M14 11v6"));
+        $btn.append($svg);
+        $btn.on("click", function(ev) {
+            if (ev && ev.stopPropagation) {
+                ev.stopPropagation();
+            }
+            removeChildRow(draft, row.key);
+            renderCreateModal($mount, draft, ctx);
+        });
+        return $btn;
     }
 
     function renderChipList(node) {
@@ -2480,7 +2557,7 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         var rowClasses =
             "ujg-sb-create-tree-row ujg-sb-create-row-" +
             rowClassSuffix(row.key) +
-            " flex items-start gap-1 px-1 py-[1px] ml-6";
+            " ml-6";
         if (variant === "table") {
             rowClasses += " ujg-sb-create-child-table-row";
         } else {
@@ -2490,11 +2567,11 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         if (node.errors && node.errors.length) {
             $row.addClass("ujg-sb-create-row-error");
         }
+        var $group = $("<div/>").addClass("group flex-1 min-w-0");
+        var $top = $("<div/>").addClass("flex items-center gap-0 px-1 py-[0px] ml-[28px] flex-wrap");
         if (variant !== "accordion") {
-            $row.append($("<span/>").addClass("text-[9px] text-muted-foreground shrink-0").text("├─"));
+            $top.append($("<span/>").addClass("text-[9px] text-muted-foreground shrink-0").text("├─"));
         }
-        var $main = $("<div/>").addClass("flex-1 min-w-0");
-        var $top = $("<div/>").addClass("flex items-center gap-1 flex-wrap");
         $top.append($("<span/>").addClass("ujg-sb-create-type-label text-[9px] text-muted-foreground shrink-0").text(role));
         $top.append($("<span/>").addClass("text-[8px] text-muted-foreground shrink-0").text("—"));
         $top.append(renderSummaryControl($mount, draft, ctx, row, summaryDisplayText(node, node.summary || role)));
@@ -2505,15 +2582,19 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         $top.append(renderComponentTrigger($mount, draft, ctx, row, "+ комп"));
         $top.append(renderLabelTrigger($mount, draft, ctx, row, "+ метку"));
         $top.append(renderLinkTrigger($mount, draft, ctx, row));
-        $top.append(renderBlockerTrigger($mount, draft, ctx, row));
-        $top.append(renderDescriptionTrigger($mount, draft, ctx, row, "ml-[28px]"));
-        $top.append(renderAssigneeTrigger($mount, draft, ctx, row));
-        $main.append($top);
+        $top.append(renderChildRowRemoveButton($mount, draft, ctx, row));
+        $group.append($top);
+
+        var $actions = $("<div/>").addClass("flex items-center gap-0.5 px-1 ml-[28px]");
+        $actions.append(renderBlockerTrigger($mount, draft, ctx, row));
+        $actions.append(renderDescriptionTrigger($mount, draft, ctx, row, ""));
+        $actions.append(renderAssigneeTrigger($mount, draft, ctx, row));
+        $group.append($actions);
         var $support = renderSupportArea($mount, draft, ctx, row, "ml-[28px]");
         if ($support) {
-            $main.append($support);
+            $group.append($support);
         }
-        $row.append($main);
+        $row.append($group);
         return $row;
     }
 
@@ -2884,7 +2965,9 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         var $dialog = $("<div/>")
             .addClass("ujg-sb-create-dialog ujg-sb-create-ref-shell")
             .addClass(LITERAL_PORT_DIALOG_UTIL);
-        var $header = $("<div/>").addClass("ujg-sb-create-header");
+        var $header = $("<div/>").addClass(
+            "ujg-sb-create-header flex items-center justify-between px-3 py-1 border-b border-border bg-muted/30 shrink-0"
+        );
         var $kpi = $("<div/>").addClass("ujg-sb-create-kpi-header");
         var pk = draft.projectKey != null ? String(draft.projectKey).trim() : "";
         var storyHours = defaultEstimateHoursForRow(draft, "story", draft.story);
@@ -2892,13 +2975,6 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
             $("<div/>")
                 .addClass("ujg-sb-create-kpi-line")
                 .text((pk || "CORE") + " Σ " + storyHours + "ч оценка · 0ч списано · " + String((draft.children || []).length) + " задач")
-        );
-        var stSum =
-            draft.story && draft.story.summary != null ? String(draft.story.summary).trim() : "";
-        $kpi.append(
-            $("<div/>")
-                .addClass("ujg-sb-create-kpi-story-line")
-                .text(stSum || "\u041d\u043e\u0432\u0430\u044f \u0438\u0441\u0442\u043e\u0440\u0438\u044f")
         );
         $header.append($kpi);
         if (hasChrome) {

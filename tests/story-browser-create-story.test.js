@@ -1576,6 +1576,36 @@ test("renderCreateModal literal-port: inner body uses reference body padding and
     assert.equal(nodeText($storyTitle[0]), "Название истории");
 });
 
+test("renderCreateModal literal-port: header strip uses compact reference utilities", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    const $header = $mount.find(".ujg-sb-create-header").first();
+    assert.ok($header.length, "compact header strip rendered");
+    ["flex", "items-center", "justify-between", "px-3", "py-1", "border-b", "border-border", "bg-muted/30", "shrink-0"].forEach(
+        function(cls) {
+            assert.ok(hasClass($header[0], cls), "header utility class " + cls);
+        }
+    );
+    assert.match(nodeText($header[0]), /Создать/i, "header keeps create action");
+    assert.match(nodeText($header[0]), /задач/i, "header keeps KPI summary");
+});
+
 test("renderCreateModal literal-port: clicking epic key reveals inline epic selector in-row", function() {
     const CS = loadCreateStory();
     const documentNode = createNode("document");
@@ -1635,6 +1665,95 @@ test("renderCreateModal literal-port: child rows expose compact action strip inc
     assert.match(childText, /\+\s*метку/i, "child row shows + метку");
     assert.match(childText, /\+\s*link/i, "child row shows +link");
     assert.match(childText, /\+\s*блокер/i, "child row shows + блокер");
+});
+
+test("renderCreateModal literal-port: child rows use group wrapper, hover trash, and nested blocker markup", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    const $seRow = $mount.find(".ujg-sb-create-row-child-SE").first();
+    assert.ok($seRow.length, "SE child row rendered");
+    const $group = $seRow.find(".group").first();
+    assert.ok($group.length, "child row uses group wrapper");
+
+    const $blocker = $seRow.find(".ujg-sb-create-blocker-trigger").first();
+    assert.ok($blocker.length, "blocker action present");
+    ["text-[7px]", "text-red-400", "cursor-pointer", "hover:bg-muted/20", "rounded", "px-1", "-mx-1", "transition-colors"].forEach(
+        function(cls) {
+            assert.ok(hasClass($blocker[0], cls), "blocker utility class " + cls);
+        }
+    );
+    const $blockerInner = $blocker.find(".italic").first();
+    assert.ok($blockerInner.length, "blocker renders nested inner span");
+    ["text-muted-foreground/40", "italic"].forEach(function(cls) {
+        assert.ok(hasClass($blockerInner[0], cls), "blocker nested span class " + cls);
+    });
+    const blockerRow = $blocker[0].parentNode;
+    ["flex", "items-center", "gap-0.5", "px-1", "ml-[28px]"].forEach(function(cls) {
+        assert.ok(hasClass(blockerRow, cls), "blocker row class " + cls);
+    });
+
+    const $trashSvg = $group.find(".lucide-trash2").first();
+    assert.ok($trashSvg.length, "trash icon rendered");
+    ["lucide", "lucide-trash2", "w-2.5", "h-2.5"].forEach(function(cls) {
+        assert.ok(hasClass($trashSvg[0], cls), "trash svg class " + cls);
+    });
+    const trashButton = $trashSvg[0].parentNode;
+    ["p-0.5", "rounded", "hover:bg-destructive/20", "text-muted-foreground", "hover:text-destructive", "opacity-0", "group-hover:opacity-100", "transition-opacity", "shrink-0", "ml-auto"].forEach(
+        function(cls) {
+            assert.ok(hasClass(trashButton, cls), "trash button class " + cls);
+        }
+    );
+    assert.ok(hasClass(trashButton, "ujg-sb-create-child-remove"), "trash button carries focus hook class");
+    const topRow = trashButton.parentNode;
+    ["flex", "items-center", "gap-0", "px-1", "py-[0px]", "ml-[28px]", "flex-wrap"].forEach(function(cls) {
+        assert.ok(hasClass(topRow, cls), "child top row class " + cls);
+    });
+});
+
+test("renderCreateModal literal-port: blocker trigger stays keyboard-accessible", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    const $blocker = $mount.find(".ujg-sb-create-row-child-SE").find(".ujg-sb-create-blocker-trigger").first();
+    assert.ok($blocker.length, "blocker trigger rendered");
+    assert.equal($blocker.attr("role"), "button", "blocker trigger exposes button role");
+    assert.equal($blocker.attr("tabindex"), "0", "blocker trigger is keyboard focusable");
+    assert.equal($mount.find(".ujg-sb-create-blocker-input").length, 0, "blocker input closed initially");
+
+    $blocker[0].dispatchEvent({ type: "keydown", key: "Enter", bubbles: true });
+
+    assert.equal($mount.find(".ujg-sb-create-blocker-input").length, 1, "Enter opens blocker input");
 });
 
 test("renderCreateModal literal-port: view toggle buttons expose reference active and inactive states", function() {

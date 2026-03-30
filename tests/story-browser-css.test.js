@@ -212,7 +212,9 @@ test("story-browser CSS: 4 create-modal shell and inline editor layout", functio
 
     const createHeader = blockForClass(css, "ujg-sb-create-header");
     assert.ok(createHeader, ".ujg-sb-create-header block");
-    assert.match(createHeader, /position\s*:\s*sticky/i, "create header sticky");
+    assert.match(createHeader, /display\s*:\s*flex/i, "create header uses compact flex shell");
+    assert.match(createHeader, /justify-content\s*:\s*space-between/i, "create header distributes KPI and actions");
+    assert.match(createHeader, /background-color|border-bottom/i, "create header keeps compact chrome styling");
 
     const tree = blockForClass(css, "ujg-sb-create-tree");
     assert.ok(tree, ".ujg-sb-create-tree block");
@@ -319,21 +321,37 @@ test("story-browser CSS: literal-port inner row utility classes are present and 
         /\.text-\\\[7px\\\]/,
         /\.overflow-y-auto\b/,
         /\.p-2\b/,
+        /\.p-0\\\.5\b/,
+        /\.px-3\b/,
         /\.py-\\\[1px\\\]/,
+        /\.py-\\\[0px\\\]/,
+        /\.py-1\b/,
         /\.py-1\\\.5\b/,
         /\.ml-\\\[28px\\\]/,
+        /\.ml-auto\b/,
         /\.font-bold\b/,
+        /\.italic\b/,
         /\.rounded-sm\b/,
         /\.inline-flex\b/,
+        /\.justify-between\b/,
         /\.justify-center\b/,
         /\.whitespace-nowrap\b/,
+        /\.gap-0\b/,
         /\.transition-all\b/,
+        /\.transition-opacity\b/,
+        /\.opacity-0\b/,
         /\.text-muted-foreground\b/,
+        /\.text-muted-foreground\\\/40\b/,
+        /\.text-red-400\b/,
         /\.hover\\:text-foreground:hover/,
+        /\.hover\\:text-destructive:hover/,
         /\.hover\\:bg-muted\\\/30:hover/,
+        /\.hover\\:bg-destructive\\\/20:hover/,
         /\.bg-blue-500\\\/20\b/,
+        /\.bg-muted\\\/30\b/,
         /\.text-blue-400\b/,
         /\.border-blue-500\\\/30\b/,
+        /\.border-b\b/,
         /\.bg-cyan-500\\\/20\b/,
         /\.border-cyan-500\\\/30\b/,
         /\.bg-orange-500\\\/20\b/,
@@ -342,6 +360,9 @@ test("story-browser CSS: literal-port inner row utility classes are present and 
         /\.border-yellow-500\\\/30\b/,
         /\.bg-emerald-500\\\/20\b/,
         /\.border-emerald-500\\\/30\b/,
+        /\.w-2\\\.5\b/,
+        /\.h-2\\\.5\b/,
+        /\.group-hover\\:opacity-100/,
         /\.data-\\\[state\\=active\\\]\\:bg-background\[data-state="active"\]/,
         /\.data-\\\[state\\=active\\\]\\:text-foreground\[data-state="active"\]/
     ];
@@ -356,4 +377,10 @@ test("story-browser CSS: literal-port inner row utility classes are present and 
         /\.ujg-story-browser\s+\.font-mono\b|\.ujg-sb-popup-host\s+\.font-mono\b/,
         "font-mono should be scoped under widget or popup host"
     );
+});
+
+test("story-browser CSS: child remove control becomes visible for keyboard focus as well as hover", function() {
+    const css = readCss();
+    assert.match(css, /\.ujg-sb-create-child-remove:focus-visible/, "remove control has direct focus-visible fallback");
+    assert.match(css, /\.group:focus-within\s+\.ujg-sb-create-child-remove/, "group focus-within reveals remove control");
 });
