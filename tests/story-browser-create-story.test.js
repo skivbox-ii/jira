@@ -1536,6 +1536,106 @@ test("renderCreateModal literal-port: bottom tabs with stable hooks update activ
     assert.equal(draft.ui.activeTab, "comments");
 });
 
+test("renderCreateModal literal-port: inner body uses reference body padding and key/title classes", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = "child";
+    });
+    draft.epicMode = "existingEpic";
+    draft.existingEpicKey = "CORE-200";
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [{ key: "CORE-200", summary: "Эпик" }];
+        }
+    });
+
+    const $body = $mount.find(".overflow-y-auto");
+    assert.equal($body.length, 1, "literal-port scroll body");
+    assert.equal($body.find(".p-2").length, 1, "inner body uses p-2 wrapper from reference");
+
+    const $epicKey = $mount.find(".ujg-sb-create-epic-key").first();
+    assert.ok($epicKey.length, "epic key node");
+    ["text-[8px]", "text-primary/90", "cursor-pointer", "transition-colors"].forEach(function(cls) {
+        assert.ok(hasClass($epicKey[0], cls), "epic key utility class " + cls);
+    });
+    assert.equal(nodeText($epicKey[0]), "CORE-200");
+
+    const $storyTitle = $mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-summary").first();
+    assert.ok($storyTitle.length, "story title node");
+    ["font-medium", "text-foreground", "cursor-pointer", "transition-colors"].forEach(function(cls) {
+        assert.ok(hasClass($storyTitle[0], cls), "story title utility class " + cls);
+    });
+    assert.equal(nodeText($storyTitle[0]), "Название истории");
+});
+
+test("renderCreateModal literal-port: clicking epic key reveals inline epic selector in-row", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [{ key: "CORE-200", summary: "Эпик" }];
+        }
+    });
+
+    assert.equal($mount.find(".ujg-sb-create-epic-existing").length, 0, "selector hidden initially");
+    const $epicKey = $mount.find(".font-mono").first();
+    assert.ok($epicKey.length, "epic key click target");
+    $epicKey.trigger("click");
+    assert.equal($mount.find(".ujg-sb-create-epic-existing").length, 1, "click opens inline epic selector");
+});
+
+test("renderCreateModal literal-port: child rows expose compact action strip including link and blocker", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    const $descBtn = $mount.find(".ujg-sb-create-add-desc").first();
+    assert.ok($descBtn.length, "compact action button");
+    ["text-primary/40", "hover:text-primary/70", "px-1"].forEach(function(cls) {
+        assert.ok(hasClass($descBtn[0], cls), "compact action utility class " + cls);
+    });
+
+    const $seRow = $mount.find(".ujg-sb-create-row-child-SE").first();
+    assert.ok($seRow.length, "SE child row rendered");
+    const childText = nodeText($seRow[0]);
+    assert.match(childText, /\+\s*комп/i, "child row shows + комп");
+    assert.match(childText, /\+\s*метку/i, "child row shows + метку");
+    assert.match(childText, /\+\s*link/i, "child row shows +link");
+    assert.match(childText, /\+\s*блокер/i, "child row shows + блокер");
+});
+
 test("renderCreateModal: clearing inline epic select to blank restores newEpic and full epic row", function() {
     const CS = loadCreateStory();
     const documentNode = createNode("document");
@@ -1572,7 +1672,7 @@ test("renderCreateModal: clearing inline epic select to blank restores newEpic a
     assert.equal(String(draft.existingEpicKey || ""), "");
     const $labels = $mount.find(".ujg-sb-create-row-epic").first().find(".ujg-sb-create-type-label");
     assert.ok($labels.length >= 1, "full epic row returns with type label");
-    assert.match(nodeText($labels[0]), /Epic/i);
+    assert.match(nodeText($labels[0]), /Epic|Эпик/i);
 });
 
 test("renderCreateModal: child view toggle updates only draft.ui.viewMode", function() {
@@ -1604,6 +1704,69 @@ test("renderCreateModal: child view toggle updates only draft.ui.viewMode", func
     $tableBtn.dispatchEvent({ type: "click", bubbles: true });
     assert.equal(draft.ui.viewMode, "table");
     assert.equal(draft.children.length, n);
+});
+
+test("renderCreateModal: child view toggle changes rendered child layout variant", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Story title";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    assert.equal($mount.find(".ujg-sb-create-children-view-rows").length, 1, "rows layout by default");
+    $mount.find(".ujg-sb-create-child-view-btn").each(function() {
+        if (nodeText(this).indexOf("Таблица") >= 0) {
+            $(this).trigger("click");
+        }
+    });
+    assert.equal($mount.find(".ujg-sb-create-children-view-table").length, 1, "table layout after click");
+    assert.equal($mount.find(".ujg-sb-create-children-view-rows").length, 0, "rows layout removed after table click");
+    $mount.find(".ujg-sb-create-child-view-btn").each(function() {
+        if (nodeText(this).indexOf("Аккордеон") >= 0) {
+            $(this).trigger("click");
+        }
+    });
+    assert.equal($mount.find(".ujg-sb-create-children-view-accordion").length, 1, "accordion layout after click");
+    assert.equal($mount.find(".ujg-sb-create-children-view-table").length, 0, "table layout removed after accordion click");
+});
+
+test("renderCreateModal: bottom tabs switch visible content panel", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Story title";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    assert.equal($mount.find(".ujg-sb-create-tab-panel-activity").length, 1, "activity panel by default");
+    assert.equal($mount.find(".ujg-sb-create-tab-panel-comments").length, 0, "comments hidden initially");
+    $mount.find(".ujg-sb-create-tab-comments").trigger("click");
+    assert.equal($mount.find(".ujg-sb-create-tab-panel-comments").length, 1, "comments panel after click");
+    assert.equal($mount.find(".ujg-sb-create-tab-panel-activity").length, 0, "activity panel removed after comments click");
+    $mount.find(".ujg-sb-create-tab-worklog").trigger("click");
+    assert.equal($mount.find(".ujg-sb-create-tab-panel-worklog").length, 1, "worklog panel after click");
+    assert.equal($mount.find(".ujg-sb-create-tab-panel-comments").length, 0, "comments panel removed after worklog click");
 });
 
 test("renderCreateModal: +FE chip appends children with template issueType/summary and unique rowIds", function() {

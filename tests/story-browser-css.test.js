@@ -309,3 +309,29 @@ test("story-browser CSS: literal-port Tailwind-like utilities are scoped, not gl
     );
     assert.match(css, /\.w-\\\[95vw\\\]/, "literal width utility selector w-[95vw] present");
 });
+
+test("story-browser CSS: literal-port inner row utility classes are present and scoped", function() {
+    const css = readCss();
+    const literalUtilities = [
+        /\.font-mono\b/,
+        /\.text-\\\[8px\\\]/,
+        /\.text-\\\[11px\\\]/,
+        /\.overflow-y-auto\b/,
+        /\.p-2\b/,
+        /\.py-\\\[1px\\\]/,
+        /\.ml-\\\[28px\\\]/,
+        /\.text-primary\\\/40\b/,
+        /\.hover\\:text-primary\\\/70:hover/
+    ];
+    literalUtilities.forEach(function(re) {
+        assert.match(css, re, "expected literal utility selector " + re);
+    });
+
+    assert.ok(!/^\s*\.font-mono\s*\{/m.test(css), "font-mono must not leak globally");
+    assert.ok(!/^\s*\.p-2\s*\{/m.test(css), "p-2 must stay scoped");
+    assert.match(
+        css,
+        /\.ujg-story-browser\s+\.font-mono\b|\.ujg-sb-popup-host\s+\.font-mono\b/,
+        "font-mono should be scoped under widget or popup host"
+    );
+});
