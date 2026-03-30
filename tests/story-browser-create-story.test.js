@@ -365,6 +365,109 @@ test("makeDefaultDraft creates epic, story, and SE/FE/BE/QA/DO children", functi
     });
 });
 
+test("makeDefaultDraft initializes literal-port ui viewMode, activeTab, epicSelectionMode", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("PROJ");
+    assert.equal(draft.ui.viewMode, "rows");
+    assert.equal(draft.ui.activeTab, "activity");
+    assert.equal(draft.ui.epicSelectionMode, "new");
+    assert.equal(draft.ui.nextChildRowSeq, 0);
+});
+
+test("makeDefaultDraft assigns stable unique child.ui.rowId for each template child", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("P");
+    const roles = ["SE", "FE", "BE", "QA", "DO"];
+    assert.equal(draft.children.length, roles.length);
+    const seen = {};
+    draft.children.forEach(function(ch, i) {
+        assert.ok(ch.ui && ch.ui.rowId, "child " + i + " has ui.rowId");
+        const id = ch.ui.rowId;
+        assert.equal(typeof id, "string");
+        assert.ok(id.length > 0);
+        assert.equal(seen[id], undefined, "rowId unique: " + id);
+        seen[id] = true;
+    });
+});
+
+test("draftRows uses child.ui.rowId as row keys for template children", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("K");
+    const rows = CS.draftRows(draft);
+    const keys = rows.map(function(r) {
+        return r.key;
+    });
+    assert.ok(keys.indexOf("epic") >= 0);
+    assert.ok(keys.indexOf("story") >= 0);
+    draft.children.forEach(function(ch) {
+        assert.ok(keys.indexOf(ch.ui.rowId) >= 0, "key for rowId " + ch.ui.rowId);
+    });
+    assert.equal(
+        keys.filter(function(k) {
+            return /^child-\d+$/.test(k);
+        }).length,
+        0,
+        "no legacy numeric child-N keys when template rowIds exist"
+    );
+});
+
+test("setEpicSelectionMode syncs draft.epicMode and draft.ui.epicSelectionMode", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("X");
+    CS.setEpicSelectionMode(draft, "existing");
+    assert.equal(draft.ui.epicSelectionMode, "existing");
+    assert.equal(draft.epicMode, "existingEpic");
+    CS.setEpicSelectionMode(draft, "new");
+    assert.equal(draft.ui.epicSelectionMode, "new");
+    assert.equal(draft.epicMode, "newEpic");
+});
+
+test("draftRows hides epic row for existing epic mode and restores for new", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("Z");
+    CS.setEpicSelectionMode(draft, "existing");
+    var keysEx = CS.draftRows(draft).map(function(r) {
+        return r.key;
+    });
+    assert.ok(keysEx.indexOf("epic") < 0);
+    assert.ok(keysEx.indexOf("story") >= 0);
+    CS.setEpicSelectionMode(draft, "new");
+    var keysNew = CS.draftRows(draft).map(function(r) {
+        return r.key;
+    });
+    assert.ok(keysNew.indexOf("epic") >= 0);
+});
+
+test("legacy draft.epicMode existingEpic syncs ui.epicSelectionMode on validateDraft", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("L");
+    assert.equal(draft.ui.epicSelectionMode, "new");
+    draft.epicMode = "existingEpic";
+    CS.validateDraft(draft, {});
+    assert.equal(draft.ui.epicSelectionMode, "existing");
+});
+
+test("validateDraft submit path honors setEpicSelectionMode existing (form error, not epic summary)", function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("P");
+    CS.setEpicSelectionMode(draft, "existing");
+    draft.existingEpicKey = "";
+    draft.epic.summary = "";
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    CS.validateDraft(draft, { purpose: "submit" });
+    assert.equal(
+        draft.epic.errors.filter(function(e) {
+            return String(e).toLowerCase().includes("summary");
+        }).length,
+        0,
+        "existing epic mode should not require new epic summary"
+    );
+    assert.ok((draft.ui.formErrors || []).length > 0, "expect form error for missing epic key");
+});
+
 test("toggleDescription toggles isDescriptionOpen on any row node", function() {
     const CS = loadCreateStory();
     const draft = CS.makeDefaultDraft("K");
@@ -1284,4 +1387,322 @@ test("selector rejection ignored when superseded by newer request", async functi
     });
     assert.equal(draft.ui.selectorRows[0] && draft.ui.selectorRows[0].id, "ok");
     assert.equal(draft.ui.selectorError || "", "");
+});
+
+test("renderCreateModal literal-port: ref shell, KPI header, epic-in-row, child toggles, role chips", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("PROJ");
+    draft.story.summary = "Story title";
+    draft.children.forEach(function(c) {
+        c.summary = "child ok";
+    });
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [{ key: "PROJ-9", summary: "Existing epic" }];
+        }
+    });
+
+    const $dialog = $mount.find(".ujg-sb-create-dialog").first();
+    assert.ok($dialog.length, "dialog");
+    assert.ok(hasClass($dialog[0], "ujg-sb-create-ref-shell"), "dialog carries literal-port ref shell class");
+
+    const $hdr = $mount.find(".ujg-sb-create-header").first();
+    assert.ok($hdr.length, "header");
+    assert.ok($hdr.find(".ujg-sb-create-kpi-header").length >= 1, "KPI-style summary header strip inside header");
+
+    assert.equal($mount.find(".ujg-sb-create-epic-toolbar").length, 0, "epic mode not in detached top toolbar");
+
+    const $epicRow = $mount.find(".ujg-sb-create-row-epic").first();
+    assert.ok($epicRow.length, "epic row");
+    assert.ok($epicRow.find(".ujg-sb-create-epic-controls").length >= 1, "epic selection lives on epic row");
+
+    const $childBar = $mount.find(".ujg-sb-create-children-toolbar");
+    assert.equal($childBar.length, 1, "child subtree view toolbar");
+    ["Таблица", "Аккордеон", "Строки"].forEach(function(lab) {
+        var found = false;
+        $childBar.find(".ujg-sb-create-child-view-btn").each(function() {
+            if (nodeText(this).indexOf(lab) >= 0) {
+                found = true;
+            }
+        });
+        assert.ok(found, "child view toggle label: " + lab);
+    });
+
+    const $strip = $mount.find(".ujg-sb-create-role-add-strip");
+    assert.equal($strip.length, 1, "add-role chip strip");
+    function compact(s) {
+        return String(s || "").replace(/\s+/g, "");
+    }
+    ["+SE", "+FE", "+BE", "+QA", "+DO"].forEach(function(marker) {
+        var hit = false;
+        $strip.find(".ujg-sb-create-role-add-chip").each(function() {
+            if (compact(nodeText(this)).indexOf(compact(marker)) >= 0) {
+                hit = true;
+            }
+        });
+        assert.ok(hit, "add-role chip " + marker);
+    });
+
+    assert.equal($mount.find(".ujg-sb-create-bottom-tabs").length, 1, "bottom tab strip");
+    ["Активность", "Комментарии", "Списания"].forEach(function(lab) {
+        var found = false;
+        $mount.find(".ujg-sb-create-tab-btn").each(function() {
+            if (nodeText(this).indexOf(lab) >= 0) {
+                found = true;
+            }
+        });
+        assert.ok(found, "bottom tab label: " + lab);
+    });
+});
+
+test("renderCreateModal literal-port: omits legacy create-title shell hook", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("PROJ");
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    assert.equal($mount.find(".ujg-sb-create-title").length, 0, "legacy generic create title hook removed");
+});
+
+test("renderCreateModal literal-port: overlay and dialog carry reference utility classes", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("P");
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+    const overlay = $mount.find(".ujg-sb-create-overlay")[0];
+    const dialog = $mount.find(".ujg-sb-create-dialog")[0];
+    assert.ok(overlay && dialog, "shell nodes");
+    const overlayUtils =
+        "fixed inset-0 z-50 flex items-start justify-center pt-2 bg-black/60 backdrop-blur-sm".split(/\s+/);
+    overlayUtils.forEach(function(c) {
+        assert.ok(hasClass(overlay, c), "overlay ref utility: " + c);
+    });
+    const dialogUtils =
+        "bg-card border border-border rounded-lg shadow-2xl w-[95vw] max-w-[1800px] max-h-[96vh] flex flex-col".split(
+            /\s+/
+        );
+    dialogUtils.forEach(function(c) {
+        assert.ok(hasClass(dialog, c), "dialog ref utility: " + c);
+    });
+});
+
+test("renderCreateModal literal-port: bottom tabs with stable hooks update activeTab", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("P");
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+    assert.equal($mount.find(".ujg-sb-create-tab-activity").length, 1);
+    assert.equal($mount.find(".ujg-sb-create-tab-comments").length, 1);
+    assert.equal($mount.find(".ujg-sb-create-tab-worklog").length, 1);
+    assert.ok(nodeText($mount.find(".ujg-sb-create-tab-activity")[0]).indexOf("Активность") >= 0);
+    assert.ok(nodeText($mount.find(".ujg-sb-create-tab-comments")[0]).indexOf("Комментарии") >= 0);
+    assert.ok(nodeText($mount.find(".ujg-sb-create-tab-worklog")[0]).indexOf("Списания") >= 0);
+    assert.equal(draft.ui.activeTab, "activity");
+    $mount.find(".ujg-sb-create-tab-comments").trigger("click");
+    assert.equal(draft.ui.activeTab, "comments");
+});
+
+test("renderCreateModal: clearing inline epic select to blank restores newEpic and full epic row", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("PROJ");
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    CS.setEpicSelectionMode(draft, "existing");
+    draft.existingEpicKey = "PROJ-9";
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [{ key: "PROJ-9", summary: "Existing epic" }];
+        }
+    });
+    assert.equal(draft.epicMode, "existingEpic");
+    assert.equal(
+        $mount.find(".ujg-sb-create-row-epic").first().find(".ujg-sb-create-type-label").length,
+        0,
+        "no full epic type row while existing epic chosen"
+    );
+
+    const $sel = $mount.find(".ujg-sb-create-epic-existing").first();
+    assert.ok($sel.length >= 1, "epic key select present");
+    $sel.val("");
+    $sel.trigger("change");
+
+    assert.equal(draft.epicMode, "newEpic");
+    assert.equal(draft.ui.epicSelectionMode, "new");
+    assert.equal(String(draft.existingEpicKey || ""), "");
+    const $labels = $mount.find(".ujg-sb-create-row-epic").first().find(".ujg-sb-create-type-label");
+    assert.ok($labels.length >= 1, "full epic row returns with type label");
+    assert.match(nodeText($labels[0]), /Epic/i);
+});
+
+test("renderCreateModal: child view toggle updates only draft.ui.viewMode", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("P");
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    const n = draft.children.length;
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+    const $btns = $mount.find(".ujg-sb-create-child-view-btn");
+    let $tableBtn = null;
+    $btns.each(function() {
+        if (nodeText(this).indexOf("Таблица") >= 0) {
+            $tableBtn = this;
+        }
+    });
+    assert.ok($tableBtn, "table view button");
+    $tableBtn.dispatchEvent({ type: "click", bubbles: true });
+    assert.equal(draft.ui.viewMode, "table");
+    assert.equal(draft.children.length, n);
+});
+
+test("renderCreateModal: +FE chip appends children with template issueType/summary and unique rowIds", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("K");
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    const before = draft.children.length;
+    const $mount = $("<div/>");
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+    const $strip = $mount.find(".ujg-sb-create-role-add-strip");
+    let $fe = null;
+    $strip.find(".ujg-sb-create-role-add-chip").each(function() {
+        if (nodeText(this).replace(/\s+/g, "").indexOf("+FE") >= 0) {
+            $fe = this;
+        }
+    });
+    assert.ok($fe, "+FE chip");
+    $fe.dispatchEvent({ type: "click", bubbles: true });
+    $fe.dispatchEvent({ type: "click", bubbles: true });
+    assert.equal(draft.children.length, before + 2);
+    const tail = draft.children.slice(before);
+    assert.equal(tail[0].issueType, "Frontend Task");
+    assert.equal(tail[0].summary, "Вёрстка / UI");
+    assert.equal(tail[1].issueType, "Frontend Task");
+    const ids = draft.children.map(function(ch) {
+        return ch.ui && ch.ui.rowId;
+    });
+    const seen = {};
+    ids.forEach(function(id) {
+        assert.ok(id, "rowId set");
+        assert.equal(seen[id], undefined, "unique rowId: " + id);
+        seen[id] = true;
+    });
+});
+
+test("submitCreateDraft newEpic creates appended role row after template children", async function() {
+    const CS = loadCreateStory();
+    const draft = CS.makeDefaultDraft("PROJ");
+    draft.epicMode = "newEpic";
+    draft.epic.summary = "E";
+    draft.story.summary = "Story sum";
+    draft.children.forEach(function(c) {
+        c.summary = "Ch " + c.issueType;
+    });
+    draft.children.push({
+        issueType: "QA",
+        summary: "Extra QA",
+        description: "",
+        assignee: null,
+        estimate: null,
+        components: [],
+        labels: [],
+        createdKey: null,
+        errors: [],
+        ui: { editing: false, isDescriptionOpen: false, rowId: "child-append-test-1" }
+    });
+    const order = [];
+    var n = 0;
+    const api = {
+        createIssue: function(payload) {
+            order.push(payload.fields.issuetype.name);
+            n += 1;
+            return Promise.resolve({ key: "PROJ-" + n });
+        }
+    };
+    const result = await CS.submitCreateDraft(api, draft);
+    assert.equal(result.ok, true);
+    assert.equal(order.length, 1 + 1 + draft.children.length);
+    assert.equal(order[order.length - 1], "QA");
+});
+
+test("buildIssueFields omits issue link / blocker style payload keys", function() {
+    const CS = loadCreateStory();
+    const node = {
+        summary: "S",
+        description: "D",
+        assignee: null,
+        components: [],
+        labels: []
+    };
+    const fields = CS.buildIssueFields("PROJ", node, "Story", { parentKey: "P-1", epicKey: "P-EP" });
+    const keys = Object.keys(fields);
+    assert.ok(keys.indexOf("issuelinks") < 0);
+    assert.ok(keys.indexOf("issueLinks") < 0);
+    assert.ok(
+        !keys.some(function(k) {
+            return /issuelink/i.test(k);
+        }),
+        "no issuelink-like field keys"
+    );
 });

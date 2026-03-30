@@ -226,3 +226,86 @@ test("story-browser CSS: 4 create-modal shell and inline editor layout", functio
     const chipTrig = blockForClass(css, "ujg-sb-chip-trigger");
     assert.ok(chipList && chipTrig, "chip list and trigger blocks");
 });
+
+test("story-browser CSS: literal-port create modal hook classes", function() {
+    const css = readCss();
+    const hooks = [
+        "ujg-sb-create-ref-shell",
+        "ujg-sb-create-kpi-header",
+        "ujg-sb-create-epic-controls",
+        "ujg-sb-create-children-toolbar",
+        "ujg-sb-create-child-view-btn",
+        "ujg-sb-create-child-view-btn--active",
+        "ujg-sb-create-role-add-strip",
+        "ujg-sb-create-role-add-chip",
+        "ujg-sb-create-bottom-tabs",
+        "ujg-sb-create-tab-btn",
+        "ujg-sb-create-tab-btn--active"
+    ];
+    var hi;
+    for (hi = 0; hi < hooks.length; hi++) {
+        var cls = hooks[hi];
+        assert.match(css, new RegExp("\\." + cls.replace(/-/g, "\\-") + "\\b"), "expected rule for ." + cls);
+    }
+
+    const kpi = blockForClass(css, "ujg-sb-create-kpi-header");
+    assert.ok(kpi, ".ujg-sb-create-kpi-header block");
+    assert.match(kpi, /display\s*:\s*flex|grid/i, "KPI header uses flex or grid layout");
+
+    const childBtn = blockForClass(css, "ujg-sb-create-child-view-btn");
+    assert.ok(childBtn, ".ujg-sb-create-child-view-btn block");
+    assert.match(childBtn, /cursor\s*:\s*pointer|border|padding/i, "child view toggle is visibly interactive");
+
+    const childActive = blockForClass(css, "ujg-sb-create-child-view-btn--active");
+    assert.ok(childActive, ".ujg-sb-create-child-view-btn--active block");
+    assert.match(
+        childActive,
+        /background(?:-color)?\s*:|border-color\s*:|color\s*:\s*hsl/i,
+        "active child view button should read as selected"
+    );
+
+    const tabBtn = blockForClass(css, "ujg-sb-create-tab-btn");
+    assert.ok(tabBtn, ".ujg-sb-create-tab-btn block");
+    assert.match(tabBtn, /cursor\s*:\s*pointer|padding|border/i, "bottom tab is visibly interactive");
+
+    const tabActive = blockForClass(css, "ujg-sb-create-tab-btn--active");
+    assert.ok(tabActive, ".ujg-sb-create-tab-btn--active block");
+    assert.match(
+        tabActive,
+        /background(?:-color)?\s*:|border-color\s*:|color\s*:\s*hsl/i,
+        "active bottom tab should read as selected"
+    );
+
+    const roleChip = blockForClass(css, "ujg-sb-create-role-add-chip");
+    assert.ok(roleChip, ".ujg-sb-create-role-add-chip block");
+    assert.match(roleChip, /cursor\s*:\s*pointer|border|padding/i, "role add chip is visibly interactive");
+});
+
+test("story-browser CSS: literal-port Tailwind-like utilities are scoped, not global", function() {
+    const css = readCss();
+    const globalUtilityPatterns = [
+        /^\s*\.fixed\s*\{/m,
+        /^\s*\.flex\s*\{/m,
+        /^\s*\.bg-card\s*\{/m,
+        /^\s*\.backdrop-blur-sm\s*\{/m,
+        /^\s*\.w-\\\[95vw\\\]\s*\{/m
+    ];
+    var gi;
+    for (gi = 0; gi < globalUtilityPatterns.length; gi++) {
+        assert.ok(
+            !globalUtilityPatterns[gi].test(css),
+            "utility " + gi + " must be scoped under .ujg-story-browser or .ujg-sb-popup-host"
+        );
+    }
+    assert.match(
+        css,
+        /\.ujg-story-browser\s+\.bg-card\b|\.ujg-sb-popup-host\s+\.bg-card\b/,
+        "bg-card utility should appear scoped to widget or popup host"
+    );
+    assert.match(
+        css,
+        /\.ujg-story-browser\s+\.backdrop-blur-sm\b|\.ujg-sb-popup-host\s+\.backdrop-blur-sm\b/,
+        "backdrop-blur-sm should appear scoped"
+    );
+    assert.match(css, /\.w-\\\[95vw\\\]/, "literal width utility selector w-[95vw] present");
+});

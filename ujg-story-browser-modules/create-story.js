@@ -4,7 +4,11 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
     var CREATE_TEMPLATE_ROLES = config.CREATE_TEMPLATE_ROLES || [];
     var EPIC_LINK_FIELD = config.EPIC_LINK_FIELD || "customfield_10014";
 
-    function makeNode(issueType, summary) {
+    function makeNode(issueType, summary, childRowId) {
+        var ui = { editing: false, isDescriptionOpen: false };
+        if (childRowId != null && String(childRowId).length) {
+            ui.rowId = String(childRowId);
+        }
         return {
             issueType: issueType,
             summary: summary != null ? String(summary) : "",
@@ -15,14 +19,45 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
             labels: [],
             createdKey: null,
             errors: [],
-            ui: { editing: false, isDescriptionOpen: false }
+            ui: ui
         };
+    }
+
+    function syncEpicUiFromEpicMode(draft) {
+        if (!draft) {
+            return;
+        }
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        if (draft.epicMode === "existingEpic") {
+            draft.ui.epicSelectionMode = "existing";
+        } else {
+            draft.ui.epicSelectionMode = "new";
+        }
+    }
+
+    function setEpicSelectionMode(draft, mode) {
+        if (!draft) {
+            return;
+        }
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        var m = String(mode || "");
+        if (m === "existing") {
+            draft.ui.epicSelectionMode = "existing";
+            draft.epicMode = "existingEpic";
+        } else if (m === "new") {
+            draft.ui.epicSelectionMode = "new";
+            draft.epicMode = "newEpic";
+        }
     }
 
     function makeDefaultDraft(projectKey) {
         var key = projectKey != null ? String(projectKey) : "";
         var children = CREATE_TEMPLATE_ROLES.map(function(row) {
-            return makeNode(row.issueType, row.summary);
+            return makeNode(row.issueType, row.summary, "child-" + row.role);
         });
         return {
             projectKey: key,
@@ -40,9 +75,42 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
                 selectorLoading: false,
                 selectorOpSeq: 0,
                 selectorError: "",
-                submitting: false
+                submitting: false,
+                viewMode: "rows",
+                activeTab: "activity",
+                epicSelectionMode: "new",
+                nextChildRowSeq: 0
             }
         };
+    }
+
+    function appendChildFromRoleChip(draft, roleCode) {
+        if (!draft) {
+            return;
+        }
+        if (!Array.isArray(draft.children)) {
+            draft.children = [];
+        }
+        if (!draft.ui) {
+            draft.ui = {};
+        }
+        var code = String(roleCode || "").toUpperCase();
+        var tpl = null;
+        for (var i = 0; i < CREATE_TEMPLATE_ROLES.length; i++) {
+            if (CREATE_TEMPLATE_ROLES[i].role === code) {
+                tpl = CREATE_TEMPLATE_ROLES[i];
+                break;
+            }
+        }
+        if (!tpl) {
+            return;
+        }
+        if (typeof draft.ui.nextChildRowSeq !== "number") {
+            draft.ui.nextChildRowSeq = 0;
+        }
+        draft.ui.nextChildRowSeq += 1;
+        var rowId = "child-added-" + draft.ui.nextChildRowSeq;
+        draft.children.push(makeNode(tpl.issueType, tpl.summary, rowId));
     }
 
     function toggleDescription(node) {
@@ -117,6 +185,7 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         if (!draft) {
             return;
         }
+        syncEpicUiFromEpicMode(draft);
         var purpose = context && context.purpose ? String(context.purpose) : "";
         var rows = [draft.epic, draft.story].concat(draft.children || []);
         rows.forEach(function(row) {
@@ -156,13 +225,18 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
     }
 
     function draftRows(draft) {
+        syncEpicUiFromEpicMode(draft);
         var rows = [];
         if (draft.epicMode !== "existingEpic") {
             rows.push({ key: "epic", node: draft.epic });
         }
         rows.push({ key: "story", node: draft.story });
         (draft.children || []).forEach(function(child, i) {
-            rows.push({ key: "child-" + i, node: child });
+            var rk =
+                child && child.ui && child.ui.rowId != null && String(child.ui.rowId).length
+                    ? String(child.ui.rowId)
+                    : "child-" + i;
+            rows.push({ key: rk, node: child });
         });
         return rows;
     }
@@ -282,6 +356,7 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         if (!draft.ui) {
             draft.ui = {};
         }
+        syncEpicUiFromEpicMode(draft);
         if (draft.ui.submitting) {
             return Promise.resolve({ ok: false, skipped: true });
         }
@@ -434,11 +509,284 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         if (rowKey === "story") {
             return draft.story;
         }
-        var m = /^child-(\d+)$/.exec(String(rowKey || ""));
+        var sk = String(rowKey || "");
+        var m = /^child-(\d+)$/.exec(sk);
         if (m) {
             return (draft.children || [])[Number(m[1])];
         }
+        var ch = draft.children || [];
+        for (var i = 0; i < ch.length; i++) {
+            var c = ch[i];
+            if (c && c.ui && c.ui.rowId === sk) {
+                return c;
+            }
+        }
         return null;
+    }
+
+    var LITERAL_PORT_OVERLAY_UTIL =
+        "fixed inset-0 z-50 flex items-start justify-center pt-2 bg-black/60 backdrop-blur-sm";
+    var LITERAL_PORT_DIALOG_UTIL =
+        "bg-card border border-border rounded-lg shadow-2xl w-[95vw] max-w-[1800px] max-h-[96vh] flex flex-col";
+
+    function renderEpicControls(draft, ctx, $mount) {
+        var $wrap = $("<div/>").addClass("ujg-sb-create-epic-controls");
+        $wrap.append($("<span/>").addClass("ujg-sb-create-epic-label").text("Эпик:"));
+        var $modeNew = $("<label/>").append(
+            $("<input type=\"radio\" name=\"ujg-sb-epic-mode\" value=\"newEpic\"/>")
+                .prop("checked", draft.epicMode === "newEpic")
+                .on("change", function() {
+                    setEpicSelectionMode(draft, "new");
+                    renderCreateModal($mount, draft, ctx);
+                }),
+            $("<span/>").text(" Новый")
+        );
+        var $modeEx = $("<label/>").append(
+            $("<input type=\"radio\" name=\"ujg-sb-epic-mode\" value=\"existingEpic\"/>")
+                .prop("checked", draft.epicMode === "existingEpic")
+                .on("change", function() {
+                    setEpicSelectionMode(draft, "existing");
+                    renderCreateModal($mount, draft, ctx);
+                }),
+            $("<span/>").text(" Существующий")
+        );
+        $wrap.append($modeNew, $modeEx);
+        if (draft.epicMode === "existingEpic") {
+            var $sel = $("<select/>").addClass("ujg-sb-inline-editor ujg-sb-create-epic-existing");
+            $sel.append($("<option value=\"\">").text("— эпик —"));
+            (ctx.getEpicOptions ? ctx.getEpicOptions() : []).forEach(function(opt) {
+                var k = opt && opt.key != null ? String(opt.key) : "";
+                var lab = opt && opt.summary != null ? String(opt.summary) : k;
+                $sel.append($("<option/>").attr("value", k).text(k + (lab && lab !== k ? " — " + lab : "")));
+            });
+            $sel.val(draft.existingEpicKey || "");
+            $sel.on("change", function() {
+                var raw = $sel.val();
+                draft.existingEpicKey = raw != null ? String(raw) : "";
+                if (!String(draft.existingEpicKey).trim()) {
+                    setEpicSelectionMode(draft, "new");
+                } else {
+                    setEpicSelectionMode(draft, "existing");
+                }
+                renderCreateModal($mount, draft, ctx);
+            });
+            $wrap.append($sel);
+        }
+        return $wrap;
+    }
+
+    function renderChildrenViewToolbar(draft, ctx, $mount) {
+        var $bar = $("<div/>").addClass("ujg-sb-create-children-toolbar");
+        var modes = [
+            { id: "table", label: "Таблица" },
+            { id: "accordion", label: "Аккордеон" },
+            { id: "rows", label: "Строки" }
+        ];
+        modes.forEach(function(m) {
+            var $btn = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-create-child-view-btn")
+                .text(m.label);
+            if ((draft.ui.viewMode || "rows") === m.id) {
+                $btn.addClass("ujg-sb-create-child-view-btn--active");
+            }
+            $btn.on("click", function() {
+                draft.ui.viewMode = m.id;
+                renderCreateModal($mount, draft, ctx);
+            });
+            $bar.append($btn);
+        });
+        return $bar;
+    }
+
+    function renderRoleAddStrip(draft, ctx, $mount) {
+        var $strip = $("<div/>").addClass("ujg-sb-create-role-add-strip");
+        ["+SE", "+FE", "+BE", "+QA", "+DO"].forEach(function(lab) {
+            var $btn = $("<button type=\"button\"/>").addClass("ujg-sb-create-role-add-chip").text(lab);
+            $btn.on("click", function() {
+                var m = /^\+([A-Z]+)$/.exec(String(lab).replace(/\s+/g, ""));
+                if (m) {
+                    appendChildFromRoleChip(draft, m[1]);
+                    renderCreateModal($mount, draft, ctx);
+                }
+            });
+            $strip.append($btn);
+        });
+        return $strip;
+    }
+
+    function renderBottomTabs(draft, ctx, $mount) {
+        var $host = $("<div/>").addClass("ujg-sb-create-bottom-tabs");
+        var tabs = [
+            { key: "activity", hook: "ujg-sb-create-tab-activity", label: "Активность" },
+            { key: "comments", hook: "ujg-sb-create-tab-comments", label: "Комментарии" },
+            { key: "worklog", hook: "ujg-sb-create-tab-worklog", label: "Списания" }
+        ];
+        var active = draft.ui.activeTab || "activity";
+        tabs.forEach(function(t) {
+            var $btn = $("<button type=\"button\"/>")
+                .addClass("ujg-sb-create-tab-btn " + t.hook)
+                .text(t.label);
+            if (active === t.key) {
+                $btn.addClass("ujg-sb-create-tab-btn--active");
+            }
+            $btn.on("click", function() {
+                draft.ui.activeTab = t.key;
+                renderCreateModal($mount, draft, ctx);
+            });
+            $host.append($btn);
+        });
+        return $host;
+    }
+
+    function appendCreateTreeRow($mount, draft, ctx, $tree, row) {
+        var node = row.node;
+        if (!node) {
+            return;
+        }
+        if (!node.ui) {
+            node.ui = { editing: false, isDescriptionOpen: false };
+        }
+        if (!Array.isArray(node.errors)) {
+            node.errors = [];
+        }
+        if (!Array.isArray(node.components)) {
+            node.components = [];
+        }
+        if (!Array.isArray(node.labels)) {
+            node.labels = [];
+        }
+        var $r = $("<div/>").addClass(
+            "ujg-sb-create-tree-row ujg-sb-create-row-" + rowClassSuffix(row.key)
+        );
+        if (node.errors && node.errors.length) {
+            $r.addClass("ujg-sb-create-row-error");
+        }
+
+        var hasChrome = ctx && ctx.onClose && ctx.onSubmit;
+        if (row.key === "epic" && hasChrome) {
+            $r.append(renderEpicControls(draft, ctx, $mount));
+        }
+
+        $r.append(
+            $("<span/>")
+                .addClass("ujg-sb-create-type-label")
+                .text(node.issueType)
+        );
+
+        if (node.ui.editing) {
+            var $summaryInput = $("<input/>")
+                .attr("type", "text")
+                .addClass("ujg-sb-inline-editor ujg-sb-create-summary-input")
+                .val(node.summary);
+            $summaryInput.on("input", function() {
+                node.summary = $summaryInput.val();
+            });
+            $summaryInput.on("click", function(ev) {
+                if (ev.stopPropagation) {
+                    ev.stopPropagation();
+                }
+            });
+            $r.append($summaryInput);
+        } else {
+            var $summary = $("<span/>").addClass("ujg-sb-create-summary");
+            var summaryText = node.summary && String(node.summary).trim() ? node.summary : "\u2014";
+            $summary.text(summaryText);
+            $summary.on("click", function() {
+                clearAllSummaryEditing(draft);
+                node.ui.editing = true;
+                renderCreateModal($mount, draft, ctx);
+            });
+            $r.append($summary);
+        }
+
+        var $addDesc = $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-sb-create-add-desc")
+            .text(descriptionToggleLabel(node));
+        $addDesc.on("click", function() {
+            toggleDescription(node);
+            renderCreateModal($mount, draft, ctx);
+        });
+        $r.append($addDesc);
+
+        var assigneeLabel = "Исполнитель";
+        if (node.assignee && typeof node.assignee === "object" && node.assignee.displayName) {
+            assigneeLabel = String(node.assignee.displayName);
+        } else if (node.assignee && typeof node.assignee === "object" && node.assignee.name) {
+            assigneeLabel = String(node.assignee.name);
+        }
+        var $asTr = $("<button type=\"button\"/>")
+            .addClass("ujg-sb-create-assignee-trigger")
+            .text(assigneeLabel);
+        $asTr.on("click", function() {
+            openSelector(draft, row.key, "assignee");
+            renderCreateModal($mount, draft, ctx);
+        });
+        $r.append($asTr);
+
+        var $compTr = $("<button type=\"button\"/>")
+            .addClass("ujg-sb-create-component-trigger")
+            .text("Компонент");
+        $compTr.on("click", function() {
+            openSelector(draft, row.key, "component");
+            renderCreateModal($mount, draft, ctx);
+        });
+        $r.append($compTr);
+
+        var $labTr = $("<button type=\"button\"/>")
+            .addClass("ujg-sb-create-label-trigger")
+            .text("Метка");
+        $labTr.on("click", function() {
+            openSelector(draft, row.key, "label");
+            renderCreateModal($mount, draft, ctx);
+        });
+        $r.append($labTr);
+
+        var $chips = $("<div/>").addClass("ujg-sb-chip-list");
+        (node.components || []).forEach(function(c) {
+            var nm = typeof c === "string" ? c : c && c.name;
+            if (nm) {
+                $chips.append($("<span/>").addClass("ujg-sb-chip").text(String(nm)));
+            }
+        });
+        (node.labels || []).forEach(function(lb) {
+            $chips.append($("<span/>").addClass("ujg-sb-chip ujg-sb-chip-label").text(String(lb)));
+        });
+        $r.append($chips);
+        $r.append($("<span/>").addClass("ujg-sb-chip-trigger").attr("aria-hidden", "true"));
+
+        if (node.createdKey) {
+            $r.append(
+                $("<span/>")
+                    .addClass("ujg-sb-create-created-key")
+                    .text(String(node.createdKey))
+            );
+        }
+
+        if (node.errors && node.errors.length) {
+            var $re = $("<div/>").addClass("ujg-sb-create-row-errors");
+            node.errors.forEach(function(er) {
+                $re.append($("<div/>").text(String(er)));
+            });
+            $r.append($re);
+        }
+
+        if (node.ui.isDescriptionOpen) {
+            var $desc = $("<textarea/>")
+                .addClass("ujg-sb-inline-editor ujg-sb-create-desc-input")
+                .val(node.description);
+            $desc.on("input", function() {
+                node.description = $desc.val();
+            });
+            $r.append($desc);
+        }
+
+        var $selPan = renderSelectorPanel($mount, draft, ctx, row.key);
+        if ($selPan) {
+            $r.append($selPan);
+        }
+
+        $tree.append($r);
     }
 
     function renderSelectorPanel($mount, draft, ctx, rowKey) {
@@ -641,19 +989,38 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
             draft.ui.selectorError = "";
         }
         ctx = ctx || {};
+        var hasChrome = !!(ctx.onClose && ctx.onSubmit);
         $mount.empty();
         $mount.addClass("ujg-sb-popup-host");
-        var $overlay = $("<div/>").addClass("ujg-sb-create-overlay");
-        var $dialog = $("<div/>").addClass("ujg-sb-create-dialog");
+        var $overlay = $("<div/>")
+            .addClass("ujg-sb-create-overlay")
+            .addClass(LITERAL_PORT_OVERLAY_UTIL);
+        var $dialog = $("<div/>")
+            .addClass("ujg-sb-create-dialog ujg-sb-create-ref-shell")
+            .addClass(LITERAL_PORT_DIALOG_UTIL);
         var $header = $("<div/>").addClass("ujg-sb-create-header");
-        $header.append($("<span/>").addClass("ujg-sb-create-title").text("Создание истории"));
-        if (ctx.onClose && ctx.onSubmit) {
+        var $kpi = $("<div/>").addClass("ujg-sb-create-kpi-header");
+        var pk = draft.projectKey != null ? String(draft.projectKey).trim() : "";
+        $kpi.append(
+            $("<div/>")
+                .addClass("ujg-sb-create-kpi-line")
+                .text(pk ? "\u041f\u0440\u043e\u0435\u043a\u0442 " + pk : "\u041f\u0440\u043e\u0435\u043a\u0442")
+        );
+        var stSum =
+            draft.story && draft.story.summary != null ? String(draft.story.summary).trim() : "";
+        $kpi.append(
+            $("<div/>")
+                .addClass("ujg-sb-create-kpi-story-line")
+                .text(stSum || "\u041d\u043e\u0432\u0430\u044f \u0438\u0441\u0442\u043e\u0440\u0438\u044f")
+        );
+        $header.append($kpi);
+        if (hasChrome) {
             var $actions = $("<div/>").addClass("ujg-sb-create-header-actions");
             $actions.append(
                 (function() {
                     var $sub = $("<button type=\"button\"/>")
                         .addClass("ujg-sb-create-submit")
-                        .text("Создать")
+                        .text("\u0421\u043e\u0437\u0434\u0430\u0442\u044c")
                         .on("click", function() {
                             if (draft.ui && draft.ui.submitting) {
                                 return;
@@ -671,7 +1038,7 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
             $actions.append(
                 $("<button type=\"button\"/>")
                     .addClass("ujg-sb-create-close")
-                    .text("Закрыть")
+                    .text("\u0417\u0430\u043a\u0440\u044b\u0442\u044c")
                     .on("click", function() {
                         if (ctx.onClose) {
                             ctx.onClose();
@@ -682,45 +1049,6 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         }
 
         var $tree = $("<div/>").addClass("ujg-sb-create-tree");
-
-        if (ctx.onClose && ctx.onSubmit) {
-            var $epicBar = $("<div/>").addClass("ujg-sb-create-epic-toolbar");
-            $epicBar.append($("<span/>").addClass("ujg-sb-create-epic-label").text("Эпик:"));
-            var $modeNew = $("<label/>").append(
-                $("<input type=\"radio\" name=\"ujg-sb-epic-mode\" value=\"newEpic\"/>")
-                    .prop("checked", draft.epicMode === "newEpic")
-                    .on("change", function() {
-                        draft.epicMode = "newEpic";
-                        renderCreateModal($mount, draft, ctx);
-                    }),
-                $("<span/>").text(" Новый")
-            );
-            var $modeEx = $("<label/>").append(
-                $("<input type=\"radio\" name=\"ujg-sb-epic-mode\" value=\"existingEpic\"/>")
-                    .prop("checked", draft.epicMode === "existingEpic")
-                    .on("change", function() {
-                        draft.epicMode = "existingEpic";
-                        renderCreateModal($mount, draft, ctx);
-                    }),
-                $("<span/>").text(" Существующий")
-            );
-            $epicBar.append($modeNew, $modeEx);
-            if (draft.epicMode === "existingEpic") {
-                var $sel = $("<select/>").addClass("ujg-sb-inline-editor ujg-sb-create-epic-existing");
-                $sel.append($("<option value=\"\">").text("— эпик —"));
-                (ctx.getEpicOptions ? ctx.getEpicOptions() : []).forEach(function(opt) {
-                    var k = opt && opt.key != null ? String(opt.key) : "";
-                    var lab = opt && opt.summary != null ? String(opt.summary) : k;
-                    $sel.append($("<option/>").attr("value", k).text(k + (lab && lab !== k ? " — " + lab : "")));
-                });
-                $sel.val(draft.existingEpicKey || "");
-                $sel.on("change", function() {
-                    draft.existingEpicKey = $sel.val();
-                });
-                $epicBar.append($sel);
-            }
-            $tree.append($epicBar);
-        }
 
         var bannerMsgs = [].concat(draft.ui.formErrors || []);
         draftRows(draft).forEach(function(dr) {
@@ -738,153 +1066,48 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
             $tree.append($fe);
         }
 
-        draftRows(draft).forEach(function(row) {
-            var node = row.node;
-            if (!node) {
-                return;
-            }
-            if (!node.ui) {
-                node.ui = { editing: false, isDescriptionOpen: false };
-            }
-            if (!Array.isArray(node.errors)) {
-                node.errors = [];
-            }
-            if (!Array.isArray(node.components)) {
-                node.components = [];
-            }
-            if (!Array.isArray(node.labels)) {
-                node.labels = [];
-            }
-            var $r = $("<div/>").addClass(
-                "ujg-sb-create-tree-row ujg-sb-create-row-" + rowClassSuffix(row.key)
-            );
-            if (node.errors && node.errors.length) {
-                $r.addClass("ujg-sb-create-row-error");
-            }
-
-            $r.append(
-                $("<span/>")
-                    .addClass("ujg-sb-create-type-label")
-                    .text(node.issueType)
-            );
-
-            if (node.ui.editing) {
-                var $summaryInput = $("<input/>")
-                    .attr("type", "text")
-                    .addClass("ujg-sb-inline-editor ujg-sb-create-summary-input")
-                    .val(node.summary);
-                $summaryInput.on("input", function() {
-                    node.summary = $summaryInput.val();
-                });
-                $summaryInput.on("click", function(ev) {
-                    if (ev.stopPropagation) {
-                        ev.stopPropagation();
-                    }
-                });
-                $r.append($summaryInput);
+        var rows = draftRows(draft);
+        var epicSpec = null;
+        var storySpec = null;
+        var childSpecs = [];
+        rows.forEach(function(r) {
+            if (r.key === "epic") {
+                epicSpec = r;
+            } else if (r.key === "story") {
+                storySpec = r;
             } else {
-                var $summary = $("<span/>").addClass("ujg-sb-create-summary");
-                var summaryText = node.summary && String(node.summary).trim() ? node.summary : "\u2014";
-                $summary.text(summaryText);
-                $summary.on("click", function() {
-                    clearAllSummaryEditing(draft);
-                    node.ui.editing = true;
-                    renderCreateModal($mount, draft, ctx);
-                });
-                $r.append($summary);
+                childSpecs.push(r);
             }
-
-            var $addDesc = $("<button/>")
-                .attr("type", "button")
-                .addClass("ujg-sb-create-add-desc")
-                .text(descriptionToggleLabel(node));
-            $addDesc.on("click", function() {
-                toggleDescription(node);
-                renderCreateModal($mount, draft, ctx);
-            });
-            $r.append($addDesc);
-
-            var assigneeLabel = "Исполнитель";
-            if (node.assignee && typeof node.assignee === "object" && node.assignee.displayName) {
-                assigneeLabel = String(node.assignee.displayName);
-            } else if (node.assignee && typeof node.assignee === "object" && node.assignee.name) {
-                assigneeLabel = String(node.assignee.name);
-            }
-            var $asTr = $("<button type=\"button\"/>")
-                .addClass("ujg-sb-create-assignee-trigger")
-                .text(assigneeLabel);
-            $asTr.on("click", function() {
-                openSelector(draft, row.key, "assignee");
-                renderCreateModal($mount, draft, ctx);
-            });
-            $r.append($asTr);
-
-            var $compTr = $("<button type=\"button\"/>")
-                .addClass("ujg-sb-create-component-trigger")
-                .text("Компонент");
-            $compTr.on("click", function() {
-                openSelector(draft, row.key, "component");
-                renderCreateModal($mount, draft, ctx);
-            });
-            $r.append($compTr);
-
-            var $labTr = $("<button type=\"button\"/>")
-                .addClass("ujg-sb-create-label-trigger")
-                .text("Метка");
-            $labTr.on("click", function() {
-                openSelector(draft, row.key, "label");
-                renderCreateModal($mount, draft, ctx);
-            });
-            $r.append($labTr);
-
-            var $chips = $("<div/>").addClass("ujg-sb-chip-list");
-            (node.components || []).forEach(function(c) {
-                var nm = typeof c === "string" ? c : c && c.name;
-                if (nm) {
-                    $chips.append($("<span/>").addClass("ujg-sb-chip").text(String(nm)));
-                }
-            });
-            (node.labels || []).forEach(function(lb) {
-                $chips.append($("<span/>").addClass("ujg-sb-chip ujg-sb-chip-label").text(String(lb)));
-            });
-            $r.append($chips);
-            $r.append($("<span/>").addClass("ujg-sb-chip-trigger").attr("aria-hidden", "true"));
-
-            if (node.createdKey) {
-                $r.append(
-                    $("<span/>")
-                        .addClass("ujg-sb-create-created-key")
-                        .text(String(node.createdKey))
-                );
-            }
-
-            if (node.errors && node.errors.length) {
-                var $re = $("<div/>").addClass("ujg-sb-create-row-errors");
-                node.errors.forEach(function(er) {
-                    $re.append($("<div/>").text(String(er)));
-                });
-                $r.append($re);
-            }
-
-            if (node.ui.isDescriptionOpen) {
-                var $desc = $("<textarea/>")
-                    .addClass("ujg-sb-inline-editor ujg-sb-create-desc-input")
-                    .val(node.description);
-                $desc.on("input", function() {
-                    node.description = $desc.val();
-                });
-                $r.append($desc);
-            }
-
-            var $selPan = renderSelectorPanel($mount, draft, ctx, row.key);
-            if ($selPan) {
-                $r.append($selPan);
-            }
-
-            $tree.append($r);
         });
 
-        $dialog.append($header).append($tree);
+        if (hasChrome && draft.epicMode === "existingEpic") {
+            var $epicOnly = $("<div/>").addClass("ujg-sb-create-tree-row ujg-sb-create-row-epic");
+            $epicOnly.append(renderEpicControls(draft, ctx, $mount));
+            $tree.append($epicOnly);
+        }
+
+        if (epicSpec) {
+            appendCreateTreeRow($mount, draft, ctx, $tree, epicSpec);
+        }
+        if (storySpec) {
+            appendCreateTreeRow($mount, draft, ctx, $tree, storySpec);
+        }
+
+        childSpecs.forEach(function(row) {
+            appendCreateTreeRow($mount, draft, ctx, $tree, row);
+        });
+
+        $dialog.append($header);
+        if (hasChrome) {
+            $dialog.append(renderChildrenViewToolbar(draft, ctx, $mount));
+            $dialog.append(renderRoleAddStrip(draft, ctx, $mount));
+        }
+        var $bodyScroll = $("<div/>").addClass("flex-1 min-h-0 overflow-auto");
+        $bodyScroll.append($tree);
+        $dialog.append($bodyScroll);
+        if (hasChrome) {
+            $dialog.append(renderBottomTabs(draft, ctx, $mount));
+        }
         $overlay.append($dialog);
         $mount.append($overlay);
     }
@@ -900,6 +1123,7 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         normalizeComponentRows: normalizeComponentRows,
         normalizeLabelSearchRows: normalizeLabelSearchRows,
         draftRows: draftRows,
-        buildIssueFields: buildIssueFields
+        buildIssueFields: buildIssueFields,
+        setEpicSelectionMode: setEpicSelectionMode
     };
 });
