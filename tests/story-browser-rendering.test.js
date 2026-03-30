@@ -987,6 +987,68 @@ test("clearCreateStoryModal empties popup host without touching view host", func
     assert.ok($c.find(".ujg-sb-view-host").text().indexOf("STORY-1") >= 0);
 });
 
+test("renderCreateStoryModal exposes literal-port create-modal hooks (create-story renderer)", function() {
+    var documentNode = createNode("document");
+    var $ = createMiniJquery(documentNode);
+    var config = loadConfig(mockWindow());
+    var utils = loadUtils(mockWindow());
+    var CS = loadCreateStory($, config);
+    var rendering = loadRendering($, config, utils);
+    var $c = $("<div/>");
+    var draft = CS.makeDefaultDraft("P1");
+    draft.story.summary = "S";
+    draft.children.forEach(function(c) {
+        c.summary = "c";
+    });
+    rendering.init($c, {
+        onCloseCreateStory: function() {},
+        onSubmitCreateStory: function() {}
+    });
+    rendering.renderCreateStoryModal(draft);
+    var $host = $c.find(".ujg-sb-popup-host");
+    var $dialog = $host.find(".ujg-sb-create-dialog");
+    assert.equal($dialog.length, 1, "dialog rendered in popup host");
+    assert.ok(hasClass($dialog[0], "ujg-sb-create-ref-shell"), "ref shell on dialog");
+    var $header = $host.find(".ujg-sb-create-header");
+    assert.equal($header.length, 1, "header rendered");
+    assert.ok($($header[0]).find(".ujg-sb-create-kpi-header").length >= 1, "KPI header");
+    assert.equal($host.find(".ujg-sb-create-epic-toolbar").length, 0, "no legacy epic toolbar");
+    var $epicRow = $host.find(".ujg-sb-create-row-epic");
+    assert.equal($epicRow.length, 1, "epic row rendered");
+    assert.ok($($epicRow[0]).find(".ujg-sb-create-epic-controls").length >= 1, "epic controls on epic row");
+    var $childBar = $host.find(".ujg-sb-create-children-toolbar");
+    assert.equal($childBar.length, 1, "child toolbar rendered");
+    var $childBtns = $($childBar[0]).find(".ujg-sb-create-child-view-btn");
+    assert.equal($childBtns.length, 3, "three child-area toggles");
+    ["Таблица", "Аккордеон", "Строки"].forEach(function(lab) {
+        var hit = false;
+        $childBtns.each(function() {
+            if (nodeText(this).indexOf(lab) >= 0) {
+                hit = true;
+            }
+        });
+        assert.ok(hit, "child toggle " + lab);
+    });
+    var $roleStrip = $host.find(".ujg-sb-create-role-add-strip");
+    assert.equal($roleStrip.length, 1, "role chip strip rendered");
+    var $roleChips = $($roleStrip[0]).find(".ujg-sb-create-role-add-chip");
+    assert.equal($roleChips.length, 5, "five add-role chips");
+    ["+SE", "+FE", "+BE", "+QA", "+DO"].forEach(function(marker) {
+        var compact = marker.replace(/\s+/g, "");
+        var hit = false;
+        $roleChips.each(function() {
+            if (nodeText(this).replace(/\s+/g, "").indexOf(compact) >= 0) {
+                hit = true;
+            }
+        });
+        assert.ok(hit, "role chip " + marker);
+    });
+    assert.equal($host.find(".ujg-sb-create-bottom-tabs").length, 1, "bottom tab strip on dialog");
+    assert.equal($host.find(".ujg-sb-create-tab-activity").length, 1);
+    assert.equal($host.find(".ujg-sb-create-tab-comments").length, 1);
+    assert.equal($host.find(".ujg-sb-create-tab-worklog").length, 1);
+});
+
 test("view mode and expand or collapse callbacks fire when buttons clicked", function() {
     var documentNode = createNode("document");
     var $ = createMiniJquery(documentNode);
