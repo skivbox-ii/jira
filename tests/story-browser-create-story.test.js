@@ -819,7 +819,7 @@ test("renderCreateModal with ctx shows header actions and surfaces submit valida
     assert.ok($mount.find(".ujg-sb-create-form-errors").length >= 1);
 });
 
-test("renderCreateModal: picking assignee from selector updates draft.story.assignee", async function() {
+test("renderCreateModal: picking assignee from selector updates child-row assignee", async function() {
     const CS = loadCreateStory();
     const documentNode = createNode("document");
     const $ = createMiniJquery(documentNode);
@@ -849,7 +849,7 @@ test("renderCreateModal: picking assignee from selector updates draft.story.assi
             return [];
         }
     });
-    const $trig = $mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-assignee-trigger");
+    const $trig = $mount.find(".ujg-sb-create-row-child-SE").find(".ujg-sb-create-assignee-trigger");
     assert.ok($trig.length >= 1, "assignee trigger present");
     $trig.trigger("click");
     const $search = $mount.find(".ujg-sb-create-selector-search");
@@ -862,8 +862,8 @@ test("renderCreateModal: picking assignee from selector updates draft.story.assi
     const $pick = $mount.find(".ujg-sb-create-selector-option").first();
     assert.ok($pick.length >= 1);
     $pick.trigger("click");
-    assert.ok(draft.story.assignee);
-    assert.equal(draft.story.assignee.name, "u1");
+    assert.ok(draft.children[0].assignee);
+    assert.equal(draft.children[0].assignee.name, "u1");
     assert.equal(lastQuery, "User");
 });
 
@@ -1152,7 +1152,7 @@ test("assignee selector ignores stale search result when a newer query completed
             return [];
         }
     });
-    $mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-assignee-trigger").trigger("click");
+    $mount.find(".ujg-sb-create-row-child-SE").find(".ujg-sb-create-assignee-trigger").trigger("click");
     const $search = $mount.find(".ujg-sb-create-selector-search");
     $search.val("slow");
     $search.trigger("input");
@@ -1204,7 +1204,7 @@ test("selector async does not rerender when isDraftActive becomes false", async 
             return [];
         }
     });
-    $mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-assignee-trigger").trigger("click");
+    $mount.find(".ujg-sb-create-row-child-SE").find(".ujg-sb-create-assignee-trigger").trigger("click");
     active = false;
     await new Promise(function(r) {
         setTimeout(r, 40);
@@ -1243,7 +1243,7 @@ test("assignee selector: searchUsers rejection clears loading and shows selector
             return [];
         }
     });
-    $mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-assignee-trigger").trigger("click");
+    $mount.find(".ujg-sb-create-row-child-SE").find(".ujg-sb-create-assignee-trigger").trigger("click");
     await new Promise(function(r) {
         setImmediate(r);
     });
@@ -1370,7 +1370,7 @@ test("selector rejection ignored when superseded by newer request", async functi
             return [];
         }
     });
-    $mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-assignee-trigger").trigger("click");
+    $mount.find(".ujg-sb-create-row-child-SE").find(".ujg-sb-create-assignee-trigger").trigger("click");
     await new Promise(function(r) {
         setImmediate(r);
     });
@@ -1621,19 +1621,102 @@ test("renderCreateModal literal-port: child rows expose compact action strip inc
         }
     });
 
-    const $descBtn = $mount.find(".ujg-sb-create-add-desc").first();
-    assert.ok($descBtn.length, "compact action button");
-    ["text-primary/40", "hover:text-primary/70", "px-1"].forEach(function(cls) {
-        assert.ok(hasClass($descBtn[0], cls), "compact action utility class " + cls);
-    });
-
     const $seRow = $mount.find(".ujg-sb-create-row-child-SE").first();
     assert.ok($seRow.length, "SE child row rendered");
+    const $descBtn = $seRow.find(".ujg-sb-create-add-desc").first();
+    assert.ok($descBtn.length, "child description action button");
+    ["text-[7px]", "text-primary/50", "hover:text-primary"].forEach(function(cls) {
+        assert.ok(hasClass($descBtn[0], cls), "compact action utility class " + cls);
+    });
+    assert.equal($mount.find(".ujg-sb-create-row-story").find(".ujg-sb-create-assignee-trigger").length, 0, "story row does not render assignee pill");
+    assert.ok($seRow.find(".ujg-sb-create-assignee-trigger").length >= 1, "child row keeps assignee pill");
     const childText = nodeText($seRow[0]);
     assert.match(childText, /\+\s*комп/i, "child row shows + комп");
     assert.match(childText, /\+\s*метку/i, "child row shows + метку");
     assert.match(childText, /\+\s*link/i, "child row shows +link");
     assert.match(childText, /\+\s*блокер/i, "child row shows + блокер");
+});
+
+test("renderCreateModal literal-port: view toggle buttons expose reference active and inactive states", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    var rowsBtn = null;
+    var tableBtn = null;
+    var accordionBtn = null;
+    $mount.find(".ujg-sb-create-child-view-btn").each(function() {
+        var txt = nodeText(this);
+        if (txt.indexOf("Строки") >= 0) rowsBtn = this;
+        if (txt.indexOf("Таблица") >= 0) tableBtn = this;
+        if (txt.indexOf("Аккордеон") >= 0) accordionBtn = this;
+    });
+    assert.ok(rowsBtn && tableBtn && accordionBtn, "all view-mode buttons present");
+    ["h-4", "px-1.5", "text-[7px]", "rounded", "flex", "items-center", "gap-0.5", "bg-primary/20", "text-primary"].forEach(
+        function(cls) {
+            assert.ok(hasClass(rowsBtn, cls), "active rows button class " + cls);
+        }
+    );
+    ["text-muted-foreground", "hover:text-foreground", "hover:bg-muted/30"].forEach(function(cls) {
+        assert.ok(hasClass(tableBtn, cls), "inactive table button class " + cls);
+        assert.ok(hasClass(accordionBtn, cls), "inactive accordion button class " + cls);
+    });
+});
+
+test("renderCreateModal literal-port: role chips use compact role-specific palette classes", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Название истории";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    const roleExpectations = {
+        "+ SE": ["bg-blue-500/20", "text-blue-400", "border-blue-500/30"],
+        "+ FE": ["bg-cyan-500/20", "text-cyan-400", "border-cyan-500/30"],
+        "+ BE": ["bg-orange-500/20", "text-orange-400", "border-orange-500/30"],
+        "+ QA": ["bg-yellow-500/20", "text-yellow-400", "border-yellow-500/30"],
+        "+ DO": ["bg-emerald-500/20", "text-emerald-400", "border-emerald-500/30"]
+    };
+    const shared = ["h-4", "px-1.5", "text-[7px]", "font-bold", "rounded", "border", "cursor-pointer", "hover:opacity-80"];
+
+    Object.keys(roleExpectations).forEach(function(label) {
+        let match = null;
+        $mount.find(".ujg-sb-create-role-add-chip").each(function() {
+            if (nodeText(this).replace(/\s+/g, " ").trim() === label) {
+                match = this;
+            }
+        });
+        assert.ok(match, "role chip present: " + label);
+        shared.concat(roleExpectations[label]).forEach(function(cls) {
+            assert.ok(hasClass(match, cls), "role chip " + label + " class " + cls);
+        });
+    });
 });
 
 test("renderCreateModal: clearing inline epic select to blank restores newEpic and full epic row", function() {
@@ -1767,6 +1850,49 @@ test("renderCreateModal: bottom tabs switch visible content panel", function() {
     $mount.find(".ujg-sb-create-tab-worklog").trigger("click");
     assert.equal($mount.find(".ujg-sb-create-tab-panel-worklog").length, 1, "worklog panel after click");
     assert.equal($mount.find(".ujg-sb-create-tab-panel-comments").length, 0, "comments panel removed after worklog click");
+});
+
+test("renderCreateModal literal-port: bottom tabs expose reference utility and state classes", function() {
+    const CS = loadCreateStory();
+    const documentNode = createNode("document");
+    const $ = createMiniJquery(documentNode);
+    const draft = CS.makeDefaultDraft("CORE");
+    draft.story.summary = "Story title";
+    draft.children.forEach(function(c) {
+        c.summary = c.summary || "child";
+    });
+    const $mount = $("<div/>");
+
+    CS.renderCreateModal($mount, draft, {
+        onClose: function() {},
+        onSubmit: function() {},
+        getEpicOptions: function() {
+            return [];
+        }
+    });
+
+    const $activity = $mount.find(".ujg-sb-create-tab-activity").first();
+    const $comments = $mount.find(".ujg-sb-create-tab-comments").first();
+    assert.ok($activity.length && $comments.length, "activity and comments tabs present");
+    [
+        "inline-flex",
+        "items-center",
+        "justify-center",
+        "whitespace-nowrap",
+        "rounded-sm",
+        "py-1.5",
+        "font-medium",
+        "transition-all",
+        "h-5",
+        "text-[8px]",
+        "px-2",
+        "data-[state=active]:bg-background",
+        "data-[state=active]:text-foreground"
+    ].forEach(function(cls) {
+        assert.ok(hasClass($activity[0], cls), "bottom tab utility class " + cls);
+    });
+    assert.equal($activity.attr("data-state"), "active", "activity tab marked active");
+    assert.equal($comments.attr("data-state"), "inactive", "comments tab marked inactive");
 });
 
 test("renderCreateModal: +FE chip appends children with template issueType/summary and unique rowIds", function() {

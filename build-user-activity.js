@@ -9,6 +9,7 @@ var path = require("path");
 
 var MODULES_DIR = path.join(__dirname, "ujg-user-activity-modules");
 var OUTPUT_FILE = path.join(__dirname, "ujg-user-activity.js");
+var TEMP_OUTPUT_FILE = OUTPUT_FILE + ".tmp";
 
 var MODULE_ORDER = [
     "config.js",
@@ -66,7 +67,8 @@ function build() {
 
     var fullContent = parts.join("\n");
 
-    fs.writeFileSync(OUTPUT_FILE, fullContent, "utf8");
+    fs.writeFileSync(TEMP_OUTPUT_FILE, fullContent, "utf8");
+    fs.renameSync(TEMP_OUTPUT_FILE, OUTPUT_FILE);
 
     console.log("✓ Built successfully:", OUTPUT_FILE);
     console.log("  Total size:", (fullContent.length / 1024).toFixed(2), "KB");

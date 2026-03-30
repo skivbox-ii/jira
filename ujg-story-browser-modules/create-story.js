@@ -20,6 +20,13 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         QA: "440",
         DO: "450"
     };
+    var ROLE_CHIP_CLASSES = {
+        SE: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+        FE: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
+        BE: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+        QA: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+        DO: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+    };
 
     function makeNode(issueType, summary, childRowId) {
         var ui = {
@@ -794,7 +801,7 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
     function renderDescriptionTrigger($mount, draft, ctx, row, extraClasses) {
         return compactTextButton(
             descriptionToggleLabel(row.node),
-            "ujg-sb-create-add-desc text-[7px] text-primary/40 hover:text-primary/70 px-1 " + String(extraClasses || ""),
+            "ujg-sb-create-add-desc text-[7px] text-primary/50 hover:text-primary px-1 " + String(extraClasses || ""),
             function() {
                 toggleDescription(row.node);
                 renderCreateModal($mount, draft, ctx);
@@ -979,7 +986,6 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         $top.append(renderComponentTrigger($mount, draft, ctx, row, "+компонент"));
         $top.append(renderLabelTrigger($mount, draft, ctx, row, "+метку"));
         $top.append(renderDescriptionTrigger($mount, draft, ctx, row, ""));
-        $top.append(renderAssigneeTrigger($mount, draft, ctx, row));
         $main.append($top);
         var $support = renderSupportArea($mount, draft, ctx, row, "ml-6");
         if ($support) {
@@ -1100,6 +1106,8 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
                 .text(m.label);
             if ((draft.ui.viewMode || "rows") === m.id) {
                 $btn.addClass("ujg-sb-create-child-view-btn--active bg-primary/20 text-primary");
+            } else {
+                $btn.addClass("text-muted-foreground hover:text-foreground hover:bg-muted/30");
             }
             $btn.on("click", function() {
                 draft.ui.viewMode = m.id;
@@ -1112,16 +1120,16 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
 
     function renderRoleAddStrip(draft, ctx, $mount) {
         var $strip = $("<div/>").addClass("ujg-sb-create-role-add-strip");
-        ["+ SE", "+ FE", "+ BE", "+ QA", "+ DO"].forEach(function(lab) {
+        ["SE", "FE", "BE", "QA", "DO"].forEach(function(role) {
             var $btn = $("<button type=\"button\"/>")
-                .addClass("ujg-sb-create-role-add-chip h-4 px-1.5 text-[7px] rounded flex items-center gap-0.5")
-                .text(lab);
+                .addClass(
+                    "ujg-sb-create-role-add-chip h-4 px-1.5 text-[7px] font-bold rounded border cursor-pointer hover:opacity-80 " +
+                        (ROLE_CHIP_CLASSES[role] || "")
+                )
+                .text("+ " + role);
             $btn.on("click", function() {
-                var m = /^\+\s*([A-Z]+)$/.exec(String(lab).replace(/\s+/g, " "));
-                if (m) {
-                    appendChildFromRoleChip(draft, m[1]);
-                    renderCreateModal($mount, draft, ctx);
-                }
+                appendChildFromRoleChip(draft, role);
+                renderCreateModal($mount, draft, ctx);
             });
             $strip.append($btn);
         });
@@ -1168,10 +1176,17 @@ define("_ujgSB_create-story", ["jquery", "_ujgSB_config"], function($, config) {
         var active = draft.ui.activeTab || "activity";
         tabs.forEach(function(t) {
             var $btn = $("<button type=\"button\"/>")
-                .addClass("ujg-sb-create-tab-btn " + t.hook)
+                .addClass(
+                    "ujg-sb-create-tab-btn " +
+                        t.hook +
+                        " inline-flex items-center justify-center whitespace-nowrap rounded-sm py-1.5 font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 h-5 text-[8px] px-2 data-[state=active]:text-foreground data-[state=active]:shadow-sm data-[state=active]:bg-background"
+                )
                 .text(t.label);
             if (active === t.key) {
+                $btn.attr("data-state", "active");
                 $btn.addClass("ujg-sb-create-tab-btn--active");
+            } else {
+                $btn.attr("data-state", "inactive");
             }
             $btn.on("click", function() {
                 draft.ui.activeTab = t.key;

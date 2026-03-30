@@ -1881,6 +1881,48 @@ test("public user activity bundle includes repo modules", function() {
     assert.match(bundleSource, /_ujgUA_repoLog/);
 });
 
+test("build-user-activity updates bundle atomically for concurrent bootstrap readers", function() {
+    var builder = require(path.join(__dirname, "..", "build-user-activity.js"));
+    var bootstrapBuilder = require(path.join(__dirname, "..", "build-widget-bootstrap-assets.js"));
+    var outputPath = path.join(__dirname, "..", "ujg-user-activity.js");
+    var originalBundle = fs.readFileSync(outputPath, "utf8");
+    var originalWriteFileSync = fs.writeFileSync;
+    var originalRenameSync = fs.renameSync;
+    var simulatedConcurrentRead = false;
+
+    try {
+        fs.writeFileSync = function(filePath, data, encoding) {
+            var resolved = path.resolve(String(filePath));
+            if (path.basename(resolved).indexOf("ujg-user-activity.js") === 0) {
+                var text = String(data);
+                var partial = text.slice(0, Math.max(1, Math.floor(text.length / 2)));
+                originalWriteFileSync.call(fs, filePath, partial, encoding);
+                assert.doesNotThrow(function() {
+                    bootstrapBuilder.buildAssets({
+                        releaseRef: "atomic-test-ref",
+                        assetBaseUrl: "https://cdn.jsdelivr.net/gh/skivbox-ii/jira",
+                        widgets: [bootstrapBuilder.WIDGETS.userActivity]
+                    });
+                }, "bootstrap readers should not observe an incomplete public bundle during rebuild");
+                simulatedConcurrentRead = true;
+                return originalWriteFileSync.call(fs, filePath, data, encoding);
+            }
+            return originalWriteFileSync.apply(fs, arguments);
+        };
+
+        builder.build();
+        assert.equal(simulatedConcurrentRead, true, "test should simulate a concurrent bootstrap read");
+    } finally {
+        fs.writeFileSync = originalWriteFileSync;
+        fs.renameSync = originalRenameSync;
+        originalWriteFileSync.call(fs, outputPath, originalBundle, "utf8");
+        var tempPath = outputPath + ".tmp";
+        if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+        }
+    }
+});
+
 test("rendering appends repo blocks after Jira counterparts in dashboard order", function() {
     var harness = createRenderingHarness();
 
