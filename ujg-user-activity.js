@@ -861,6 +861,28 @@ define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils
 define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(config, utils) {
     "use strict";
 
+    function byTimestamp(a, b) {
+        var ta = String(a.timestamp || "");
+        var tb = String(b.timestamp || "");
+        if (ta < tb) return -1;
+        if (ta > tb) return 1;
+        return 0;
+    }
+
+    function getWorkdaysInRange(startDate, endDate) {
+        var keys = [];
+        var d = new Date(startDate + "T00:00:00");
+        var end = new Date(endDate + "T23:59:59");
+        while (d.getTime() <= end.getTime()) {
+            var dow = d.getDay();
+            if (dow >= 1 && dow <= 5) {
+                keys.push(utils.getDayKey(d));
+            }
+            d.setDate(d.getDate() + 1);
+        }
+        return keys;
+    }
+
     function processData(rawData, username, startDate, endDate) {
         var dayMap = {};
         var issueMap = {};
@@ -1020,8 +1042,228 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
         };
     }
 
+    function processMultiUserData(usersData, startDate, endDate) {
+        var dayMap = {};
+        var issueMap = {};
+        var projectMap = {};
+        var userStats = {};
+        var userDayMaps = {};
+        var totalHoursAll = 0;
+        var startMs = new Date(startDate + "T00:00:00").getTime();
+        var endMs = new Date(endDate + "T23:59:59").getTime();
+        var today = new Date();
+        var todayKey = utils.getDayKey(today);
+        var workdayKeys = getWorkdaysInRange(startDate, endDate);
+
+        function ensureMultiDay(dateStr) {
+            if (!dayMap[dateStr]) {
+                dayMap[dateStr] = {
+                    users: {},
+                    allWorklogs: [],
+                    allChanges: [],
+                    allComments: [],
+                    totalHours: 0,
+                    repoItems: []
+                };
+            }
+            return dayMap[dateStr];
+        }
+
+        function ensureUserSlice(multiDay, username) {
+            if (!multiDay.users[username]) {
+                multiDay.users[username] = { worklogs: [], changes: [], comments: [], totalHours: 0 };
+            }
+            return multiDay.users[username];
+        }
+
+        function mergeIssueMaps(fromMap) {
+            Object.keys(fromMap).forEach(function(key) {
+                var src = fromMap[key];
+                if (!issueMap[key]) {
+                    issueMap[key] = {
+                        key: src.key,
+                        summary: src.summary,
+                        status: src.status,
+                        type: src.type,
+                        project: src.project,
+                        projectName: src.projectName,
+                        totalTimeHours: 0,
+                        worklogs: [],
+                        changelogs: []
+                    };
+                }
+                var tgt = issueMap[key];
+                tgt.worklogs = tgt.worklogs.concat(src.worklogs || []);
+                tgt.changelogs = tgt.changelogs.concat(src.changelogs || []);
+                tgt.totalTimeHours += src.totalTimeHours || 0;
+            });
+        }
+
+        function mergeProjectMaps(fromMap) {
+            Object.keys(fromMap).forEach(function(pk) {
+                var src = fromMap[pk];
+                if (!projectMap[pk]) {
+                    projectMap[pk] = {
+                        key: src.key,
+                        name: src.name,
+                        totalHours: 0,
+                        issueCount: 0,
+                        issues: []
+                    };
+                }
+                var tgt = projectMap[pk];
+                tgt.totalHours += src.totalHours || 0;
+                (src.issues || []).forEach(function(ik) {
+                    if (tgt.issues.indexOf(ik) === -1) {
+                        tgt.issues.push(ik);
+                        tgt.issueCount++;
+                    }
+                });
+            });
+        }
+
+        (usersData || []).forEach(function(userData) {
+            var username = userData.username;
+            if (!username) return;
+
+            var displayName = userData.displayName || username;
+            var rawData = userData.rawData || {};
+            var processed = processData(rawData, username, startDate, endDate);
+            userDayMaps[username] = processed.dayMap;
+            var author = { name: username, displayName: displayName };
+
+            mergeIssueMaps(processed.issueMap);
+            mergeProjectMaps(processed.projectMap);
+
+            totalHoursAll += processed.stats.totalHours;
+            userStats[username] = {
+                displayName: displayName,
+                totalHours: processed.stats.totalHours,
+                activeDays: processed.stats.activeDays,
+                daysWithoutWorklogs: 0
+            };
+
+            var userDayMap = processed.dayMap;
+            Object.keys(userDayMap).forEach(function(dateStr) {
+                var srcDay = userDayMap[dateStr];
+                var multiDay = ensureMultiDay(dateStr);
+                var userSlice = ensureUserSlice(multiDay, username);
+
+                (srcDay.worklogs || []).forEach(function(w) {
+                    var wlCopy = {
+                        issueKey: w.issueKey,
+                        date: w.date,
+                        timeSpentHours: w.timeSpentHours,
+                        comment: w.comment,
+                        author: author,
+                        timestamp: w.started || w.date
+                    };
+                    userSlice.worklogs.push(wlCopy);
+                    multiDay.allWorklogs.push(wlCopy);
+                });
+
+                (srcDay.changes || []).forEach(function(c) {
+                    var chCopy = {
+                        issueKey: c.issueKey,
+                        date: c.date,
+                        field: c.field,
+                        fromString: c.fromString,
+                        toString: c.toString,
+                        author: author,
+                        timestamp: c.created || c.date
+                    };
+                    userSlice.changes.push(chCopy);
+                    multiDay.allChanges.push(chCopy);
+                });
+
+                userSlice.totalHours = srcDay.totalHours || 0;
+            });
+
+            var commentsByIssue = userData.comments || {};
+            Object.keys(commentsByIssue).forEach(function(issueKey) {
+                var list = commentsByIssue[issueKey] || [];
+                list.forEach(function(comment) {
+                    var authorName = (comment.author && comment.author.name) || "";
+                    if (!authorName || authorName.toLowerCase() !== username.toLowerCase()) return;
+
+                    var created = comment.created;
+                    if (!created || created.length < 10) return;
+                    var dateStr = created.substring(0, 10);
+                    var createdDt = utils.parseDate(created);
+                    if (!createdDt) return;
+                    var ts = createdDt.getTime();
+                    if (ts < startMs || ts > endMs) return;
+
+                    var multiDay = ensureMultiDay(dateStr);
+                    var userSlice = ensureUserSlice(multiDay, username);
+                    var commentEntry = {
+                        type: "comment",
+                        issueKey: issueKey,
+                        body: comment.body || "",
+                        id: comment.id,
+                        author: author,
+                        timestamp: created
+                    };
+                    userSlice.comments.push(commentEntry);
+                    multiDay.allComments.push(commentEntry);
+                });
+            });
+        });
+
+        Object.keys(issueMap).forEach(function(key) {
+            issueMap[key].totalTimeHours = Math.round(issueMap[key].totalTimeHours * 100) / 100;
+        });
+
+        Object.keys(projectMap).forEach(function(pk) {
+            projectMap[pk].totalHours = Math.round(projectMap[pk].totalHours * 100) / 100;
+        });
+
+        Object.keys(dayMap).forEach(function(dk) {
+            var multiDay = dayMap[dk];
+            var daySum = 0;
+            Object.keys(multiDay.users).forEach(function(un) {
+                daySum += multiDay.users[un].totalHours || 0;
+            });
+            multiDay.totalHours = Math.round(daySum * 100) / 100;
+
+            multiDay.allWorklogs.sort(byTimestamp);
+            multiDay.allChanges.sort(byTimestamp);
+            multiDay.allComments.sort(byTimestamp);
+            Object.keys(multiDay.users).forEach(function(un) {
+                var u = multiDay.users[un];
+                u.worklogs.sort(byTimestamp);
+                u.changes.sort(byTimestamp);
+                u.comments.sort(byTimestamp);
+            });
+        });
+
+        Object.keys(userStats).forEach(function(un) {
+            var udm = userDayMaps[un] || {};
+            var missing = 0;
+            workdayKeys.forEach(function(wd) {
+                if (wd > todayKey) return;
+                var day = udm[wd];
+                var h = day ? day.totalHours : 0;
+                if (h === 0) missing++;
+            });
+            userStats[un].daysWithoutWorklogs = missing;
+        });
+
+        return {
+            dayMap: dayMap,
+            issueMap: issueMap,
+            projectMap: projectMap,
+            stats: {
+                totalHours: Math.round(totalHoursAll * 100) / 100,
+                totalIssues: Object.keys(issueMap).length,
+                userStats: userStats
+            }
+        };
+    }
+
     return {
-        processData: processData
+        processData: processData,
+        processMultiUserData: processMultiUserData
     };
 });
 
@@ -1069,6 +1311,22 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         return userValues.some(function(value) {
             return selectedValues.indexOf(value) >= 0;
         });
+    }
+
+    function matchesRequestUsers(userLike, requestUsers) {
+        if (!requestUsers || !requestUsers.length) return false;
+        var userValues = collectUserValues(userLike);
+        if (!userValues.length) return false;
+        return userValues.some(function(value) {
+            return requestUsers.indexOf(value) >= 0;
+        });
+    }
+
+    function matchesStateUser(userLike, state) {
+        if (state.useStringUserFilter) {
+            return matchesRequestUsers(userLike, state.requestUsers);
+        }
+        return matchesSelectedUser(userLike, state.selectedUser);
     }
 
     function getUserLabel(userLike) {
@@ -1190,7 +1448,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
     function extractCommitEvents(state, issueKey, issueInfo, repo) {
         (repo.commits || []).forEach(function(commit) {
-            if (!matchesSelectedUser(commit.author, state.selectedUser)) return;
+            if (!matchesStateUser(commit.author, state)) return;
             pushEvent(state, {
                 type: "commit",
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
@@ -1245,7 +1503,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
     function hasConcretePullRequestActivity(state, pullRequests) {
         return getPullRequests({ pullRequests: pullRequests }).some(function(pr) {
-            if (matchesSelectedUser(pr.author, state.selectedUser)) {
+            if (matchesStateUser(pr.author, state)) {
                 if (isTimestampInRange(state, pr.createdDate || pr.created || pr.openedDate)) return true;
                 if (isTimestampInRange(state, pr.mergedDate || pr.completedDate || pr.closedDate)) return true;
                 if (isTimestampInRange(state, pr.declinedDate || pr.closedDate)) return true;
@@ -1253,7 +1511,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             }
 
             return normalizeArray(pr.reviewers).some(function(reviewer) {
-                return matchesSelectedUser(reviewer, state.selectedUser) &&
+                return matchesStateUser(reviewer, state) &&
                     isTimestampInRange(state, extractReviewerTimestamp(reviewer));
             });
         });
@@ -1262,20 +1520,20 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     function hasConcreteBranchActivity(state, repo) {
         return normalizeArray(repo && repo.branches).some(function(branch) {
             if ((branch.commits || []).some(function(commit) {
-                return matchesSelectedUser(commit.author, state.selectedUser) &&
+                return matchesStateUser(commit.author, state) &&
                     isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
             })) {
                 return true;
             }
 
-            return matchesSelectedUser(branch.author, state.selectedUser) &&
+            return matchesStateUser(branch.author, state) &&
                 isTimestampInRange(state, branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date);
         });
     }
 
     function hasConcreteRepoActivity(state, repo) {
         if ((repo.commits || []).some(function(commit) {
-            return matchesSelectedUser(commit.author, state.selectedUser) &&
+            return matchesStateUser(commit.author, state) &&
                 isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
         })) {
             return true;
@@ -1288,7 +1546,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     }
 
     function extractRepositoryEvents(state, issueKey, issueInfo, repo) {
-        if (!matchesSelectedUser(getActor(repo), state.selectedUser)) return;
+        if (!matchesStateUser(getActor(repo), state)) return;
         if (hasConcreteRepoActivity(state, repo)) return;
         pushEvent(state, {
             type: "repository_update",
@@ -1335,7 +1593,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
             normalizeArray(container[key]).forEach(function(item) {
                 if (!item || typeof item !== "object") return;
-                if (!matchesSelectedUser(getActor(item), state.selectedUser)) return;
+                if (!matchesStateUser(getActor(item), state)) return;
                 pushEvent(state, {
                     type: "unknown_dev_event",
                     timestamp: getActivityTimestamp(item),
@@ -1359,7 +1617,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             var prStatus = normalizeUserValue(pr.status);
             var hasTypedAuthorEvent = false;
 
-            if (matchesSelectedUser(pr.author, state.selectedUser)) {
+            if (matchesStateUser(pr.author, state)) {
                 pushEvent(state, {
                     type: "pull_request_opened",
                     timestamp: pr.createdDate || pr.created || pr.openedDate,
@@ -1431,7 +1689,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             (pr.reviewers || []).forEach(function(reviewer) {
                 var reviewerStatus;
 
-                if (!matchesSelectedUser(reviewer, state.selectedUser)) return;
+                if (!matchesStateUser(reviewer, state)) return;
 
                 reviewerStatus = normalizeUserValue(reviewer.status || reviewer.approvalStatus);
                 pushEvent(state, {
@@ -1459,11 +1717,11 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         (repo.branches || []).forEach(function(branch) {
             var branchName = branch.name || branch.id || "";
             var hasBranchCommitInRange = (branch.commits || []).some(function(commit) {
-                return matchesSelectedUser(commit.author, state.selectedUser) &&
+                return matchesStateUser(commit.author, state) &&
                     isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
             });
 
-            if (!hasBranchCommitInRange && matchesSelectedUser(branch.author, state.selectedUser)) {
+            if (!hasBranchCommitInRange && matchesStateUser(branch.author, state)) {
                 pushEvent(state, {
                     type: "branch_update",
                     timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
@@ -1479,7 +1737,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             }
 
             (branch.commits || []).forEach(function(commit) {
-                if (!matchesSelectedUser(commit.author, state.selectedUser)) return;
+                if (!matchesStateUser(commit.author, state)) return;
                 pushEvent(state, {
                     type: "branch_commit",
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
@@ -1499,8 +1757,16 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     }
 
     function processRepoActivity(issueMap, issueDevStatusMap, selectedUser, startDate, endDate) {
+        var useStringUserFilter = typeof selectedUser === "string" || Array.isArray(selectedUser);
+        var requestUsers = useStringUserFilter
+            ? (Array.isArray(selectedUser)
+                ? selectedUser.map(function(u) { return (u || "").toLowerCase(); })
+                : [(selectedUser || "").toLowerCase()])
+            : null;
         var state = {
-            selectedUser: selectedUser || {},
+            useStringUserFilter: useStringUserFilter,
+            requestUsers: requestUsers,
+            selectedUser: useStringUserFilter ? {} : (selectedUser || {}),
             startMs: new Date(startDate + "T00:00:00").getTime(),
             endMs: new Date(endDate + "T23:59:59").getTime(),
             items: [],

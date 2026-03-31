@@ -43,6 +43,22 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         });
     }
 
+    function matchesRequestUsers(userLike, requestUsers) {
+        if (!requestUsers || !requestUsers.length) return false;
+        var userValues = collectUserValues(userLike);
+        if (!userValues.length) return false;
+        return userValues.some(function(value) {
+            return requestUsers.indexOf(value) >= 0;
+        });
+    }
+
+    function matchesStateUser(userLike, state) {
+        if (state.useStringUserFilter) {
+            return matchesRequestUsers(userLike, state.requestUsers);
+        }
+        return matchesSelectedUser(userLike, state.selectedUser);
+    }
+
     function getUserLabel(userLike) {
         if (!userLike) return "";
         if (userLike.user) return getUserLabel(userLike.user);
@@ -162,7 +178,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
     function extractCommitEvents(state, issueKey, issueInfo, repo) {
         (repo.commits || []).forEach(function(commit) {
-            if (!matchesSelectedUser(commit.author, state.selectedUser)) return;
+            if (!matchesStateUser(commit.author, state)) return;
             pushEvent(state, {
                 type: "commit",
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
@@ -217,7 +233,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
     function hasConcretePullRequestActivity(state, pullRequests) {
         return getPullRequests({ pullRequests: pullRequests }).some(function(pr) {
-            if (matchesSelectedUser(pr.author, state.selectedUser)) {
+            if (matchesStateUser(pr.author, state)) {
                 if (isTimestampInRange(state, pr.createdDate || pr.created || pr.openedDate)) return true;
                 if (isTimestampInRange(state, pr.mergedDate || pr.completedDate || pr.closedDate)) return true;
                 if (isTimestampInRange(state, pr.declinedDate || pr.closedDate)) return true;
@@ -225,7 +241,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             }
 
             return normalizeArray(pr.reviewers).some(function(reviewer) {
-                return matchesSelectedUser(reviewer, state.selectedUser) &&
+                return matchesStateUser(reviewer, state) &&
                     isTimestampInRange(state, extractReviewerTimestamp(reviewer));
             });
         });
@@ -234,20 +250,20 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     function hasConcreteBranchActivity(state, repo) {
         return normalizeArray(repo && repo.branches).some(function(branch) {
             if ((branch.commits || []).some(function(commit) {
-                return matchesSelectedUser(commit.author, state.selectedUser) &&
+                return matchesStateUser(commit.author, state) &&
                     isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
             })) {
                 return true;
             }
 
-            return matchesSelectedUser(branch.author, state.selectedUser) &&
+            return matchesStateUser(branch.author, state) &&
                 isTimestampInRange(state, branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date);
         });
     }
 
     function hasConcreteRepoActivity(state, repo) {
         if ((repo.commits || []).some(function(commit) {
-            return matchesSelectedUser(commit.author, state.selectedUser) &&
+            return matchesStateUser(commit.author, state) &&
                 isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
         })) {
             return true;
@@ -260,7 +276,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     }
 
     function extractRepositoryEvents(state, issueKey, issueInfo, repo) {
-        if (!matchesSelectedUser(getActor(repo), state.selectedUser)) return;
+        if (!matchesStateUser(getActor(repo), state)) return;
         if (hasConcreteRepoActivity(state, repo)) return;
         pushEvent(state, {
             type: "repository_update",
@@ -307,7 +323,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
             normalizeArray(container[key]).forEach(function(item) {
                 if (!item || typeof item !== "object") return;
-                if (!matchesSelectedUser(getActor(item), state.selectedUser)) return;
+                if (!matchesStateUser(getActor(item), state)) return;
                 pushEvent(state, {
                     type: "unknown_dev_event",
                     timestamp: getActivityTimestamp(item),
@@ -331,7 +347,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             var prStatus = normalizeUserValue(pr.status);
             var hasTypedAuthorEvent = false;
 
-            if (matchesSelectedUser(pr.author, state.selectedUser)) {
+            if (matchesStateUser(pr.author, state)) {
                 pushEvent(state, {
                     type: "pull_request_opened",
                     timestamp: pr.createdDate || pr.created || pr.openedDate,
@@ -403,7 +419,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             (pr.reviewers || []).forEach(function(reviewer) {
                 var reviewerStatus;
 
-                if (!matchesSelectedUser(reviewer, state.selectedUser)) return;
+                if (!matchesStateUser(reviewer, state)) return;
 
                 reviewerStatus = normalizeUserValue(reviewer.status || reviewer.approvalStatus);
                 pushEvent(state, {
@@ -431,11 +447,11 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         (repo.branches || []).forEach(function(branch) {
             var branchName = branch.name || branch.id || "";
             var hasBranchCommitInRange = (branch.commits || []).some(function(commit) {
-                return matchesSelectedUser(commit.author, state.selectedUser) &&
+                return matchesStateUser(commit.author, state) &&
                     isTimestampInRange(state, commit.authorTimestamp || commit.commitTimestamp || commit.date);
             });
 
-            if (!hasBranchCommitInRange && matchesSelectedUser(branch.author, state.selectedUser)) {
+            if (!hasBranchCommitInRange && matchesStateUser(branch.author, state)) {
                 pushEvent(state, {
                     type: "branch_update",
                     timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
@@ -451,7 +467,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             }
 
             (branch.commits || []).forEach(function(commit) {
-                if (!matchesSelectedUser(commit.author, state.selectedUser)) return;
+                if (!matchesStateUser(commit.author, state)) return;
                 pushEvent(state, {
                     type: "branch_commit",
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
@@ -471,8 +487,16 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     }
 
     function processRepoActivity(issueMap, issueDevStatusMap, selectedUser, startDate, endDate) {
+        var useStringUserFilter = typeof selectedUser === "string" || Array.isArray(selectedUser);
+        var requestUsers = useStringUserFilter
+            ? (Array.isArray(selectedUser)
+                ? selectedUser.map(function(u) { return (u || "").toLowerCase(); })
+                : [(selectedUser || "").toLowerCase()])
+            : null;
         var state = {
-            selectedUser: selectedUser || {},
+            useStringUserFilter: useStringUserFilter,
+            requestUsers: requestUsers,
+            selectedUser: useStringUserFilter ? {} : (selectedUser || {}),
             startMs: new Date(startDate + "T00:00:00").getTime(),
             endMs: new Date(endDate + "T23:59:59").getTime(),
             items: [],
