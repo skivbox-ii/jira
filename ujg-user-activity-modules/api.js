@@ -4,6 +4,16 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
     var baseUrl = Common.baseUrl || "";
     var CONFIG = config.CONFIG;
 
+    function pad2(n) {
+        return (n < 10 ? "0" : "") + n;
+    }
+
+    function nextDay(dateStr) {
+        var d = new Date(dateStr + "T00:00:00");
+        d.setDate(d.getDate() + 1);
+        return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+    }
+
     function searchIssues(jql, fields, expand, maxResults) {
         var d = $.Deferred();
         var all = [];
@@ -41,12 +51,12 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
     }
 
     function fetchWorklogIssues(username, startDate, endDate) {
-        var jql = 'worklogAuthor = "' + username + '" AND worklogDate >= "' + startDate + '" AND worklogDate <= "' + endDate + '"';
+        var jql = 'worklogAuthor = "' + username + '" AND worklogDate >= "' + startDate + '" AND worklogDate < "' + nextDay(endDate) + '"';
         return searchIssues(jql, ["summary","status","issuetype","project","timespent","timeoriginalestimate","assignee","created","updated","comment"]);
     }
 
     function fetchActivityIssues(username, startDate, endDate) {
-        var jql = '(assignee was "' + username + '" OR reporter = "' + username + '") AND updated >= "' + startDate + '" AND updated <= "' + endDate + '"';
+        var jql = '(assignee was "' + username + '" OR reporter = "' + username + '") AND updated >= "' + startDate + '" AND updated < "' + nextDay(endDate) + '"';
         return searchIssues(jql, ["summary","status","issuetype","project","timespent","timeoriginalestimate","assignee","created","updated","comment"]);
     }
 

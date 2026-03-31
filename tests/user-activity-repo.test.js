@@ -137,6 +137,47 @@ function loadRepoApi(jquery) {
     });
 }
 
+function loadUserActivityApi(jquery) {
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "api.js"), {
+        jquery: jquery,
+        _ujgCommon: { baseUrl: "" },
+        _ujgUA_config: { CONFIG: { maxResults: 50, maxConcurrent: 2 } },
+        _ujgUA_utils: {}
+    });
+}
+
+test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
+    var captured = [];
+    var $ = createJqueryStub(function(options) {
+        if (options.url && options.url.indexOf("/rest/api/2/search") !== -1) {
+            captured.push(JSON.parse(options.data));
+        }
+        return resolvedAjax({ issues: [], total: 0 });
+    });
+    var api = loadUserActivityApi($);
+    await new Promise(function(resolve, reject) {
+        api.fetchAllData("jdoe", "2026-03-30", "2026-03-31").done(function() {
+            try {
+                var jql = captured.map(function(body) { return body.jql; }).find(function(q) {
+                    return q.indexOf("assignee was") !== -1;
+                });
+                assert.ok(jql, "expected activity search JQL");
+                assert.match(jql, /updated >= "2026-03-30"/);
+                assert.match(jql, /updated < "2026-04-01"/);
+                var wjql = captured.map(function(body) { return body.jql; }).find(function(q) {
+                    return q.indexOf("worklogAuthor") !== -1;
+                });
+                assert.ok(wjql, "expected worklog search JQL");
+                assert.match(wjql, /worklogDate >= "2026-03-30"/);
+                assert.match(wjql, /worklogDate < "2026-04-01"/);
+                resolve();
+            } catch (err) {
+                reject(err);
+            }
+        }).fail(reject);
+    });
+});
+
 function loadRepoDataProcessor() {
     return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "repo-data-processor.js"), {
         _ujgUA_config: {},
