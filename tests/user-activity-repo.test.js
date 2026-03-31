@@ -9,6 +9,10 @@ function normalize(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function createDeferred() {
     var state = "pending";
     var settledArgs = [];
@@ -2693,7 +2697,7 @@ test("unified calendar repo line keeps status without issue key and no dangling 
             repoItems: [{
                 type: "commit",
                 timestamp: "2026-03-04T11:00:00.000Z",
-                authorName: "Repo Dev",
+                authorName: "Alice Dev",
                 issueStatus: "Blocked",
                 message: "Refactor escape path"
             }]
@@ -2704,14 +2708,17 @@ test("unified calendar repo line keeps status without issue key and no dangling 
     var html = out.$el.html();
 
     assert.match(html, /<span class="ujg-ua-inline-status">Blocked<\/span>/);
-    assert.match(html, /Repo<\/span> <span class="ujg-ua-inline-status">Blocked<\/span> <span class="[^"]*ujg-ua-repo-msg[^"]*">Refactor escape path<\/span>/);
-    assert.doesNotMatch(html, /Repo<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
+    assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice<\/span> <span class="ujg-ua-inline-status">Blocked<\/span>/);
+    assert.match(html, /<span class="[^"]*ujg-ua-repo-msg[^"]*">Refactor escape path<\/span>/);
+    assert.doesNotMatch(html, /Alice<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
 });
 
 test("presentation consistency: repo author links and issue status align across calendar and day detail", function() {
     var dateStr = "2026-03-05";
     var issueKey = "PRES-9";
     var longSummary = "FULL_TITLE_" + new Array(45).join("abcdefghij");
+    var summaryPattern = new RegExp('ujg-ua-detail-issue-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
+    var calendarSummaryPattern = new RegExp('ujg-ua-repo-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
     assert.ok(longSummary.length > 120);
     var start = new Date("2026-03-01T00:00:00.000Z");
     var end = new Date("2026-03-09T23:59:59.000Z");
@@ -2766,9 +2773,12 @@ test("presentation consistency: repo author links and issue status align across 
     assert.match(detailHtml, /class="ujg-ua-author">Ivanov</);
     assert.match(calHtml, /jira\.example\.com\/browse\/PRES-9/);
     assert.match(detailHtml, /jira\.example\.com\/browse\/PRES-9/);
+    assert.match(calHtml, /ujg-ua-inline-status">In Progress</);
     assert.match(detailHtml, /ujg-ua-inline-status">In Progress</);
-    assert.ok(detailHtml.indexOf(longSummary) !== -1, "issue summary in detail header must not be truncated");
-    assert.equal(detailHtml.indexOf("…"), -1, "ellipsis must not appear in day-detail html for this case");
+    assert.match(calHtml, calendarSummaryPattern);
+    assert.doesNotMatch(calHtml, /ujg-ua-repo-summary[^>]*>fallback only<\/span>/);
+    assert.match(detailHtml, summaryPattern);
+    assert.doesNotMatch(detailHtml, /ujg-ua-detail-issue-summary[^>]*>[^<]*…[^<]*<\/span>/);
     assert.match(calHtml, /Коммит/);
     assert.match(detailHtml, /Коммит/);
 });
