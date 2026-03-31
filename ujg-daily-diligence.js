@@ -586,12 +586,12 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
             getSelectedTeamIds: function() {
                 return selected.slice();
             },
-            setSelectedTeamIds: function(ids) {
+            setSelectedTeamIds: function(ids, options) {
                 if (destroyed) return;
                 selected = normalizeIds(ids, mode);
                 if (panelOpen) renderList();
                 else updateTriggerText();
-                notify();
+                if (!options || !options.silent) notify();
             },
             openPanel: openPanel,
             closePanel: closePanel,
