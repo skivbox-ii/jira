@@ -24,9 +24,10 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     }
 
     function normalizeAuthor(author) {
-        if (!author) return { name: "", displayName: "" };
-        if (typeof author === "string") return { name: "", displayName: author };
+        if (!author) return { key: "", name: "", displayName: "" };
+        if (typeof author === "string") return { key: "", name: "", displayName: author };
         return {
+            key: author.key || "",
             name: author.name || author.key || "",
             displayName: author.displayName || author.name || author.key || ""
         };
@@ -54,6 +55,14 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             return dayData.allChanges || [];
         }
         return dayData.changes || [];
+    }
+
+    function pickComments(dayData) {
+        if (!dayData) return [];
+        if (dayData.allComments !== undefined && dayData.allComments !== null) {
+            return dayData.allComments || [];
+        }
+        return dayData.comments || [];
     }
 
     function metaFromIssue(issueKey, issueMap, repoItem) {
@@ -98,7 +107,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             });
         });
 
-        (dayData.allComments || []).forEach(function(cm) {
+        pickComments(dayData).forEach(function(cm) {
             var m = metaFromIssue(cm.issueKey, issueMap, null);
             actions.push({
                 issueKey: cm.issueKey,
@@ -160,9 +169,25 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return { grouped: grouped, unlinked: unlinked };
     }
 
+    function normalizedToken(value) {
+        return String(value || "").trim().toLowerCase();
+    }
+
+    function collectUserTokens(user) {
+        var source = typeof user === "string" ? { key: user, name: user, displayName: user } : (user || {});
+        var tokens = [];
+
+        [source.key, source.name, source.displayName].forEach(function(value) {
+            var token = normalizedToken(value);
+            if (token && tokens.indexOf(token) === -1) tokens.push(token);
+        });
+
+        return tokens;
+    }
+
     function authorMatchKey(author) {
         var a = author || {};
-        return String(a.name || a.displayName || "").trim() || "__unknown__";
+        return String(a.name || a.key || a.displayName || "").trim() || "__unknown__";
     }
 
     function groupActionsByUser(actions, selectedUsers) {
@@ -170,14 +195,16 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         if (selectedUsers && selectedUsers.length) {
             var allow = {};
             selectedUsers.forEach(function(u) {
-                var key = typeof u === "string" ? u : (u.name || u.displayName || u.key || "");
-                key = String(key).trim();
-                if (key) allow[key] = true;
+                collectUserTokens(u).forEach(function(token) {
+                    allow[token] = true;
+                });
             });
             list = list.filter(function(a) {
-                var dn = (a.author && a.author.displayName) || "";
-                var nm = (a.author && a.author.name) || "";
-                return allow[dn] || allow[nm];
+                var tokens = collectUserTokens(a.author);
+                for (var i = 0; i < tokens.length; i++) {
+                    if (allow[tokens[i]]) return true;
+                }
+                return false;
             });
         }
         var byUser = {};

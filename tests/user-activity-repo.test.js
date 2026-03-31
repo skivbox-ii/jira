@@ -3100,6 +3100,28 @@ test("daily detail normalize merges worklog change comment repo with unified fie
     assert.ok(String(rp.timestamp).length > 0);
 });
 
+test("daily detail normalize includes single-user comments array", function() {
+    var mod = loadDailyDetail();
+    var actions = mod.normalizeDayActions({
+        comments: [{
+            issueKey: "A-3",
+            created: "2026-03-15T15:00:00.000Z",
+            author: { displayName: "Solo User" },
+            body: "single user comment"
+        }]
+    }, {
+        "A-3": { key: "A-3", summary: "Single-user issue", status: "In Progress" }
+    });
+
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].type, "comment");
+    assert.equal(actions[0].issueKey, "A-3");
+    assert.equal(actions[0].issueSummary, "Single-user issue");
+    assert.equal(actions[0].issueStatus, "In Progress");
+    assert.equal(actions[0].author.displayName, "Solo User");
+    assert.equal(actions[0].timestamp, "2026-03-15T15:00:00.000Z");
+});
+
 test("daily detail undated splits repo rows without timestamp", function() {
     var mod = loadDailyDetail();
     var dayData = {
@@ -3121,6 +3143,31 @@ test("daily detail undated splits repo rows without timestamp", function() {
     assert.equal(split.timed.length, 1);
     assert.equal(split.undated[0].issueKey, "R-1");
     assert.equal(split.timed[0].issueKey, "R-2");
+});
+
+test("daily detail groupActionsByUser matches key name and displayName variants", function() {
+    var mod = loadDailyDetail();
+    var grouped = mod.groupActionsByUser([{
+        issueKey: "A-1",
+        type: "worklog",
+        author: { key: "john.key", name: "jdoe", displayName: "John Doe" }
+    }, {
+        issueKey: "A-2",
+        type: "comment",
+        author: { key: "mary.key", name: "mary", displayName: "Mary Major" }
+    }], [{
+        key: "john.key"
+    }, {
+        displayName: "  mary major  "
+    }]);
+
+    var issueKeys = Object.keys(grouped).reduce(function(list, userKey) {
+        return list.concat(grouped[userKey].map(function(action) {
+            return action.issueKey;
+        }));
+    }, []).sort();
+
+    assert.deepEqual(issueKeys, ["A-1", "A-2"]);
 });
 
 test("daily detail summary shows full issue title in panel html", function() {
