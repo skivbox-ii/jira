@@ -226,10 +226,18 @@ function loadTeamManager(jquery, windowMock, localStorageMock, configOverrides, 
             globals[k] = extraGlobals[k];
         });
     }
+    var sharedTeamStore = loadAmdModule(
+        path.join(__dirname, "..", "ujg-shared-modules", "team-store.js"),
+        {
+            jquery: jquery
+        },
+        globals
+    );
     return loadAmdModule(
         path.join(__dirname, "..", "ujg-daily-diligence-modules", "team-manager.js"),
         {
             jquery: jquery,
+            _ujgShared_teamStore: sharedTeamStore,
             _ujgDD_config: config,
             _ujgDD_utils: utils
         },
@@ -262,6 +270,44 @@ test("shared team-store normalizes teams and matches team-manager loadTeams", as
         tm.loadTeams().done(resolve).fail(reject);
     });
     assert.deepEqual(fromStore, fromManager);
+});
+
+test("shared team-store create respects provided jiraBaseUrl and storageKey", async function() {
+    var ls = makeLocalStorage();
+    ls.setItem("custom-teams", JSON.stringify({ teams: [{ id: "loc", name: "Local", memberKeys: [] }] }));
+    var remote = [{ id: "rt", name: "Remote", memberKeys: [] }];
+    var jq = createJqueryStub(function(options) {
+        if (options.type === "GET" && options.url === "https://custom.example/jira/rest/api/2/dashboard/77/properties/custom-teams") {
+            return resolvedAjax({ key: "custom-teams", value: { teams: remote } });
+        }
+        if (options.type === "PUT" && options.url === "https://custom.example/jira/rest/api/2/dashboard/77/properties/custom-teams") {
+            return resolvedAjax({});
+        }
+        return resolvedAjax({});
+    });
+    var win = { location: { search: "?selectPageId=77", origin: "https://jira.example.com" }, AJS: { params: {} } };
+    var storeMod = loadTeamStore(jq, win, ls);
+    var store = storeMod.create({
+        jiraBaseUrl: "https://custom.example/jira",
+        storageKey: "custom-teams"
+    });
+
+    var loaded = await new Promise(function(resolve, reject) {
+        store.loadTeams().done(resolve).fail(reject);
+    });
+    assert.deepEqual(loaded, remote);
+
+    await new Promise(function(resolve, reject) {
+        store.saveTeams([{ id: "sv", name: "Saved", memberKeys: [] }]).done(resolve).fail(reject);
+    });
+
+    assert.equal(
+        jq.__calls.filter(function(call) {
+            return call.url === "https://custom.example/jira/rest/api/2/dashboard/77/properties/custom-teams";
+        }).length,
+        2
+    );
+    assert.deepEqual(JSON.parse(ls.getItem("custom-teams")).teams, [{ id: "sv", name: "Saved", memberKeys: [] }]);
 });
 
 test("shared team-picker reports selected team ids (multi and single)", function() {
