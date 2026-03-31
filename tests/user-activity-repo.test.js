@@ -9,6 +9,10 @@ function normalize(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function createDeferred() {
     var state = "pending";
     var settledArgs = [];
@@ -145,6 +149,53 @@ function loadUserActivityApi(jquery) {
         _ujgUA_utils: {}
     });
 }
+
+function loadUserActivityUtils(windowStub) {
+    var config = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var globals = windowStub ? { window: windowStub } : {};
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "utils.js"), {
+        _ujgUA_config: config
+    }, globals);
+}
+
+test("user-activity utils: issue URL falls back to location origin", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(utils.buildIssueUrl("ABC-123"), "https://jira.example.com/browse/ABC-123");
+});
+
+test("user-activity utils: issue URL prefers AJS baseURL and encodes issue key", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: " https://jira.alt.example.com/jira/ " } }
+    });
+    assert.equal(utils.getJiraBaseUrl(), "https://jira.alt.example.com/jira");
+    assert.equal(utils.buildIssueUrl("ABC/123"), "https://jira.alt.example.com/jira/browse/ABC%2F123");
+});
+
+test("user-activity utils: issue link normalizes extra attrs", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(
+        utils.renderIssueLink("ABC-123", null, 'class="foo" data-issue="1"'),
+        '<a href="https://jira.example.com/browse/ABC-123" target="_blank" rel="noopener noreferrer" class="foo" data-issue="1">ABC-123</a>'
+    );
+});
+
+test("user-activity utils: issue link escapes object attrs", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(
+        utils.renderIssueLink("ABC-123", null, { class: 'foo" onclick="x' }),
+        '<a href="https://jira.example.com/browse/ABC-123" target="_blank" rel="noopener noreferrer" class="foo&quot; onclick=&quot;x">ABC-123</a>'
+    );
+});
 
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
     var captured = [];
@@ -730,6 +781,15 @@ function createHtmlJqueryStub() {
                     }
                 });
                 return this;
+            },
+            each: function() {
+                return this;
+            },
+            css: function() {
+                return this;
+            },
+            outerHeight: function() {
+                return 0;
             }
         };
     }
@@ -867,23 +927,205 @@ function loadRepoCalendar(jquery, utilsOverrides) {
     });
 }
 
+function uaUtilsForLinks() {
+    return loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+}
+
 function loadRepoLog(jquery, utilsOverrides, configOverrides) {
     utilsOverrides = utilsOverrides || {};
     configOverrides = configOverrides || {};
+    var u = uaUtilsForLinks();
     return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "repo-log.js"), {
         jquery: jquery,
         _ujgUA_config: configOverrides,
         _ujgUA_utils: Object.assign({
-            escapeHtml: function(value) {
-                return String(value || "")
-                    .replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;")
-                    .replace(/"/g, "&quot;")
-                    .replace(/'/g, "&#39;");
-            }
+            escapeHtml: u.escapeHtml,
+            renderIssueLink: u.renderIssueLink,
+            buildIssueUrl: u.buildIssueUrl,
+            getJiraBaseUrl: u.getJiraBaseUrl
         }, utilsOverrides)
     });
+}
+
+function loadUnifiedCalendar(jquery, utilsOverrides) {
+    utilsOverrides = utilsOverrides || {};
+    var configMod = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var u = uaUtilsForLinks();
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "unified-calendar.js"), {
+        jquery: jquery,
+        _ujgUA_config: configMod,
+        _ujgUA_utils: Object.assign({
+            WEEKDAYS_RU: ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
+            MONTHS_RU: ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"],
+            getDayKey: function(date) {
+                var y = date.getFullYear();
+                var m = String(date.getMonth() + 1).padStart(2, "0");
+                var d = String(date.getDate()).padStart(2, "0");
+                return y + "-" + m + "-" + d;
+            },
+            getHeatBg: function(value) {
+                return value > 0 ? "bg-heat-1" : "bg-heat-0";
+            },
+            formatTime: function(ts) {
+                if (!ts) return "";
+                var date = new Date(ts);
+                if (isNaN(date.getTime())) return "";
+                return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+            },
+            truncate: function(s, n) {
+                s = String(s || "");
+                return s.length <= n ? s : s.slice(0, n) + "…";
+            },
+            isWeekendDay: function(dateStr) {
+                var dt = new Date(dateStr + "T00:00:00");
+                var dow = dt.getDay();
+                return dow === 0 || dow === 6;
+            },
+            escapeHtml: u.escapeHtml,
+            renderIssueLink: u.renderIssueLink,
+            buildIssueUrl: u.buildIssueUrl,
+            getJiraBaseUrl: u.getJiraBaseUrl
+        }, utilsOverrides)
+    }, { requestAnimationFrame: function(fn) { if (fn) fn(); } });
+}
+
+function loadDailyDetail(jqueryFactory) {
+    var configMod = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var u = uaUtilsForLinks();
+    var $fn = jqueryFactory || function() {
+        return {
+            html: function() {
+                return this;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "daily-detail.js"), {
+        jquery: $fn,
+        _ujgUA_config: configMod,
+        _ujgUA_utils: u
+    });
+}
+
+function createActivityLogJqueryStub() {
+    var doc = {};
+    var tbodyInner = "";
+    var expandHandler = null;
+
+    var root = {
+        find: function(sel) {
+            if (sel === ".ujg-ua-log-tbody") {
+                return {
+                    html: function(v) {
+                        if (v === undefined) return tbodyInner;
+                        tbodyInner = String(v);
+                        return this;
+                    },
+                    on: function(ev, sub, fn) {
+                        if (ev === "click" && sub === ".ujg-ua-row-expand") expandHandler = fn;
+                        return this;
+                    }
+                };
+            }
+            if (sel === ".ujg-ua-log-count") {
+                return { text: function() { return this; } };
+            }
+            if (/^\.ujg-ua-th-/.test(sel)) {
+                return { empty: function() { return this; }, append: function() { return this; } };
+            }
+            return root;
+        }
+    };
+
+    function inner() {
+        var c = {
+            append: function() { return c; },
+            empty: function() { return c; },
+            on: function() { return c; },
+            html: function() { return c; },
+            val: function() { return c; },
+            show: function() { return c; },
+            hide: function() { return c; },
+            focus: function() { return c; },
+            toggle: function() { return c; },
+            addClass: function() { return c; },
+            removeClass: function() { return c; },
+            closest: function() { return { length: 0 }; },
+            stopPropagation: function() {}
+        };
+        return c;
+    }
+
+    function $(input) {
+        if (input === doc) {
+            return { on: function() { return inner(); } };
+        }
+        if (typeof input === "string") {
+            if (/dashboard-card|ujg-ua-log-tbody/.test(input)) return root;
+            return inner();
+        }
+        if (input && typeof input.getAttribute === "function") {
+            return {
+                attr: function(n) {
+                    return input.getAttribute(n);
+                }
+            };
+        }
+        throw new Error("activity log jquery stub: unsupported input");
+    }
+
+    return {
+        doc: doc,
+        $: $,
+        getTbodyHtml: function() {
+            return tbodyInner;
+        },
+        clickExpandFirstRow: function() {
+            if (!expandHandler) throw new Error("missing expand handler");
+            var el = {
+                getAttribute: function(n) {
+                    return n === "data-idx" ? "0" : null;
+                }
+            };
+            expandHandler.call(el, { target: el });
+        }
+    };
+}
+
+function loadActivityLog(jquery, utilsOverrides, documentRef) {
+    utilsOverrides = utilsOverrides || {};
+    var u = uaUtilsForLinks();
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "activity-log.js"), {
+        jquery: jquery,
+        _ujgUA_config: {},
+        _ujgUA_utils: Object.assign({
+            escapeHtml: u.escapeHtml,
+            renderIssueLink: u.renderIssueLink,
+            buildIssueUrl: u.buildIssueUrl,
+            getJiraBaseUrl: u.getJiraBaseUrl,
+            getProjectKey: u.getProjectKey,
+            formatTime: function(ts) {
+                if (!ts) return "";
+                var date = new Date(ts);
+                if (isNaN(date.getTime())) return "";
+                return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+            },
+            icon: function() {
+                return "";
+            }
+        }, utilsOverrides)
+    }, documentRef ? { document: documentRef } : {});
 }
 
 function countMatches(value, pattern) {
@@ -1487,11 +1729,12 @@ function createRenderingHarness(options) {
             create: function() {
                 return {
                     $el: jquery.createNode("DailyDetail"),
-                    show: function(dateStr, dayData, issueMap) {
+                    show: function(dateStr, dayData, issueMap, selectedUsers) {
                         events.dailyShows.push({
                             dateStr: dateStr,
                             dayData: dayData,
-                            issueMap: issueMap
+                            issueMap: issueMap,
+                            selectedUsers: selectedUsers
                         });
                     },
                     hide: function() {
@@ -1881,6 +2124,58 @@ test("processRepoActivity builds commit and PR events for selected user", functi
     assert.equal(normalize(repoActivity.items[0].raw).id, "42");
     assert.equal(repoActivity.items[1].author, "Dima Torzok");
     assert.equal(normalize(repoActivity.items[1].raw).id, "abc123");
+});
+
+test("processRepoActivity: repo items include issue summary and status from issueMap", function() {
+    var mod = loadRepoDataProcessor();
+    var issueMap = {
+        "ABC-123": { key: "ABC-123", summary: "Real summary", status: "In Progress" }
+    };
+    var issueDevStatusMap = {
+        "ABC-123": {
+            detail: [{
+                repositories: [{
+                    name: "demo-repo",
+                    url: "https://git/demo",
+                    commits: [{
+                        id: "commit1",
+                        message: "Do work",
+                        authorTimestamp: "2026-03-15T10:00:00.000Z",
+                        author: { displayName: "Commit Author" }
+                    }],
+                    pullRequests: [{
+                        id: "pr1",
+                        title: "Review work",
+                        status: "OPEN",
+                        createdDate: "2026-03-15T11:00:00.000Z",
+                        author: { displayName: "Commit Author" },
+                        reviewers: []
+                    }]
+                }]
+            }]
+        }
+    };
+    var repoActivity = mod.processRepoActivity(
+        issueMap,
+        issueDevStatusMap,
+        { displayName: "Commit Author" },
+        "2026-03-01",
+        "2026-03-31"
+    );
+    var item = repoActivity.items.find(function(i) {
+        return i.type === "commit";
+    });
+    var prItem = repoActivity.items.find(function(i) {
+        return i.type === "pull_request_opened";
+    });
+    assert.ok(item, "expected commit repo item");
+    assert.ok(prItem, "expected pull request repo item");
+    assert.equal(item.issueSummary, "Real summary");
+    assert.equal(item.issueStatus, "In Progress");
+    assert.equal(item.author, "Commit Author");
+    assert.equal(prItem.issueSummary, "Real summary");
+    assert.equal(prItem.issueStatus, "In Progress");
+    assert.equal(prItem.author, "Commit Author");
 });
 
 test("processRepoActivity extracts branch commits and reviewer decisions for selected user", function() {
@@ -2332,6 +2627,211 @@ test("repo calendar switches selection between dates and toggles callback", func
     assert.equal(countMatches(widget.$el.html(), /ring-2/g), 0);
 });
 
+test("unified calendar Jira line renders issue link with target blank", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var dayMap = {
+        "2026-03-08": {
+            totalHours: 1,
+            allWorklogs: [{
+                timestamp: "2026-03-08T10:00:00.000Z",
+                issueKey: "CORE-1",
+                author: { displayName: "Test User" },
+                timeSpentHours: 1,
+                comment: ""
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        }
+    };
+    var issueMap = { "CORE-1": { key: "CORE-1", project: "CORE", summary: "T" } };
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render(dayMap, issueMap, users, start, end);
+    var html = out.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+    assert.match(html, />CORE-1<\/a>/);
+});
+
+test("unified calendar repo line shows issue link status badge and summary meta", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 0,
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Repo Dev",
+                issueKey: "CORE-9",
+                issueStatus: "In Progress",
+                message: "fix: typo",
+                issueSummary: "Different summary text for task"
+            }]
+        }
+    };
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render(dayMap, {}, users, start, end);
+    var html = out.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-9"[^>]*target="_blank"/);
+    assert.match(html, /ujg-ua-inline-status/);
+    assert.match(html, /In Progress/);
+    assert.match(html, /Different summary text for task/);
+});
+
+test("unified calendar repo line keeps status without issue key and no dangling gap", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 0,
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Alice Dev",
+                issueStatus: "Blocked",
+                message: "Refactor escape path"
+            }]
+        }
+    };
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render(dayMap, {}, users, start, end);
+    var html = out.$el.html();
+
+    assert.match(html, /<span class="ujg-ua-inline-status">Blocked<\/span>/);
+    assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice<\/span> <span class="ujg-ua-inline-status">Blocked<\/span>/);
+    assert.match(html, /<span class="[^"]*ujg-ua-repo-msg[^"]*">Refactor escape path<\/span>/);
+    assert.doesNotMatch(html, /Alice<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
+});
+
+test("presentation consistency: repo author links and issue status align across calendar and day detail", function() {
+    var dateStr = "2026-03-05";
+    var issueKey = "PRES-9";
+    var longSummary = "FULL_TITLE_" + new Array(45).join("abcdefghij");
+    var summaryPattern = new RegExp('ujg-ua-detail-issue-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
+    var calendarSummaryPattern = new RegExp('ujg-ua-repo-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
+    assert.ok(longSummary.length > 120);
+    var start = new Date("2026-03-01T00:00:00.000Z");
+    var end = new Date("2026-03-09T23:59:59.000Z");
+    var daySlice = {
+        totalHours: 0,
+        allWorklogs: [],
+        allChanges: [],
+        allComments: [],
+        repoItems: [{
+            type: "commit",
+            timestamp: dateStr + "T16:00:00.000Z",
+            author: "Ivanov Ivan Petrovich",
+            issueKey: issueKey,
+            issueStatus: "QA",
+            message: "fix: align presentation",
+            issueSummary: "fallback only"
+        }]
+    };
+    var dayMap = {};
+    dayMap[dateStr] = daySlice;
+    var issueMap = {};
+    issueMap[issueKey] = { key: issueKey, summary: longSummary, status: "In Progress" };
+
+    var users = [{ name: "u1", displayName: "User One" }];
+    var modCal = loadUnifiedCalendar(createHtmlJqueryStub());
+    var calHtml = modCal.render(dayMap, issueMap, users, start, end).$el.html();
+
+    var detailHtml = "";
+    var $stub = function() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    detailHtml = h;
+                    return this;
+                }
+                return detailHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    loadDailyDetail($stub).create().show(dateStr, daySlice, issueMap, []);
+
+    assert.match(calHtml, /class="ujg-ua-author">Ivanov</);
+    assert.match(detailHtml, /class="ujg-ua-author">Ivanov</);
+    assert.match(calHtml, /jira\.example\.com\/browse\/PRES-9/);
+    assert.match(detailHtml, /jira\.example\.com\/browse\/PRES-9/);
+    assert.match(calHtml, /ujg-ua-inline-status">In Progress</);
+    assert.match(detailHtml, /ujg-ua-inline-status">In Progress</);
+    assert.match(calHtml, calendarSummaryPattern);
+    assert.doesNotMatch(calHtml, /ujg-ua-repo-summary[^>]*>fallback only<\/span>/);
+    assert.match(detailHtml, summaryPattern);
+    assert.doesNotMatch(detailHtml, /ujg-ua-detail-issue-summary[^>]*>[^<]*…[^<]*<\/span>/);
+    assert.match(calHtml, /Коммит/);
+    assert.match(detailHtml, /Коммит/);
+});
+
+test("activity log renders issue link in column and expanded issue link", function() {
+    var stub = createActivityLogJqueryStub();
+    var mod = loadActivityLog(stub.$, {}, stub.doc);
+    var log = mod.create();
+    log.render({
+        issueMap: {
+            "CORE-1": {
+                key: "CORE-1",
+                summary: "Task summary",
+                worklogs: [{
+                    timestamp: "2026-03-08T10:00:00.000Z",
+                    date: "2026-03-08",
+                    author: { displayName: "Author One" },
+                    timeSpentHours: 1,
+                    comment: "note"
+                }],
+                changelogs: []
+            }
+        }
+    });
+    var h = stub.getTbodyHtml();
+    assert.match(h, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+    stub.clickExpandFirstRow();
+    h = stub.getTbodyHtml();
+    assert.match(h, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+});
+
+test("repo log renders issue link in issue column and details panel", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            branchName: "main",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "abc123"
+        }]
+    }, null);
+    var html = log.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+    log.$el.find('button[data-idx="0"]').trigger("click");
+    html = log.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+});
+
 test("repo log renders rows for repository events", function() {
     var mod = loadRepoLog(createHtmlJqueryStub());
     var log = mod.create();
@@ -2606,6 +3106,519 @@ test("repo config exposes repo activity labels", function() {
     assert.equal(config.REPO_ACTIVITY_LABELS.pull_request_merged, "PR влит");
 });
 
+test("daily detail normalize merges worklog change comment repo with unified fields", function() {
+    var mod = loadDailyDetail();
+    var dayData = {
+        worklogs: [{
+            issueKey: "A-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { displayName: "John Doe" },
+            timeSpentHours: 1,
+            comment: "c1"
+        }],
+        changes: [{
+            issueKey: "A-1",
+            field: "status",
+            timestamp: "2026-03-15T11:00:00.000Z",
+            author: { displayName: "Jane" },
+            fromString: "Open",
+            toString: "Done"
+        }],
+        allComments: [{
+            issueKey: "A-2",
+            timestamp: "2026-03-15T12:00:00.000Z",
+            author: { displayName: "Bob" },
+            body: "hello"
+        }],
+        repoItems: [{
+            issueKey: "A-2",
+            timestamp: "2026-03-15T13:00:00.000Z",
+            message: "commit msg",
+            type: "commit",
+            authorName: "Dev",
+            issueSummary: "From repo only",
+            issueStatus: "In Progress"
+        }]
+    };
+    var issueMap = {
+        "A-1": { key: "A-1", summary: "First issue", status: "Open" },
+        "A-2": { key: "A-2", summary: "Second from map", status: "QA" }
+    };
+    var actions = mod.normalizeDayActions(dayData, issueMap);
+    assert.equal(actions.length, 4);
+
+    function pick(type) {
+        return actions.filter(function(a) {
+            return a.type === type;
+        });
+    }
+
+    var wl = pick("worklog")[0];
+    assert.equal(wl.issueKey, "A-1");
+    assert.equal(wl.issueSummary, "First issue");
+    assert.equal(wl.issueStatus, "Open");
+    assert.equal(wl.author.displayName, "John Doe");
+    assert.ok(String(wl.timestamp).length > 0);
+
+    var ch = pick("change")[0];
+    assert.equal(ch.issueSummary, "First issue");
+    assert.equal(ch.author.displayName, "Jane");
+
+    var cm = pick("comment")[0];
+    assert.equal(cm.issueKey, "A-2");
+    assert.equal(cm.issueSummary, "Second from map");
+    assert.equal(cm.issueStatus, "QA");
+
+    var rp = pick("repo")[0];
+    assert.equal(rp.issueKey, "A-2");
+    assert.equal(rp.issueSummary, "Second from map");
+    assert.equal(rp.author.displayName, "Dev");
+    assert.ok(String(rp.timestamp).length > 0);
+});
+
+test("daily detail normalize includes single-user comments array", function() {
+    var mod = loadDailyDetail();
+    var actions = mod.normalizeDayActions({
+        comments: [{
+            issueKey: "A-3",
+            created: "2026-03-15T15:00:00.000Z",
+            author: { displayName: "Solo User" },
+            body: "single user comment"
+        }]
+    }, {
+        "A-3": { key: "A-3", summary: "Single-user issue", status: "In Progress" }
+    });
+
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].type, "comment");
+    assert.equal(actions[0].issueKey, "A-3");
+    assert.equal(actions[0].issueSummary, "Single-user issue");
+    assert.equal(actions[0].issueStatus, "In Progress");
+    assert.equal(actions[0].author.displayName, "Solo User");
+    assert.equal(actions[0].timestamp, "2026-03-15T15:00:00.000Z");
+});
+
+test("daily detail undated splits repo rows without timestamp", function() {
+    var mod = loadDailyDetail();
+    var dayData = {
+        repoItems: [{
+            issueKey: "R-1",
+            message: "no time",
+            authorName: "Alice",
+            issueSummary: "S",
+            issueStatus: "Open"
+        }, {
+            issueKey: "R-2",
+            timestamp: "2026-03-15T14:00:00.000Z",
+            message: "with time"
+        }]
+    };
+    var actions = mod.normalizeDayActions(dayData, {});
+    var split = mod.splitTimedAndUntimed(actions);
+    assert.equal(split.undated.length, 1);
+    assert.equal(split.timed.length, 1);
+    assert.equal(split.undated[0].issueKey, "R-1");
+    assert.equal(split.timed[0].issueKey, "R-2");
+});
+
+test("daily detail groupActionsByUser matches key name and displayName variants", function() {
+    var mod = loadDailyDetail();
+    var grouped = mod.groupActionsByUser([{
+        issueKey: "A-1",
+        type: "worklog",
+        author: { key: "john.key", name: "jdoe", displayName: "John Doe" }
+    }, {
+        issueKey: "A-2",
+        type: "comment",
+        author: { key: "mary.key", name: "mary", displayName: "Mary Major" }
+    }], [{
+        key: "john.key"
+    }, {
+        displayName: "  mary major  "
+    }]);
+
+    var issueKeys = Object.keys(grouped).reduce(function(list, userKey) {
+        return list.concat(grouped[userKey].map(function(action) {
+            return action.issueKey;
+        }));
+    }, []).sort();
+
+    assert.deepEqual(issueKeys, ["A-1", "A-2"]);
+});
+
+test("daily detail summary shows full issue title in panel html", function() {
+    var lastHtml = "";
+    var $stub = function() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    lastHtml = h;
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    var mod = loadDailyDetail($stub);
+    var longSummary = new Array(30).join("ABCDEFGHIJ");
+    assert.ok(longSummary.length > 200);
+    var panel = mod.create();
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "LONG-1",
+            timestamp: "2026-03-15T09:00:00.000Z",
+            author: { displayName: "U" },
+            timeSpentHours: 0.5,
+            comment: ""
+        }]
+    }, {
+        "LONG-1": { key: "LONG-1", summary: longSummary, status: "Open" }
+    });
+    assert.ok(lastHtml.indexOf(longSummary) !== -1, "expected full summary in rendered html");
+    assert.equal(lastHtml.indexOf("…"), -1, "ellipsis should not appear in day-detail panel for issue title");
+});
+
+function createDayDetailInteractiveStub() {
+    var lastHtml = "";
+    var handlers = Object.create(null);
+    function el() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    handlers = Object.create(null);
+                    lastHtml = String(h);
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function(sel) {
+                return {
+                    on: function(ev, fn) {
+                        if (!handlers[sel]) handlers[sel] = [];
+                        handlers[sel].push(fn);
+                    }
+                };
+            }
+        };
+    }
+    var root = el();
+    function $(input) {
+        if (typeof input === "string" && /^\s*</.test(input)) {
+            return root;
+        }
+        throw new Error("day detail jquery stub: unsupported " + input);
+    }
+    return {
+        $: $,
+        getHtml: function() {
+            return lastHtml;
+        },
+        triggerClick: function(sel, mockThis) {
+            (handlers[sel] || []).forEach(function(fn) {
+                fn.call(mockThis || {}, { target: mockThis || {} });
+            });
+        }
+    };
+}
+
+test("day detail defaults to issue mode", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "X-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, { "X-1": { key: "X-1", summary: "T1", status: "Open" } }, users);
+
+    var html = stub.getHtml();
+    assert.match(html, /По задачам/);
+    assert.equal(html.indexOf("ujg-ua-detail-timeline-grid"), -1, "issue mode should not render team timeline grid");
+    assert.ok(html.indexOf("ujg-ua-detail-issue") !== -1, "issue mode should render issue groups");
+});
+
+test("day detail toggle switches to team view", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "X-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, { "X-1": { key: "X-1", summary: "T1", status: "Open" } }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-mode" ? "team" : null;
+        }
+    });
+
+    var html = stub.getHtml();
+    assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should render timeline grid");
+});
+
+test("day detail team view builds one column per user", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" },
+        { name: "u3", key: "u3", displayName: "Carol" }
+    ];
+    panel.show("2026-03-16", {
+        worklogs: [
+            {
+                issueKey: "A-1",
+                timestamp: "2026-03-16T09:00:00.000Z",
+                author: { name: "u1", displayName: "Alice" },
+                timeSpentHours: 0.5,
+                comment: ""
+            },
+            {
+                issueKey: "A-2",
+                timestamp: "2026-03-16T11:00:00.000Z",
+                author: { name: "u2", displayName: "Bob" },
+                timeSpentHours: 0.5,
+                comment: ""
+            }
+        ]
+    }, {
+        "A-1": { key: "A-1", summary: "S1", status: "Open" },
+        "A-2": { key: "A-2", summary: "S2", status: "Open" }
+    }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+
+    var html = stub.getHtml();
+    var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
+    assert.equal(cols ? cols.length : 0, 3, "expected three user columns for three selected users");
+});
+
+test("day detail team view keeps separate columns for duplicate visible identifiers", function() {
+    var mod = loadDailyDetail();
+    var selectedUsers = [
+        { key: "u1", name: "shared-login", displayName: "Alex Same" },
+        { key: "u2", name: "shared-login", displayName: "Alex Same" }
+    ];
+    var model = mod.buildTimelineModel([{
+        issueKey: "COL-1",
+        timestamp: "2026-03-16T09:00:00.000Z",
+        type: "worklog",
+        author: { key: "u1", name: "shared-login", displayName: "Alex Same" },
+        timeSpentHours: 1
+    }, {
+        issueKey: "COL-2",
+        timestamp: "2026-03-16T10:00:00.000Z",
+        type: "worklog",
+        author: { key: "u2", name: "shared-login", displayName: "Alex Same" },
+        timeSpentHours: 1
+    }], selectedUsers, "2026-03-16");
+
+    assert.equal(model.users.length, 2);
+    assert.equal(Object.keys(model.columns).length, 2);
+    assert.deepEqual(
+        normalize(model.users.map(function(user) {
+            return model.columns[user.id].items.map(function(item) {
+                return item.issueKey;
+            });
+        })),
+        [["COL-1"], ["COL-2"]]
+    );
+});
+
+test("day detail team timeline stacks near-simultaneous events at distinct vertical offsets", function() {
+    var mod = loadDailyDetail();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    var model = mod.buildTimelineModel([
+        {
+            issueKey: "STK-1",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "worklog",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 0.5,
+            comment: ""
+        },
+        {
+            issueKey: "STK-2",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "comment",
+            author: { name: "u1", displayName: "Alice" },
+            body: "same instant"
+        }
+    ], users, "2026-03-16");
+    var html = mod.renderTeamTimeline(model);
+    var tops = [];
+    var re = /ujg-ua-detail-timeline-card" style="top:(\d+)px/g;
+    var m;
+    while ((m = re.exec(html)) !== null) tops.push(parseInt(m[1], 10));
+    assert.ok(tops.length >= 2, "expected two timeline cards");
+    assert.notEqual(tops[0], tops[1], "stacked cards must not share the same top offset");
+});
+
+test("day detail team timeline matches author by accountId like repo-data-processor", function() {
+    var mod = loadDailyDetail();
+    var selectedUsers = [{ accountId: "jira-cloud-acc-99", displayName: "Cloud User" }];
+    var model = mod.buildTimelineModel([{
+        issueKey: "ACC-1",
+        timestamp: "2026-03-16T12:00:00.000Z",
+        type: "worklog",
+        author: { accountId: "jira-cloud-acc-99" },
+        timeSpentHours: 1,
+        comment: ""
+    }], selectedUsers, "2026-03-16");
+
+    assert.equal(model.unmatched.length, 0);
+    assert.equal(model.users.length, 1);
+    assert.equal(model.columns[model.users[0].id].items.length, 1);
+    assert.equal(model.columns[model.users[0].id].items[0].issueKey, "ACC-1");
+});
+
+test("day detail team view leaves ambiguous author unmatched instead of mislabeling", function() {
+    var mod = loadDailyDetail();
+    var selectedUsers = [
+        { key: "u1", name: "u1", displayName: "Alex Same" },
+        { key: "u2", name: "u2", displayName: "Alex Same" }
+    ];
+    var model = mod.buildTimelineModel([{
+        issueKey: "AMB-1",
+        timestamp: "2026-03-16T09:30:00.000Z",
+        type: "comment",
+        author: { displayName: "Alex Same" },
+        body: "ambiguous"
+    }], selectedUsers, "2026-03-16");
+
+    assert.deepEqual(
+        normalize(model.users.map(function(user) {
+            return model.columns[user.id].items.length;
+        })),
+        [0, 0]
+    );
+    assert.equal(model.unmatched.length, 1);
+    assert.equal(model.unmatched[0].issueKey, "AMB-1");
+});
+
+test("day detail team view puts untimed actions in separate block", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    panel.show("2026-03-17", {
+        worklogs: [
+            {
+                issueKey: "U-1",
+                timestamp: "",
+                author: { name: "u1", displayName: "Alice" },
+                timeSpentHours: 0.25,
+                comment: "no time"
+            },
+            {
+                issueKey: "U-2",
+                timestamp: "2026-03-17T14:00:00.000Z",
+                author: { name: "u1", displayName: "Alice" },
+                timeSpentHours: 1,
+                comment: ""
+            }
+        ]
+    }, {
+        "U-1": { key: "U-1", summary: "Untimed", status: "Open" },
+        "U-2": { key: "U-2", summary: "Timed", status: "Open" }
+    }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+
+    var html = stub.getHtml();
+    assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "expected team timeline in team view");
+    var iUnd = html.indexOf("ujg-ua-detail-undated");
+    assert.ok(iUnd !== -1, "expected undated section in team view");
+    assert.ok(html.indexOf("Без точного времени") !== -1);
+    assert.ok(html.slice(iUnd).indexOf("Untimed") !== -1 || html.indexOf("U-1") !== -1);
+});
+
+test("day detail mode persists when opening another day", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    panel.show("2026-03-18", {
+        worklogs: [{
+            issueKey: "D-1",
+            timestamp: "2026-03-18T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, { "D-1": { key: "D-1", summary: "Day1", status: "Open" } }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+    assert.ok(stub.getHtml().indexOf("ujg-ua-detail-timeline-grid") !== -1);
+
+    panel.show("2026-03-19", {
+        worklogs: [{
+            issueKey: "D-2",
+            timestamp: "2026-03-19T11:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 0.5,
+            comment: ""
+        }]
+    }, { "D-2": { key: "D-2", summary: "Day2", status: "Open" } }, users);
+
+    assert.ok(stub.getHtml().indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should persist across days");
+});
+
 test("user activity data processor preserves Jira timestamps and authors for worklogs and status changes", function() {
     var mod = loadUserActivityDataProcessor();
     var rawData = {
@@ -2786,6 +3799,19 @@ test("rendering keeps Jira calendar wired to DailyDetail and repo calendar wired
 
     harness.events.jiraSelect(null);
     assert.equal(harness.events.dailyHides, 1);
+});
+
+test("rendering passes current selected users snapshot to day detail on date click", function() {
+    var harness = createRenderingHarness();
+
+    harness.triggerUserChange({ name: "fresh-user", displayName: "Fresh User" });
+    harness.events.jiraSelect("2026-03-08");
+
+    assert.equal(harness.events.dailyShows.length, 1);
+    assert.deepEqual(normalize(harness.events.dailyShows[0].selectedUsers), [{
+        name: "fresh-user",
+        displayName: "Fresh User"
+    }]);
 });
 
 test("rendering keeps Jira blocks visible when repo loading fails", function() {

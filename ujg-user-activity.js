@@ -758,17 +758,39 @@ define("_ujgUA_config", [], function() {
         ".ujg-ua-repo-block { padding: 4px; background: #f4f5f7; min-height: 16px; }",
         ".ujg-ua-jira-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
         ".ujg-ua-repo-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
+        ".ujg-ua-inline-status { font-size: 9px; padding: 0 4px; border-radius: 4px; background: #ebecf0; color: #42526e; }",
+        ".ujg-ua-issue-key { text-decoration: none; }",
+        ".ujg-ua-issue-key:hover { text-decoration: underline; }",
+        ".ujg-ua-repo-msg, .ujg-ua-repo-summary { overflow-wrap: anywhere; word-break: break-word; }",
+        ".ujg-ua-jira-line, .ujg-ua-repo-line { overflow-wrap: anywhere; }",
+        ".ujg-ua-log-tbody td, .ujg-ua-repo-row td { overflow-wrap: anywhere; }",
         ".ujg-ua-time { color: #6b778c; font-size: 10px; font-family: monospace; }",
         ".ujg-ua-author { color: #0052cc; font-size: 11px; }",
         ".ujg-ua-day-cell { vertical-align: top; border: 1px solid #dfe1e6; }",
         ".ujg-ua-day-cell-red-border { border: 2px solid #de350b !important; }",
         "",
         ".ujg-ua-detail-issue { border: 1px solid #dfe1e6; border-radius: 3px; margin-bottom: 8px; padding: 8px; }",
-        ".ujg-ua-detail-issue-header { font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 4px; }",
+        ".ujg-ua-detail-issue-header { font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 4px; white-space: normal; word-break: break-word; }",
+        ".ujg-ua-detail-issue-summary { white-space: normal; word-break: break-word; }",
         ".ujg-ua-detail-issue-header a { color: #0052cc; text-decoration: none; }",
         ".ujg-ua-detail-action { padding: 3px 0; font-size: 13px; }",
         ".ujg-ua-detail-comment { color: #6b778c; font-size: 12px; margin-left: 16px; font-style: italic; }",
         ".ujg-ua-detail-unlinked { border: 1px dashed #dfe1e6; border-radius: 3px; margin-bottom: 8px; padding: 8px; }",
+        ".ujg-ua-detail-mode-toggle .ujg-ua-detail-mode-btn { padding: 4px 10px; border: none; background: #f4f5f7; color: #42526e; cursor: pointer; }",
+        ".ujg-ua-detail-mode-toggle .ujg-ua-detail-mode-btn:hover { background: #ebecf0; }",
+        ".ujg-ua-detail-mode-toggle .ujg-ua-detail-mode-active { background: #deebff; color: #0747a6; font-weight: 600; }",
+        ".ujg-ua-detail-timeline { position: relative; }",
+        ".ujg-ua-detail-timeline-scale { line-height: 1.2; }",
+        ".ujg-ua-detail-timeline-grid { position: relative; border: 1px solid #dfe1e6; border-radius: 4px; padding: 4px; background: #fafbfc; }",
+        ".ujg-ua-detail-time-markers { position: absolute; left: 0; right: 0; top: 0; bottom: 0; }",
+        ".ujg-ua-detail-time-marker { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed #ebecf0; }",
+        ".ujg-ua-detail-user-cols { position: relative; z-index: 1; align-items: stretch; }",
+        ".ujg-ua-detail-user-col { flex: 1 1 0; min-width: 0; border-left: 1px solid #ebecf0; padding-left: 6px; }",
+        ".ujg-ua-detail-user-col:first-child { border-left: none; padding-left: 0; }",
+        ".ujg-ua-detail-user-col-label { margin-bottom: 4px; }",
+        ".ujg-ua-detail-user-col-track { position: relative; }",
+        ".ujg-ua-detail-timeline-card { position: absolute; left: 0; right: 4px; z-index: 2; }",
+        ".ujg-ua-detail-timeline-card .ujg-ua-detail-action { background: #fff; border: 1px solid #dfe1e6; border-radius: 3px; padding: 4px 6px; margin-bottom: 2px; }",
         "",
         ".ujg-ua-user-stats-table { margin-top: 12px; }",
         ".ujg-ua-user-stats-table table { width: 100%; border-collapse: collapse; font-size: 13px; }",
@@ -860,6 +882,44 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
     function escapeHtml(t) {
         if (!t) return "";
         return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
+    function getJiraBaseUrl() {
+        if (typeof window === "undefined") return "";
+        var fromAjs = window.AJS && window.AJS.params && String(window.AJS.params.baseURL || "").trim();
+        if (fromAjs) return fromAjs.replace(/\/$/, "");
+        var origin = window.location && String(window.location.origin || "").trim();
+        return origin ? origin.replace(/\/$/, "") : "";
+    }
+
+    function buildIssueUrl(issueKey) {
+        var key = String(issueKey || "").trim();
+        if (!key) return "";
+        return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + encodeURIComponent(key);
+    }
+
+    function normalizeLinkAttrs(extraAttrs) {
+        if (extraAttrs == null) return "";
+        if (typeof extraAttrs === "string") return String(extraAttrs).trim();
+        if (typeof extraAttrs !== "object") return String(extraAttrs).trim();
+
+        return Object.keys(extraAttrs).map(function(name) {
+            if (!Object.prototype.hasOwnProperty.call(extraAttrs, name)) return "";
+            if (!/^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/.test(name)) return "";
+            var value = extraAttrs[name];
+            if (value == null || value === false) return "";
+            if (value === true) return name;
+            return name + '="' + escapeHtml(String(value)) + '"';
+        }).filter(Boolean).join(" ");
+    }
+
+    function renderIssueLink(issueKey, label, extraAttrs) {
+        var url = buildIssueUrl(issueKey);
+        var text = label != null ? String(label) : String(issueKey || "");
+        var attrs = normalizeLinkAttrs(extraAttrs);
+        if (!url) return escapeHtml(text);
+        return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
+            (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
     }
 
     function getProjectKey(issueKey) {
@@ -970,6 +1030,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         formatDateTime: formatDateTime,
         formatDateShort: formatDateShort,
         escapeHtml: escapeHtml,
+        getJiraBaseUrl: getJiraBaseUrl,
+        buildIssueUrl: buildIssueUrl,
+        renderIssueLink: renderIssueLink,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
         getDefaultPeriod: getDefaultPeriod,
@@ -2118,6 +2181,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         item.repoUrl = item.repoUrl || "";
         item.issueKey = item.issueKey || "";
         item.issueSummary = item.issueSummary || "";
+        item.issueStatus = item.issueStatus || "";
         item.branchName = item.branchName || "";
         item.type = item.type || "unknown_dev_event";
         item.title = item.title || "";
@@ -2155,6 +2219,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
                 issueKey: issueKey,
                 issueSummary: issueInfo.summary || "",
+                issueStatus: issueInfo.status || "",
                 repoName: repo.name || repo.slug || "(unknown)",
                 repoUrl: repo.url || "",
                 branchName: commit.branchName || "",
@@ -2254,6 +2319,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             timestamp: getActivityTimestamp(repo),
             issueKey: issueKey,
             issueSummary: issueInfo.summary || "",
+            issueStatus: issueInfo.status || "",
             repoName: repo.name || repo.slug || "(unknown)",
             repoUrl: repo.url || "",
             title: repo.name || repo.slug || "(unknown)",
@@ -2300,6 +2366,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: getActivityTimestamp(item),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName || container.name || "(unknown)",
                     repoUrl: repoUrl || container.url || "",
                     title: item.title || item.name || item.id || key,
@@ -2324,6 +2391,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: pr.createdDate || pr.created || pr.openedDate,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName,
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2341,6 +2409,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.mergedDate || pr.completedDate || pr.closedDate,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2357,6 +2426,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.closedDate || pr.declinedDate || pr.updatedDate,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2375,6 +2445,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.updatedDate || pr.updated || pr.lastUpdated,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2400,6 +2471,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: extractReviewerTimestamp(reviewer),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName,
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2428,6 +2500,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repo.name || repo.slug || "(unknown)",
                     repoUrl: repo.url || "",
                     branchName: branchName,
@@ -2444,6 +2517,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repo.name || repo.slug || "(unknown)",
                     repoUrl: repo.url || "",
                     branchName: branchName,
@@ -3664,6 +3738,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
     var MONTHS_FULL_RU = utils.MONTHS_FULL_RU;
     var ICONS = config.ICONS;
+    var REPO_LABELS = config.REPO_ACTIVITY_LABELS || {};
 
     function formatFullDate(dateStr) {
         var d = new Date(dateStr + "T00:00:00");
@@ -3684,11 +3759,18 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     }
 
     function normalizeAuthor(author) {
-        if (!author) return { name: "", displayName: "" };
-        if (typeof author === "string") return { name: "", displayName: author };
+        if (!author) return { key: "", name: "", displayName: "", accountId: "", userName: "" };
+        if (typeof author === "string") {
+            return { key: "", name: "", displayName: author, accountId: "", userName: "" };
+        }
+        var nested = author.user && typeof author.user === "object" ? author.user : null;
         return {
-            name: author.name || author.key || "",
-            displayName: author.displayName || author.name || author.key || ""
+            key: author.key || (nested && nested.key) || "",
+            name: author.name || (nested && nested.name) || author.key || (nested && nested.key) || "",
+            displayName: author.displayName || (nested && nested.displayName) || author.name ||
+                (nested && nested.name) || author.key || "",
+            accountId: author.accountId || (nested && nested.accountId) || "",
+            userName: author.userName || (nested && nested.userName) || ""
         };
     }
 
@@ -3716,13 +3798,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return dayData.changes || [];
     }
 
-    function collectActions(dayData) {
+    function pickComments(dayData) {
+        if (!dayData) return [];
+        if (dayData.allComments !== undefined && dayData.allComments !== null) {
+            return dayData.allComments || [];
+        }
+        return dayData.comments || [];
+    }
+
+    function metaFromIssue(issueKey, issueMap, repoItem) {
+        var issue = issueKey && issueMap && issueMap[issueKey];
+        return {
+            issueSummary: (issue && issue.summary) || (repoItem && repoItem.issueSummary) || "",
+            issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || ""
+        };
+    }
+
+    function normalizeDayActions(dayData, issueMap) {
+        issueMap = issueMap || {};
         var actions = [];
         if (!dayData) return actions;
 
         pickWorklogs(dayData).forEach(function(wl) {
+            var m = metaFromIssue(wl.issueKey, issueMap, null);
             actions.push({
                 issueKey: wl.issueKey,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: timestampFor(wl),
                 author: normalizeAuthor(wl.author),
                 type: "worklog",
@@ -3733,8 +3835,11 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
         pickChanges(dayData).forEach(function(ch) {
             if (ch.field !== "status") return;
+            var m = metaFromIssue(ch.issueKey, issueMap, null);
             actions.push({
                 issueKey: ch.issueKey,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: timestampFor(ch),
                 author: normalizeAuthor(ch.author),
                 type: "change",
@@ -3743,9 +3848,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             });
         });
 
-        (dayData.allComments || []).forEach(function(cm) {
+        pickComments(dayData).forEach(function(cm) {
+            var m = metaFromIssue(cm.issueKey, issueMap, null);
             actions.push({
                 issueKey: cm.issueKey,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: timestampFor(cm),
                 author: normalizeAuthor(cm.author),
                 type: "comment",
@@ -3760,8 +3868,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             } else if (r.authorName) {
                 repoAuthor = { name: "", displayName: r.authorName };
             }
+            var ik = r.issueKey || null;
+            var m = metaFromIssue(ik, issueMap, r);
             actions.push({
-                issueKey: r.issueKey || null,
+                issueKey: ik,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: r.timestamp || r.authorTimestamp || "",
                 author: repoAuthor,
                 type: "repo",
@@ -3771,6 +3883,107 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         });
 
         return actions;
+    }
+
+    function splitTimedAndUntimed(actions) {
+        var timed = [];
+        var undated = [];
+        (actions || []).forEach(function(a) {
+            if (String(a.timestamp || "").trim()) timed.push(a);
+            else undated.push(a);
+        });
+        return { timed: timed, undated: undated };
+    }
+
+    function groupActionsByIssue(actions) {
+        var grouped = {};
+        var unlinked = [];
+        (actions || []).forEach(function(act) {
+            var ik = act.issueKey;
+            if (ik == null || ik === "") {
+                unlinked.push(act);
+            } else {
+                if (!grouped[ik]) grouped[ik] = [];
+                grouped[ik].push(act);
+            }
+        });
+        return { grouped: grouped, unlinked: unlinked };
+    }
+
+    function normalizedToken(value) {
+        return String(value || "").trim().toLowerCase();
+    }
+
+    function collectUserTokens(user) {
+        var source = typeof user === "string" ? { key: user, name: user, displayName: user } : (user || {});
+        var tokens = [];
+
+        function push(value) {
+            var token = normalizedToken(value);
+            if (token && tokens.indexOf(token) === -1) tokens.push(token);
+        }
+
+        push(source.key);
+        push(source.name);
+        push(source.displayName);
+        push(source.accountId);
+        push(source.userName);
+        if (source.user) {
+            push(source.user.key);
+            push(source.user.name);
+            push(source.user.displayName);
+            push(source.user.accountId);
+            push(source.user.userName);
+        }
+
+        return tokens;
+    }
+
+    function authorMatchKey(author) {
+        var a = author || {};
+        return String(a.accountId || a.name || a.key || a.displayName || "").trim() || "__unknown__";
+    }
+
+    function authorIdentity(author) {
+        var a = normalizeAuthor(author);
+        return {
+            key: normalizedToken(a.key),
+            name: normalizedToken(a.name),
+            displayName: normalizedToken(a.displayName),
+            accountId: normalizedToken(a.accountId),
+            userName: normalizedToken(a.userName)
+        };
+    }
+
+    function authorIdentitySignature(author) {
+        var id = authorIdentity(author);
+        return [id.key, id.name, id.displayName, id.accountId, id.userName].join("\0");
+    }
+
+    function groupActionsByUser(actions, selectedUsers) {
+        var list = actions || [];
+        if (selectedUsers && selectedUsers.length) {
+            var allow = {};
+            selectedUsers.forEach(function(u) {
+                collectUserTokens(u).forEach(function(token) {
+                    allow[token] = true;
+                });
+            });
+            list = list.filter(function(a) {
+                var tokens = collectUserTokens(a.author);
+                for (var i = 0; i < tokens.length; i++) {
+                    if (allow[tokens[i]]) return true;
+                }
+                return false;
+            });
+        }
+        var byUser = {};
+        list.forEach(function(a) {
+            var k = authorMatchKey(a.author);
+            if (!byUser[k]) byUser[k] = [];
+            byUser[k].push(a);
+        });
+        return byUser;
     }
 
     function minGroupTimestamp(arr) {
@@ -3787,7 +4000,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var authEsc = utils.escapeHtml(surname(action.author && action.author.displayName));
         var html = '<div class="ujg-ua-detail-action">';
         html += '<span class="ujg-ua-time">' + utils.escapeHtml(time) + '</span> ';
-        html += '<span class="ujg-ua-author">' + authEsc + '</span> — ';
+        html += '<span class="ujg-ua-author">' + authEsc + "</span> — ";
 
         switch (action.type) {
             case "worklog": {
@@ -3800,7 +4013,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 break;
             }
             case "change":
-                html += '<span class="text-warning">' + utils.escapeHtml(action.fromString || "") + '</span>';
+                html += '<span class="text-warning">' + utils.escapeHtml(action.fromString || "") + "</span>";
                 html += " → ";
                 html += '<span class="text-success">' + utils.escapeHtml(action.toString || "") + "</span>";
                 break;
@@ -3813,10 +4026,15 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 break;
             case "repo": {
                 var rt = String(action.repoType || "commit").toLowerCase();
-                html += utils.escapeHtml(rt);
+                var typeLabel = REPO_LABELS[rt] || rt;
+                html += utils.escapeHtml(typeLabel);
+                var st = action.issueStatus && String(action.issueStatus).trim();
+                if (st) {
+                    html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(st) + "</span>";
+                }
                 var msg = action.message && String(action.message).trim();
                 if (msg) {
-                    html += '<div class="ujg-ua-detail-comment">"' + utils.escapeHtml(utils.truncate(msg, 200)) + '"</div>';
+                    html += '<div class="ujg-ua-detail-comment whitespace-normal break-words">"' + utils.escapeHtml(msg) + '"</div>';
                 }
                 break;
             }
@@ -3828,74 +4046,350 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return html;
     }
 
+    function buildIssueGroupsHtml(grouped, unlinked) {
+        var html = "";
+        var keys = Object.keys(grouped);
+        var ki;
+        for (ki = 0; ki < keys.length; ki++) {
+            grouped[keys[ki]].sort(byTimestamp);
+        }
+        unlinked.sort(byTimestamp);
+
+        keys.sort(function(a, b) {
+            var cmp = minGroupTimestamp(grouped[a]).localeCompare(minGroupTimestamp(grouped[b]));
+            if (cmp !== 0) return cmp;
+            return a.localeCompare(b);
+        });
+
+        for (ki = 0; ki < keys.length; ki++) {
+            var key = keys[ki];
+            var entry = grouped[key];
+            var summary = (entry[0] && entry[0].issueSummary) || "";
+
+            html += '<div class="ujg-ua-detail-issue">';
+            html += '<div class="ujg-ua-detail-issue-header flex items-start gap-2">';
+            html += utils.renderIssueLink(key, key, 'class="font-mono text-xs font-semibold text-primary shrink-0 ujg-ua-issue-key"');
+            html += '<span class="text-foreground font-medium min-w-0 ujg-ua-detail-issue-summary">' + utils.escapeHtml(summary) + "</span>";
+            html += "</div>";
+            for (var gi = 0; gi < entry.length; gi++) {
+                html += renderActionHtml(entry[gi]);
+            }
+            html += "</div>";
+        }
+
+        if (unlinked.length > 0) {
+            html += '<div class="ujg-ua-detail-unlinked">';
+            html += '<div class="ujg-ua-detail-issue-header">Без привязки к задаче</div>';
+            for (var ui = 0; ui < unlinked.length; ui++) {
+                html += renderActionHtml(unlinked[ui]);
+            }
+            html += "</div>";
+        }
+        return html;
+    }
+
+    function filterActionsBySelectedUsers(actions, selectedUsers, selectedColumns) {
+        if (!selectedUsers || !selectedUsers.length) return actions || [];
+        selectedColumns = selectedColumns || buildSelectedColumns(selectedUsers);
+        return (actions || []).filter(function(a) {
+            return findTimelineCandidateColumnIds(a.author, selectedColumns).length > 0;
+        });
+    }
+
+    function buildSelectedColumns(selectedUsers) {
+        return (selectedUsers || []).map(function(user, index) {
+            var normalized = normalizeAuthor(user);
+            return {
+                id: "sel-" + index,
+                user: normalized,
+                identity: authorIdentity(normalized),
+                tokens: collectUserTokens(normalized)
+            };
+        });
+    }
+
+    function buildDerivedColumns(actions) {
+        var seen = {};
+        var columns = [];
+        (actions || []).forEach(function(action) {
+            var normalized = normalizeAuthor(action.author);
+            var sig = authorIdentitySignature(normalized);
+            if (seen[sig]) return;
+            seen[sig] = true;
+            columns.push({
+                id: "act-" + columns.length,
+                user: normalized,
+                identity: authorIdentity(normalized),
+                tokens: collectUserTokens(normalized)
+            });
+        });
+        return columns;
+    }
+
+    function matchColumnIdsByField(columns, field, value) {
+        var token = normalizedToken(value);
+        if (!token) return [];
+        var ids = [];
+        (columns || []).forEach(function(column) {
+            if (column.identity[field] === token) ids.push(column.id);
+        });
+        return ids;
+    }
+
+    function matchColumnIdsByTokens(columns, author) {
+        var tokens = collectUserTokens(author);
+        if (!tokens.length) return [];
+        var ids = [];
+        (columns || []).forEach(function(column) {
+            for (var i = 0; i < tokens.length; i++) {
+                if (column.tokens.indexOf(tokens[i]) !== -1) {
+                    ids.push(column.id);
+                    return;
+                }
+            }
+        });
+        return ids;
+    }
+
+    function findTimelineCandidateColumnIds(author, columns) {
+        var normalized = normalizeAuthor(author);
+        var ids = matchColumnIdsByField(columns, "key", normalized.key);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "accountId", normalized.accountId);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "userName", normalized.userName);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "name", normalized.name);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "displayName", normalized.displayName);
+        if (ids.length) return ids;
+        return matchColumnIdsByTokens(columns, normalized);
+    }
+
+    function findTimelineColumnId(author, columns) {
+        var ids = findTimelineCandidateColumnIds(author, columns);
+        return ids.length === 1 ? ids[0] : "";
+    }
+
+    var TEAM_TIMELINE_HEIGHT_PX = 400;
+    var TIMELINE_STACK_NEAR_MS = 90 * 1000;
+    var TIMELINE_STACK_STEP_PX = 10;
+    var TIMELINE_CARD_EST_HEIGHT_PX = 64;
+
+    function layoutTimelineCardTops(items, h, rangeStartMs, span) {
+        var sorted = (items || []).slice().sort(byTimestamp);
+        var anchorMs = NaN;
+        var stackInCluster = 0;
+        var rows = [];
+        sorted.forEach(function(a) {
+            var ms = Date.parse(String(a.timestamp || ""));
+            if (isNaN(ms)) {
+                rows.push({ action: a, topPx: null });
+                return;
+            }
+            if (isNaN(anchorMs) || ms - anchorMs > TIMELINE_STACK_NEAR_MS) {
+                anchorMs = ms;
+                stackInCluster = 0;
+            } else {
+                stackInCluster += 1;
+            }
+            var ratio = (ms - rangeStartMs) / span;
+            var baseTop = Math.round(ratio * h);
+            rows.push({ action: a, topPx: baseTop + stackInCluster * TIMELINE_STACK_STEP_PX });
+        });
+        return rows;
+    }
+
+    function buildTimelineModel(actions, selectedUsers, dateStr) {
+        selectedUsers = selectedUsers || [];
+        var selectedColumns = selectedUsers.length ? buildSelectedColumns(selectedUsers) : [];
+        var filtered = filterActionsBySelectedUsers(actions, selectedUsers, selectedColumns);
+        var split = splitTimedAndUntimed(filtered);
+        var timed = split.timed.slice().sort(byTimestamp);
+
+        var columnDefs = selectedColumns.length ? selectedColumns : buildDerivedColumns(timed);
+        var users = [];
+        var columns = {};
+        columnDefs.forEach(function(column) {
+            users.push(Object.assign({ id: column.id }, column.user));
+            columns[column.id] = { user: column.user, items: [] };
+        });
+        var unmatched = [];
+
+        timed.forEach(function(a) {
+            var columnId = findTimelineColumnId(a.author, columnDefs);
+            if (!columnId) {
+                if (selectedColumns.length) unmatched.push(a);
+                return;
+            }
+            columns[columnId].items.push(a);
+        });
+
+        var minMs = Infinity;
+        var maxMs = -Infinity;
+        timed.forEach(function(a) {
+            var ms = Date.parse(String(a.timestamp || ""));
+            if (!isNaN(ms)) {
+                if (ms < minMs) minMs = ms;
+                if (ms > maxMs) maxMs = ms;
+            }
+        });
+
+        if (minMs === Infinity) {
+            var ds = dateStr || "2000-01-01";
+            minMs = Date.parse(ds + "T09:00:00Z");
+            maxMs = minMs + 3600000;
+            if (isNaN(minMs)) {
+                minMs = Date.now();
+                maxMs = minMs + 3600000;
+            }
+        }
+
+        var MIN_RANGE_MS = 60 * 60 * 1000;
+        if (maxMs - minMs < MIN_RANGE_MS) {
+            var mid = (minMs + maxMs) / 2;
+            minMs = mid - MIN_RANGE_MS / 2;
+            maxMs = mid + MIN_RANGE_MS / 2;
+        }
+
+        var rangeStartMs = minMs;
+        var rangeEndMs = maxMs;
+        var span = rangeEndMs - rangeStartMs || 1;
+
+        var markers = [];
+        var step = 3600000;
+        var t = Math.floor(rangeStartMs / step) * step;
+        var guard = 0;
+        while (t <= rangeEndMs + step && guard < 48) {
+            if (t >= rangeStartMs - 1) {
+                markers.push({ ms: t, ratio: (t - rangeStartMs) / span });
+            }
+            t += step;
+            guard += 1;
+        }
+
+        return {
+            users: users,
+            columns: columns,
+            markers: markers,
+            rangeStartMs: rangeStartMs,
+            rangeEndMs: rangeEndMs,
+            undated: split.undated,
+            unmatched: unmatched
+        };
+    }
+
+    function renderTeamTimeline(model) {
+        var h = TEAM_TIMELINE_HEIGHT_PX;
+        var span = model.rangeEndMs - model.rangeStartMs || 1;
+
+        var markersHtml = "";
+        model.markers.forEach(function(mk) {
+            var topPx = Math.round(mk.ratio * h);
+            markersHtml += '<div class="ujg-ua-detail-time-marker" style="top:' + topPx + 'px"></div>';
+        });
+
+        var colLayouts = model.users.map(function(user) {
+            var col = model.columns[user.id];
+            return {
+                user: user,
+                rows: layoutTimelineCardTops(col.items, h, model.rangeStartMs, span)
+            };
+        });
+        var trackH = h;
+        colLayouts.forEach(function(layout) {
+            layout.rows.forEach(function(row) {
+                if (row.topPx != null) {
+                    trackH = Math.max(trackH, row.topPx + TIMELINE_CARD_EST_HEIGHT_PX);
+                }
+            });
+        });
+
+        var colsHtml = "";
+        colLayouts.forEach(function(layout) {
+            var user = layout.user;
+            var label = utils.escapeHtml(surname(user.displayName || user.name || user.id));
+            colsHtml += '<div class="ujg-ua-detail-user-col">';
+            colsHtml += '<div class="ujg-ua-detail-user-col-label text-xs font-semibold text-muted-foreground">' + label + "</div>";
+            colsHtml += '<div class="ujg-ua-detail-user-col-track" style="height:' + trackH + 'px">';
+            layout.rows.forEach(function(row) {
+                if (row.topPx == null) return;
+                colsHtml += '<div class="ujg-ua-detail-timeline-card" style="top:' + row.topPx + 'px">';
+                colsHtml += renderActionHtml(row.action);
+                colsHtml += "</div>";
+            });
+            colsHtml += "</div></div>";
+        });
+
+        var t0 = new Date(model.rangeStartMs).toISOString();
+        var t1 = new Date(model.rangeEndMs).toISOString();
+        var html = '<div class="ujg-ua-detail-timeline mt-2">';
+        html += '<div class="ujg-ua-detail-timeline-scale text-[10px] text-muted-foreground mb-1">' +
+            utils.escapeHtml(utils.formatTime(t0)) + " — " + utils.escapeHtml(utils.formatTime(t1)) + "</div>";
+        html += '<div class="ujg-ua-detail-timeline-grid relative" style="min-height:' + trackH + 'px">';
+        html += '<div class="ujg-ua-detail-time-markers pointer-events-none">' + markersHtml + "</div>";
+        html += '<div class="ujg-ua-detail-user-cols flex gap-2 min-w-0">' + colsHtml + "</div>";
+        html += "</div></div>";
+        return html;
+    }
+
     function create() {
         var $el = $('<div class="dashboard-card overflow-hidden" style="display:none"></div>');
+        var currentMode = "issue";
+        var lastArgs = null;
 
-        function renderContent(date, dayData, issueMap) {
+        function renderModeToggle(mode) {
+            var issueAct = mode === "issue" ? " ujg-ua-detail-mode-active" : "";
+            var teamAct = mode === "team" ? " ujg-ua-detail-mode-active" : "";
+            return (
+                '<div class="ujg-ua-detail-mode-toggle flex rounded-md border border-border overflow-hidden text-xs shrink-0">' +
+                '<button type="button" class="ujg-ua-detail-mode-btn ujg-ua-detail-mode-issue' + issueAct + '" data-ua-detail-mode="issue">По задачам</button>' +
+                '<button type="button" class="ujg-ua-detail-mode-btn ujg-ua-detail-mode-team' + teamAct + '" data-ua-detail-mode="team">По команде</button>' +
+                "</div>"
+            );
+        }
+
+        function renderInner(date, dayData, issueMap, selectedUsers, mode) {
             var html = '<div class="p-5">' +
-                '<div class="flex items-center justify-between mb-4">' +
-                    '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + '</h3>' +
-                    '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
-                        '<span class="w-4 h-4">' + ICONS.x + '</span>' +
-                    '</button>' +
-                '</div>' +
+                '<div class="flex items-center justify-between gap-2 mb-4 flex-wrap">' +
+                '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + "</h3>" +
+                '<div class="flex items-center gap-2">' +
+                renderModeToggle(mode) +
+                '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
+                '<span class="w-4 h-4">' + ICONS.x + "</span>" +
+                "</button></div></div>" +
                 '<div class="space-y-2">';
 
-            var actions = collectActions(dayData);
+            var normalized = normalizeDayActions(dayData, issueMap);
 
-            if (actions.length === 0) {
+            if (normalized.length === 0) {
                 html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности за этот день</div>';
+            } else if (mode === "team") {
+                var model = buildTimelineModel(normalized, selectedUsers, date);
+                html += renderTeamTimeline(model);
+                if (model.unmatched.length > 0) {
+                    var unmatchedPart = groupActionsByIssue(model.unmatched);
+                    html += '<div class="ujg-ua-detail-unmatched mt-3 pt-2 border-t border-dashed border-border">';
+                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Не удалось сопоставить с выбранным пользователем</div>';
+                    html += buildIssueGroupsHtml(unmatchedPart.grouped, unmatchedPart.unlinked);
+                    html += "</div>";
+                }
+                if (model.undated.length > 0) {
+                    var undTeam = groupActionsByIssue(model.undated);
+                    html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
+                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
+                    html += buildIssueGroupsHtml(undTeam.grouped, undTeam.unlinked);
+                    html += "</div>";
+                }
             } else {
-                var grouped = {};
-                var unlinked = [];
-                var ai;
-                for (ai = 0; ai < actions.length; ai++) {
-                    var act = actions[ai];
-                    var ik = act.issueKey;
-                    if (ik == null || ik === "") {
-                        unlinked.push(act);
-                    } else {
-                        if (!grouped[ik]) grouped[ik] = [];
-                        grouped[ik].push(act);
-                    }
-                }
-
-                var keys = Object.keys(grouped);
-                var ki;
-                for (ki = 0; ki < keys.length; ki++) {
-                    grouped[keys[ki]].sort(byTimestamp);
-                }
-                unlinked.sort(byTimestamp);
-
-                keys.sort(function(a, b) {
-                    var cmp = minGroupTimestamp(grouped[a]).localeCompare(minGroupTimestamp(grouped[b]));
-                    if (cmp !== 0) return cmp;
-                    return a.localeCompare(b);
-                });
-
-                for (ki = 0; ki < keys.length; ki++) {
-                    var key = keys[ki];
-                    var entry = grouped[key];
-                    var issue = issueMap[key];
-                    var summary = (issue && issue.summary) || "";
-
-                    html += '<div class="ujg-ua-detail-issue">';
-                    html += '<div class="ujg-ua-detail-issue-header flex items-start gap-2">';
-                    html += '<span class="font-mono text-xs font-semibold text-primary shrink-0">' + utils.escapeHtml(key) + "</span>";
-                    html += '<span class="text-foreground font-medium truncate min-w-0">' + utils.escapeHtml(summary) + "</span>";
-                    html += "</div>";
-                    for (var gi = 0; gi < entry.length; gi++) {
-                        html += renderActionHtml(entry[gi]);
-                    }
-                    html += "</div>";
-                }
-
-                if (unlinked.length > 0) {
-                    html += '<div class="ujg-ua-detail-unlinked">';
-                    html += '<div class="ujg-ua-detail-issue-header">Без привязки к задаче</div>';
-                    for (var ui = 0; ui < unlinked.length; ui++) {
-                        html += renderActionHtml(unlinked[ui]);
-                    }
+                var split = splitTimedAndUntimed(normalized);
+                var timedPart = groupActionsByIssue(split.timed);
+                html += buildIssueGroupsHtml(timedPart.grouped, timedPart.unlinked);
+                if (split.undated.length > 0) {
+                    var undIss = groupActionsByIssue(split.undated);
+                    html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
+                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
+                    html += buildIssueGroupsHtml(undIss.grouped, undIss.unlinked);
                     html += "</div>";
                 }
             }
@@ -3904,9 +4398,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             return html;
         }
 
-        function show(date, dayData, issueMap) {
-            $el.html(renderContent(date, dayData, issueMap)).slideDown(200);
+        function bindChrome() {
             $el.find(".ujg-ua-detail-close").on("click", function() { hide(); });
+            $el.find(".ujg-ua-detail-mode-issue").on("click", function() {
+                currentMode = "issue";
+                if (lastArgs) {
+                    $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
+                    bindChrome();
+                }
+            });
+            $el.find(".ujg-ua-detail-mode-team").on("click", function() {
+                currentMode = "team";
+                if (lastArgs) {
+                    $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
+                    bindChrome();
+                }
+            });
+        }
+
+        function show(date, dayData, issueMap, selectedUsers) {
+            lastArgs = {
+                date: date,
+                dayData: dayData,
+                issueMap: issueMap,
+                selectedUsers: selectedUsers || []
+            };
+            $el.html(renderInner(date, dayData, issueMap, lastArgs.selectedUsers, currentMode)).slideDown(200);
+            bindChrome();
         }
 
         function hide() {
@@ -3916,7 +4434,16 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return { $el: $el, show: show, hide: hide };
     }
 
-    return { create: create };
+    return {
+        create: create,
+        normalizeDayActions: normalizeDayActions,
+        groupActionsByIssue: groupActionsByIssue,
+        groupActionsByUser: groupActionsByUser,
+        splitTimedAndUntimed: splitTimedAndUntimed,
+        buildTimelineModel: buildTimelineModel,
+        renderTeamTimeline: renderTeamTimeline,
+        layoutTimelineCardTops: layoutTimelineCardTops
+    };
 });
 
 /* === Module: unified-calendar.js === */
@@ -3998,7 +4525,23 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
     function surname(displayName) {
         if (!displayName) return "";
-        return displayName.split(" ")[0];
+        return String(displayName).split(" ")[0];
+    }
+
+    function repoItemAuthorDisplayName(item) {
+        if (item.authorName) return String(item.authorName);
+        var a = item.author;
+        if (!a) return "";
+        if (typeof a === "string") return a;
+        return String((a.displayName || a.name || a.key || ""));
+    }
+
+    function repoIssueMeta(issueKey, issueMap, item) {
+        var issue = issueKey && issueMap && issueMap[issueKey];
+        return {
+            issueSummary: (issue && issue.summary) || (item && item.issueSummary) || "",
+            issueStatus: (issue && issue.status) || (item && item.issueStatus) || ""
+        };
     }
 
     function renderUserChips(dayData, selectedUsers, dateStr) {
@@ -4034,7 +4577,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(w.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(w.issueKey, w.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
@@ -4048,7 +4593,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(c.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
@@ -4060,7 +4607,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(c.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px]">💬</span>' +
                     '</div>'
             });
@@ -4076,7 +4625,8 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         return html;
     }
 
-    function renderRepoBlock(dayData) {
+    function renderRepoBlock(dayData, issueMap) {
+        issueMap = issueMap || {};
         var items = (dayData.repoItems || []).slice();
         items.sort(function(a, b) {
             return ((a.timestamp || "").localeCompare(b.timestamp || ""));
@@ -4092,15 +4642,32 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             else if (type === "pullrequest" || type === "pr") icon = "🔵";
             else if (type === "branch") icon = "🟡";
             else icon = "●";
+            var rt = String(type || "commit").toLowerCase();
+            var typeLabel = REPO_LABELS[rt] || REPO_LABELS[type] || type;
 
-            html += '<div class="ujg-ua-repo-line">';
-            html += '<span class="ujg-ua-time">' + time + '</span> ';
-            html += icon + ' ';
-            if (item.authorName || (item.author && item.author.displayName)) {
-                html += '<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + '</span> ';
+            var meta = repoIssueMeta(item.issueKey, issueMap, item);
+            var authorDisp = repoItemAuthorDisplayName(item);
+            var parts = ['<span class="ujg-ua-time">' + time + "</span>", icon,
+                '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(typeLabel) + "</span>"];
+            if (authorDisp) {
+                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(authorDisp)) + "</span>");
             }
-            html += '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(utils.truncate(item.message || item.title || item.name || "", 50)) + '</span>';
-            html += '</div>';
+            if (item.issueKey) {
+                parts.push(utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                }));
+            }
+            if (meta.issueStatus) {
+                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(meta.issueStatus) + "</span>");
+            }
+            var repoMsg = item.message || item.title || item.name || "";
+            parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg whitespace-normal break-words min-w-0">' +
+                utils.escapeHtml(repoMsg) + "</span>");
+            if (meta.issueSummary && String(meta.issueSummary) !== String(repoMsg)) {
+                parts.push('<span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary whitespace-normal break-words min-w-0">' +
+                    utils.escapeHtml(meta.issueSummary) + "</span>");
+            }
+            html += '<div class="ujg-ua-repo-line">' + parts.join(" ") + "</div>";
         }
         html += '</div>';
         return html;
@@ -4206,7 +4773,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
                 html += chipsResult.html;
                 html += renderJiraBlock(dayData, issueMap);
-                html += renderRepoBlock(dayData);
+                html += renderRepoBlock(dayData, issueMap);
 
                 html += '</td>';
             }
@@ -4692,12 +5259,16 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     '<tr class="border-b border-border/50 hover:bg-muted/30">' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground whitespace-nowrap">' + r.date + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + r.time + '</td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[140px] min-w-0 whitespace-normal break-words" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' + utils.escapeHtml(r.issueKey) + '</td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                                class: "text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"
+                            }) : "") +
+                            "</td>" +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[200px] min-w-0 whitespace-normal break-words">' + utils.escapeHtml(r.summary) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold px-1 py-0 rounded ' + actionCls + '">' + utils.escapeHtml(r.action) + '</span></td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground truncate max-w-[180px]">' + utils.escapeHtml(r.detail) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground max-w-[180px] min-w-0 whitespace-normal break-words">' + utils.escapeHtml(r.detail) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-right font-medium text-foreground">' + hrs + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><button class="text-[9px] text-primary hover:underline ujg-ua-row-expand" data-idx="' + i + '">' + (isExp ? '&#9650;' : '&#9654;') + '</button></td>' +
                     '</tr>';
@@ -4705,7 +5276,11 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 if (isExp) {
                     html +=
                         '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
-                            '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span><span class="font-mono font-semibold text-primary">' + utils.escapeHtml(r.issueKey) + '</span><span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
+                            '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span>' +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                                class: "font-mono font-semibold text-primary ujg-ua-issue-key"
+                            }) : '<span class="font-mono font-semibold text-primary">-</span>') +
+                            '<span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
                             (r.author ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Автор:</span><span class="text-foreground">' + utils.escapeHtml(r.author) + '</span></div>' : '') +
@@ -4897,7 +5472,13 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         details += '<div class="grid gap-1 text-[11px]">';
         details += '<div><span class="text-muted-foreground">' + UI.repo + ':</span> <span class="font-semibold text-foreground">' + escapeHtml(item.repoName || "") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.branch + ':</span> <span class="text-foreground">' + escapeHtml(item.branchName || "-") + '</span></div>';
-        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> <span class="font-mono text-foreground">' + escapeHtml(item.issueKey || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> ' +
+            (item.issueKey
+                ? utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "font-mono text-foreground ujg-ua-issue-key"
+                })
+                : '<span class="font-mono text-foreground">-</span>') +
+            "</div>";
         details += '<div><span class="text-muted-foreground">' + UI.author + ':</span> <span class="text-foreground">' + escapeHtml(item.author || "-") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.reviewers + ':</span> <span class="text-foreground">' + escapeHtml((item.reviewers || []).join(", ") || "-") + '</span></div>';
         if (pullRequestId) {
@@ -4947,10 +5528,14 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + escapeHtml(time) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-semibold text-primary">' + escapeHtml(item.repoName || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground">' + escapeHtml(item.branchName || "") + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' + escapeHtml(item.issueKey || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' +
+                (item.issueKey ? utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "text-[11px] font-mono text-foreground ujg-ua-issue-key"
+                }) : "") +
+                "</td>";
             html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] truncate">' + escapeHtml(getDescription(item)) + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] truncate">' + escapeHtml(getStatusHash(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] min-w-0 whitespace-normal break-words">' + escapeHtml(getDescription(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] min-w-0 whitespace-normal break-all">' + escapeHtml(getStatusHash(item)) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-right"><button class="text-[10px] text-primary hover:underline ujg-ua-repo-row-expand" data-idx="' + index + '">' + (isExpanded ? UI.hide : UI.show) + "</button></td>";
             html += "</tr>";
 
@@ -5459,6 +6044,10 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
     }
 
+    function getDetailSelectedUsers(selectedUsers) {
+        return cloneUsers(currentUsers.length ? currentUsers : selectedUsers);
+    }
+
     function attachAsync(promiseLike, onDone, onFail) {
         if (promiseLike && typeof promiseLike.done === "function") {
             promiseLike.done(onDone);
@@ -5694,7 +6283,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                 repoItems: [],
                 users: {}
             };
-            detailInst.show(dateStr, dayData, data.issueMap);
+            detailInst.show(dateStr, dayData, data.issueMap, getDetailSelectedUsers(selectedUsers));
         });
 
         projBreakInst = mods.projectBreakdown.create();

@@ -391,6 +391,10 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
     }
 
+    function getDetailSelectedUsers(selectedUsers) {
+        return cloneUsers(currentUsers.length ? currentUsers : selectedUsers);
+    }
+
     function attachAsync(promiseLike, onDone, onFail) {
         if (promiseLike && typeof promiseLike.done === "function") {
             promiseLike.done(onDone);
@@ -626,7 +630,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                 repoItems: [],
                 users: {}
             };
-            detailInst.show(dateStr, dayData, data.issueMap);
+            detailInst.show(dateStr, dayData, data.issueMap, getDetailSelectedUsers(selectedUsers));
         });
 
         projBreakInst = mods.projectBreakdown.create();
