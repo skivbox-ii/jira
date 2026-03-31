@@ -3893,6 +3893,11 @@ function createDayDetailInteractiveStub() {
             (handlers[sel] || []).forEach(function(fn) {
                 fn.call(mockThis || {}, { target: mockThis || {} });
             });
+        },
+        triggerChange: function(sel, mockThis) {
+            (handlers[sel] || []).forEach(function(fn) {
+                fn.call(mockThis || {}, { target: mockThis || {} });
+            });
         }
     };
 }
@@ -3951,6 +3956,92 @@ test("day detail toggle switches to team view", function() {
 
     var html = stub.getHtml();
     assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should render timeline grid");
+});
+
+test("day detail user filter narrows issue view to one selected user", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "X-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: "alice only"
+        }, {
+            issueKey: "X-2",
+            timestamp: "2026-03-15T11:00:00.000Z",
+            author: { name: "u2", displayName: "Bob" },
+            timeSpentHours: 1,
+            comment: "bob only"
+        }]
+    }, {
+        "X-1": { key: "X-1", summary: "Alice task", status: "Open" },
+        "X-2": { key: "X-2", summary: "Bob task", status: "Open" }
+    }, users);
+
+    var html = stub.getHtml();
+    assert.match(html, /Все пользователи/);
+    assert.match(html, /Alice task/);
+    assert.match(html, /Bob task/);
+
+    stub.triggerChange(".ujg-ua-detail-user-filter", {
+        value: "sel-1"
+    });
+
+    html = stub.getHtml();
+    assert.doesNotMatch(html, /Alice task/);
+    assert.match(html, /Bob task/);
+});
+
+test("day detail user filter narrows team view to one column", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "X-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }, {
+            issueKey: "X-2",
+            timestamp: "2026-03-15T11:00:00.000Z",
+            author: { name: "u2", displayName: "Bob" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, {
+        "X-1": { key: "X-1", summary: "Alice task", status: "Open" },
+        "X-2": { key: "X-2", summary: "Bob task", status: "Open" }
+    }, users);
+
+    stub.triggerChange(".ujg-ua-detail-user-filter", {
+        value: "sel-1"
+    });
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+
+    var html = stub.getHtml();
+    var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
+    assert.equal(cols ? cols.length : 0, 1, "expected one user column after selecting a single user");
 });
 
 test("day detail team view builds one column per user", function() {
@@ -4398,6 +4489,25 @@ test("rendering keeps Jira calendar wired to DailyDetail and repo calendar wired
 
     harness.events.jiraSelect(null);
     assert.equal(harness.events.dailyHides, 1);
+});
+
+test("rendering with unified calendar syncs selected day to repo log", function() {
+    var harness = createRenderingHarness({
+        useUnifiedCalendar: true
+    });
+
+    assert.equal(harness.events.repoLogCalls.length, 1);
+    assert.equal(harness.events.repoLogCalls[0].selectedDate, null);
+
+    harness.events.jiraSelect("2026-03-09");
+    assert.equal(harness.events.dailyShows.length, 1);
+    assert.equal(harness.events.repoLogCalls.length, 2);
+    assert.equal(harness.events.repoLogCalls[1].selectedDate, "2026-03-09");
+
+    harness.events.jiraSelect(null);
+    assert.equal(harness.events.dailyHides, 1);
+    assert.equal(harness.events.repoLogCalls.length, 3);
+    assert.equal(harness.events.repoLogCalls[2].selectedDate, null);
 });
 
 test("rendering passes current selected users snapshot to day detail on date click", function() {

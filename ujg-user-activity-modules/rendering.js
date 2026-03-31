@@ -702,6 +702,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $contentArea.append(detailInst.$el);
 
         calendar.onSelectDate(function(dateStr) {
+            if (mods.unifiedCalendar && repoLogInst && repoActivity) {
+                repoLogInst.render(repoActivity, dateStr || null);
+            }
             if (!dateStr) {
                 detailInst.hide();
                 return;

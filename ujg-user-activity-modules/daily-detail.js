@@ -836,9 +836,61 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return html;
     }
 
+    function buildUserFilterOptions(selectedUsers) {
+        var normalizedUsers = (selectedUsers || []).map(function(user, index) {
+            var normalized = normalizeAuthor(user);
+            var baseLabel = normalized.displayName || normalized.name || normalized.key || ("Пользователь " + (index + 1));
+            return {
+                id: "sel-" + index,
+                user: normalized,
+                baseLabel: baseLabel,
+                suffix: normalized.key || normalized.name || normalized.accountId || String(index + 1)
+            };
+        });
+        var labelCounts = {};
+        normalizedUsers.forEach(function(option) {
+            labelCounts[option.baseLabel] = (labelCounts[option.baseLabel] || 0) + 1;
+        });
+        return normalizedUsers.map(function(option) {
+            return {
+                id: option.id,
+                user: option.user,
+                label: labelCounts[option.baseLabel] > 1
+                    ? option.baseLabel + " (" + option.suffix + ")"
+                    : option.baseLabel
+            };
+        });
+    }
+
+    function findUserFilterOption(selectedUsers, filterId) {
+        if (!filterId) return null;
+        var options = buildUserFilterOptions(selectedUsers);
+        for (var i = 0; i < options.length; i++) {
+            if (options[i].id === filterId) return options[i];
+        }
+        return null;
+    }
+
+    function renderUserFilter(selectedUsers, filterId) {
+        var options = buildUserFilterOptions(selectedUsers);
+        if (options.length <= 1) return "";
+        var html = '<label class="flex items-center gap-2 text-xs text-muted-foreground">';
+        html += '<span>Пользователь</span>';
+        html += '<select class="ujg-ua-detail-user-filter h-7 rounded border border-border bg-background px-2 text-xs text-foreground">';
+        html += '<option value="">Все пользователи</option>';
+        options.forEach(function(option) {
+            html += '<option value="' + utils.escapeHtml(option.id) + '"' +
+                (option.id === filterId ? ' selected="selected"' : "") +
+                ">" + utils.escapeHtml(option.label) + "</option>";
+        });
+        html += "</select></label>";
+        return html;
+    }
+
     function create() {
         var $el = $('<div class="dashboard-card overflow-hidden" style="display:none"></div>');
         var currentMode = "issue";
+        var currentUserFilterId = "";
         var lastArgs = null;
 
         function renderModeToggle(mode) {
@@ -853,11 +905,16 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         }
 
         function renderInner(date, dayData, issueMap, selectedUsers, mode) {
+            var selectedUserOption = findUserFilterOption(selectedUsers, currentUserFilterId);
+            if (!selectedUserOption) currentUserFilterId = "";
+            var issueFilterUsers = selectedUserOption ? [selectedUserOption.user] : [];
+            var timelineSelectedUsers = selectedUserOption ? [selectedUserOption.user] : (selectedUsers || []);
             var html = '<div class="p-5">' +
                 '<div class="flex items-center justify-between gap-2 mb-4 flex-wrap">' +
                 '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + "</h3>" +
                 '<div class="flex items-center gap-2">' +
                 renderModeToggle(mode) +
+                renderUserFilter(selectedUsers, currentUserFilterId) +
                 '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
                 '<span class="w-4 h-4">' + ICONS.x + "</span>" +
                 "</button></div></div>" +
@@ -870,11 +927,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             var repoActions = normalized.filter(function(action) {
                 return action.type === "repo";
             });
+            var filteredJiraActions = issueFilterUsers.length ? filterActionsBySelectedUsers(jiraActions, issueFilterUsers) : jiraActions;
+            var filteredRepoActions = issueFilterUsers.length ? filterActionsBySelectedUsers(repoActions, issueFilterUsers) : repoActions;
 
             if (normalized.length === 0) {
                 html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности за этот день</div>';
             } else if (mode === "team") {
-                var model = buildTimelineModel(normalized, selectedUsers, date);
+                var model = buildTimelineModel(normalized, timelineSelectedUsers, date);
                 html += renderTeamTimeline(model);
                 if (model.unmatched.length > 0) {
                     var unmatchedPart = groupActionsByIssue(model.unmatched);
@@ -890,13 +949,16 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     html += buildIssueGroupsHtml(undTeam.grouped, undTeam.unlinked);
                     html += "</div>";
                 }
-                var timelineRepoActions = filterActionsBySelectedUsers(repoActions, selectedUsers);
+                var timelineRepoActions = filterActionsBySelectedUsers(repoActions, timelineSelectedUsers);
                 if (timelineRepoActions.length > 0) {
                     html += renderRepoDaySections(timelineRepoActions);
                 }
             } else {
-                if (jiraActions.length > 0) {
-                    var split = splitTimedAndUntimed(jiraActions);
+                if (filteredJiraActions.length === 0 && filteredRepoActions.length === 0) {
+                    html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности для выбранного пользователя</div>';
+                }
+                if (filteredJiraActions.length > 0) {
+                    var split = splitTimedAndUntimed(filteredJiraActions);
                     var timedPart = groupActionsByIssue(split.timed);
                     html += buildIssueGroupsHtml(timedPart.grouped, timedPart.unlinked);
                     if (split.undated.length > 0) {
@@ -907,8 +969,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         html += "</div>";
                     }
                 }
-                if (repoActions.length > 0) {
-                    html += renderRepoDaySections(repoActions);
+                if (filteredRepoActions.length > 0) {
+                    html += renderRepoDaySections(filteredRepoActions);
                 }
             }
 
@@ -916,25 +978,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             return html;
         }
 
+        function rerender() {
+            if (lastArgs) {
+                $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
+                bindChrome();
+            }
+        }
+
         function bindChrome() {
             $el.find(".ujg-ua-detail-close").on("click", function() { hide(); });
             $el.find(".ujg-ua-detail-mode-issue").on("click", function() {
                 currentMode = "issue";
-                if (lastArgs) {
-                    $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
-                    bindChrome();
-                }
+                rerender();
             });
             $el.find(".ujg-ua-detail-mode-team").on("click", function() {
                 currentMode = "team";
-                if (lastArgs) {
-                    $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
-                    bindChrome();
-                }
+                rerender();
+            });
+            $el.find(".ujg-ua-detail-user-filter").on("change", function() {
+                currentUserFilterId = this && this.value != null ? String(this.value) : "";
+                rerender();
             });
         }
 
         function show(date, dayData, issueMap, selectedUsers) {
+            if (!findUserFilterOption(selectedUsers || [], currentUserFilterId)) {
+                currentUserFilterId = "";
+            }
             lastArgs = {
                 date: date,
                 dayData: dayData,
