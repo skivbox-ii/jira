@@ -53,10 +53,9 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     }
 
     function matchesStateUser(userLike, state) {
-        if (state.useStringUserFilter) {
-            return matchesRequestUsers(userLike, state.requestUsers);
-        }
-        return matchesSelectedUser(userLike, state.selectedUser);
+        void userLike;
+        void state;
+        return true;
     }
 
     function getUserLabel(userLike) {

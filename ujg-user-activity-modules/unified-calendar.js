@@ -229,7 +229,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 parts.push(objectLink);
             }
             if (authorDisp) {
-                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(authorDisp)) + "</span>");
+                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(authorDisp) + "</span>");
             }
             if (item.issueKey || meta.issueSummary) {
                 parts.push(renderIssueInlineRef(

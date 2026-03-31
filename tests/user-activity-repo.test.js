@@ -2636,7 +2636,7 @@ test("fetchRepoActivityForIssues resolves merged dev-status and keeps failed iss
     ]);
 });
 
-test("processRepoActivity builds commit and PR events for selected user", function() {
+test("processRepoActivity builds commit and PR events in range", function() {
     var mod = loadRepoDataProcessor();
     var issueMap = {
         "CORE-1": { key: "CORE-1", summary: "Test task" }
@@ -2807,6 +2807,87 @@ test("processRepoActivity matches multi-user selection passed as user objects ar
     assert.equal(repoActivity.items[0].issueKey, "CORE-2");
 });
 
+test("processRepoActivity hard-open keeps repo events from all authors in range", function() {
+    var mod = loadRepoDataProcessor();
+    var repoActivity = mod.processRepoActivity(
+        {
+            "CORE-OPEN": { key: "CORE-OPEN", summary: "Hard open task", status: "In Progress" }
+        },
+        {
+            "CORE-OPEN": {
+                detail: [{
+                    repositories: [{
+                        name: "core-open",
+                        commits: [{
+                            id: "a1",
+                            message: "Alice commit",
+                            authorTimestamp: "2026-03-18T09:00:00.000Z",
+                            author: { name: "alice", displayName: "Alice Dev" }
+                        }, {
+                            id: "b1",
+                            message: "Bob commit",
+                            authorTimestamp: "2026-03-18T10:00:00.000Z",
+                            author: { name: "bob", displayName: "Bob Dev" }
+                        }]
+                    }]
+                }]
+            }
+        },
+        { name: "alice", displayName: "Alice Dev" },
+        "2026-03-18",
+        "2026-03-18"
+    );
+
+    assert.deepEqual(normalize(repoActivity.items.map(function(item) {
+        return item.author;
+    })), ["Alice Dev", "Bob Dev"]);
+});
+
+test("processRepoActivity hard-open keeps reviewer activity from all participants in range", function() {
+    var mod = loadRepoDataProcessor();
+    var repoActivity = mod.processRepoActivity(
+        {
+            "CORE-OPEN-REV": { key: "CORE-OPEN-REV", summary: "Review stream", status: "In Progress" }
+        },
+        {
+            "CORE-OPEN-REV": {
+                detail: [{
+                    repositories: [{
+                        name: "core-open",
+                        url: "https://git/core-open",
+                        pullRequests: [{
+                            id: "91",
+                            title: "Shared review flow",
+                            status: "OPEN",
+                            createdDate: "2026-03-18T08:00:00.000Z",
+                            author: { name: "repo-author", displayName: "Repo Author" },
+                            reviewers: [{
+                                user: { accountId: "rev-1", displayName: "Reviewer One" },
+                                status: "NEEDS_WORK",
+                                lastReviewedDate: "2026-03-18T09:00:00.000Z"
+                            }, {
+                                user: { accountId: "rev-2", displayName: "Reviewer Two" },
+                                status: "APPROVED",
+                                approvedDate: "2026-03-18T10:00:00.000Z"
+                            }]
+                        }]
+                    }]
+                }]
+            }
+        },
+        { name: "alice", displayName: "Alice Dev" },
+        "2026-03-18",
+        "2026-03-18"
+    );
+
+    assert.deepEqual(normalize(repoActivity.items.map(function(item) {
+        return item.type;
+    })), ["pull_request_opened", "pull_request_needs_work", "pull_request_reviewed"]);
+    assert.deepEqual(normalize(repoActivity.items.map(function(item) {
+        return item.author;
+    })), ["Repo Author", "Reviewer One", "Reviewer Two"]);
+});
+
 test("processRepoActivity: repo items include issue summary and status from issueMap", function() {
     var mod = loadRepoDataProcessor();
     var issueMap = {
@@ -2862,7 +2943,7 @@ test("processRepoActivity: repo items include issue summary and status from issu
     assert.equal(prItem.pullRequestAuthor, "Commit Author");
 });
 
-test("processRepoActivity extracts branch commits and reviewer decisions for selected user", function() {
+test("processRepoActivity hard-open keeps branch commits reviewer decisions and PR author events", function() {
     var mod = loadRepoDataProcessor();
     var repoActivity = mod.processRepoActivity(
         {
@@ -2913,7 +2994,7 @@ test("processRepoActivity extracts branch commits and reviewer decisions for sel
 
     assert.deepEqual(normalize(repoActivity.items.map(function(item) {
         return item.type;
-    })), ["branch_commit", "pull_request_needs_work", "pull_request_reviewed"]);
+    })), ["pull_request_opened", "branch_commit", "pull_request_needs_work", "pull_request_reviewed"]);
     var branchCommit = repoActivity.items.find(function(item) {
         return item.type === "branch_commit";
     });
@@ -2921,7 +3002,7 @@ test("processRepoActivity extracts branch commits and reviewer decisions for sel
         return item.type === "pull_request_needs_work";
     });
     assert.equal(repoActivity.stats.totalCommits, 1);
-    assert.equal(repoActivity.stats.totalPullRequests, 2);
+    assert.equal(repoActivity.stats.totalPullRequests, 3);
     assert.equal(repoActivity.stats.totalBranchesTouched, 1);
     assert.equal(repoActivity.dayMap["2026-03-09"].countsByType.branch_commit, 1);
     assert.equal(repoActivity.repoMap["core-web"].branches.length, 1);
@@ -3056,7 +3137,7 @@ test("processRepoActivity emits unknown_dev_event for repo-ish unknown activity 
     assert.equal(repoActivity.dayMap["2026-03-11"].countsByType.unknown_dev_event, 1);
 });
 
-test("processRepoActivity keeps branch_update when there are no branch commits for selected user in range", function() {
+test("processRepoActivity keeps branch_update when there are no branch commits in range", function() {
     var mod = loadRepoDataProcessor();
     var repoActivity = mod.processRepoActivity(
         {
@@ -3437,6 +3518,31 @@ test("unified calendar repo line renders clickable commit hash link", function()
     assert.match(html, />557bbc5251<\/a>/);
 });
 
+test("unified calendar hard-open shows full repo author label", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var out = mod.render({
+        "2026-03-04": {
+            totalHours: 0,
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Ivanov Ivan Petrovich",
+                issueKey: "CORE-OPEN",
+                message: "full author visible"
+            }]
+        }
+    }, {}, [{ name: "alice", displayName: "Alice Dev" }], start, end);
+    var html = out.$el.html();
+
+    assert.match(html, /Ivanov Ivan Petrovich/);
+    assert.doesNotMatch(html, /class="ujg-ua-author">Ivanov<\/span>/);
+});
+
 test("unified calendar repo line keeps status without issue key and no dangling gap", function() {
     var mod = loadUnifiedCalendar(createHtmlJqueryStub());
     var start = new Date("2026-03-02T00:00:00.000Z");
@@ -3461,9 +3567,9 @@ test("unified calendar repo line keeps status without issue key and no dangling 
     var html = out.$el.html();
 
     assert.match(html, /<span class="ujg-ua-inline-status">Blocked<\/span>/);
-    assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice<\/span> <span class="ujg-ua-inline-status">Blocked<\/span>/);
+    assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice Dev<\/span> <span class="ujg-ua-inline-status">Blocked<\/span>/);
     assert.match(html, /<span class="[^"]*ujg-ua-repo-msg[^"]*">Refactor escape path<\/span>/);
-    assert.doesNotMatch(html, /Alice<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
+    assert.doesNotMatch(html, /Alice Dev<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
 });
 
 test("unified calendar updateDayCell rerenders updated day content", function() {
@@ -3558,7 +3664,7 @@ test("presentation consistency: repo author links and issue status align across 
     };
     loadDailyDetail($stub).create().show(dateStr, daySlice, issueMap, []);
 
-    assert.match(calHtml, /class="ujg-ua-author">Ivanov</);
+    assert.match(calHtml, /class="ujg-ua-author">Ivanov Ivan Petrovich<\/span>/);
     assert.match(detailHtml, /class="ujg-ua-author">Ivanov Ivan Petrovich<\/span>/);
     assert.match(calHtml, /jira\.example\.com\/browse\/PRES-9/);
     assert.match(detailHtml, /jira\.example\.com\/browse\/PRES-9/);
@@ -4184,7 +4290,7 @@ test("daily detail summary shows full issue title in panel html", function() {
     assert.equal(lastHtml.indexOf("…"), -1, "ellipsis should not appear in day-detail panel for issue title");
 });
 
-test("daily detail action line includes time author issue key and summary before comment label", function() {
+test("daily detail action line includes full author issue key and summary before comment label", function() {
     var lastHtml = "";
     var $stub = function() {
         return {
@@ -4220,7 +4326,7 @@ test("daily detail action line includes time author issue key and summary before
 
     assert.match(
         lastHtml,
-        /<span class="ujg-ua-time">\d{2}:\d{2}<\/span>\s*<span class="ujg-ua-author">Alice<\/span>\s*<a [^>]*>ORD-1<\/a>\s*<span [^>]*class="[^"]*ujg-ua-issue-summary[^"]*"[^>]*>Ordered task summary<\/span>\s*— Комментарий/
+        /<span class="ujg-ua-time">\d{2}:\d{2}<\/span>\s*<span class="ujg-ua-author">Alice Reviewer<\/span>\s*<a [^>]*>ORD-1<\/a>\s*<span [^>]*class="[^"]*ujg-ua-issue-summary[^"]*"[^>]*>Ordered task summary<\/span>\s*— Комментарий/
     );
 });
 
@@ -4334,7 +4440,44 @@ test("day detail toggle switches to team view", function() {
     assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should render timeline grid");
 });
 
-test("day detail user filter narrows issue view to one selected user", function() {
+test("day detail hard-open renders all actions without selected-user filter UI", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+
+    panel.show("2026-03-18", {
+        allWorklogs: [{
+            issueKey: "CORE-1",
+            timestamp: "2026-03-18T09:00:00.000Z",
+            author: { name: "alice", displayName: "Alice Dev" },
+            timeSpentHours: 1,
+            comment: "alice action"
+        }, {
+            issueKey: "CORE-2",
+            timestamp: "2026-03-18T10:00:00.000Z",
+            author: { name: "bob", displayName: "Bob Dev" },
+            timeSpentHours: 1,
+            comment: "bob action"
+        }],
+        allChanges: [],
+        allComments: [],
+        repoItems: []
+    }, {
+        "CORE-1": { key: "CORE-1", summary: "Alice task", status: "Open" },
+        "CORE-2": { key: "CORE-2", summary: "Bob task", status: "Open" }
+    }, [{ name: "alice", displayName: "Alice Dev" }]);
+
+    var html = stub.getHtml();
+    assert.match(html, /Alice task/);
+    assert.match(html, /Bob task/);
+    assert.match(html, /Alice Dev/);
+    assert.match(html, /Bob Dev/);
+    assert.equal(html.indexOf("ujg-ua-detail-user-filter"), -1);
+});
+
+test("day detail hard-open issue view keeps all actions after user-filter change attempt", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4364,7 +4507,7 @@ test("day detail user filter narrows issue view to one selected user", function(
     }, users);
 
     var html = stub.getHtml();
-    assert.match(html, /Все пользователи/);
+    assert.equal(html.indexOf("ujg-ua-detail-user-filter"), -1);
     assert.match(html, /Alice task/);
     assert.match(html, /Bob task/);
 
@@ -4373,11 +4516,11 @@ test("day detail user filter narrows issue view to one selected user", function(
     });
 
     html = stub.getHtml();
-    assert.doesNotMatch(html, /Alice task/);
+    assert.match(html, /Alice task/);
     assert.match(html, /Bob task/);
 });
 
-test("day detail user filter narrows team view to one column", function() {
+test("day detail hard-open team view keeps actual author columns after user-filter change attempt", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4417,10 +4560,11 @@ test("day detail user filter narrows team view to one column", function() {
 
     var html = stub.getHtml();
     var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
-    assert.equal(cols ? cols.length : 0, 1, "expected one user column after selecting a single user");
+    assert.equal(cols ? cols.length : 0, 2, "expected two user columns for two active authors");
+    assert.equal(html.indexOf("ujg-ua-detail-user-filter"), -1);
 });
 
-test("day detail user filter keeps repo activity matched by authorMeta", function() {
+test("day detail hard-open keeps repo activity visible by authorMeta", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4458,7 +4602,7 @@ test("day detail user filter keeps repo activity matched by authorMeta", functio
     assert.match(html, /core-api/);
 });
 
-test("day detail team view builds one column per user", function() {
+test("day detail team view builds one column per active author", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4499,7 +4643,8 @@ test("day detail team view builds one column per user", function() {
 
     var html = stub.getHtml();
     var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
-    assert.equal(cols ? cols.length : 0, 3, "expected three user columns for three selected users");
+    assert.equal(cols ? cols.length : 0, 2, "expected two user columns for two active authors");
+    assert.doesNotMatch(html, /Carol/);
 });
 
 test("day detail team view keeps separate columns for duplicate visible identifiers", function() {

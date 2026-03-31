@@ -35,7 +35,17 @@
 │       ├── 2026-03-29-dashboard-version-display-design.md
 │       ├── 2026-03-29-dashboard-version-display.md
 │       ├── 2026-03-29-widget-bootstrap-design.md
-│       └── 2026-03-29-widget-bootstrap.md
+│       ├── 2026-03-29-widget-bootstrap.md
+│       ├── 2026-03-30-story-browser-literal-port-design.md
+│       ├── 2026-03-30-story-browser-literal-port.md
+│       ├── 2026-03-31-day-sequential-pipeline-design.md
+│       ├── 2026-03-31-day-sequential-pipeline.md
+│       ├── 2026-03-31-multi-user-activity-dashboard-design.md
+│       ├── 2026-03-31-multi-user-activity-dashboard.md
+│       ├── 2026-03-31-user-activity-day-detail-views-design.md
+│       ├── 2026-03-31-user-activity-day-detail-views.md
+│       ├── 2026-04-01-user-activity-hard-open-diagnostics-design.md
+│       └── 2026-04-01-user-activity-hard-open-diagnostics.md
 ├── jira_attach_latest_assets.py
 ├── standalone/
 │   └── public/
