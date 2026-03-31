@@ -2115,8 +2115,43 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
         { icon: "trendingUp",   label: "Ø часов/день",   key: "avgHoursPerDay",  suffix: "ч" }
     ];
 
+    function formatHoursCell(hours) {
+        var n = hours == null ? 0 : Number(hours);
+        if (isNaN(n)) n = 0;
+        return (Math.round(n * 10) / 10) + "ч";
+    }
+
+    function buildUserStatsTableHtml(userStats) {
+        var keys = Object.keys(userStats).sort();
+        var rows = "";
+        for (var i = 0; i < keys.length; i++) {
+            var u = userStats[keys[i]];
+            var name = u && u.displayName != null ? String(u.displayName) : keys[i];
+            var activeDays = u && u.activeDays != null ? Number(u.activeDays) : 0;
+            var daysWithoutWorklogs = u && u.daysWithoutWorklogs != null ? Number(u.daysWithoutWorklogs) : 0;
+            var rowClass = daysWithoutWorklogs > 0 ? ' class="ujg-ua-stat-warn"' : "";
+            rows +=
+                "<tr" + rowClass + ">" +
+                "<td>" + utils.escapeHtml(name) + "</td>" +
+                "<td>" + formatHoursCell(u && u.totalHours) + "</td>" +
+                "<td>" + (isNaN(activeDays) ? 0 : activeDays) + "</td>" +
+                "<td>" + (isNaN(daysWithoutWorklogs) ? 0 : daysWithoutWorklogs) + "</td>" +
+                "</tr>";
+        }
+        return (
+            '<div class="ujg-ua-user-stats-table">' +
+            "<table>" +
+            "<tr><th>Пользователь</th><th>Часы</th><th>Активных дней</th><th>Без трудозатрат</th></tr>" +
+            rows +
+            "</table>" +
+            "</div>"
+        );
+    }
+
     function create() {
-        var $el = $('<div class="grid grid-cols-5 gap-2"></div>');
+        var $wrap = $('<div class="flex flex-col gap-2"></div>');
+        var $grid = $('<div class="grid grid-cols-5 gap-2"></div>');
+        $wrap.append($grid);
 
         function render(data) {
             var html = "";
@@ -2134,12 +2169,19 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
                         '</span>' +
                     '</div>';
             }
-            $el.html(html);
+            $grid.html(html);
+
+            $wrap.find(".ujg-ua-user-stats-table").remove();
+            var us = data.userStats;
+            var nUsers = us && typeof us === "object" ? Object.keys(us).length : 0;
+            if (nUsers > 1) {
+                $wrap.append(buildUserStatsTableHtml(us));
+            }
         }
 
-        render({ totalHours: 0, totalIssues: 0, totalProjects: 0, activeDays: 0, avgHoursDay: 0 });
+        render({ totalHours: 0, totalIssues: 0, totalProjects: 0, activeDays: 0, avgHoursPerDay: 0 });
 
-        return { $el: $el, render: render };
+        return { $el: $wrap, render: render };
     }
 
     return { create: create };
@@ -2878,12 +2920,14 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 var wl = worklogs[w];
                 var hrs = wl.timeSpentHours || 0;
                 var comment = wl.comment || "";
-                var h = String(Math.floor(Math.random() * 10) + 8).padStart(2, "0");
-                var m = String(Math.floor(Math.random() * 60)).padStart(2, "0");
+                var wlRawTs = wl.timestamp || wl.started || wl.date;
+                var wlTime = utils.formatTime(wlRawTs) || "";
+                var wlAuthor = wl.author && (wl.author.displayName || wl.author.name) || "";
                 rows.push({
-                    timestamp: wl.date + "T" + h + ":" + m,
+                    timestamp: wlRawTs || wl.date || "",
                     date: wl.date,
-                    time: h + ":" + m,
+                    time: wlTime,
+                    author: wlAuthor,
                     issueKey: issueKey,
                     project: project,
                     summary: summary,
@@ -2899,12 +2943,14 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 var field = ch.field || "";
                 var fromStr = ch.fromString || "";
                 var toStr = ch.toString || "";
-                var h2 = String(Math.floor(Math.random() * 10) + 8).padStart(2, "0");
-                var m2 = String(Math.floor(Math.random() * 60)).padStart(2, "0");
+                var chRawTs = ch.timestamp || ch.created || ch.date;
+                var chTime = utils.formatTime(chRawTs) || "";
+                var chAuthor = ch.author && (ch.author.displayName || ch.author.name) || "";
                 rows.push({
-                    timestamp: ch.date + "T" + h2 + ":" + m2,
+                    timestamp: chRawTs || ch.date || "",
                     date: ch.date,
-                    time: h2 + ":" + m2,
+                    time: chTime,
+                    author: chAuthor,
                     issueKey: issueKey,
                     project: project,
                     summary: summary,
@@ -3068,6 +3114,7 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         '<thead><tr class="hover:bg-transparent border-b border-border">' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[68px] text-left text-muted-foreground">Дата</th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[40px] text-left text-muted-foreground">Время</th>' +
+                            '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider min-w-[72px] max-w-[140px] text-left text-muted-foreground">Автор</th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[48px] text-left text-muted-foreground ujg-ua-th-project"></th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[84px] text-left text-muted-foreground ujg-ua-th-issue"></th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-muted-foreground ujg-ua-th-desc"></th>' +
@@ -3120,6 +3167,7 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     '<tr class="border-b border-border/50 hover:bg-muted/30">' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground whitespace-nowrap">' + r.date + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + r.time + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' + utils.escapeHtml(r.issueKey) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
@@ -3131,10 +3179,11 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
                 if (isExp) {
                     html +=
-                        '<tr class="bg-muted/20"><td colspan="9" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
+                        '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span><span class="font-mono font-semibold text-primary">' + utils.escapeHtml(r.issueKey) + '</span><span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
+                            (r.author ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Автор:</span><span class="text-foreground">' + utils.escapeHtml(r.author) + '</span></div>' : '') +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Дата/Время:</span><span class="font-mono text-foreground">' + r.date + ' ' + r.time + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Детали:</span><span class="text-foreground break-all">' + utils.escapeHtml(r.detail) + '</span></div>' +
                             (r.hours != null ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Часы:</span><span class="font-bold text-foreground">' + r.hours + 'ч</span></div>' : '') +

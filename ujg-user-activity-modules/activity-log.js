@@ -17,12 +17,14 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 var wl = worklogs[w];
                 var hrs = wl.timeSpentHours || 0;
                 var comment = wl.comment || "";
-                var h = String(Math.floor(Math.random() * 10) + 8).padStart(2, "0");
-                var m = String(Math.floor(Math.random() * 60)).padStart(2, "0");
+                var wlRawTs = wl.timestamp || wl.started || wl.date;
+                var wlTime = utils.formatTime(wlRawTs) || "";
+                var wlAuthor = wl.author && (wl.author.displayName || wl.author.name) || "";
                 rows.push({
-                    timestamp: wl.date + "T" + h + ":" + m,
+                    timestamp: wlRawTs || wl.date || "",
                     date: wl.date,
-                    time: h + ":" + m,
+                    time: wlTime,
+                    author: wlAuthor,
                     issueKey: issueKey,
                     project: project,
                     summary: summary,
@@ -38,12 +40,14 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 var field = ch.field || "";
                 var fromStr = ch.fromString || "";
                 var toStr = ch.toString || "";
-                var h2 = String(Math.floor(Math.random() * 10) + 8).padStart(2, "0");
-                var m2 = String(Math.floor(Math.random() * 60)).padStart(2, "0");
+                var chRawTs = ch.timestamp || ch.created || ch.date;
+                var chTime = utils.formatTime(chRawTs) || "";
+                var chAuthor = ch.author && (ch.author.displayName || ch.author.name) || "";
                 rows.push({
-                    timestamp: ch.date + "T" + h2 + ":" + m2,
+                    timestamp: chRawTs || ch.date || "",
                     date: ch.date,
-                    time: h2 + ":" + m2,
+                    time: chTime,
+                    author: chAuthor,
                     issueKey: issueKey,
                     project: project,
                     summary: summary,
@@ -207,6 +211,7 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         '<thead><tr class="hover:bg-transparent border-b border-border">' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[68px] text-left text-muted-foreground">Дата</th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[40px] text-left text-muted-foreground">Время</th>' +
+                            '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider min-w-[72px] max-w-[140px] text-left text-muted-foreground">Автор</th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[48px] text-left text-muted-foreground ujg-ua-th-project"></th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider w-[84px] text-left text-muted-foreground ujg-ua-th-issue"></th>' +
                             '<th class="h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-muted-foreground ujg-ua-th-desc"></th>' +
@@ -259,6 +264,7 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     '<tr class="border-b border-border/50 hover:bg-muted/30">' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground whitespace-nowrap">' + r.date + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + r.time + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' + utils.escapeHtml(r.issueKey) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
@@ -270,10 +276,11 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
                 if (isExp) {
                     html +=
-                        '<tr class="bg-muted/20"><td colspan="9" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
+                        '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span><span class="font-mono font-semibold text-primary">' + utils.escapeHtml(r.issueKey) + '</span><span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
+                            (r.author ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Автор:</span><span class="text-foreground">' + utils.escapeHtml(r.author) + '</span></div>' : '') +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Дата/Время:</span><span class="font-mono text-foreground">' + r.date + ' ' + r.time + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Детали:</span><span class="text-foreground break-all">' + utils.escapeHtml(r.detail) + '</span></div>' +
                             (r.hours != null ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Часы:</span><span class="font-bold text-foreground">' + r.hours + 'ч</span></div>' : '') +
