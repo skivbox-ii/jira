@@ -190,6 +190,20 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return String(a.name || a.key || a.displayName || "").trim() || "__unknown__";
     }
 
+    function authorIdentity(author) {
+        var a = normalizeAuthor(author);
+        return {
+            key: normalizedToken(a.key),
+            name: normalizedToken(a.name),
+            displayName: normalizedToken(a.displayName)
+        };
+    }
+
+    function authorIdentitySignature(author) {
+        var id = authorIdentity(author);
+        return [id.key, id.name, id.displayName].join("\0");
+    }
+
     function groupActionsByUser(actions, selectedUsers) {
         var list = actions || [];
         if (selectedUsers && selectedUsers.length) {
@@ -318,84 +332,110 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return html;
     }
 
-    function filterActionsBySelectedUsers(actions, selectedUsers) {
+    function filterActionsBySelectedUsers(actions, selectedUsers, selectedColumns) {
         if (!selectedUsers || !selectedUsers.length) return actions || [];
-        var allow = {};
-        selectedUsers.forEach(function(u) {
-            collectUserTokens(u).forEach(function(t) {
-                allow[t] = true;
-            });
-        });
+        selectedColumns = selectedColumns || buildSelectedColumns(selectedUsers);
         return (actions || []).filter(function(a) {
-            var tokens = collectUserTokens(a.author);
-            for (var i = 0; i < tokens.length; i++) {
-                if (allow[tokens[i]]) return true;
-            }
-            return false;
+            return findTimelineCandidateColumnIds(a.author, selectedColumns).length > 0;
         });
     }
 
-    function columnKeyFromUser(u) {
-        return authorMatchKey(normalizeAuthor(u));
+    function buildSelectedColumns(selectedUsers) {
+        return (selectedUsers || []).map(function(user, index) {
+            var normalized = normalizeAuthor(user);
+            return {
+                id: "sel-" + index,
+                user: normalized,
+                identity: authorIdentity(normalized),
+                tokens: collectUserTokens(normalized)
+            };
+        });
+    }
+
+    function buildDerivedColumns(actions) {
+        var seen = {};
+        var columns = [];
+        (actions || []).forEach(function(action) {
+            var normalized = normalizeAuthor(action.author);
+            var sig = authorIdentitySignature(normalized);
+            if (seen[sig]) return;
+            seen[sig] = true;
+            columns.push({
+                id: "act-" + columns.length,
+                user: normalized,
+                identity: authorIdentity(normalized),
+                tokens: collectUserTokens(normalized)
+            });
+        });
+        return columns;
+    }
+
+    function matchColumnIdsByField(columns, field, value) {
+        var token = normalizedToken(value);
+        if (!token) return [];
+        var ids = [];
+        (columns || []).forEach(function(column) {
+            if (column.identity[field] === token) ids.push(column.id);
+        });
+        return ids;
+    }
+
+    function matchColumnIdsByTokens(columns, author) {
+        var tokens = collectUserTokens(author);
+        if (!tokens.length) return [];
+        var ids = [];
+        (columns || []).forEach(function(column) {
+            for (var i = 0; i < tokens.length; i++) {
+                if (column.tokens.indexOf(tokens[i]) !== -1) {
+                    ids.push(column.id);
+                    return;
+                }
+            }
+        });
+        return ids;
+    }
+
+    function findTimelineCandidateColumnIds(author, columns) {
+        var normalized = normalizeAuthor(author);
+        var ids = matchColumnIdsByField(columns, "key", normalized.key);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "name", normalized.name);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "displayName", normalized.displayName);
+        if (ids.length) return ids;
+        return matchColumnIdsByTokens(columns, normalized);
+    }
+
+    function findTimelineColumnId(author, columns) {
+        var ids = findTimelineCandidateColumnIds(author, columns);
+        return ids.length === 1 ? ids[0] : "";
     }
 
     var TEAM_TIMELINE_HEIGHT_PX = 400;
 
     function buildTimelineModel(actions, selectedUsers, dateStr) {
         selectedUsers = selectedUsers || [];
-        var filtered = filterActionsBySelectedUsers(actions, selectedUsers);
+        var selectedColumns = selectedUsers.length ? buildSelectedColumns(selectedUsers) : [];
+        var filtered = filterActionsBySelectedUsers(actions, selectedUsers, selectedColumns);
         var split = splitTimedAndUntimed(filtered);
         var timed = split.timed.slice().sort(byTimestamp);
 
+        var columnDefs = selectedColumns.length ? selectedColumns : buildDerivedColumns(timed);
         var users = [];
-        if (selectedUsers.length) {
-            users = selectedUsers.slice();
-        } else {
-            var seenU = Object.create(null);
-            timed.forEach(function(a) {
-                var k = authorMatchKey(a.author);
-                if (!seenU[k]) {
-                    seenU[k] = true;
-                    users.push({
-                        key: (a.author && a.author.key) || "",
-                        name: (a.author && a.author.name) || k,
-                        displayName: (a.author && a.author.displayName) || k
-                    });
-                }
-            });
-        }
-
         var columns = {};
-        var orderedKeys = [];
-        users.forEach(function(u) {
-            var ck = columnKeyFromUser(u);
-            if (!columns[ck]) {
-                columns[ck] = { user: u, items: [] };
-                orderedKeys.push(ck);
-            }
+        columnDefs.forEach(function(column) {
+            users.push(Object.assign({ id: column.id }, column.user));
+            columns[column.id] = { user: column.user, items: [] };
         });
-
-        function actionColumnKey(action) {
-            var ak = authorMatchKey(action.author);
-            if (columns[ak]) return ak;
-            var aTok = collectUserTokens(action.author);
-            for (var ui = 0; ui < users.length; ui++) {
-                var ck = columnKeyFromUser(users[ui]);
-                var uTok = collectUserTokens(users[ui]);
-                for (var j = 0; j < aTok.length; j++) {
-                    if (uTok.indexOf(aTok[j]) !== -1) return ck;
-                }
-            }
-            return orderedKeys[0] || ak;
-        }
+        var unmatched = [];
 
         timed.forEach(function(a) {
-            var ck = actionColumnKey(a);
-            if (!columns[ck]) {
-                columns[ck] = { user: { key: "", name: ck, displayName: ck }, items: [] };
-                orderedKeys.push(ck);
+            var columnId = findTimelineColumnId(a.author, columnDefs);
+            if (!columnId) {
+                if (selectedColumns.length) unmatched.push(a);
+                return;
             }
-            columns[ck].items.push(a);
+            columns[columnId].items.push(a);
         });
 
         var minMs = Infinity;
@@ -443,12 +483,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
         return {
             users: users,
-            orderedKeys: orderedKeys,
             columns: columns,
             markers: markers,
             rangeStartMs: rangeStartMs,
             rangeEndMs: rangeEndMs,
-            undated: split.undated
+            undated: split.undated,
+            unmatched: unmatched
         };
     }
 
@@ -463,9 +503,9 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         });
 
         var colsHtml = "";
-        model.orderedKeys.forEach(function(key) {
-            var col = model.columns[key];
-            var label = utils.escapeHtml(surname(col.user.displayName || col.user.name || key));
+        model.users.forEach(function(user) {
+            var col = model.columns[user.id];
+            var label = utils.escapeHtml(surname(user.displayName || user.name || user.id));
             colsHtml += '<div class="ujg-ua-detail-user-col">';
             colsHtml += '<div class="ujg-ua-detail-user-col-label text-xs font-semibold text-muted-foreground">' + label + "</div>";
             colsHtml += '<div class="ujg-ua-detail-user-col-track" style="height:' + h + 'px">';
@@ -527,6 +567,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             } else if (mode === "team") {
                 var model = buildTimelineModel(normalized, selectedUsers, date);
                 html += renderTeamTimeline(model);
+                if (model.unmatched.length > 0) {
+                    var unmatchedPart = groupActionsByIssue(model.unmatched);
+                    html += '<div class="ujg-ua-detail-unmatched mt-3 pt-2 border-t border-dashed border-border">';
+                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Не удалось сопоставить с выбранным пользователем</div>';
+                    html += buildIssueGroupsHtml(unmatchedPart.grouped, unmatchedPart.unlinked);
+                    html += "</div>";
+                }
                 if (model.undated.length > 0) {
                     var undTeam = groupActionsByIssue(model.undated);
                     html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';

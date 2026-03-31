@@ -1725,11 +1725,12 @@ function createRenderingHarness(options) {
             create: function() {
                 return {
                     $el: jquery.createNode("DailyDetail"),
-                    show: function(dateStr, dayData, issueMap) {
+                    show: function(dateStr, dayData, issueMap, selectedUsers) {
                         events.dailyShows.push({
                             dateStr: dateStr,
                             dayData: dayData,
-                            issueMap: issueMap
+                            issueMap: issueMap,
+                            selectedUsers: selectedUsers
                         });
                     },
                     hide: function() {
@@ -3360,6 +3361,62 @@ test("day detail team view builds one column per user", function() {
     assert.equal(cols ? cols.length : 0, 3, "expected three user columns for three selected users");
 });
 
+test("day detail team view keeps separate columns for duplicate visible identifiers", function() {
+    var mod = loadDailyDetail();
+    var selectedUsers = [
+        { key: "u1", name: "shared-login", displayName: "Alex Same" },
+        { key: "u2", name: "shared-login", displayName: "Alex Same" }
+    ];
+    var model = mod.buildTimelineModel([{
+        issueKey: "COL-1",
+        timestamp: "2026-03-16T09:00:00.000Z",
+        type: "worklog",
+        author: { key: "u1", name: "shared-login", displayName: "Alex Same" },
+        timeSpentHours: 1
+    }, {
+        issueKey: "COL-2",
+        timestamp: "2026-03-16T10:00:00.000Z",
+        type: "worklog",
+        author: { key: "u2", name: "shared-login", displayName: "Alex Same" },
+        timeSpentHours: 1
+    }], selectedUsers, "2026-03-16");
+
+    assert.equal(model.users.length, 2);
+    assert.equal(Object.keys(model.columns).length, 2);
+    assert.deepEqual(
+        normalize(model.users.map(function(user) {
+            return model.columns[user.id].items.map(function(item) {
+                return item.issueKey;
+            });
+        })),
+        [["COL-1"], ["COL-2"]]
+    );
+});
+
+test("day detail team view leaves ambiguous author unmatched instead of mislabeling", function() {
+    var mod = loadDailyDetail();
+    var selectedUsers = [
+        { key: "u1", name: "u1", displayName: "Alex Same" },
+        { key: "u2", name: "u2", displayName: "Alex Same" }
+    ];
+    var model = mod.buildTimelineModel([{
+        issueKey: "AMB-1",
+        timestamp: "2026-03-16T09:30:00.000Z",
+        type: "comment",
+        author: { displayName: "Alex Same" },
+        body: "ambiguous"
+    }], selectedUsers, "2026-03-16");
+
+    assert.deepEqual(
+        normalize(model.users.map(function(user) {
+            return model.columns[user.id].items.length;
+        })),
+        [0, 0]
+    );
+    assert.equal(model.unmatched.length, 1);
+    assert.equal(model.unmatched[0].issueKey, "AMB-1");
+});
+
 test("day detail team view puts untimed actions in separate block", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
@@ -3620,6 +3677,19 @@ test("rendering keeps Jira calendar wired to DailyDetail and repo calendar wired
 
     harness.events.jiraSelect(null);
     assert.equal(harness.events.dailyHides, 1);
+});
+
+test("rendering passes current selected users snapshot to day detail on date click", function() {
+    var harness = createRenderingHarness();
+
+    harness.triggerUserChange({ name: "fresh-user", displayName: "Fresh User" });
+    harness.events.jiraSelect("2026-03-08");
+
+    assert.equal(harness.events.dailyShows.length, 1);
+    assert.deepEqual(normalize(harness.events.dailyShows[0].selectedUsers), [{
+        name: "fresh-user",
+        displayName: "Fresh User"
+    }]);
 });
 
 test("rendering keeps Jira blocks visible when repo loading fails", function() {
