@@ -82,7 +82,7 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
         }
 
         function notifyChange() {
-            if (onChange) onChange(selectedUsers.slice());
+            if (onChange) onChange(selectedUsers);
         }
 
         function renderResults() {
