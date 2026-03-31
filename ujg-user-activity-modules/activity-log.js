@@ -26,6 +26,7 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     time: wlTime,
                     author: wlAuthor,
                     issueKey: issueKey,
+                    status: issue.status || "",
                     project: project,
                     summary: summary,
                     action: "Worklog",
@@ -49,6 +50,7 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     time: chTime,
                     author: chAuthor,
                     issueKey: issueKey,
+                    status: issue.status || "",
                     project: project,
                     summary: summary,
                     action: field === "status" ? "Status" : field,
@@ -267,11 +269,15 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[140px] min-w-0 whitespace-normal break-words" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' +
-                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                            (r.issueKey ? utils.renderIssueLinkWithStatus(r.issueKey, r.issueKey, r.status, {
                                 class: "text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"
                             }) : "") +
                             "</td>" +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[200px] min-w-0 whitespace-normal break-words">' + utils.escapeHtml(r.summary) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[200px] min-w-0 whitespace-normal break-words">' +
+                            utils.renderIssueSummaryText(r.summary, r.status, {
+                                class: "text-foreground"
+                            }) +
+                        '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold px-1 py-0 rounded ' + actionCls + '">' + utils.escapeHtml(r.action) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground max-w-[180px] min-w-0 whitespace-normal break-words">' + utils.escapeHtml(r.detail) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-right font-medium text-foreground">' + hrs + '</td>' +
@@ -282,10 +288,11 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     html +=
                         '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span>' +
-                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
-                                class: "font-mono font-semibold text-primary ujg-ua-issue-key"
-                            }) : '<span class="font-mono font-semibold text-primary">-</span>') +
-                            '<span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
+                            utils.renderIssueRef(r.issueKey, r.summary, r.status, {
+                                keyClass: "font-mono font-semibold text-primary",
+                                summaryClass: "text-foreground",
+                                emptyLabel: "-"
+                            }) + '</div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
                             (r.author ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Автор:</span><span class="text-foreground">' + utils.escapeHtml(r.author) + '</span></div>' : '') +

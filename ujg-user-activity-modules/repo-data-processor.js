@@ -73,6 +73,17 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         });
     }
 
+    function getReviewerDetails(reviewers) {
+        return normalizeArray(reviewers).map(function(reviewer) {
+            return {
+                name: getUserLabel(reviewer),
+                status: reviewer && (reviewer.status || reviewer.approvalStatus || "")
+            };
+        }).filter(function(item) {
+            return !!item.name;
+        });
+    }
+
     function normalizeTimestamp(value) {
         if (value === undefined || value === null || value === "") return null;
         if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
@@ -154,8 +165,13 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         item.message = item.message || "";
         item.status = item.status || "";
         item.hash = item.hash || "";
+        item.commitUrl = item.commitUrl || "";
+        item.pullRequestId = item.pullRequestId || "";
+        item.pullRequestUrl = item.pullRequestUrl || "";
+        item.pullRequestAuthor = item.pullRequestAuthor || "";
         item.author = item.author || getUserLabel(item.userLike || item.raw && (item.raw.author || item.raw.user || item.raw.actor || item.raw.updatedBy)) || "";
         item.reviewers = item.reviewers || getReviewerLabels(item.raw && item.raw.reviewers);
+        item.reviewerDetails = item.reviewerDetails || getReviewerDetails(item.raw && item.raw.reviewers);
         item.raw = item.raw || null;
 
         state.items.push(item);
@@ -180,6 +196,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     function extractCommitEvents(state, issueKey, issueInfo, repo) {
         (repo.commits || []).forEach(function(commit) {
             if (!matchesStateUser(commit.author, state)) return;
+            var commitHash = commit.id || commit.hash || commit.commitId || "";
             pushEvent(state, {
                 type: "commit",
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
@@ -190,7 +207,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 repoUrl: repo.url || "",
                 branchName: commit.branchName || "",
                 message: commit.message || "",
-                hash: commit.id || commit.hash || commit.commitId || "",
+                hash: commitHash,
+                commitUrl: utils.buildBitbucketCommitUrl(repo.url || "", commitHash, commit.url || commit.links),
                 title: commit.message || "",
                 userLike: commit.author,
                 raw: commit
@@ -231,6 +249,33 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             item.createdDate ||
             item.timestamp
         );
+    }
+
+    function buildRequestUsers(selectedUser) {
+        var values = [];
+
+        function pushValue(value) {
+            value = normalizeUserValue(value);
+            if (!value || values.indexOf(value) >= 0) return;
+            values.push(value);
+        }
+
+        function pushUserLike(userLike) {
+            if (!userLike) return;
+            if (typeof userLike === "string" || typeof userLike === "number") {
+                pushValue(userLike);
+                return;
+            }
+            collectUserValues(userLike).forEach(pushValue);
+        }
+
+        if (Array.isArray(selectedUser)) {
+            selectedUser.forEach(pushUserLike);
+        } else {
+            pushUserLike(selectedUser);
+        }
+
+        return values;
     }
 
     function hasConcretePullRequestActivity(state, pullRequests) {
@@ -349,6 +394,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             var repoUrl = repo.url || "";
             var prTitle = pr.name || pr.title || pr.id || "";
             var prStatus = normalizeUserValue(pr.status);
+            var prAuthor = getUserLabel(pr.author);
             var hasTypedAuthorEvent = false;
 
             if (matchesStateUser(pr.author, state)) {
@@ -362,6 +408,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
                     pullRequestId: pr.id || pr.key || "",
+                    pullRequestUrl: utils.buildBitbucketPullRequestUrl(repoUrl, pr.id || pr.key || "", pr.url || pr.links),
+                    pullRequestAuthor: prAuthor,
                     title: prTitle,
                     status: pr.status || "",
                     userLike: pr.author,
@@ -380,6 +428,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
                         pullRequestId: pr.id || pr.key || "",
+                        pullRequestUrl: utils.buildBitbucketPullRequestUrl(repoUrl, pr.id || pr.key || "", pr.url || pr.links),
+                        pullRequestAuthor: prAuthor,
                         title: prTitle,
                         status: pr.status || "",
                         userLike: pr.author,
@@ -397,6 +447,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
                         pullRequestId: pr.id || pr.key || "",
+                        pullRequestUrl: utils.buildBitbucketPullRequestUrl(repoUrl, pr.id || pr.key || "", pr.url || pr.links),
+                        pullRequestAuthor: prAuthor,
                         title: prTitle,
                         status: pr.status || "",
                         userLike: pr.author,
@@ -416,6 +468,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
                         pullRequestId: pr.id || pr.key || "",
+                        pullRequestUrl: utils.buildBitbucketPullRequestUrl(repoUrl, pr.id || pr.key || "", pr.url || pr.links),
+                        pullRequestAuthor: prAuthor,
                         title: prTitle,
                         status: pr.status || "",
                         userLike: pr.author,
@@ -442,10 +496,13 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
                     pullRequestId: pr.id || pr.key || "",
+                    pullRequestUrl: utils.buildBitbucketPullRequestUrl(repoUrl, pr.id || pr.key || "", pr.url || pr.links),
+                    pullRequestAuthor: prAuthor,
                     title: prTitle,
                     status: reviewer.status || reviewer.approvalStatus || "",
                     userLike: reviewer,
                     reviewers: getReviewerLabels(pr.reviewers),
+                    reviewerDetails: getReviewerDetails(pr.reviewers),
                     raw: pr
                 });
             });
@@ -478,6 +535,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
 
             (branch.commits || []).forEach(function(commit) {
                 if (!matchesStateUser(commit.author, state)) return;
+                var commitHash = commit.id || commit.hash || commit.commitId || "";
                 pushEvent(state, {
                     type: "branch_commit",
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
@@ -488,7 +546,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     repoUrl: repo.url || "",
                     branchName: branchName,
                     message: commit.message || "",
-                    hash: commit.id || commit.hash || commit.commitId || "",
+                    hash: commitHash,
+                    commitUrl: utils.buildBitbucketCommitUrl(repo.url || "", commitHash, commit.url || commit.links),
                     title: commit.message || "",
                     userLike: commit.author,
                     raw: commit
@@ -500,9 +559,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     function processRepoActivity(issueMap, issueDevStatusMap, selectedUser, startDate, endDate) {
         var useStringUserFilter = typeof selectedUser === "string" || Array.isArray(selectedUser);
         var requestUsers = useStringUserFilter
-            ? (Array.isArray(selectedUser)
-                ? selectedUser.map(function(u) { return (u || "").toLowerCase(); })
-                : [(selectedUser || "").toLowerCase()])
+            ? buildRequestUsers(selectedUser)
             : null;
         var state = {
             useStringUserFilter: useStringUserFilter,

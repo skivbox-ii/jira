@@ -23,6 +23,10 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return 0;
     }
 
+    function byTimestampDesc(a, b) {
+        return byTimestamp(b, a);
+    }
+
     function normalizeAuthor(author) {
         if (!author) return { key: "", name: "", displayName: "", accountId: "", userName: "" };
         if (typeof author === "string") {
@@ -77,6 +81,14 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             issueSummary: (issue && issue.summary) || (repoItem && repoItem.issueSummary) || "",
             issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || ""
         };
+    }
+
+    function renderActionIssueRef(action, keyClass, summaryClass) {
+        if (!action || (!action.issueKey && !action.issueSummary)) return "";
+        return utils.renderIssueRef(action.issueKey, action.issueSummary, action.issueStatus, {
+            keyClass: keyClass || "font-mono text-xs font-semibold text-primary shrink-0",
+            summaryClass: summaryClass || "text-foreground font-medium min-w-0"
+        });
     }
 
     function normalizeDayActions(dayData, issueMap) {
@@ -143,7 +155,20 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 author: repoAuthor,
                 type: "repo",
                 repoType: r.type || "commit",
-                message: r.message || r.title || r.name || ""
+                repoName: r.repoName || "",
+                repoUrl: r.repoUrl || "",
+                branchName: r.branchName || "",
+                message: r.message || r.title || r.name || "",
+                title: r.title || "",
+                status: r.status || "",
+                hash: r.hash || "",
+                commitUrl: r.commitUrl || "",
+                pullRequestId: r.pullRequestId || "",
+                pullRequestUrl: r.pullRequestUrl || "",
+                pullRequestAuthor: r.pullRequestAuthor || "",
+                reviewers: (r.reviewers || []).slice(),
+                reviewerDetails: (r.reviewerDetails || []).slice(),
+                raw: r.raw || null
             });
         });
 
@@ -263,9 +288,16 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     function renderActionHtml(action) {
         var time = utils.formatTime(action.timestamp);
         var authEsc = utils.escapeHtml(surname(action.author && action.author.displayName));
+        var issueRef = renderActionIssueRef(
+            action,
+            "font-mono text-xs font-semibold text-primary shrink-0",
+            "text-foreground font-medium min-w-0"
+        );
         var html = '<div class="ujg-ua-detail-action">';
         html += '<span class="ujg-ua-time">' + utils.escapeHtml(time) + '</span> ';
-        html += '<span class="ujg-ua-author">' + authEsc + "</span> — ";
+        html += '<span class="ujg-ua-author">' + authEsc + "</span>";
+        if (issueRef) html += " " + issueRef;
+        html += " — ";
 
         switch (action.type) {
             case "worklog": {
@@ -278,6 +310,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 break;
             }
             case "change":
+                html += "Статус ";
                 html += '<span class="text-warning">' + utils.escapeHtml(action.fromString || "") + "</span>";
                 html += " → ";
                 html += '<span class="text-success">' + utils.escapeHtml(action.toString || "") + "</span>";
@@ -292,7 +325,11 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             case "repo": {
                 var rt = String(action.repoType || "commit").toLowerCase();
                 var typeLabel = REPO_LABELS[rt] || rt;
+                var objectLink = renderRepoObjectLink(action);
                 html += utils.escapeHtml(typeLabel);
+                if (objectLink) {
+                    html += " " + objectLink;
+                }
                 var st = action.issueStatus && String(action.issueStatus).trim();
                 if (st) {
                     html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(st) + "</span>";
@@ -330,11 +367,18 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             var key = keys[ki];
             var entry = grouped[key];
             var summary = (entry[0] && entry[0].issueSummary) || "";
+            var status = (entry[0] && entry[0].issueStatus) || "";
 
             html += '<div class="ujg-ua-detail-issue">';
             html += '<div class="ujg-ua-detail-issue-header flex items-start gap-2">';
-            html += utils.renderIssueLink(key, key, 'class="font-mono text-xs font-semibold text-primary shrink-0 ujg-ua-issue-key"');
-            html += '<span class="text-foreground font-medium min-w-0 ujg-ua-detail-issue-summary">' + utils.escapeHtml(summary) + "</span>";
+            html += renderActionIssueRef({
+                issueKey: key,
+                issueSummary: summary,
+                issueStatus: status
+            }, "font-mono text-xs font-semibold text-primary shrink-0", "text-foreground font-medium min-w-0 ujg-ua-detail-issue-summary");
+            if (status) {
+                html += '<span class="ujg-ua-inline-status shrink-0">' + utils.escapeHtml(status) + "</span>";
+            }
             html += "</div>";
             for (var gi = 0; gi < entry.length; gi++) {
                 html += renderActionHtml(entry[gi]);
@@ -350,6 +394,173 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             }
             html += "</div>";
         }
+        return html;
+    }
+
+    function authorDisplayName(author) {
+        var normalized = normalizeAuthor(author);
+        return normalized.displayName || normalized.name || normalized.key || "";
+    }
+
+    function isCommitRepoType(repoType) {
+        var type = String(repoType || "").toLowerCase();
+        return type === "commit" || type === "branch_commit";
+    }
+
+    function isPullRequestRepoType(repoType) {
+        return String(repoType || "").toLowerCase().indexOf("pull_request_") === 0;
+    }
+
+    function renderRepoObjectLink(action) {
+        if (!action) return "";
+        if (isCommitRepoType(action.repoType) && action.commitUrl && action.hash) {
+            return utils.renderExternalLink(action.commitUrl, utils.shortHash(action.hash, 10), {
+                class: "font-mono text-primary font-semibold ujg-ua-commit-link",
+                title: action.hash
+            });
+        }
+        if (isPullRequestRepoType(action.repoType) && action.pullRequestUrl && action.pullRequestId) {
+            return utils.renderExternalLink(action.pullRequestUrl, "#" + action.pullRequestId, {
+                class: "font-mono text-primary font-semibold ujg-ua-commit-link",
+                title: "Открыть pull request"
+            });
+        }
+        return "";
+    }
+
+    function renderRepoIssueCell(action) {
+        if (!action || (!action.issueKey && !action.issueSummary)) {
+            return '<span class="text-muted-foreground">-</span>';
+        }
+        var html = utils.renderIssueRef(action.issueKey, action.issueSummary, action.issueStatus, {
+            keyClass: "font-mono text-primary text-[11px]",
+            summaryClass: "block text-[10px] text-foreground/80 ujg-ua-detail-issue-summary"
+        });
+        if (action.issueStatus) {
+            html += '<div><span class="ujg-ua-inline-status">' + utils.escapeHtml(action.issueStatus) + "</span></div>";
+        }
+        return html;
+    }
+
+    function renderRepoPlaceCell(action) {
+        var repoName = utils.escapeHtml(action && action.repoName || "-");
+        var branchName = utils.escapeHtml(action && action.branchName || "");
+        var html = '<div class="font-semibold text-foreground">' + repoName + "</div>";
+        if (branchName) {
+            html += '<div class="text-[10px] text-muted-foreground font-mono">' + branchName + "</div>";
+        }
+        return html;
+    }
+
+    function renderReviewerSummary(action) {
+        var reviewerDetails = action && action.reviewerDetails || [];
+        if (reviewerDetails.length) {
+            return reviewerDetails.map(function(item) {
+                return item.status
+                    ? item.name + " (" + item.status + ")"
+                    : item.name;
+            }).join(", ");
+        }
+        return (action && action.reviewers || []).join(", ");
+    }
+
+    function renderRepoSection(title, headHtml, bodyHtml) {
+        return '<div class="ujg-ua-detail-repo-section mt-3">' +
+            '<div class="ujg-ua-detail-repo-title">' + utils.escapeHtml(title) + "</div>" +
+            '<div class="ujg-ua-detail-repo-table-wrap"><table class="ujg-ua-detail-repo-table">' +
+            "<thead><tr>" + headHtml + "</tr></thead>" +
+            "<tbody>" + bodyHtml + "</tbody></table></div></div>";
+    }
+
+    function renderCommitRows(actions) {
+        return actions.map(function(action) {
+            var author = authorDisplayName(action.author) || "-";
+            var objectLink = renderRepoObjectLink(action);
+            return "<tr>" +
+                '<td class="font-mono text-muted-foreground whitespace-nowrap">' + utils.escapeHtml(utils.formatTime(action.timestamp)) + "</td>" +
+                '<td><span class="ujg-ua-author">' + utils.escapeHtml(author) + "</span></td>" +
+                '<td class="font-mono">' + (objectLink || utils.escapeHtml(utils.shortHash(action.hash, 10) || "-")) + "</td>" +
+                "<td>" + renderRepoPlaceCell(action) + "</td>" +
+                "<td>" + renderRepoIssueCell(action) + "</td>" +
+                '<td class="whitespace-normal break-words">' + utils.escapeHtml(action.message || action.title || "-") + "</td>" +
+                "</tr>";
+        }).join("");
+    }
+
+    function renderPullRequestRows(actions) {
+        return actions.map(function(action) {
+            var objectLink = renderRepoObjectLink(action);
+            var prAuthor = action.pullRequestAuthor || authorDisplayName(action.author) || "-";
+            var actor = authorDisplayName(action.author) || "-";
+            var reviewers = renderReviewerSummary(action) || "-";
+            var typeLabel = REPO_LABELS[String(action.repoType || "").toLowerCase()] || action.repoType || "";
+            return "<tr>" +
+                '<td class="font-mono text-muted-foreground whitespace-nowrap">' + utils.escapeHtml(utils.formatTime(action.timestamp)) + "</td>" +
+                '<td><span class="ujg-ua-inline-status">' + utils.escapeHtml(typeLabel) + "</span></td>" +
+                '<td class="font-mono">' + (objectLink || utils.escapeHtml(action.pullRequestId ? "#" + action.pullRequestId : "-")) + "</td>" +
+                '<td class="whitespace-normal break-words">' + utils.escapeHtml(action.title || action.message || "-") + "</td>" +
+                '<td>' + utils.escapeHtml(action.status || "-") + "</td>" +
+                '<td><span class="ujg-ua-author">' + utils.escapeHtml(prAuthor) + "</span></td>" +
+                '<td><span class="ujg-ua-author">' + utils.escapeHtml(actor) + "</span></td>" +
+                '<td class="whitespace-normal break-words">' + utils.escapeHtml(reviewers) + "</td>" +
+                "<td>" + renderRepoPlaceCell(action) + "</td>" +
+                "<td>" + renderRepoIssueCell(action) + "</td>" +
+                "</tr>";
+        }).join("");
+    }
+
+    function renderOtherRepoRows(actions) {
+        return actions.map(function(action) {
+            var typeLabel = REPO_LABELS[String(action.repoType || "").toLowerCase()] || action.repoType || "";
+            return "<tr>" +
+                '<td class="font-mono text-muted-foreground whitespace-nowrap">' + utils.escapeHtml(utils.formatTime(action.timestamp)) + "</td>" +
+                '<td><span class="ujg-ua-inline-status">' + utils.escapeHtml(typeLabel) + "</span></td>" +
+                '<td><span class="ujg-ua-author">' + utils.escapeHtml(authorDisplayName(action.author) || "-") + "</span></td>" +
+                "<td>" + renderRepoPlaceCell(action) + "</td>" +
+                "<td>" + renderRepoIssueCell(action) + "</td>" +
+                '<td class="whitespace-normal break-words">' + utils.escapeHtml(action.message || action.title || "-") + "</td>" +
+                "</tr>";
+        }).join("");
+    }
+
+    function renderRepoDaySections(actions) {
+        var repoActions = (actions || []).slice().sort(byTimestampDesc);
+        if (!repoActions.length) return "";
+        var commits = repoActions.filter(function(action) {
+            return isCommitRepoType(action.repoType);
+        });
+        var pullRequests = repoActions.filter(function(action) {
+            return isPullRequestRepoType(action.repoType);
+        });
+        var other = repoActions.filter(function(action) {
+            return !isCommitRepoType(action.repoType) && !isPullRequestRepoType(action.repoType);
+        });
+        var html = '<div class="ujg-ua-detail-repo-day mt-4 pt-3 border-t border-border">' +
+            '<div class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Bitbucket за день</div>';
+
+        if (commits.length) {
+            html += renderRepoSection(
+                "Коммиты",
+                "<th>Время</th><th>Автор</th><th>Commit</th><th>Репозиторий</th><th>Задача</th><th>Сообщение</th>",
+                renderCommitRows(commits)
+            );
+        }
+        if (pullRequests.length) {
+            html += renderRepoSection(
+                "Pull requests",
+                "<th>Время</th><th>Событие</th><th>PR</th><th>Заголовок</th><th>Статус</th><th>Автор PR</th><th>Кто сделал</th><th>Проверяющие</th><th>Репозиторий</th><th>Задача</th>",
+                renderPullRequestRows(pullRequests)
+            );
+        }
+        if (other.length) {
+            html += renderRepoSection(
+                "Прочая repo-активность",
+                "<th>Время</th><th>Тип</th><th>Кто</th><th>Репозиторий</th><th>Задача</th><th>Описание</th>",
+                renderOtherRepoRows(other)
+            );
+        }
+
+        html += "</div>";
         return html;
     }
 
@@ -440,6 +651,25 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     var TIMELINE_STACK_NEAR_MS = 90 * 1000;
     var TIMELINE_STACK_STEP_PX = 10;
     var TIMELINE_CARD_EST_HEIGHT_PX = 64;
+
+    function timelineMaxStackOffsetPx(items) {
+        var sorted = (items || []).slice().sort(byTimestamp);
+        var anchorMs = NaN;
+        var stackInCluster = 0;
+        var maxOffset = 0;
+        sorted.forEach(function(a) {
+            var ms = Date.parse(String(a.timestamp || ""));
+            if (isNaN(ms)) return;
+            if (isNaN(anchorMs) || ms - anchorMs > TIMELINE_STACK_NEAR_MS) {
+                anchorMs = ms;
+                stackInCluster = 0;
+            } else {
+                stackInCluster += 1;
+                maxOffset = Math.max(maxOffset, stackInCluster * TIMELINE_STACK_STEP_PX);
+            }
+        });
+        return maxOffset;
+    }
 
     function layoutTimelineCardTops(items, h, rangeStartMs, span) {
         var sorted = (items || []).slice().sort(byTimestamp);
@@ -547,10 +777,19 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     function renderTeamTimeline(model) {
         var h = TEAM_TIMELINE_HEIGHT_PX;
         var span = model.rangeEndMs - model.rangeStartMs || 1;
+        var maxStackOffsetPx = 0;
+
+        model.users.forEach(function(user) {
+            var col = model.columns[user.id];
+            maxStackOffsetPx = Math.max(maxStackOffsetPx, timelineMaxStackOffsetPx(col.items));
+        });
+
+        var baseHeight = h + maxStackOffsetPx;
+        var trackH = h + maxStackOffsetPx * 2 + TIMELINE_CARD_EST_HEIGHT_PX;
 
         var markersHtml = "";
         model.markers.forEach(function(mk) {
-            var topPx = Math.round(mk.ratio * h);
+            var topPx = Math.round(mk.ratio * baseHeight);
             markersHtml += '<div class="ujg-ua-detail-time-marker" style="top:' + topPx + 'px"></div>';
         });
 
@@ -558,14 +797,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             var col = model.columns[user.id];
             return {
                 user: user,
-                rows: layoutTimelineCardTops(col.items, h, model.rangeStartMs, span)
+                rows: layoutTimelineCardTops(col.items, baseHeight, model.rangeStartMs, span)
             };
         });
-        var trackH = h;
         colLayouts.forEach(function(layout) {
             layout.rows.forEach(function(row) {
                 if (row.topPx != null) {
-                    trackH = Math.max(trackH, row.topPx + TIMELINE_CARD_EST_HEIGHT_PX);
+                    trackH = Math.max(trackH, row.topPx + TIMELINE_CARD_EST_HEIGHT_PX + 4);
                 }
             });
         });
@@ -626,6 +864,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 '<div class="space-y-2">';
 
             var normalized = normalizeDayActions(dayData, issueMap);
+            var jiraActions = normalized.filter(function(action) {
+                return action.type !== "repo";
+            });
+            var repoActions = normalized.filter(function(action) {
+                return action.type === "repo";
+            });
 
             if (normalized.length === 0) {
                 html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности за этот день</div>';
@@ -646,16 +890,25 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     html += buildIssueGroupsHtml(undTeam.grouped, undTeam.unlinked);
                     html += "</div>";
                 }
+                var timelineRepoActions = filterActionsBySelectedUsers(repoActions, selectedUsers);
+                if (timelineRepoActions.length > 0) {
+                    html += renderRepoDaySections(timelineRepoActions);
+                }
             } else {
-                var split = splitTimedAndUntimed(normalized);
-                var timedPart = groupActionsByIssue(split.timed);
-                html += buildIssueGroupsHtml(timedPart.grouped, timedPart.unlinked);
-                if (split.undated.length > 0) {
-                    var undIss = groupActionsByIssue(split.undated);
-                    html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
-                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
-                    html += buildIssueGroupsHtml(undIss.grouped, undIss.unlinked);
-                    html += "</div>";
+                if (jiraActions.length > 0) {
+                    var split = splitTimedAndUntimed(jiraActions);
+                    var timedPart = groupActionsByIssue(split.timed);
+                    html += buildIssueGroupsHtml(timedPart.grouped, timedPart.unlinked);
+                    if (split.undated.length > 0) {
+                        var undIss = groupActionsByIssue(split.undated);
+                        html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
+                        html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
+                        html += buildIssueGroupsHtml(undIss.grouped, undIss.unlinked);
+                        html += "</div>";
+                    }
+                }
+                if (repoActions.length > 0) {
+                    html += renderRepoDaySections(repoActions);
                 }
             }
 

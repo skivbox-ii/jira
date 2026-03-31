@@ -8,6 +8,18 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
     var MONTHS_RU = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
     var MONTHS_FULL_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
     var PROJECT_COLORS = ["#3B82F6", "#06B6D4", "#F59E0B", "#EC4899", "#8B5CF6", "#10B981", "#F97316", "#6366F1"];
+    var DONE_STATUSES = [
+        "done",
+        "closed",
+        "resolved",
+        "готово",
+        "закрыт",
+        "закрыта",
+        "завершен",
+        "завершён",
+        "завершена",
+        "выполнено"
+    ];
 
     function log() {
         if (CONFIG.debug && window.console) {
@@ -98,6 +110,158 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         if (!url) return escapeHtml(text);
         return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
             (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
+    }
+
+    function renderExternalLink(url, label, extraAttrs) {
+        var href = String(url || "").trim();
+        var text = label != null ? String(label) : href;
+        var attrs = normalizeLinkAttrs(extraAttrs);
+        if (!href) return escapeHtml(text);
+        return '<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer"' +
+            (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
+    }
+
+    function joinClassNames() {
+        var seen = {};
+        var out = [];
+        for (var i = 0; i < arguments.length; i++) {
+            String(arguments[i] || "").split(/\s+/).forEach(function(token) {
+                if (!token || seen[token]) return;
+                seen[token] = true;
+                out.push(token);
+            });
+        }
+        return out.join(" ");
+    }
+
+    function getStatusName(status) {
+        if (!status) return "";
+        if (typeof status === "string") return String(status).trim();
+        if (status.name != null) return String(status.name).trim();
+        if (status.statusCategory && status.statusCategory.name != null) {
+            return String(status.statusCategory.name).trim();
+        }
+        return "";
+    }
+
+    function isDoneStatus(status) {
+        var name = getStatusName(status);
+        if (!name) return false;
+        return DONE_STATUSES.indexOf(String(name).toLowerCase()) >= 0;
+    }
+
+    function getIssueStatusTitle(status) {
+        var name = getStatusName(status);
+        return name ? "Текущий статус: " + name : "";
+    }
+
+    function renderIssueLinkWithStatus(issueKey, label, status, extraAttrs) {
+        if (extraAttrs != null && typeof extraAttrs !== "object") {
+            return renderIssueLink(issueKey, label, extraAttrs);
+        }
+        var attrs = Object.assign({}, extraAttrs || {});
+        var title = attrs.title || getIssueStatusTitle(status);
+        attrs.class = joinClassNames(attrs.class, isDoneStatus(status) ? "ujg-ua-issue-done" : "");
+        if (title) attrs.title = title;
+        else delete attrs.title;
+        return renderIssueLink(issueKey, label, attrs);
+    }
+
+    function renderIssueSummaryText(summary, status, extraAttrs) {
+        var text = summary != null ? String(summary) : "";
+        if (!text) return "";
+        if (extraAttrs != null && typeof extraAttrs !== "object") {
+            var rawAttrs = normalizeLinkAttrs(extraAttrs);
+            return '<span' + (rawAttrs ? " " + rawAttrs : "") + ">" + escapeHtml(text) + "</span>";
+        }
+        var attrs = Object.assign({}, extraAttrs || {});
+        var title = attrs.title || getIssueStatusTitle(status);
+        attrs.class = joinClassNames(attrs.class, isDoneStatus(status) ? "ujg-ua-issue-done" : "");
+        if (title) attrs.title = title;
+        else delete attrs.title;
+        var attrString = normalizeLinkAttrs(attrs);
+        return '<span' + (attrString ? " " + attrString : "") + ">" + escapeHtml(text) + "</span>";
+    }
+
+    function renderIssueRef(issueKey, summary, status, options) {
+        options = options || {};
+        var title = options.title || getIssueStatusTitle(status);
+        var parts = [];
+        if (issueKey) {
+            parts.push(renderIssueLinkWithStatus(issueKey, options.keyLabel || issueKey, status, {
+                class: joinClassNames("ujg-ua-issue-key", options.keyClass),
+                title: title
+            }));
+        }
+        if (summary) {
+            parts.push(renderIssueSummaryText(summary, status, {
+                class: joinClassNames("ujg-ua-issue-summary", options.summaryClass),
+                title: title
+            }));
+        }
+        if (!parts.length && options.emptyLabel) {
+            parts.push(escapeHtml(options.emptyLabel));
+        }
+        return parts.join(options.separator != null ? options.separator : " ");
+    }
+
+    function pickFirstUrl() {
+        for (var i = 0; i < arguments.length; i++) {
+            var value = arguments[i];
+            if (value && typeof value === "object") {
+                if (Array.isArray(value)) {
+                    if (!value.length) continue;
+                    value = value[0];
+                } else if (value.href) {
+                    value = value.href;
+                } else if (value.url) {
+                    value = value.url;
+                } else if (Array.isArray(value.self) && value.self.length) {
+                    value = value.self[0];
+                } else {
+                    continue;
+                }
+            }
+            var url = String(value || "").trim();
+            if (url) return url;
+        }
+        return "";
+    }
+
+    function buildBitbucketCommitUrl(repoUrl, commitId, explicitUrl) {
+        var direct = pickFirstUrl(
+            explicitUrl,
+            explicitUrl && explicitUrl.href,
+            explicitUrl && explicitUrl.self,
+            explicitUrl && explicitUrl.self && explicitUrl.self[0] && explicitUrl.self[0].href
+        );
+        if (direct) return direct;
+        var base = String(repoUrl || "").trim().replace(/\/$/, "");
+        var hash = String(commitId || "").trim();
+        if (!base || !hash) return "";
+        return base + "/commits/" + encodeURIComponent(hash);
+    }
+
+    function buildBitbucketPullRequestUrl(repoUrl, pullRequestId, explicitUrl) {
+        var direct = pickFirstUrl(
+            explicitUrl,
+            explicitUrl && explicitUrl.href,
+            explicitUrl && explicitUrl.self,
+            explicitUrl && explicitUrl.self && explicitUrl.self[0] && explicitUrl.self[0].href
+        );
+        if (direct) return direct;
+        var base = String(repoUrl || "").trim().replace(/\/$/, "");
+        var id = String(pullRequestId || "").trim();
+        if (!base || !id) return "";
+        return base + "/pull-requests/" + encodeURIComponent(id);
+    }
+
+    function shortHash(value, maxLen) {
+        var text = String(value || "").trim();
+        var len = Number(maxLen || 10);
+        if (!text) return "";
+        if (!isFinite(len) || len <= 0) len = 10;
+        return text.length <= len ? text : text.substring(0, len);
     }
 
     function getProjectKey(issueKey) {
@@ -211,6 +375,16 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         getJiraBaseUrl: getJiraBaseUrl,
         buildIssueUrl: buildIssueUrl,
         renderIssueLink: renderIssueLink,
+        renderExternalLink: renderExternalLink,
+        getStatusName: getStatusName,
+        isDoneStatus: isDoneStatus,
+        getIssueStatusTitle: getIssueStatusTitle,
+        renderIssueLinkWithStatus: renderIssueLinkWithStatus,
+        renderIssueSummaryText: renderIssueSummaryText,
+        renderIssueRef: renderIssueRef,
+        buildBitbucketCommitUrl: buildBitbucketCommitUrl,
+        buildBitbucketPullRequestUrl: buildBitbucketPullRequestUrl,
+        shortHash: shortHash,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
         getDefaultPeriod: getDefaultPeriod,

@@ -157,8 +157,16 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         renderShell();
     }
 
+    function teamPickerEnabled() {
+        return !!(mods && mods.teamStore && mods.teamPicker && typeof mods.teamPicker.create === "function");
+    }
+
     function teamSyncEnabled() {
-        return !!(mods && mods.teamStore && mods.teamPicker && mods.multiUserPicker);
+        return !!(teamPickerEnabled() && mods.multiUserPicker);
+    }
+
+    function teamManagerEnabled() {
+        return !!(mods && mods.teamManager && typeof mods.teamManager.create === "function");
     }
 
     function syncUsersFromTeams(options) {
@@ -260,7 +268,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     }
 
     function setupTeamPicker($header) {
-        if (!teamSyncEnabled()) return;
+        if (!teamPickerEnabled()) return;
         if (teamPickerInst && teamPickerInst.destroy) {
             teamPickerInst.destroy();
             teamPickerInst = null;
@@ -270,6 +278,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             mode: "multi",
             teams: currentTeams,
             selectedTeamIds: currentTeamIds.slice(),
+            emptyMultiLabel: "Выбор команд",
             onChange: function(nextTeamIds) {
                 currentTeamIds = (nextTeamIds || []).map(String);
                 syncUsersFromTeams({ source: "team-sync" });
@@ -314,7 +323,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     }
 
     function openTeamManager($header) {
-        if (!teamSyncEnabled() || !mods || !mods.teamManager || typeof mods.teamManager.create !== "function") return;
+        if (!teamManagerEnabled()) return;
         if (!$popupHost) return;
         closeTeamManager();
         teamManagerCtrl = mods.teamManager.create($popupHost, function() {
@@ -334,8 +343,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         $container.empty().addClass("bg-background");
 
-        var canManageTeams =
-            teamSyncEnabled() && mods && mods.teamManager && typeof mods.teamManager.create === "function";
+        var canManageTeams = teamManagerEnabled();
         var teamsButtonHtml = canManageTeams
             ? '<button class="ujg-ua-teams-btn ml-auto h-5 px-1.5 rounded border border-border text-[9px] font-medium text-foreground hover:bg-muted flex items-center gap-0.5">' +
                   utils.icon("settings", "w-2.5 h-2.5") +
@@ -418,7 +426,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $popupHost = $('<div class="ujg-ua-popup-host"></div>');
         $container.append($popupHost);
 
-        if (teamSyncEnabled()) {
+        if (teamPickerEnabled()) {
             teamStoreRef = mods.teamStore;
             mods.teamStore.loadTeams().always(function() {
                 setupTeamPicker($header);
@@ -575,7 +583,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                     requestUsers.length === 1
                         ? Object.assign({}, requestUsers[0])
                         : requestUsers.map(function(user) {
-                              return user.name;
+                              return Object.assign({}, user);
                           });
 
                 attachAsync(
@@ -594,9 +602,17 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
                         if (repoActivity && repoActivity.dayMap) {
                             Object.keys(repoActivity.dayMap).forEach(function(dateKey) {
-                                if (processed.dayMap[dateKey]) {
-                                    processed.dayMap[dateKey].repoItems = repoActivity.dayMap[dateKey].items || [];
+                                if (!processed.dayMap[dateKey]) {
+                                    processed.dayMap[dateKey] = {
+                                        users: {},
+                                        allWorklogs: [],
+                                        allChanges: [],
+                                        allComments: [],
+                                        totalHours: 0,
+                                        repoItems: []
+                                    };
                                 }
+                                processed.dayMap[dateKey].repoItems = (repoActivity.dayMap[dateKey].items || []).slice();
                             });
                         }
 

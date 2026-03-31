@@ -197,6 +197,37 @@ test("user-activity utils: issue link escapes object attrs", function() {
     );
 });
 
+test("user-activity utils: builds bitbucket URLs and short hash", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(
+        utils.buildBitbucketCommitUrl("https://bitbucket/repo-a/", "557bbc52515"),
+        "https://bitbucket/repo-a/commits/557bbc52515"
+    );
+    assert.equal(
+        utils.buildBitbucketPullRequestUrl("https://bitbucket/repo-a", "229"),
+        "https://bitbucket/repo-a/pull-requests/229"
+    );
+    assert.equal(utils.shortHash("557bbc52515"), "557bbc5251");
+});
+
+test("user-activity utils: done issue ref adds strike class and status tooltip", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    var html = utils.renderIssueRef("ABC-123", "Closed task", "Done");
+
+    assert.equal(utils.isDoneStatus({ name: "Done" }), true);
+    assert.equal(utils.isDoneStatus("Resolved"), true);
+    assert.equal(utils.isDoneStatus("Open"), false);
+    assert.match(html, /ujg-ua-issue-done/);
+    assert.match(html, /title="Текущий статус: Done"/);
+    assert.match(html, /Closed task/);
+});
+
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
     var captured = [];
     var $ = createJqueryStub(function(options) {
@@ -230,6 +261,7 @@ test("user-activity API: activity JQL exclusive upper bound includes end date", 
 });
 
 function loadRepoDataProcessor() {
+    var u = uaUtilsForLinks();
     return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "repo-data-processor.js"), {
         _ujgUA_config: {},
         _ujgUA_utils: {
@@ -243,7 +275,9 @@ function loadRepoDataProcessor() {
                 var month = String(date.getMonth() + 1).padStart(2, "0");
                 var day = String(date.getDate()).padStart(2, "0");
                 return year + "-" + month + "-" + day;
-            }
+            },
+            buildBitbucketCommitUrl: u.buildBitbucketCommitUrl,
+            buildBitbucketPullRequestUrl: u.buildBitbucketPullRequestUrl
         }
     });
 }
@@ -944,8 +978,16 @@ function loadRepoLog(jquery, utilsOverrides, configOverrides) {
         _ujgUA_utils: Object.assign({
             escapeHtml: u.escapeHtml,
             renderIssueLink: u.renderIssueLink,
+            renderExternalLink: u.renderExternalLink,
+            renderIssueRef: u.renderIssueRef,
+            renderIssueLinkWithStatus: u.renderIssueLinkWithStatus,
+            renderIssueSummaryText: u.renderIssueSummaryText,
             buildIssueUrl: u.buildIssueUrl,
-            getJiraBaseUrl: u.getJiraBaseUrl
+            getJiraBaseUrl: u.getJiraBaseUrl,
+            getStatusName: u.getStatusName,
+            isDoneStatus: u.isDoneStatus,
+            getIssueStatusTitle: u.getIssueStatusTitle,
+            shortHash: u.shortHash
         }, utilsOverrides)
     });
 }
@@ -986,8 +1028,16 @@ function loadUnifiedCalendar(jquery, utilsOverrides) {
             },
             escapeHtml: u.escapeHtml,
             renderIssueLink: u.renderIssueLink,
+            renderExternalLink: u.renderExternalLink,
+            renderIssueRef: u.renderIssueRef,
+            renderIssueLinkWithStatus: u.renderIssueLinkWithStatus,
+            renderIssueSummaryText: u.renderIssueSummaryText,
             buildIssueUrl: u.buildIssueUrl,
-            getJiraBaseUrl: u.getJiraBaseUrl
+            getJiraBaseUrl: u.getJiraBaseUrl,
+            getStatusName: u.getStatusName,
+            isDoneStatus: u.isDoneStatus,
+            getIssueStatusTitle: u.getIssueStatusTitle,
+            shortHash: u.shortHash
         }, utilsOverrides)
     }, { requestAnimationFrame: function(fn) { if (fn) fn(); } });
 }
@@ -1112,9 +1162,15 @@ function loadActivityLog(jquery, utilsOverrides, documentRef) {
         _ujgUA_utils: Object.assign({
             escapeHtml: u.escapeHtml,
             renderIssueLink: u.renderIssueLink,
+            renderIssueRef: u.renderIssueRef,
+            renderIssueLinkWithStatus: u.renderIssueLinkWithStatus,
+            renderIssueSummaryText: u.renderIssueSummaryText,
             buildIssueUrl: u.buildIssueUrl,
             getJiraBaseUrl: u.getJiraBaseUrl,
             getProjectKey: u.getProjectKey,
+            getStatusName: u.getStatusName,
+            isDoneStatus: u.isDoneStatus,
+            getIssueStatusTitle: u.getIssueStatusTitle,
             formatTime: function(ts) {
                 if (!ts) return "";
                 var date = new Date(ts);
@@ -1361,6 +1417,7 @@ test("user-activity team manager button opens popup and refreshes team picker", 
     var mod = loadRendering(jqStub.$, {}, docStub);
     var teams = [{ id: "team-1", name: "Alpha", memberKeys: ["u1"] }];
     var teamPickerSnapshots = [];
+    var teamPickerCreateOptions = [];
     var popupParent = null;
     var popupOnChange = null;
     var root = jqStub.createNode("root");
@@ -1429,6 +1486,7 @@ test("user-activity team manager button opens popup and refreshes team picker", 
         teamPicker: {
             create: function(options) {
                 teamPickerSnapshots.push(normalize(options.teams || []));
+                teamPickerCreateOptions.push(normalize(options));
                 return {
                     $el: jqStub.createNode("TeamPicker"),
                     setSelectedTeamIds: function() {},
@@ -1457,6 +1515,7 @@ test("user-activity team manager button opens popup and refreshes team picker", 
     assert.ok(teamsButtonNode, "teams button should have a click binding node");
     assert.ok(popupHostNode, "popup host should be mounted into the container");
     assert.deepEqual(teamPickerSnapshots, [[{ id: "team-1", name: "Alpha", memberKeys: ["u1"] }]]);
+    assert.equal(teamPickerCreateOptions[0].emptyMultiLabel, "Выбор команд");
 
     triggerClick(teamsButtonNode);
     assert.equal(popupParent && popupParent.__el, popupHostNode);
@@ -1464,6 +1523,89 @@ test("user-activity team manager button opens popup and refreshes team picker", 
 
     popupOnChange([{ id: "team-2", name: "Beta", memberKeys: ["u2"] }]);
     assert.deepEqual(teamPickerSnapshots[1], [{ id: "team-2", name: "Beta", memberKeys: ["u2"] }]);
+});
+
+test("user-activity team manager button stays visible without multi-user sync", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    var root = jqStub.createNode("root");
+    var popupParent = null;
+
+    function resolvedAlways(value) {
+        var d = createDeferred();
+        d.always = function(handler) {
+            d.done(handler);
+            d.fail(handler);
+            return d;
+        };
+        d.resolve(value);
+        return d.promise();
+    }
+
+    mod.init(root, {
+        userPicker: {
+            create: function() {
+                return {
+                    $el: jqStub.createNode("UserPicker"),
+                    setFromUrl: function() {
+                        return resolvedAlways();
+                    },
+                    getSelected: function() {
+                        return null;
+                    }
+                };
+            }
+        },
+        dateRangePicker: {
+            create: function(onChange) {
+                var period = { start: "2026-03-01", end: "2026-03-31" };
+                if (onChange) onChange(period);
+                return {
+                    $el: jqStub.createNode("DateRangePicker"),
+                    getPeriod: function() {
+                        return period;
+                    }
+                };
+            }
+        },
+        teamStore: {
+            loadTeams: function() {
+                return resolvedAlways([]);
+            },
+            getTeams: function() {
+                return [];
+            },
+            getDisplayNameByKey: function() {
+                return {};
+            }
+        },
+        teamPicker: {
+            create: function() {
+                return {
+                    $el: jqStub.createNode("TeamPicker"),
+                    setSelectedTeamIds: function() {},
+                    destroy: function() {}
+                };
+            }
+        },
+        teamManager: {
+            create: function(parent) {
+                popupParent = parent;
+                return { close: function() {} };
+            }
+        }
+    });
+
+    var headerNode = root.__el.children[0];
+    var teamsButtonNode = headerNode && headerNode.slots[".ujg-ua-teams-btn"];
+
+    assert.match(headerNode.html, /ujg-ua-teams-btn/);
+    assert.ok(teamsButtonNode, "teams button should render with fallback user picker");
+    (teamsButtonNode.handlers.click || []).forEach(function(binding) {
+        binding.handler.call(teamsButtonNode, { target: teamsButtonNode, type: "click" });
+    });
+    assert.ok(popupParent, "team manager popup should open without multi-user sync");
 });
 
 test("user-activity team sync: URL teams param derives users", function() {
@@ -1693,6 +1835,8 @@ function createRenderingHarness(options) {
         fetchRepoArgsHistory: [],
         processRepoArgs: null,
         processRepoArgsHistory: [],
+        unifiedCalendarRenderArgs: null,
+        unifiedCalendarRenderArgsHistory: [],
         repoLogCalls: [],
         dailyShows: [],
         dailyHides: 0,
@@ -1826,6 +1970,24 @@ function createRenderingHarness(options) {
                 };
             }
         },
+        unifiedCalendar: options.useUnifiedCalendar ? {
+            render: function(dayMap, issueMap, selectedUsers, startDate, endDate) {
+                events.unifiedCalendarRenderArgs = {
+                    dayMap: dayMap,
+                    issueMap: issueMap,
+                    selectedUsers: selectedUsers,
+                    startDate: startDate,
+                    endDate: endDate
+                };
+                events.unifiedCalendarRenderArgsHistory.push(events.unifiedCalendarRenderArgs);
+                return {
+                    $el: jquery.createNode("Jira Activity Calendar"),
+                    onSelectDate: function(handler) {
+                        events.jiraSelect = handler;
+                    }
+                };
+            }
+        } : null,
         repoCalendar: {
             render: function() {
                 return {
@@ -2203,6 +2365,7 @@ test("processRepoActivity builds commit and PR events for selected user", functi
                         id: "42",
                         name: "Fix auth",
                         status: "MERGED",
+                        url: "https://git/repo/pull-requests/42",
                         createdDate: "2026-03-07T08:00:00.000Z",
                         mergedDate: "2026-03-08T12:00:00.000Z",
                         author: { name: "dtorzok", displayName: "Dima Torzok" },
@@ -2225,6 +2388,12 @@ test("processRepoActivity builds commit and PR events for selected user", functi
     assert.deepEqual(normalize(repoActivity.items.map(function(item) {
         return item.type;
     })), ["pull_request_opened", "commit", "pull_request_merged"]);
+    var commitItem = repoActivity.items.find(function(item) {
+        return item.type === "commit";
+    });
+    var prOpenedItem = repoActivity.items.find(function(item) {
+        return item.type === "pull_request_opened";
+    });
     assert.equal(repoActivity.stats.totalCommits, 1);
     assert.equal(repoActivity.stats.totalPullRequests, 2);
     assert.equal(repoActivity.stats.totalRepositories, 1);
@@ -2235,6 +2404,44 @@ test("processRepoActivity builds commit and PR events for selected user", functi
     assert.equal(normalize(repoActivity.items[0].raw).id, "42");
     assert.equal(repoActivity.items[1].author, "Dima Torzok");
     assert.equal(normalize(repoActivity.items[1].raw).id, "abc123");
+    assert.equal(commitItem.commitUrl, "https://git/repo/commits/abc123");
+    assert.equal(prOpenedItem.pullRequestUrl, "https://git/repo/pull-requests/42");
+    assert.equal(prOpenedItem.pullRequestAuthor, "Dima Torzok");
+});
+
+test("processRepoActivity matches multi-user selection passed as user objects array", function() {
+    var mod = loadRepoDataProcessor();
+    var repoActivity = mod.processRepoActivity(
+        {
+            "CORE-2": { key: "CORE-2", summary: "Second task", status: "In Progress" }
+        },
+        {
+            "CORE-2": {
+                detail: [{
+                    repositories: [{
+                        name: "core-api",
+                        commits: [{
+                            id: "def456",
+                            message: "Second author commit",
+                            authorTimestamp: "2026-03-08T11:00:00.000Z",
+                            author: { displayName: "Alice Example" }
+                        }]
+                    }]
+                }]
+            }
+        },
+        [
+            { name: "john.doe", displayName: "John Doe" },
+            { key: "jira-alice", displayName: "Alice Example" }
+        ],
+        "2026-03-01",
+        "2026-03-31"
+    );
+
+    assert.equal(repoActivity.items.length, 1);
+    assert.equal(repoActivity.items[0].type, "commit");
+    assert.equal(repoActivity.items[0].author, "Alice Example");
+    assert.equal(repoActivity.items[0].issueKey, "CORE-2");
 });
 
 test("processRepoActivity: repo items include issue summary and status from issueMap", function() {
@@ -2284,9 +2491,12 @@ test("processRepoActivity: repo items include issue summary and status from issu
     assert.equal(item.issueSummary, "Real summary");
     assert.equal(item.issueStatus, "In Progress");
     assert.equal(item.author, "Commit Author");
+    assert.equal(item.commitUrl, "https://git/demo/commits/commit1");
     assert.equal(prItem.issueSummary, "Real summary");
     assert.equal(prItem.issueStatus, "In Progress");
     assert.equal(prItem.author, "Commit Author");
+    assert.equal(prItem.pullRequestUrl, "https://git/demo/pull-requests/pr1");
+    assert.equal(prItem.pullRequestAuthor, "Commit Author");
 });
 
 test("processRepoActivity extracts branch commits and reviewer decisions for selected user", function() {
@@ -2341,11 +2551,23 @@ test("processRepoActivity extracts branch commits and reviewer decisions for sel
     assert.deepEqual(normalize(repoActivity.items.map(function(item) {
         return item.type;
     })), ["branch_commit", "pull_request_needs_work", "pull_request_reviewed"]);
+    var branchCommit = repoActivity.items.find(function(item) {
+        return item.type === "branch_commit";
+    });
+    var needsWork = repoActivity.items.find(function(item) {
+        return item.type === "pull_request_needs_work";
+    });
     assert.equal(repoActivity.stats.totalCommits, 1);
     assert.equal(repoActivity.stats.totalPullRequests, 2);
     assert.equal(repoActivity.stats.totalBranchesTouched, 1);
     assert.equal(repoActivity.dayMap["2026-03-09"].countsByType.branch_commit, 1);
     assert.equal(repoActivity.repoMap["core-web"].branches.length, 1);
+    assert.equal(branchCommit.commitUrl, "https://git/core-web/commits/def456");
+    assert.equal(needsWork.pullRequestAuthor, "someone-else");
+    assert.deepEqual(normalize(needsWork.reviewerDetails), [
+        { name: "Dima Torzok", status: "NEEDS_WORK" },
+        { name: "Dima Torzok", status: "APPROVED" }
+    ]);
 });
 
 test("processRepoActivity supports lowercase matching PR aliases and repository updates", function() {
@@ -2765,6 +2987,34 @@ test("unified calendar Jira line renders issue link with target blank", function
     assert.match(html, />CORE-1<\/a>/);
 });
 
+test("unified calendar Jira line shows summary and done-state tooltip", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var out = mod.render({
+        "2026-03-08": {
+            totalHours: 1,
+            allWorklogs: [{
+                timestamp: "2026-03-08T10:00:00.000Z",
+                issueKey: "CORE-1",
+                author: { displayName: "Test User" },
+                timeSpentHours: 1,
+                comment: ""
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        }
+    }, {
+        "CORE-1": { key: "CORE-1", project: "CORE", summary: "Closed task summary", status: "Done" }
+    }, [{ name: "u1", displayName: "User One" }], start, end);
+    var html = out.$el.html();
+
+    assert.match(html, /Closed task summary/);
+    assert.match(html, /ujg-ua-issue-done/);
+    assert.match(html, /title="Текущий статус: Done"/);
+});
+
 test("unified calendar repo line shows issue link status badge and summary meta", function() {
     var mod = loadUnifiedCalendar(createHtmlJqueryStub());
     var start = new Date("2026-03-02T00:00:00.000Z");
@@ -2793,6 +3043,34 @@ test("unified calendar repo line shows issue link status badge and summary meta"
     assert.match(html, /ujg-ua-inline-status/);
     assert.match(html, /In Progress/);
     assert.match(html, /Different summary text for task/);
+});
+
+test("unified calendar repo line renders clickable commit hash link", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var out = mod.render({
+        "2026-03-04": {
+            totalHours: 0,
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Repo Dev",
+                issueKey: "CORE-9",
+                commitUrl: "https://bitbucket/repo-a/commits/557bbc52515",
+                hash: "557bbc52515",
+                message: "fix: typo"
+            }]
+        }
+    }, {}, [{ name: "u1", displayName: "User One" }], start, end);
+    var html = out.$el.html();
+
+    assert.match(html, /https:\/\/bitbucket\/repo-a\/commits\/557bbc52515/);
+    assert.match(html, /ujg-ua-commit-link/);
+    assert.match(html, />557bbc5251<\/a>/);
 });
 
 test("unified calendar repo line keeps status without issue key and no dangling gap", function() {
@@ -2881,7 +3159,7 @@ test("presentation consistency: repo author links and issue status align across 
     loadDailyDetail($stub).create().show(dateStr, daySlice, issueMap, []);
 
     assert.match(calHtml, /class="ujg-ua-author">Ivanov</);
-    assert.match(detailHtml, /class="ujg-ua-author">Ivanov</);
+    assert.match(detailHtml, /class="ujg-ua-author">Ivanov Ivan Petrovich<\/span>/);
     assert.match(calHtml, /jira\.example\.com\/browse\/PRES-9/);
     assert.match(detailHtml, /jira\.example\.com\/browse\/PRES-9/);
     assert.match(calHtml, /ujg-ua-inline-status">In Progress</);
@@ -2963,6 +3241,32 @@ test("repo log renders rows for repository events", function() {
     assert.match(log.$el.html(), /core-api/);
     assert.match(log.$el.html(), /abc123/);
     assert.equal(countMatches(log.$el.html(), /<tr class="[^"]*ujg-ua-repo-row\b/g), 1);
+});
+
+test("repo log renders clickable commit link in row and details", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            branchName: "main",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "557bbc52515",
+            commitUrl: "https://bitbucket/repo-a/commits/557bbc52515"
+        }]
+    }, null);
+
+    assert.match(log.$el.html(), /https:\/\/bitbucket\/repo-a\/commits\/557bbc52515/);
+    assert.match(log.$el.html(), /ujg-ua-commit-link/);
+    assert.match(log.$el.html(), />557bbc5251<\/a>/);
+
+    log.$el.find('button[data-idx="0"]').trigger("click");
+    assert.match(log.$el.html(), /https:\/\/bitbucket\/repo-a\/commits\/557bbc52515/);
 });
 
 test("repo log filters rendered rows by selectedDate", function() {
@@ -3247,6 +3551,10 @@ test("daily detail normalize merges worklog change comment repo with unified fie
             message: "commit msg",
             type: "commit",
             authorName: "Dev",
+            repoName: "core-api",
+            branchName: "main",
+            hash: "557bbc52515",
+            commitUrl: "https://bitbucket/core-api/commits/557bbc52515",
             issueSummary: "From repo only",
             issueStatus: "In Progress"
         }]
@@ -3285,6 +3593,10 @@ test("daily detail normalize merges worklog change comment repo with unified fie
     assert.equal(rp.issueSummary, "Second from map");
     assert.equal(rp.author.displayName, "Dev");
     assert.ok(String(rp.timestamp).length > 0);
+    assert.equal(rp.repoName, "core-api");
+    assert.equal(rp.branchName, "main");
+    assert.equal(rp.hash, "557bbc52515");
+    assert.equal(rp.commitUrl, "https://bitbucket/core-api/commits/557bbc52515");
 });
 
 test("daily detail normalize includes single-user comments array", function() {
@@ -3330,6 +3642,80 @@ test("daily detail undated splits repo rows without timestamp", function() {
     assert.equal(split.timed.length, 1);
     assert.equal(split.undated[0].issueKey, "R-1");
     assert.equal(split.timed[0].issueKey, "R-2");
+});
+
+test("daily detail issue view renders separate Bitbucket commit and pull request sections", function() {
+    var lastHtml = "";
+    var $stub = function() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    lastHtml = h;
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    var panel = loadDailyDetail($stub).create();
+    panel.show("2026-03-17", {
+        repoItems: [{
+            type: "commit",
+            timestamp: "2026-03-17T10:00:00.000Z",
+            authorName: "Commit Dev",
+            repoName: "evo-manager",
+            branchName: "feature/16781",
+            issueKey: "EVOSCADA-16781",
+            issueSummary: "Update metadata",
+            issueStatus: "In Progress",
+            message: "EVOSCADA-16781 up version 3.10.36",
+            hash: "557bbc52515",
+            commitUrl: "https://bitbucket/evo-manager/commits/557bbc52515"
+        }, {
+            type: "pull_request_merged",
+            timestamp: "2026-03-17T12:00:00.000Z",
+            author: { displayName: "Reviewer One" },
+            pullRequestAuthor: "Alice Dev",
+            pullRequestId: "229",
+            pullRequestUrl: "https://bitbucket/evo-manager/pull-requests/229",
+            title: "EVOSCADA-16781 evo-manager -> 3.10.36",
+            status: "MERGED",
+            reviewerDetails: [
+                { name: "Reviewer One", status: "APPROVED" },
+                { name: "Reviewer Two", status: "APPROVED" }
+            ],
+            repoName: "evo-manager",
+            branchName: "master",
+            issueKey: "EVOSCADA-16781",
+            issueSummary: "Update metadata",
+            issueStatus: "In Progress"
+        }]
+    }, {
+        "EVOSCADA-16781": {
+            key: "EVOSCADA-16781",
+            summary: "Update metadata",
+            status: "In Progress"
+        }
+    }, []);
+
+    assert.match(lastHtml, /Bitbucket за день/);
+    assert.match(lastHtml, /Коммиты/);
+    assert.match(lastHtml, /Pull requests/);
+    assert.match(lastHtml, /https:\/\/bitbucket\/evo-manager\/commits\/557bbc52515/);
+    assert.match(lastHtml, /https:\/\/bitbucket\/evo-manager\/pull-requests\/229/);
+    assert.match(lastHtml, /Автор PR/);
+    assert.match(lastHtml, /Кто сделал/);
+    assert.match(lastHtml, /Reviewer One \(APPROVED\)/);
+    assert.match(lastHtml, /Alice Dev/);
 });
 
 test("daily detail groupActionsByUser matches key name and displayName variants", function() {
@@ -3396,6 +3782,46 @@ test("daily detail summary shows full issue title in panel html", function() {
     });
     assert.ok(lastHtml.indexOf(longSummary) !== -1, "expected full summary in rendered html");
     assert.equal(lastHtml.indexOf("…"), -1, "ellipsis should not appear in day-detail panel for issue title");
+});
+
+test("daily detail action line includes time author issue key and summary before comment label", function() {
+    var lastHtml = "";
+    var $stub = function() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    lastHtml = h;
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    var panel = loadDailyDetail($stub).create();
+    panel.show("2026-03-15", {
+        comments: [{
+            issueKey: "ORD-1",
+            created: "2026-03-15T10:05:00.000Z",
+            author: { displayName: "Alice Reviewer" },
+            body: "comment body"
+        }]
+    }, {
+        "ORD-1": { key: "ORD-1", summary: "Ordered task summary", status: "In Progress" }
+    }, []);
+
+    assert.match(
+        lastHtml,
+        /<span class="ujg-ua-time">\d{2}:\d{2}<\/span>\s*<span class="ujg-ua-author">Alice<\/span>\s*<a [^>]*>ORD-1<\/a>\s*<span [^>]*class="[^"]*ujg-ua-issue-summary[^"]*"[^>]*>Ordered task summary<\/span>\s*— Комментарий/
+    );
 });
 
 function createDayDetailInteractiveStub() {
@@ -3606,6 +4032,41 @@ test("day detail team timeline stacks near-simultaneous events at distinct verti
     while ((m = re.exec(html)) !== null) tops.push(parseInt(m[1], 10));
     assert.ok(tops.length >= 2, "expected two timeline cards");
     assert.notEqual(tops[0], tops[1], "stacked cards must not share the same top offset");
+});
+
+test("day detail team timeline grid stretches when stacked cards need extra height", function() {
+    var mod = loadDailyDetail();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    var model = mod.buildTimelineModel([
+        {
+            issueKey: "STR-1",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "worklog",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 0.5,
+            comment: ""
+        },
+        {
+            issueKey: "STR-2",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "comment",
+            author: { name: "u1", displayName: "Alice" },
+            body: "same instant"
+        },
+        {
+            issueKey: "STR-3",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "change",
+            author: { name: "u1", displayName: "Alice" },
+            fromString: "Open",
+            toString: "In Progress"
+        }
+    ], users, "2026-03-16");
+    var html = mod.renderTeamTimeline(model);
+    var match = /ujg-ua-detail-timeline-grid relative" style="min-height:(\d+)px/.exec(html);
+
+    assert.ok(match, "expected timeline grid height style");
+    assert.ok(parseInt(match[1], 10) > 470, "expected stretched grid height above base size");
 });
 
 test("day detail team timeline matches author by accountId like repo-data-processor", function() {
@@ -3926,6 +4387,56 @@ test("rendering passes current selected users snapshot to day detail on date cli
         name: "fresh-user",
         displayName: "Fresh User"
     }]);
+});
+
+test("rendering with unified calendar keeps repo-only day entries in merged dayMap", function() {
+    var harness = createRenderingHarness({
+        useUnifiedCalendar: true,
+        processed: {
+            stats: { totalHours: 1 },
+            dayMap: {
+                "2026-03-08": { worklogs: [], changes: [], issues: ["CORE-1"], totalHours: 1 }
+            },
+            issueMap: {
+                "CORE-1": { key: "CORE-1", summary: "Test task", type: "Task", status: "Done", totalTimeHours: 1 }
+            },
+            projectMap: {
+                CORE: { key: "CORE", totalHours: 1, issueCount: 1, issues: ["CORE-1"] }
+            },
+            statusTransitions: {}
+        },
+        repoActivity: {
+            items: [{
+                type: "commit",
+                date: "2026-03-09",
+                timestamp: "2026-03-09T10:00:00.000Z",
+                repoName: "core-api",
+                issueKey: "CORE-1",
+                message: "Repo-only day",
+                hash: "abc123"
+            }],
+            dayMap: {
+                "2026-03-09": {
+                    items: [{
+                        type: "commit",
+                        date: "2026-03-09",
+                        timestamp: "2026-03-09T10:00:00.000Z",
+                        repoName: "core-api",
+                        issueKey: "CORE-1",
+                        message: "Repo-only day",
+                        hash: "abc123"
+                    }]
+                }
+            },
+            repoMap: {},
+            stats: { totalEvents: 1 }
+        }
+    });
+
+    assert.ok(harness.events.unifiedCalendarRenderArgs, "expected unified calendar render call");
+    assert.ok(harness.events.unifiedCalendarRenderArgs.dayMap["2026-03-09"], "expected repo-only day in merged dayMap");
+    assert.equal(harness.events.unifiedCalendarRenderArgs.dayMap["2026-03-09"].repoItems.length, 1);
+    assert.equal(harness.events.unifiedCalendarRenderArgs.dayMap["2026-03-09"].totalHours, 0);
 });
 
 test("rendering keeps Jira blocks visible when repo loading fails", function() {

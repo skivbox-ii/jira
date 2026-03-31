@@ -58,6 +58,8 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
             item.repoName,
             item.branchName,
             item.issueKey,
+            item.issueSummary,
+            item.issueStatus,
             item.type,
             getTypeLabel(item.type),
             item.title,
@@ -138,6 +140,23 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         return item.status || item.raw && item.raw.status || "";
     }
 
+    function renderRepoObjectLink(item) {
+        var type = String(item && item.type || "").toLowerCase();
+        if ((type === "commit" || type === "branch_commit") && item && item.commitUrl && item.hash) {
+            return utils.renderExternalLink(item.commitUrl, utils.shortHash(item.hash, 10), {
+                class: "font-mono text-primary ujg-ua-commit-link",
+                title: item.hash
+            });
+        }
+        if (type.indexOf("pull_request_") === 0 && item && item.pullRequestUrl && getPullRequestId(item)) {
+            return utils.renderExternalLink(item.pullRequestUrl, "#" + getPullRequestId(item), {
+                class: "font-mono text-primary ujg-ua-commit-link",
+                title: "Открыть pull request"
+            });
+        }
+        return "";
+    }
+
     function buildDetails(item) {
         var raw = item.raw ? JSON.stringify(item.raw) : "";
         var pullRequestId = getPullRequestId(item);
@@ -148,16 +167,24 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         details += '<div><span class="text-muted-foreground">' + UI.repo + ':</span> <span class="font-semibold text-foreground">' + escapeHtml(item.repoName || "") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.branch + ':</span> <span class="text-foreground">' + escapeHtml(item.branchName || "-") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> ' +
-            (item.issueKey
-                ? utils.renderIssueLink(item.issueKey, item.issueKey, {
-                    class: "font-mono text-foreground ujg-ua-issue-key"
-                })
-                : '<span class="font-mono text-foreground">-</span>') +
+            utils.renderIssueRef(item.issueKey, item.issueSummary, item.issueStatus, {
+                keyClass: "font-mono text-foreground",
+                summaryClass: "text-foreground",
+                emptyLabel: "-"
+            }) +
+            (item.issueStatus ? ' <span class="ujg-ua-inline-status">' + escapeHtml(item.issueStatus) + '</span>' : "") +
             "</div>";
         details += '<div><span class="text-muted-foreground">' + UI.author + ':</span> <span class="text-foreground">' + escapeHtml(item.author || "-") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.reviewers + ':</span> <span class="text-foreground">' + escapeHtml((item.reviewers || []).join(", ") || "-") + '</span></div>';
         if (pullRequestId) {
-            details += '<div><span class="text-muted-foreground">' + UI.prId + ':</span> <span class="font-mono text-foreground">' + escapeHtml(pullRequestId) + '</span></div>';
+            details += '<div><span class="text-muted-foreground">' + UI.prId + ':</span> ' +
+                (item.pullRequestUrl
+                    ? utils.renderExternalLink(item.pullRequestUrl, "#" + pullRequestId, {
+                        class: "font-mono text-primary ujg-ua-commit-link",
+                        title: "Открыть pull request"
+                    })
+                    : '<span class="font-mono text-foreground">' + escapeHtml(pullRequestId) + '</span>') +
+                '</div>';
         }
         if (pullRequestTitle) {
             details += '<div><span class="text-muted-foreground">' + UI.prTitle + ':</span> <span class="text-foreground">' + escapeHtml(pullRequestTitle) + '</span></div>';
@@ -166,7 +193,11 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
             details += '<div><span class="text-muted-foreground">' + UI.prStatus + ':</span> <span class="text-foreground">' + escapeHtml(pullRequestStatus) + '</span></div>';
         }
         details += '<div><span class="text-muted-foreground">' + UI.description + ':</span> <span class="text-foreground break-all">' + escapeHtml(getDescription(item) || "-") + '</span></div>';
-        details += '<div><span class="text-muted-foreground">' + UI.statusHash + ':</span> <span class="text-foreground break-all">' + escapeHtml(getStatusHash(item) || "-") + '</span></div>';
+        var objectLink = renderRepoObjectLink(item);
+        details += '<div><span class="text-muted-foreground">' + UI.statusHash + ':</span> ' +
+            (objectLink || '<span class="text-foreground break-all">' + escapeHtml(getStatusHash(item) || "-") + '</span>') +
+            (objectLink && item.status ? ' <span class="text-foreground break-all">' + escapeHtml(item.status) + "</span>" : "") +
+            "</div>";
         if (raw) {
             details += '<div><span class="text-muted-foreground">' + UI.raw + ':</span> <span class="font-mono text-foreground break-all">' + escapeHtml(raw) + "</span></div>";
         }
@@ -197,20 +228,26 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         rows.forEach(function(item, index) {
             var time = formatTime(item.timestamp);
             var isExpanded = String(index) === expandedIndex;
+            var issueHtml = utils.renderIssueRef(item.issueKey, item.issueSummary, item.issueStatus, {
+                keyClass: "text-[11px] font-mono text-foreground",
+                summaryClass: "block text-[10px] text-muted-foreground",
+                emptyLabel: ""
+            });
+            var objectLink = renderRepoObjectLink(item);
 
             html += '<tr class="border-b border-border/50 hover:bg-muted/30 ujg-ua-repo-row">';
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground whitespace-nowrap">' + escapeHtml(item.date || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + escapeHtml(time) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-semibold text-primary">' + escapeHtml(item.repoName || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground">' + escapeHtml(item.branchName || "") + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' +
-                (item.issueKey ? utils.renderIssueLink(item.issueKey, item.issueKey, {
-                    class: "text-[11px] font-mono text-foreground ujg-ua-issue-key"
-                }) : "") +
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[180px] min-w-0 whitespace-normal break-words">' +
+                issueHtml +
+                (item.issueStatus ? '<div><span class="ujg-ua-inline-status">' + escapeHtml(item.issueStatus) + '</span></div>' : "") +
                 "</td>";
             html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] min-w-0 whitespace-normal break-words">' + escapeHtml(getDescription(item)) + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] min-w-0 whitespace-normal break-all">' + escapeHtml(getStatusHash(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] min-w-0 whitespace-normal break-all">' +
+                (objectLink || escapeHtml(getStatusHash(item))) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-right"><button class="text-[10px] text-primary hover:underline ujg-ua-repo-row-expand" data-idx="' + index + '">' + (isExpanded ? UI.hide : UI.show) + "</button></td>";
             html += "</tr>";
 

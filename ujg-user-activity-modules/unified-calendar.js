@@ -95,6 +95,31 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         };
     }
 
+    function renderIssueInlineRef(issueKey, issueSummary, issueStatus, summaryClass) {
+        return utils.renderIssueRef(issueKey, issueSummary, issueStatus, {
+            keyClass: "text-[10px] font-semibold text-primary",
+            summaryClass: summaryClass || "text-[9px] font-medium text-foreground/90"
+        });
+    }
+
+    function renderRepoObjectLink(item) {
+        var type = String(item && item.type || "").toLowerCase();
+        var hash = item && item.hash ? utils.shortHash(item.hash, 10) : "";
+        if ((type === "commit" || type === "branch_commit") && item && item.commitUrl && hash) {
+            return utils.renderExternalLink(item.commitUrl, hash, {
+                class: "text-[10px] font-semibold text-primary ujg-ua-commit-link",
+                title: item.hash
+            });
+        }
+        if (type.indexOf("pull_request_") === 0 && item && item.pullRequestUrl && item.pullRequestId) {
+            return utils.renderExternalLink(item.pullRequestUrl, "#" + item.pullRequestId, {
+                class: "text-[10px] font-semibold text-primary ujg-ua-commit-link",
+                title: "Открыть pull request"
+            });
+        }
+        return "";
+    }
+
     function renderUserChips(dayData, selectedUsers, dateStr) {
         if (!selectedUsers || selectedUsers.length === 0) return "";
         var todayKey = utils.getDayKey(new Date());
@@ -120,17 +145,17 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
     }
 
     function renderJiraBlock(dayData, issueMap) {
+        issueMap = issueMap || {};
         var items = [];
 
         (dayData.allWorklogs || []).forEach(function(w) {
+            var worklogMeta = repoIssueMeta(w.issueKey, issueMap, null);
             items.push({
                 ts: w.timestamp || "",
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    utils.renderIssueLink(w.issueKey, w.issueKey, {
-                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
-                    }) + " " +
+                    renderIssueInlineRef(w.issueKey, worklogMeta.issueSummary, worklogMeta.issueStatus) + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
@@ -139,29 +164,28 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
         (dayData.allChanges || []).forEach(function(c) {
             if (c.field !== "status") return;
+            var changeMeta = repoIssueMeta(c.issueKey, issueMap, null);
             items.push({
                 ts: c.timestamp || "",
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    utils.renderIssueLink(c.issueKey, c.issueKey, {
-                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
-                    }) + " " +
+                    renderIssueInlineRef(c.issueKey, changeMeta.issueSummary, changeMeta.issueStatus) + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
         });
 
         (dayData.allComments || []).forEach(function(c) {
+            var commentMeta = repoIssueMeta(c.issueKey, issueMap, null);
             items.push({
                 ts: c.timestamp || "",
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    utils.renderIssueLink(c.issueKey, c.issueKey, {
-                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
-                    }) + " " +
-                    '<span class="text-[9px]">💬</span>' +
+                    renderIssueInlineRef(c.issueKey, commentMeta.issueSummary, commentMeta.issueStatus) + " " +
+                    '<span class="text-[9px]">Комментарий</span>' +
+                    (c.body ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(c.body, 60)) + '</span>' : '') +
                     '</div>'
             });
         });
@@ -198,15 +222,22 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
             var meta = repoIssueMeta(item.issueKey, issueMap, item);
             var authorDisp = repoItemAuthorDisplayName(item);
+            var objectLink = renderRepoObjectLink(item);
             var parts = ['<span class="ujg-ua-time">' + time + "</span>", icon,
                 '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(typeLabel) + "</span>"];
+            if (objectLink) {
+                parts.push(objectLink);
+            }
             if (authorDisp) {
                 parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(authorDisp)) + "</span>");
             }
-            if (item.issueKey) {
-                parts.push(utils.renderIssueLink(item.issueKey, item.issueKey, {
-                    class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
-                }));
+            if (item.issueKey || meta.issueSummary) {
+                parts.push(renderIssueInlineRef(
+                    item.issueKey,
+                    meta.issueSummary,
+                    meta.issueStatus,
+                    "ujg-ua-repo-summary text-[9px] font-medium text-foreground/90"
+                ));
             }
             if (meta.issueStatus) {
                 parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(meta.issueStatus) + "</span>");
@@ -214,10 +245,6 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             var repoMsg = item.message || item.title || item.name || "";
             parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg whitespace-normal break-words min-w-0">' +
                 utils.escapeHtml(repoMsg) + "</span>");
-            if (meta.issueSummary && String(meta.issueSummary) !== String(repoMsg)) {
-                parts.push('<span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary whitespace-normal break-words min-w-0">' +
-                    utils.escapeHtml(meta.issueSummary) + "</span>");
-            }
             html += '<div class="ujg-ua-repo-line">' + parts.join(" ") + "</div>";
         }
         html += '</div>';

@@ -73,6 +73,8 @@ define(moduleId, ["jquery"], function($) {
         var selected = normalizeIds(options.selectedTeamIds, mode);
         var onChange = typeof options.onChange === "function" ? options.onChange : function() {};
         var getTeamLabel = typeof options.getTeamLabel === "function" ? options.getTeamLabel : null;
+        var emptySingleLabel = String(options.emptySingleLabel || "Команда");
+        var emptyMultiLabel = String(options.emptyMultiLabel || "0 команд");
         var pickerId = nextPickerId++;
         var panelOpen = false;
         var destroyed = false;
@@ -118,14 +120,14 @@ define(moduleId, ["jquery"], function($) {
             var n = selected.length;
             if (mode === "single") {
                 if (n === 0) {
-                    $trigger.text("Команда");
+                    $trigger.text(emptySingleLabel);
                 } else {
                     var t = teamById(teams, selected[0]);
                     $trigger.text(formatTeamLabel(t || { id: selected[0] }, "trigger"));
                 }
             } else {
                 if (n === 0) {
-                    $trigger.text("0 команд");
+                    $trigger.text(emptyMultiLabel);
                 } else if (n === 1) {
                     var one = teamById(teams, selected[0]);
                     $trigger.text(formatTeamLabel(one || { id: selected[0] }, "trigger"));
