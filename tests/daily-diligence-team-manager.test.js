@@ -360,6 +360,34 @@ test("shared team-picker reports selected team ids (multi and single)", function
     assert.equal(JSON.stringify(singleIds[singleIds.length - 1]), JSON.stringify(["b"]));
 });
 
+test("shared team-picker supports custom labels and destroy detaches document listener", function() {
+    var trackedDocument = createTrackedDocument();
+    var $ = enrichMiniJquery(createMiniJquery());
+    var pickerMod = loadTeamPicker($, { document: trackedDocument });
+    var $wrap = $("<div/>");
+    var picker = pickerMod.create({
+        mode: "single",
+        teams: [{ id: "a", name: "Alpha", memberKeys: ["u1", "u2"] }],
+        selectedTeamIds: ["a"],
+        getTeamLabel: function(team) {
+            return team.name + " (" + team.memberKeys.length + ")";
+        },
+        $container: $wrap
+    });
+
+    assert.equal($wrap.find(".ujg-st-team-picker-trigger").text(), "Alpha (2)");
+
+    picker.openPanel();
+
+    assert.equal(trackedDocument.totalListeners(), 1);
+    assert.equal($wrap.find(".ujg-st-team-picker-row").eq(0)[0].children[1].textContent, "Alpha (2)");
+
+    picker.destroy();
+
+    assert.equal(trackedDocument.totalListeners(), 0);
+    assert.equal($wrap.find(".ujg-st-team-picker").length, 0);
+});
+
 test("detectDashboardId reads selectPageId from URL or AJS.params", function() {
     var ls = makeLocalStorage();
     var jq = createJqueryStub(function() {
@@ -552,6 +580,32 @@ function createFakeDocument() {
     };
 }
 
+function createTrackedDocument() {
+    var listeners = Object.create(null);
+
+    function getBucket(type) {
+        var key = String(type || "");
+        if (!listeners[key]) listeners[key] = [];
+        return listeners[key];
+    }
+
+    return {
+        addEventListener: function(type, handler) {
+            getBucket(type).push(handler);
+        },
+        removeEventListener: function(type, handler) {
+            var bucket = getBucket(type);
+            var idx = bucket.indexOf(handler);
+            if (idx >= 0) bucket.splice(idx, 1);
+        },
+        totalListeners: function() {
+            return Object.keys(listeners).reduce(function(sum, type) {
+                return sum + listeners[type].length;
+            }, 0);
+        }
+    };
+}
+
 function createMiniJquery() {
     function parseTag(spec) {
         var m = /^<\s*(\w+)/i.exec(spec.trim());
@@ -727,6 +781,13 @@ function createMiniJquery() {
         return this;
     };
     $.fn.off = function() {
+        var ev = arguments[0];
+        var fn = arguments[1];
+        this.each(function() {
+            if (typeof this.removeEventListener === "function" && ev && fn) {
+                this.removeEventListener(ev, fn);
+            }
+        });
         return this;
     };
     $.fn.val = function(v) {

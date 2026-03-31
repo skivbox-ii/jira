@@ -200,6 +200,7 @@ define("_ujgDD_rendering", [
     function createController($container, mods) {
         var defaultRange = utils.getDefaultRange();
         var popupCtrl = null;
+        var teamPickerCtrl = null;
         var activeRequestId = 0;
         var destroyed = false;
         var documentHandler = null;
@@ -273,6 +274,13 @@ define("_ujgDD_rendering", [
             popupCtrl = null;
         }
 
+        function destroyTeamPicker() {
+            if (teamPickerCtrl && typeof teamPickerCtrl.destroy === "function") {
+                teamPickerCtrl.destroy();
+            }
+            teamPickerCtrl = null;
+        }
+
         function ensureHosts() {
             if (
                 $renderHost && $renderHost[0] &&
@@ -292,6 +300,7 @@ define("_ujgDD_rendering", [
             destroyed = true;
             activeRequestId += 1;
             closePopup();
+            destroyTeamPicker();
             dateControlsNode = null;
             $renderHost = null;
             $popupHost = null;
@@ -465,6 +474,7 @@ define("_ujgDD_rendering", [
 
             ensureHosts();
             $container.addClass("min-h-screen bg-background w-full");
+            destroyTeamPicker();
             $renderHost.empty();
             $headerInner = $("<div/>").addClass("px-1 py-1 flex items-center gap-1.5 flex-wrap");
             $dateControls = buildDateControls(presets);
@@ -505,17 +515,24 @@ define("_ujgDD_rendering", [
 
         function buildTeamPicker() {
             var lib = mods.teamPicker || teamPickerMod;
-            return lib.create({
+            teamPickerCtrl = lib.create({
                 mode: "single",
                 teams: state.teams,
                 selectedTeamIds: state.selectedTeamId ? [state.selectedTeamId] : [],
+                getTeamLabel: function(team) {
+                    var id = team && team.id != null ? String(team.id) : "";
+                    var name = team && team.name ? team.name : id;
+                    var count = team && team.memberKeys && team.memberKeys.length ? team.memberKeys.length : 0;
+                    return name + " (" + count + ")";
+                },
                 onChange: function(ids) {
                     state.selectedTeamId = normalizeId(ids[0] || "");
                     clearLoadedRangeState();
                     render();
                     autoLoadSelectedTeam();
                 }
-            }).$el;
+            });
+            return teamPickerCtrl.$el;
         }
         function buildDateControls(presets) {
             var $wrap = $("<div/>").addClass("ujg-dd-date-controls flex items-center gap-0.5 relative");

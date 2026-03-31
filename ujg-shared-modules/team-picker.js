@@ -41,8 +41,10 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
         var teams = normalizeTeamsInput(options.teams);
         var selected = normalizeIds(options.selectedTeamIds, mode);
         var onChange = typeof options.onChange === "function" ? options.onChange : function() {};
+        var getTeamLabel = typeof options.getTeamLabel === "function" ? options.getTeamLabel : null;
         var pickerId = nextPickerId++;
         var panelOpen = false;
+        var destroyed = false;
 
         var $root = $("<div/>").addClass("ujg-st-team-picker");
         var $trigger = $("<button type=\"button\"/>")
@@ -62,6 +64,25 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
             options.$container.append($root);
         }
 
+        function defaultTeamLabel(team) {
+            var id = team && team.id != null ? String(team.id) : "";
+            return team && team.name ? team.name : id;
+        }
+
+        function formatTeamLabel(team, context) {
+            var meta = {
+                context: context,
+                mode: mode,
+                selectedTeamIds: selected.slice(),
+                selectedCount: selected.length
+            };
+            var fallback = defaultTeamLabel(team);
+            var label;
+            if (!getTeamLabel) return fallback;
+            label = getTeamLabel(team || {}, meta);
+            return label == null || label === "" ? fallback : String(label);
+        }
+
         function updateTriggerText() {
             var n = selected.length;
             if (mode === "single") {
@@ -69,14 +90,14 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                     $trigger.text("Команда");
                 } else {
                     var t = teamById(teams, selected[0]);
-                    $trigger.text(t && t.name ? t.name : selected[0]);
+                    $trigger.text(formatTeamLabel(t || { id: selected[0] }, "trigger"));
                 }
             } else {
                 if (n === 0) {
                     $trigger.text("0 команд");
                 } else if (n === 1) {
                     var one = teamById(teams, selected[0]);
-                    $trigger.text(one && one.name ? one.name : selected[0]);
+                    $trigger.text(formatTeamLabel(one || { id: selected[0] }, "trigger"));
                 } else {
                     $trigger.text(teamsCountLabel(n));
                 }
@@ -105,7 +126,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                         .attr("data-team-id", id)
                         .prop("checked", checked);
                     $row.append($rb);
-                    $row.append($("<span/>").text(t.name || id));
+                    $row.append($("<span/>").text(formatTeamLabel(t, "list")));
                 } else {
                     var cid = name + "-c-" + i;
                     var $cb = $("<input/>")
@@ -115,7 +136,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                         .attr("data-team-id", id)
                         .prop("checked", checked);
                     $row.append($cb);
-                    $row.append($("<span/>").text(t.name || id));
+                    $row.append($("<span/>").text(formatTeamLabel(t, "list")));
                 }
                 $list.append($row);
             }
@@ -138,6 +159,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
         }
 
         function openPanel() {
+            if (destroyed) return;
             if (panelOpen) return;
             panelOpen = true;
             $panel.show();
@@ -153,6 +175,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
         }
 
         function togglePanel() {
+            if (destroyed) return;
             if (panelOpen) closePanel();
             else openPanel();
         }
@@ -207,13 +230,20 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                 return selected.slice();
             },
             setSelectedTeamIds: function(ids) {
+                if (destroyed) return;
                 selected = normalizeIds(ids, mode);
                 if (panelOpen) renderList();
                 else updateTriggerText();
                 notify();
             },
             openPanel: openPanel,
-            closePanel: closePanel
+            closePanel: closePanel,
+            destroy: function() {
+                if (destroyed) return;
+                closePanel();
+                destroyed = true;
+                $root.remove();
+            }
         };
     }
 

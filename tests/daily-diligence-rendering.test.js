@@ -637,6 +637,7 @@ test("header uses shared team picker instead of native select; picking another t
 
     assert.equal(env.$container.find("select").length, 0);
     assert.ok(env.$container.find(".ujg-st-team-picker").length >= 1);
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Team A (1)");
     assert.equal(jiraCalls.length, 1);
     assert.deepEqual(jiraCalls[0].slice(0, 3), [["u1"], "2026-03-09", "2026-03-13"]);
 
@@ -645,8 +646,67 @@ test("header uses shared team picker instead of native select; picking another t
     cf.resolve([]);
 
     pickTeamInSharedPicker(env.$, env.$container, "team-b");
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Team B (1)");
     assert.equal(jiraCalls.length, 2);
     assert.deepEqual(jiraCalls[1].slice(0, 3), [["u2"], "2026-03-09", "2026-03-13"]);
+});
+
+test("rerender destroys previous team picker controller and destroy cleans current picker", function() {
+    var env = createTestEnv();
+    var rendering = loadRendering(env);
+    var created = 0;
+    var destroyed = [];
+    var ctrl = rendering.init(env.$container, {
+        config: env.config,
+        utils: env.utils,
+        apiJira: {
+            fetchTeamData: function() {
+                return createDeferred().promise();
+            }
+        },
+        apiBitbucket: {
+            fetchTeamActivity: function() {
+                return createDeferred().promise();
+            }
+        },
+        apiConfluence: {
+            fetchTeamActivity: function() {
+                return createDeferred().promise();
+            }
+        },
+        dataProcessor: {
+            processTeamData: function() {
+                return {};
+            }
+        },
+        teamPicker: {
+            create: function() {
+                var id = ++created;
+                return {
+                    $el: env.$("<div/>").addClass("test-team-picker-" + id),
+                    destroy: function() {
+                        destroyed.push(id);
+                    }
+                };
+            }
+        },
+        teamManager: {
+            loadTeams: function() {
+                return resolvedDeferred([{ id: "team-empty", name: "Alpha", memberKeys: [] }]);
+            },
+            create: function() {
+                return { close: function() {} };
+            }
+        },
+        resize: function() {}
+    });
+
+    assert.equal(created, 2);
+    assert.deepEqual(destroyed, [1]);
+
+    ctrl.destroy();
+
+    assert.deepEqual(destroyed, [1, 2]);
 });
 
 test("init loads teams and renders empty state without firing data APIs for empty team", function() {
@@ -702,7 +762,7 @@ test("init loads teams and renders empty state without firing data APIs for empt
     assert.equal(env.$container.find(".ujg-dd-empty").length, 1);
     assert.equal(env.$container.find("select").length, 0);
     assert.ok(env.$container.find(".ujg-st-team-picker").length >= 1);
-    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Alpha");
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Alpha (0)");
     assert.equal(env.$container.find(".ujg-dd-load-btn").prop("disabled"), false);
     assert.match(env.$container.text(), /Добавьте участников/);
     assert.match(env.$container.text(), /Team Dashboard/);
@@ -769,7 +829,7 @@ test("numeric team ids are normalized so selection and auto-load still work", fu
     });
 
     assert.equal(env.$container.find("select").length, 0);
-    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Numbers");
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Numbers (1)");
     assert.equal(jiraCalls.length, 1);
     assert.deepEqual(jiraCalls[0].slice(0, 3), [["u1"], "2026-03-09", "2026-03-13"]);
 
@@ -1163,7 +1223,7 @@ test("teams button opens the popup and popup changes sync teams state then auto-
 
     popupOnChange([{ id: "team-live", name: "Live", memberKeys: ["u9"] }]);
 
-    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Live");
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Live (1)");
     assert.equal(jiraCalls.length, 1);
     assert.deepEqual(jiraCalls[0].slice(0, 3), [["u9"], "2026-03-09", "2026-03-13"]);
     assert.equal(env.$container.find(".ujg-dd-loading").length, 1);
