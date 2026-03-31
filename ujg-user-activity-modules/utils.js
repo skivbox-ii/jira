@@ -73,15 +73,16 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
     function buildIssueUrl(issueKey) {
         var key = String(issueKey || "").trim();
         if (!key) return "";
-        return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + key;
+        return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + encodeURIComponent(key);
     }
 
     function renderIssueLink(issueKey, label, extraAttrs) {
         var url = buildIssueUrl(issueKey);
         var text = label != null ? String(label) : String(issueKey || "");
+        var attrs = extraAttrs == null ? "" : String(extraAttrs).trim();
         if (!url) return escapeHtml(text);
         return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
-            (extraAttrs || "") + ">" + escapeHtml(text) + "</a>";
+            (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
     }
 
     function getProjectKey(issueKey) {

@@ -154,14 +154,32 @@ function loadUserActivityUtils(windowStub) {
     }, globals);
 }
 
-test("user-activity utils: issue URL and issue link", function() {
+test("user-activity utils: issue URL falls back to location origin", function() {
     var utils = loadUserActivityUtils({
         location: { origin: "https://jira.example.com" },
         AJS: { params: { baseURL: "" } }
     });
     assert.equal(utils.buildIssueUrl("ABC-123"), "https://jira.example.com/browse/ABC-123");
-    assert.match(utils.renderIssueLink("ABC-123"), /target="_blank"/);
-    assert.match(utils.renderIssueLink("ABC-123"), />ABC-123</);
+});
+
+test("user-activity utils: issue URL prefers AJS baseURL and encodes issue key", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: " https://jira.alt.example.com/jira/ " } }
+    });
+    assert.equal(utils.getJiraBaseUrl(), "https://jira.alt.example.com/jira");
+    assert.equal(utils.buildIssueUrl("ABC/123"), "https://jira.alt.example.com/jira/browse/ABC%2F123");
+});
+
+test("user-activity utils: issue link normalizes extra attrs", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(
+        utils.renderIssueLink("ABC-123", null, 'class="foo" data-issue="1"'),
+        '<a href="https://jira.example.com/browse/ABC-123" target="_blank" rel="noopener noreferrer" class="foo" data-issue="1">ABC-123</a>'
+    );
 });
 
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
