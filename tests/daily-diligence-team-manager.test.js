@@ -130,6 +130,46 @@ function createFakeTimers() {
     };
 }
 
+function loadTeamStore(jquery, windowMock, localStorageMock, extraGlobals) {
+    var globals = {
+        window: windowMock,
+        localStorage: localStorageMock,
+        RegExp: RegExp,
+        setTimeout: setTimeout,
+        clearTimeout: clearTimeout
+    };
+    if (extraGlobals) {
+        Object.keys(extraGlobals).forEach(function(k) {
+            globals[k] = extraGlobals[k];
+        });
+    }
+    return loadAmdModule(
+        path.join(__dirname, "..", "ujg-shared-modules", "team-store.js"),
+        {
+            jquery: jquery
+        },
+        globals
+    );
+}
+
+function loadTeamPicker(jquery, extraGlobals) {
+    var globals = Object.assign(
+        {
+            document: createFakeDocument(),
+            setTimeout: setTimeout,
+            clearTimeout: clearTimeout
+        },
+        extraGlobals || {}
+    );
+    return loadAmdModule(
+        path.join(__dirname, "..", "ujg-shared-modules", "team-picker.js"),
+        {
+            jquery: jquery
+        },
+        globals
+    );
+}
+
 function loadTeamManager(jquery, windowMock, localStorageMock, configOverrides, extraGlobals) {
     var config = {
         jiraBaseUrl: "https://jira.example.com",
@@ -196,6 +236,83 @@ function loadTeamManager(jquery, windowMock, localStorageMock, configOverrides, 
         globals
     );
 }
+
+test("shared team-store normalizes teams and matches team-manager loadTeams", async function() {
+    var ls = makeLocalStorage();
+    var remote = [{ id: "t1", name: "Alpha", memberKeys: [] }];
+    var jq = createJqueryStub(function(options) {
+        if (options.type === "GET" && options.url.indexOf("/rest/api/2/dashboard/77/properties/ujg-dd-teams") !== -1) {
+            return resolvedAjax({ key: "ujg-dd-teams", value: { teams: remote } });
+        }
+        return resolvedAjax({});
+    });
+    var win = { location: { search: "?selectPageId=77", origin: "https://jira.example.com" }, AJS: { params: {} } };
+    var store = loadTeamStore(jq, win, ls);
+    var tm = loadTeamManager(jq, win, ls);
+
+    assert.deepEqual(
+        store.normalizeTeams([{ id: "platform", name: "Platform", memberKeys: ["u1", "u2"] }]),
+        [{ id: "platform", name: "Platform", memberKeys: ["u1", "u2"] }]
+    );
+
+    var fromStore = await new Promise(function(resolve, reject) {
+        store.loadTeams().done(resolve).fail(reject);
+    });
+    var fromManager = await new Promise(function(resolve, reject) {
+        tm.loadTeams().done(resolve).fail(reject);
+    });
+    assert.deepEqual(fromStore, fromManager);
+});
+
+test("shared team-picker reports selected team ids (multi and single)", function() {
+    var $ = enrichMiniJquery(createMiniJquery());
+    var pickerMod = loadTeamPicker($, { document: createFakeDocument() });
+    var teams = [
+        { id: "a", name: "Alpha", memberKeys: [] },
+        { id: "b", name: "Beta", memberKeys: [] }
+    ];
+    var multiIds = [];
+    var $wrap = $("<div/>");
+    var multi = pickerMod.create({
+        mode: "multi",
+        teams: teams,
+        selectedTeamIds: [],
+        onChange: function(ids) {
+            multiIds.push(ids.slice());
+        },
+        $container: $wrap
+    });
+    multi.openPanel();
+    var $panel = $wrap.find(".ujg-st-team-picker-panel");
+    var $cb0 = $panel.find(".ujg-st-team-picker-cb").eq(0);
+    var $cb1 = $panel.find(".ujg-st-team-picker-cb").eq(1);
+    $cb0.prop("checked", true);
+    $cb0[0].dispatchEvent({ type: "change", bubbles: true });
+    assert.equal(JSON.stringify(multiIds[multiIds.length - 1]), JSON.stringify(["a"]));
+    $cb1.prop("checked", true);
+    $cb1[0].dispatchEvent({ type: "change", bubbles: true });
+    assert.equal(JSON.stringify(multi.getSelectedTeamIds().slice().sort()), JSON.stringify(["a", "b"]));
+    $wrap.find(".ujg-st-team-picker-reset")[0].dispatchEvent({ type: "click", bubbles: true });
+    assert.equal(JSON.stringify(multi.getSelectedTeamIds()), JSON.stringify([]));
+
+    var singleIds = [];
+    var $w2 = $("<div/>");
+    var single = pickerMod.create({
+        mode: "single",
+        teams: teams,
+        selectedTeamIds: [],
+        onChange: function(ids) {
+            singleIds.push(ids.slice());
+        },
+        $container: $w2
+    });
+    single.openPanel();
+    var $radio1 = $w2.find(".ujg-st-team-picker-radio").eq(1);
+    $radio1.prop("checked", true);
+    $radio1[0].dispatchEvent({ type: "change", bubbles: true });
+    assert.equal(JSON.stringify(single.getSelectedTeamIds()), JSON.stringify(["b"]));
+    assert.equal(JSON.stringify(singleIds[singleIds.length - 1]), JSON.stringify(["b"]));
+});
 
 test("detectDashboardId reads selectPageId from URL or AJS.params", function() {
     var ls = makeLocalStorage();
@@ -333,6 +450,61 @@ test("searchUsers normalizes rows to key and displayName", async function() {
     assert.equal(getCall.data.username, "q");
     assert.equal(getCall.data.maxResults, 20);
 });
+
+function enrichMiniJquery($) {
+    $.fn.eq = function(idx) {
+        var col = Object.create($.fn);
+        var n = this[idx];
+        col.length = n ? 1 : 0;
+        col[0] = n;
+        col.jquery = true;
+        return col;
+    };
+    $.fn.prop = function(name, val) {
+        if (arguments.length === 1) {
+            if (name === "checked") return !!(this[0] && this[0]._checked);
+            return undefined;
+        }
+        this.each(function() {
+            if (name === "checked") this._checked = !!val;
+        });
+        return this;
+    };
+    $.fn.attr = function(name, val) {
+        if (arguments.length === 1) {
+            return this[0] && this[0]._attrs ? this[0]._attrs[name] : undefined;
+        }
+        this.each(function() {
+            this._attrs = this._attrs || {};
+            this._attrs[name] = val;
+        });
+        return this;
+    };
+    var origCss = $.fn.css;
+    $.fn.css = function(k, v) {
+        if (arguments.length === 2 && k === "display") {
+            this.each(function() {
+                this._ujgDisplay = v;
+            });
+            return this;
+        }
+        return origCss.apply(this, arguments);
+    };
+    $.fn.show = function() {
+        return this.css("display", "block");
+    };
+    $.fn.hide = function() {
+        return this.css("display", "none");
+    };
+    return $;
+}
+
+function createFakeDocument() {
+    return {
+        addEventListener: function() {},
+        removeEventListener: function() {}
+    };
+}
 
 function createMiniJquery() {
     function parseTag(spec) {

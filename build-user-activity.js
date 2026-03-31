@@ -8,37 +8,42 @@ var fs = require("fs");
 var path = require("path");
 
 var MODULES_DIR = path.join(__dirname, "ujg-user-activity-modules");
+var SHARED_DIR = path.join(__dirname, "ujg-shared-modules");
 var OUTPUT_FILE = path.join(__dirname, "ujg-user-activity.js");
 var TEMP_OUTPUT_FILE = OUTPUT_FILE + ".tmp";
 
 var MODULE_ORDER = [
-    "config.js",
-    "utils.js",
-    "api.js",
-    "repo-api.js",
-    "data-processor.js",
-    "repo-data-processor.js",
-    "progress-loader.js",
-    "user-picker.js",
-    "multi-user-picker.js",
-    "date-range-picker.js",
-    "summary-cards.js",
-    "calendar-heatmap.js",
-    "repo-calendar.js",
-    "daily-detail.js",
-    "unified-calendar.js",
-    "project-breakdown.js",
-    "issue-list.js",
-    "activity-log.js",
-    "repo-log.js",
-    "rendering.js",
-    "main.js"
+    { dir: SHARED_DIR, file: "team-store.js" },
+    { dir: SHARED_DIR, file: "team-picker.js" },
+    { dir: MODULES_DIR, file: "config.js" },
+    { dir: MODULES_DIR, file: "utils.js" },
+    { dir: MODULES_DIR, file: "api.js" },
+    { dir: MODULES_DIR, file: "repo-api.js" },
+    { dir: MODULES_DIR, file: "data-processor.js" },
+    { dir: MODULES_DIR, file: "repo-data-processor.js" },
+    { dir: MODULES_DIR, file: "progress-loader.js" },
+    { dir: MODULES_DIR, file: "user-picker.js" },
+    { dir: MODULES_DIR, file: "multi-user-picker.js" },
+    { dir: MODULES_DIR, file: "date-range-picker.js" },
+    { dir: MODULES_DIR, file: "summary-cards.js" },
+    { dir: MODULES_DIR, file: "calendar-heatmap.js" },
+    { dir: MODULES_DIR, file: "repo-calendar.js" },
+    { dir: MODULES_DIR, file: "daily-detail.js" },
+    { dir: MODULES_DIR, file: "unified-calendar.js" },
+    { dir: MODULES_DIR, file: "project-breakdown.js" },
+    { dir: MODULES_DIR, file: "issue-list.js" },
+    { dir: MODULES_DIR, file: "activity-log.js" },
+    { dir: MODULES_DIR, file: "repo-log.js" },
+    { dir: MODULES_DIR, file: "rendering.js" },
+    { dir: MODULES_DIR, file: "main.js" }
 ];
 
-function readModule(fileName) {
-    var filePath = path.join(MODULES_DIR, fileName);
+function readModule(entry) {
+    var dir = typeof entry === "object" && entry.dir ? entry.dir : MODULES_DIR;
+    var fileName = typeof entry === "object" && entry.file ? entry.file : entry;
+    var filePath = path.join(dir, fileName);
     if (!fs.existsSync(filePath)) {
-        throw new Error("Module not found: " + fileName);
+        throw new Error("Module not found: " + filePath);
     }
     return fs.readFileSync(filePath, "utf8");
 }
@@ -53,8 +58,9 @@ function build() {
         ""
     ];
 
-    MODULE_ORDER.forEach(function(fileName) {
-        var content = readModule(fileName);
+    MODULE_ORDER.forEach(function(entry) {
+        var fileName = typeof entry === "object" && entry.file ? entry.file : entry;
+        var content = readModule(entry);
         if (!content) return;
         parts.push("/* === Module: " + fileName + " === */");
         parts.push(content.trim());
@@ -74,9 +80,14 @@ function build() {
 
     console.log("✓ Built successfully:", OUTPUT_FILE);
     console.log("  Total size:", (fullContent.length / 1024).toFixed(2), "KB");
-    console.log("  Modules processed:", MODULE_ORDER.filter(function(f) {
-        return fs.existsSync(path.join(MODULES_DIR, f));
-    }).length);
+    console.log(
+        "  Modules processed:",
+        MODULE_ORDER.filter(function(entry) {
+            var dir = typeof entry === "object" && entry.dir ? entry.dir : MODULES_DIR;
+            var fileName = typeof entry === "object" && entry.file ? entry.file : entry;
+            return fs.existsSync(path.join(dir, fileName));
+        }).length
+    );
 }
 
 if (require.main === module) {

@@ -71,6 +71,7 @@
 │   ├── user-activity-repo.test.js
 │   └── widget-bootstrap.test.js
 ├── ujg-daily-diligence-modules/
+├── ujg-shared-modules/
 ├── ujg-daily-diligence.bootstrap.js
 ├── ujg-daily-diligence.css
 ├── ujg-daily-diligence.js

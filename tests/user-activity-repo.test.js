@@ -1939,9 +1939,21 @@ test("repo modules are wired in main module and build order", function() {
     assert.match(mainSource, /summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar/);
     assert.match(mainSource, /issueList: issueList, activityLog: activityLog, repoLog: repoLog/);
 
-    assert.match(buildSource, /"api\.js",\s*"repo-api\.js",\s*"data-processor\.js",\s*"repo-data-processor\.js"/);
-    assert.match(buildSource, /"calendar-heatmap\.js",\s*"repo-calendar\.js",\s*"daily-detail\.js"/);
-    assert.match(buildSource, /"activity-log\.js",\s*"repo-log\.js",\s*"rendering\.js"/);
+    assert.match(buildSource, /file:\s*"team-store\.js"/);
+    assert.match(buildSource, /file:\s*"team-picker\.js"/);
+    var iApi = buildSource.indexOf('file: "api.js"');
+    var iRepoApi = buildSource.indexOf('file: "repo-api.js"');
+    var iData = buildSource.indexOf('file: "data-processor.js"');
+    var iRepoData = buildSource.indexOf('file: "repo-data-processor.js"');
+    assert.ok(iApi < iRepoApi && iRepoApi < iData && iData < iRepoData);
+    var iHeat = buildSource.indexOf('file: "calendar-heatmap.js"');
+    var iRepoCal = buildSource.indexOf('file: "repo-calendar.js"');
+    var iDaily = buildSource.indexOf('file: "daily-detail.js"');
+    assert.ok(iHeat < iRepoCal && iRepoCal < iDaily);
+    var iAct = buildSource.indexOf('file: "activity-log.js"');
+    var iRepoLog = buildSource.indexOf('file: "repo-log.js"');
+    var iRender = buildSource.indexOf('file: "rendering.js"');
+    assert.ok(iAct < iRepoLog && iRepoLog < iRender);
 });
 
 test("public user activity bundle includes repo modules", function() {
