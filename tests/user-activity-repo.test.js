@@ -3468,6 +3468,53 @@ test("day detail team view keeps separate columns for duplicate visible identifi
     );
 });
 
+test("day detail team timeline stacks near-simultaneous events at distinct vertical offsets", function() {
+    var mod = loadDailyDetail();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    var model = mod.buildTimelineModel([
+        {
+            issueKey: "STK-1",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "worklog",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 0.5,
+            comment: ""
+        },
+        {
+            issueKey: "STK-2",
+            timestamp: "2026-03-16T10:00:00.000Z",
+            type: "comment",
+            author: { name: "u1", displayName: "Alice" },
+            body: "same instant"
+        }
+    ], users, "2026-03-16");
+    var html = mod.renderTeamTimeline(model);
+    var tops = [];
+    var re = /ujg-ua-detail-timeline-card" style="top:(\d+)px/g;
+    var m;
+    while ((m = re.exec(html)) !== null) tops.push(parseInt(m[1], 10));
+    assert.ok(tops.length >= 2, "expected two timeline cards");
+    assert.notEqual(tops[0], tops[1], "stacked cards must not share the same top offset");
+});
+
+test("day detail team timeline matches author by accountId like repo-data-processor", function() {
+    var mod = loadDailyDetail();
+    var selectedUsers = [{ accountId: "jira-cloud-acc-99", displayName: "Cloud User" }];
+    var model = mod.buildTimelineModel([{
+        issueKey: "ACC-1",
+        timestamp: "2026-03-16T12:00:00.000Z",
+        type: "worklog",
+        author: { accountId: "jira-cloud-acc-99" },
+        timeSpentHours: 1,
+        comment: ""
+    }], selectedUsers, "2026-03-16");
+
+    assert.equal(model.unmatched.length, 0);
+    assert.equal(model.users.length, 1);
+    assert.equal(model.columns[model.users[0].id].items.length, 1);
+    assert.equal(model.columns[model.users[0].id].items[0].issueKey, "ACC-1");
+});
+
 test("day detail team view leaves ambiguous author unmatched instead of mislabeling", function() {
     var mod = loadDailyDetail();
     var selectedUsers = [

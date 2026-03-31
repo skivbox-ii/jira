@@ -24,12 +24,18 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     }
 
     function normalizeAuthor(author) {
-        if (!author) return { key: "", name: "", displayName: "" };
-        if (typeof author === "string") return { key: "", name: "", displayName: author };
+        if (!author) return { key: "", name: "", displayName: "", accountId: "", userName: "" };
+        if (typeof author === "string") {
+            return { key: "", name: "", displayName: author, accountId: "", userName: "" };
+        }
+        var nested = author.user && typeof author.user === "object" ? author.user : null;
         return {
-            key: author.key || "",
-            name: author.name || author.key || "",
-            displayName: author.displayName || author.name || author.key || ""
+            key: author.key || (nested && nested.key) || "",
+            name: author.name || (nested && nested.name) || author.key || (nested && nested.key) || "",
+            displayName: author.displayName || (nested && nested.displayName) || author.name ||
+                (nested && nested.name) || author.key || "",
+            accountId: author.accountId || (nested && nested.accountId) || "",
+            userName: author.userName || (nested && nested.userName) || ""
         };
     }
 
@@ -177,17 +183,30 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var source = typeof user === "string" ? { key: user, name: user, displayName: user } : (user || {});
         var tokens = [];
 
-        [source.key, source.name, source.displayName].forEach(function(value) {
+        function push(value) {
             var token = normalizedToken(value);
             if (token && tokens.indexOf(token) === -1) tokens.push(token);
-        });
+        }
+
+        push(source.key);
+        push(source.name);
+        push(source.displayName);
+        push(source.accountId);
+        push(source.userName);
+        if (source.user) {
+            push(source.user.key);
+            push(source.user.name);
+            push(source.user.displayName);
+            push(source.user.accountId);
+            push(source.user.userName);
+        }
 
         return tokens;
     }
 
     function authorMatchKey(author) {
         var a = author || {};
-        return String(a.name || a.key || a.displayName || "").trim() || "__unknown__";
+        return String(a.accountId || a.name || a.key || a.displayName || "").trim() || "__unknown__";
     }
 
     function authorIdentity(author) {
@@ -195,13 +214,15 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return {
             key: normalizedToken(a.key),
             name: normalizedToken(a.name),
-            displayName: normalizedToken(a.displayName)
+            displayName: normalizedToken(a.displayName),
+            accountId: normalizedToken(a.accountId),
+            userName: normalizedToken(a.userName)
         };
     }
 
     function authorIdentitySignature(author) {
         var id = authorIdentity(author);
-        return [id.key, id.name, id.displayName].join("\0");
+        return [id.key, id.name, id.displayName, id.accountId, id.userName].join("\0");
     }
 
     function groupActionsByUser(actions, selectedUsers) {
@@ -399,6 +420,10 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var normalized = normalizeAuthor(author);
         var ids = matchColumnIdsByField(columns, "key", normalized.key);
         if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "accountId", normalized.accountId);
+        if (ids.length) return ids;
+        ids = matchColumnIdsByField(columns, "userName", normalized.userName);
+        if (ids.length) return ids;
         ids = matchColumnIdsByField(columns, "name", normalized.name);
         if (ids.length) return ids;
         ids = matchColumnIdsByField(columns, "displayName", normalized.displayName);
@@ -412,6 +437,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     }
 
     var TEAM_TIMELINE_HEIGHT_PX = 400;
+    var TIMELINE_STACK_NEAR_MS = 90 * 1000;
+    var TIMELINE_STACK_STEP_PX = 10;
+    var TIMELINE_CARD_EST_HEIGHT_PX = 64;
+
+    function layoutTimelineCardTops(items, h, rangeStartMs, span) {
+        var sorted = (items || []).slice().sort(byTimestamp);
+        var anchorMs = NaN;
+        var stackInCluster = 0;
+        var rows = [];
+        sorted.forEach(function(a) {
+            var ms = Date.parse(String(a.timestamp || ""));
+            if (isNaN(ms)) {
+                rows.push({ action: a, topPx: null });
+                return;
+            }
+            if (isNaN(anchorMs) || ms - anchorMs > TIMELINE_STACK_NEAR_MS) {
+                anchorMs = ms;
+                stackInCluster = 0;
+            } else {
+                stackInCluster += 1;
+            }
+            var ratio = (ms - rangeStartMs) / span;
+            var baseTop = Math.round(ratio * h);
+            rows.push({ action: a, topPx: baseTop + stackInCluster * TIMELINE_STACK_STEP_PX });
+        });
+        return rows;
+    }
 
     function buildTimelineModel(actions, selectedUsers, dateStr) {
         selectedUsers = selectedUsers || [];
@@ -502,20 +554,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             markersHtml += '<div class="ujg-ua-detail-time-marker" style="top:' + topPx + 'px"></div>';
         });
 
-        var colsHtml = "";
-        model.users.forEach(function(user) {
+        var colLayouts = model.users.map(function(user) {
             var col = model.columns[user.id];
+            return {
+                user: user,
+                rows: layoutTimelineCardTops(col.items, h, model.rangeStartMs, span)
+            };
+        });
+        var trackH = h;
+        colLayouts.forEach(function(layout) {
+            layout.rows.forEach(function(row) {
+                if (row.topPx != null) {
+                    trackH = Math.max(trackH, row.topPx + TIMELINE_CARD_EST_HEIGHT_PX);
+                }
+            });
+        });
+
+        var colsHtml = "";
+        colLayouts.forEach(function(layout) {
+            var user = layout.user;
             var label = utils.escapeHtml(surname(user.displayName || user.name || user.id));
             colsHtml += '<div class="ujg-ua-detail-user-col">';
             colsHtml += '<div class="ujg-ua-detail-user-col-label text-xs font-semibold text-muted-foreground">' + label + "</div>";
-            colsHtml += '<div class="ujg-ua-detail-user-col-track" style="height:' + h + 'px">';
-            col.items.forEach(function(a) {
-                var ms = Date.parse(String(a.timestamp || ""));
-                if (isNaN(ms)) return;
-                var ratio = (ms - model.rangeStartMs) / span;
-                var topPx = Math.round(ratio * h);
-                colsHtml += '<div class="ujg-ua-detail-timeline-card" style="top:' + topPx + 'px">';
-                colsHtml += renderActionHtml(a);
+            colsHtml += '<div class="ujg-ua-detail-user-col-track" style="height:' + trackH + 'px">';
+            layout.rows.forEach(function(row) {
+                if (row.topPx == null) return;
+                colsHtml += '<div class="ujg-ua-detail-timeline-card" style="top:' + row.topPx + 'px">';
+                colsHtml += renderActionHtml(row.action);
                 colsHtml += "</div>";
             });
             colsHtml += "</div></div>";
@@ -526,7 +591,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var html = '<div class="ujg-ua-detail-timeline mt-2">';
         html += '<div class="ujg-ua-detail-timeline-scale text-[10px] text-muted-foreground mb-1">' +
             utils.escapeHtml(utils.formatTime(t0)) + " — " + utils.escapeHtml(utils.formatTime(t1)) + "</div>";
-        html += '<div class="ujg-ua-detail-timeline-grid relative" style="min-height:' + h + 'px">';
+        html += '<div class="ujg-ua-detail-timeline-grid relative" style="min-height:' + trackH + 'px">';
         html += '<div class="ujg-ua-detail-time-markers pointer-events-none">' + markersHtml + "</div>";
         html += '<div class="ujg-ua-detail-user-cols flex gap-2 min-w-0">' + colsHtml + "</div>";
         html += "</div></div>";
@@ -641,6 +706,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         groupActionsByUser: groupActionsByUser,
         splitTimedAndUntimed: splitTimedAndUntimed,
         buildTimelineModel: buildTimelineModel,
-        renderTeamTimeline: renderTeamTimeline
+        renderTeamTimeline: renderTeamTimeline,
+        layoutTimelineCardTops: layoutTimelineCardTops
     };
 });
