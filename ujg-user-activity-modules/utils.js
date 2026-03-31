@@ -136,6 +136,26 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return svg;
     }
 
+    function formatTime(isoString) {
+        if (!isoString) return "";
+        var d = new Date(isoString);
+        if (isNaN(d.getTime())) return "";
+        var h = d.getHours();
+        var m = d.getMinutes();
+        return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+    }
+
+    function isWeekendDay(dateKey) {
+        var d = new Date(dateKey);
+        var dow = d.getDay();
+        return dow === 0 || dow === 6;
+    }
+
+    function truncate(str, maxLen) {
+        if (!str || str.length <= maxLen) return str || "";
+        return str.substring(0, maxLen) + "…";
+    }
+
     return {
         WEEKDAYS_RU: WEEKDAYS_RU,
         MONTHS_RU: MONTHS_RU,
@@ -155,6 +175,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         getDefaultPeriod: getDefaultPeriod,
         computePresetDates: computePresetDates,
         getHeatBg: getHeatBg,
-        icon: icon
+        icon: icon,
+        formatTime: formatTime,
+        isWeekendDay: isWeekendDay,
+        truncate: truncate
     };
 });
