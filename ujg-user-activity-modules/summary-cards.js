@@ -9,8 +9,43 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
         { icon: "trendingUp",   label: "Ø часов/день",   key: "avgHoursPerDay",  suffix: "ч" }
     ];
 
+    function formatHoursCell(hours) {
+        var n = hours == null ? 0 : Number(hours);
+        if (isNaN(n)) n = 0;
+        return (Math.round(n * 10) / 10) + "ч";
+    }
+
+    function buildUserStatsTableHtml(userStats) {
+        var keys = Object.keys(userStats).sort();
+        var rows = "";
+        for (var i = 0; i < keys.length; i++) {
+            var u = userStats[keys[i]];
+            var name = u && u.displayName != null ? String(u.displayName) : keys[i];
+            var activeDays = u && u.activeDays != null ? Number(u.activeDays) : 0;
+            var daysWithoutWorklogs = u && u.daysWithoutWorklogs != null ? Number(u.daysWithoutWorklogs) : 0;
+            var rowClass = daysWithoutWorklogs > 0 ? ' class="ujg-ua-stat-warn"' : "";
+            rows +=
+                "<tr" + rowClass + ">" +
+                "<td>" + utils.escapeHtml(name) + "</td>" +
+                "<td>" + formatHoursCell(u && u.totalHours) + "</td>" +
+                "<td>" + (isNaN(activeDays) ? 0 : activeDays) + "</td>" +
+                "<td>" + (isNaN(daysWithoutWorklogs) ? 0 : daysWithoutWorklogs) + "</td>" +
+                "</tr>";
+        }
+        return (
+            '<div class="ujg-ua-user-stats-table">' +
+            "<table>" +
+            "<tr><th>Пользователь</th><th>Часы</th><th>Активных дней</th><th>Без трудозатрат</th></tr>" +
+            rows +
+            "</table>" +
+            "</div>"
+        );
+    }
+
     function create() {
-        var $el = $('<div class="grid grid-cols-5 gap-2"></div>');
+        var $wrap = $('<div class="flex flex-col gap-2"></div>');
+        var $grid = $('<div class="grid grid-cols-5 gap-2"></div>');
+        $wrap.append($grid);
 
         function render(data) {
             var html = "";
@@ -28,12 +63,19 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
                         '</span>' +
                     '</div>';
             }
-            $el.html(html);
+            $grid.html(html);
+
+            $wrap.find(".ujg-ua-user-stats-table").remove();
+            var us = data.userStats;
+            var nUsers = us && typeof us === "object" ? Object.keys(us).length : 0;
+            if (nUsers > 1) {
+                $wrap.append(buildUserStatsTableHtml(us));
+            }
         }
 
-        render({ totalHours: 0, totalIssues: 0, totalProjects: 0, activeDays: 0, avgHoursDay: 0 });
+        render({ totalHours: 0, totalIssues: 0, totalProjects: 0, activeDays: 0, avgHoursPerDay: 0 });
 
-        return { $el: $el, render: render };
+        return { $el: $wrap, render: render };
     }
 
     return { create: create };

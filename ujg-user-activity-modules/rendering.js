@@ -4,7 +4,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var $container = null;
     var mods = null;
     var $contentArea = null;
-    var currentUser = null;
+    var currentUsers = [];
     var currentPeriod = null;
     var isFullscreen = false;
     var activeRequestId = 0;
@@ -14,10 +14,24 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var issueListInst = null;
     var activityLogInst = null;
     var detailInst = null;
+    var pickerInstance = null;
+
+    var stylesInjected = false;
+
+    function injectStyles() {
+        if (stylesInjected) return;
+        stylesInjected = true;
+        var styles = config.STYLES;
+        if (styles) {
+            var $style = $('<style type="text/css"></style>').text(styles);
+            $("head").append($style);
+        }
+    }
 
     function init($el, modules) {
         $container = $el;
         mods = modules;
+        injectStyles();
         renderShell();
     }
 
@@ -44,26 +58,34 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
         $container.append($header);
 
-        var userPicker = mods.userPicker.create($container, function(user) {
-            currentUser = user;
-            if (user) {
-                var period = currentPeriod || utils.getDefaultPeriod();
-                loadData(user.name, period, user);
+        var pickerMod = mods.multiUserPicker || mods.userPicker;
+        pickerInstance = pickerMod.create($container, function(users) {
+            if (Array.isArray(users)) {
+                currentUsers = users;
+            } else if (users) {
+                currentUsers = [users];
             } else {
+                currentUsers = [];
+            }
+            if (currentUsers.length === 0) {
                 activeRequestId += 1;
                 renderEmptyState();
+                return;
+            }
+            if (!mods.multiUserPicker) {
+                loadData(currentUsers, currentPeriod || utils.getDefaultPeriod());
             }
         });
-        $header.find(".ujg-ua-slot-user").append(userPicker.$el);
+        $header.find(".ujg-ua-slot-user").append(pickerInstance.$el);
 
         var datePicker = mods.dateRangePicker.create(function(period) { currentPeriod = period; });
         $header.find(".ujg-ua-slot-daterange").append(datePicker.$el);
         currentPeriod = datePicker.getPeriod();
 
         $header.find(".ujg-ua-btn-load").on("click", function() {
-            if (!currentUser) return;
+            if (currentUsers.length === 0) return;
             var period = currentPeriod || utils.getDefaultPeriod();
-            loadData(currentUser.name, period, currentUser);
+            loadData(currentUsers, period);
         });
 
         $header.find(".ujg-ua-btn-fullscreen").on("click", function() {
@@ -90,12 +112,19 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $contentArea = $('<main class="w-full px-3 py-2 space-y-2"></main>');
         $container.append($contentArea);
 
-        userPicker.setFromUrl();
-        currentUser = userPicker.getSelected();
+        if (pickerInstance.setFromUrl) {
+            pickerInstance.setFromUrl();
+        }
+        if (pickerInstance.getSelectedUsers) {
+            currentUsers = pickerInstance.getSelectedUsers() || [];
+        } else if (pickerInstance.getSelected) {
+            var sel = pickerInstance.getSelected();
+            currentUsers = sel ? [sel] : [];
+        }
 
-        if (currentUser) {
+        if (currentUsers.length > 0) {
             var period = currentPeriod || utils.getDefaultPeriod();
-            loadData(currentUser.name, period, currentUser);
+            loadData(currentUsers, period);
         } else {
             renderEmptyState();
         }
@@ -108,53 +137,168 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                     utils.icon("activity", "w-8 h-8 text-primary") +
                 '</div>' +
                 '<h2 class="text-xl font-bold text-foreground mb-2">User Activity Dashboard</h2>' +
-                '<p class="text-sm text-muted-foreground max-w-md">Выберите пользователя и период, чтобы увидеть полную статистику активности: залогированное время, задачи, переходы статусов.</p>' +
+                '<p class="text-sm text-muted-foreground max-w-md">Выберите пользователя и период, чтобы увидеть полную статистику активности: залогированное время, задачи, переходы статусов. Для сравнения можно добавить нескольких пользователей.</p>' +
             '</div>'
         );
     }
 
-    function loadData(username, period, user) {
+    function cloneUsers(selectedUsers) {
+        var list = Array.isArray(selectedUsers) ? selectedUsers : (selectedUsers ? [selectedUsers] : []);
+        return list.map(function(user) {
+            return Object.assign({}, user);
+        });
+    }
+
+    function attachAsync(promiseLike, onDone, onFail) {
+        if (promiseLike && typeof promiseLike.done === "function") {
+            promiseLike.done(onDone);
+            if (onFail && typeof promiseLike.fail === "function") promiseLike.fail(onFail);
+            return;
+        }
+        if (promiseLike && typeof promiseLike.then === "function") {
+            promiseLike.then(onDone, onFail);
+            return;
+        }
+        onDone(promiseLike);
+    }
+
+    function loadComments(issueKeys, loader, callback, onFail) {
+        if (!mods.api.fetchIssueComments) {
+            callback({});
+            return;
+        }
+        attachAsync(
+            mods.api.fetchIssueComments(issueKeys, function(done, total) {
+                loader.update({ phase: "comments", done: done, total: total });
+            }),
+            function(commentsMap) { callback(commentsMap || {}); },
+            onFail
+        );
+    }
+
+    function loadData(selectedUsers, period) {
         var requestId = ++activeRequestId;
-        var requestUser = Object.assign({}, user || currentUser || { name: username });
+        var requestUsers = cloneUsers(selectedUsers);
         $contentArea.empty();
 
         var loader = mods.progressLoader.create();
         loader.show();
         $contentArea.append(loader.$el);
 
-        mods.api.fetchAllData(username, period.start, period.end, function(progress) {
-            loader.update(progress);
-        }).done(function(rawData) {
-            if (requestId !== activeRequestId) return;
-            var processed = mods.dataProcessor.processData(rawData, username, period.start, period.end);
-            var startDate = new Date(period.start + "T00:00:00");
-            var endDate = new Date(period.end + "T23:59:59");
-            if (requestId !== activeRequestId) return;
-            mods.repoApi.fetchRepoActivityForIssues(rawData.issues, function(progress) {
-                loader.update(progress);
-            }).done(function(repoData) {
-                if (requestId !== activeRequestId) return;
-                var repoActivity = mods.repoDataProcessor.processRepoActivity(
-                    processed.issueMap,
-                    repoData && repoData.issueDevStatusMap,
-                    requestUser,
-                    period.start,
-                    period.end
-                );
-                if (requestId !== activeRequestId) return;
-                renderDashboard(processed, startDate, endDate, username, { activity: repoActivity });
-            }).fail(function(err) {
-                if (requestId !== activeRequestId) return;
-                renderDashboard(processed, startDate, endDate, username, { error: err });
-            });
-        }).fail(function(err) {
-            if (requestId !== activeRequestId) return;
+        if (requestUsers.length === 0) {
+            renderEmptyState();
+            return;
+        }
+
+        var usersData = new Array(requestUsers.length);
+        var pendingUsers = requestUsers.length;
+        var hasFailed = false;
+
+        function failLoad(err) {
+            if (hasFailed || requestId !== activeRequestId) return;
+            hasFailed = true;
             $contentArea.empty().html(
                 '<div class="dashboard-card p-8 text-center">' +
                     '<div class="text-destructive font-medium mb-2">Ошибка загрузки</div>' +
                     '<div class="text-sm text-muted-foreground">' + utils.escapeHtml(String(err)) + '</div>' +
                 '</div>'
             );
+        }
+
+        function continueWithUsers() {
+            if (requestId !== activeRequestId) return;
+
+            var allIssueKeys = [];
+            var seenKeys = {};
+            usersData.forEach(function(ud) {
+                (ud.rawData.issues || []).forEach(function(issue) {
+                    if (!seenKeys[issue.key]) {
+                        seenKeys[issue.key] = true;
+                        allIssueKeys.push(issue.key);
+                    }
+                });
+            });
+
+            loadComments(allIssueKeys, loader, function(commentsMap) {
+                if (requestId !== activeRequestId) return;
+
+                usersData.forEach(function(ud) {
+                    ud.comments = commentsMap || {};
+                });
+
+                var processed;
+                if (mods.dataProcessor.processMultiUserData) {
+                    processed = mods.dataProcessor.processMultiUserData(usersData, period.start, period.end);
+                } else {
+                    var singleUser = usersData[0];
+                    processed = mods.dataProcessor.processData(singleUser.rawData, singleUser.username, period.start, period.end);
+                }
+
+                var startDate = new Date(period.start + "T00:00:00");
+                var endDate = new Date(period.end + "T23:59:59");
+                var allIssues = [];
+                var issueSeen = {};
+                usersData.forEach(function(ud) {
+                    (ud.rawData.issues || []).forEach(function(issue) {
+                        if (!issueSeen[issue.key]) {
+                            issueSeen[issue.key] = true;
+                            allIssues.push(issue);
+                        }
+                    });
+                });
+
+                var requestUserFilter = requestUsers.length === 1
+                    ? Object.assign({}, requestUsers[0])
+                    : requestUsers.map(function(user) { return user.name; });
+
+                attachAsync(
+                    mods.repoApi.fetchRepoActivityForIssues(allIssues, function(progress) {
+                        loader.update(progress);
+                    }),
+                    function(repoData) {
+                        if (requestId !== activeRequestId) return;
+                        var repoActivity = mods.repoDataProcessor.processRepoActivity(
+                            processed.issueMap,
+                            repoData && repoData.issueDevStatusMap,
+                            requestUserFilter,
+                            period.start,
+                            period.end
+                        );
+
+                        if (repoActivity && repoActivity.dayMap) {
+                            Object.keys(repoActivity.dayMap).forEach(function(dateKey) {
+                                if (processed.dayMap[dateKey]) {
+                                    processed.dayMap[dateKey].repoItems = repoActivity.dayMap[dateKey].items || [];
+                                }
+                            });
+                        }
+
+                        if (requestId !== activeRequestId) return;
+                        renderDashboard(processed, startDate, endDate, requestUsers, { activity: repoActivity });
+                    },
+                    function(err) {
+                        if (requestId !== activeRequestId) return;
+                        renderDashboard(processed, startDate, endDate, requestUsers, { error: err });
+                    }
+                );
+            }, failLoad);
+        }
+
+        requestUsers.forEach(function(user, index) {
+            attachAsync(mods.api.fetchAllData(user.name, period.start, period.end, function(progress) {
+                loader.update(progress);
+            }), function(rawData) {
+                if (hasFailed || requestId !== activeRequestId) return;
+                usersData[index] = {
+                    username: user.name,
+                    displayName: user.displayName || user.name,
+                    rawData: rawData
+                };
+                pendingUsers -= 1;
+                if (pendingUsers === 0) {
+                    continueWithUsers();
+                }
+            }, failLoad);
         });
     }
 
@@ -167,7 +311,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
     }
 
-    function renderDashboard(data, startDate, endDate, username, repoState) {
+    function renderDashboard(data, startDate, endDate, selectedUsers, repoState) {
         $contentArea.empty();
         repoState = repoState || {};
         var repoActivity = repoState.activity || null;
@@ -176,16 +320,26 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         summaryInst.render(data.stats);
         $contentArea.append(summaryInst.$el);
 
-        var heatmap = mods.calendarHeatmap.render(data.dayMap, data.issueMap, startDate, endDate);
-        $contentArea.append(heatmap.$el);
+        var calendarMod = mods.unifiedCalendar || mods.calendarHeatmap;
+        var calendar;
+        if (mods.unifiedCalendar) {
+            calendar = calendarMod.render(data.dayMap, data.issueMap, selectedUsers, startDate, endDate);
+        } else {
+            calendar = calendarMod.render(data.dayMap, data.issueMap, startDate, endDate);
+        }
+        $contentArea.append(calendar.$el);
 
-        var repoCalendarInst = null;
         var repoLogInst = null;
 
-        if (repoActivity) {
-            repoCalendarInst = mods.repoCalendar.render(repoActivity.dayMap, startDate, endDate);
-            $contentArea.append(repoCalendarInst.$el);
-        } else if (repoState.error) {
+        if (!mods.unifiedCalendar && repoActivity) {
+            if (mods.repoCalendar) {
+                var repoCalendarInst = mods.repoCalendar.render(repoActivity.dayMap, startDate, endDate);
+                $contentArea.append(repoCalendarInst.$el);
+                repoCalendarInst.onSelectDate(function(selectedDate) {
+                    if (repoLogInst) repoLogInst.render(repoActivity, selectedDate || null);
+                });
+            }
+        } else if (!mods.unifiedCalendar && repoState.error) {
             $contentArea.append(renderRepoStateCard(
                 "Репозиторная активность",
                 "Не удалось загрузить данные репозиториев."
@@ -195,17 +349,11 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         detailInst = mods.dailyDetail.create();
         $contentArea.append(detailInst.$el);
 
-        heatmap.onSelectDate(function(dateStr) {
+        calendar.onSelectDate(function(dateStr) {
             if (!dateStr) { detailInst.hide(); return; }
-            var dayData = data.dayMap[dateStr] || { worklogs: [], changes: [], issues: [], totalHours: 0 };
+            var dayData = data.dayMap[dateStr] || { worklogs: [], changes: [], issues: [], totalHours: 0, allWorklogs: [], allChanges: [], allComments: [], repoItems: [], users: {} };
             detailInst.show(dateStr, dayData, data.issueMap);
         });
-
-        if (repoCalendarInst) {
-            repoCalendarInst.onSelectDate(function(selectedDate) {
-                if (repoLogInst) repoLogInst.render(repoActivity, selectedDate || null);
-            });
-        }
 
         projBreakInst = mods.projectBreakdown.create();
         var projects = Object.values(data.projectMap).sort(function(a, b) { return b.totalHours - a.totalHours; });
@@ -228,7 +376,8 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $contentArea.append(issueListInst.$el);
 
         activityLogInst = mods.activityLog.create();
-        activityLogInst.render(data, username, utils.getDayKey(startDate), utils.getDayKey(endDate));
+        var usernameStr = Array.isArray(selectedUsers) ? selectedUsers.map(function(u) { return u.name; }).join(",") : selectedUsers;
+        activityLogInst.render(data, usernameStr, utils.getDayKey(startDate), utils.getDayKey(endDate));
         $contentArea.append(activityLogInst.$el);
 
         if (repoActivity) {
