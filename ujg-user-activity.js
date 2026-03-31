@@ -680,6 +680,7 @@ define("_ujgUA_config", [], function() {
 
     var ICONS = {
         activity: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>',
+        settings: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
         clock: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
         checkSquare: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/></svg>',
         folderOpen: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>',
@@ -691,11 +692,16 @@ define("_ujgUA_config", [], function() {
         download: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
         search: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
         user: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>',
+        users: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         chevronDown: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
         chevronRight: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
         arrowRight: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
+        arrowLeft: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>',
         filter: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>',
+        plus: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>',
         x: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+        trash2: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>',
+        userPlus: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>',
         bug: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>',
         bookOpen: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
         checkCircle2: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
@@ -5650,6 +5656,492 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
     };
 });
 
+/* === Module: team-manager.js === */
+define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"], function(
+    $,
+    sharedTeamStore,
+    utils
+) {
+    "use strict";
+
+    var STORAGE_KEY = "ujg-ua-teams";
+    var store = sharedTeamStore.create({
+        jiraBaseUrl: utils.getJiraBaseUrl ? utils.getJiraBaseUrl() : "",
+        storageKey: STORAGE_KEY
+    });
+    var teams = [];
+    var displayNameByKey = {};
+
+    function trimSlash(s) {
+        return String(s || "").replace(/\/+$/, "");
+    }
+
+    function apiUrl(path) {
+        var base = trimSlash(utils.getJiraBaseUrl ? utils.getJiraBaseUrl() : "");
+        if (!path) return base;
+        if (path.charAt(0) !== "/") path = "/" + path;
+        return base + path;
+    }
+
+    function pluralizeMembers(n) {
+        var value = Number(n || 0);
+        var z = value % 100;
+        var m = value % 10;
+        if (z >= 11 && z <= 14) return "участников";
+        if (m === 1) return "участник";
+        if (m >= 2 && m <= 4) return "участника";
+        return "участников";
+    }
+
+    function normalizeTeams(list) {
+        return sharedTeamStore.normalizeTeams(list);
+    }
+
+    function syncState() {
+        teams = store.getTeams();
+        displayNameByKey = store.getDisplayNameByKey();
+        return teams;
+    }
+
+    function detectDashboardId() {
+        return store.detectDashboardId();
+    }
+
+    function loadTeams() {
+        var req = store.loadTeams();
+        req.always(syncState);
+        return req;
+    }
+
+    function saveTeams(teamsList) {
+        var req = store.saveTeams(teamsList);
+        syncState();
+        req.always(syncState);
+        return req;
+    }
+
+    function normalizeUserRow(u) {
+        if (!u || typeof u !== "object") return null;
+        var key = u.accountId || u.key || u.name || u.username || "";
+        var displayName = u.displayName || u.name || key || "";
+        return { key: String(key), displayName: String(displayName) };
+    }
+
+    function searchUsers(query) {
+        var d = $.Deferred();
+        var q = String(query || "").trim();
+        $.ajax({
+            url: apiUrl("/rest/api/2/user/search"),
+            type: "GET",
+            dataType: "json",
+            data: { username: q, maxResults: 20 }
+        })
+            .done(function(raw) {
+                var arr = Array.isArray(raw) ? raw : (raw && raw.users) || [];
+                var out = [];
+                for (var i = 0; i < arr.length; i++) {
+                    var row = normalizeUserRow(arr[i]);
+                    if (row && row.key) out.push(row);
+                }
+                d.resolve(out);
+            })
+            .fail(function(xhr, status, err) {
+                d.reject(xhr, status, err);
+            });
+        return d.promise();
+    }
+
+    function getTeams() {
+        syncState();
+        return teams.slice();
+    }
+
+    function memberLabel(key) {
+        if (displayNameByKey[key]) return displayNameByKey[key];
+        return key;
+    }
+
+    function create($parent, onChange) {
+        var editingTeamId = null;
+        var showCreate = false;
+        var searchTimer = null;
+        var lastSearchQuery = "";
+
+        var $overlay = $("<div/>").addClass(
+            "ujg-ua-teams-overlay fixed inset-0 z-50 overflow-auto bg-background/95 transition-opacity duration-150"
+        );
+        var $shell = $("<div/>").addClass("min-h-screen bg-background");
+        var $header = $("<header/>").addClass(
+            "border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-30"
+        );
+        var $headerInner = $("<div/>").addClass("px-4 py-3 flex items-center gap-3");
+        var $close = $("<button type=\"button\"/>")
+            .addClass(
+                "ujg-ua-teams-close h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            )
+            .attr("title", "Закрыть")
+            .html(utils.icon("arrowLeft", "w-4 h-4"));
+        var $titleIcon = $("<span/>").html(utils.icon("users", "w-4 h-4 text-primary"));
+        var $title = $("<h1/>")
+            .addClass("text-sm font-bold text-foreground")
+            .text("Управление командами");
+        $headerInner.append($close, $titleIcon, $title);
+        $header.append($headerInner);
+
+        var $main = $("<main/>").addClass("max-w-4xl mx-auto px-4 py-6");
+        var $grid = $("<div/>").addClass("grid grid-cols-1 lg:grid-cols-2 gap-6");
+        var $colLeft = $("<div/>");
+        var $colRight = $("<div/>");
+        $grid.append($colLeft, $colRight);
+        $main.append($grid);
+        $shell.append($header, $main);
+        $overlay.append($shell);
+        $overlay.appendTo($parent);
+
+        function notify() {
+            if (typeof onChange === "function") onChange(getTeams());
+        }
+
+        function persist(next) {
+            saveTeams(next).always(notify);
+        }
+
+        function render() {
+            syncState();
+            if (searchTimer) {
+                clearTimeout(searchTimer);
+                searchTimer = null;
+            }
+            teams = normalizeTeams(teams);
+            $colLeft.empty();
+            $colRight.empty();
+
+            var $teamsHeader = $("<div/>").addClass("flex items-center justify-between mb-3");
+            $teamsHeader.append(
+                $("<h2/>")
+                    .addClass("text-xs font-semibold text-muted-foreground uppercase tracking-wider")
+                    .text("Команды")
+            );
+            var $newBtn = $("<button type=\"button\"/>")
+                .addClass(
+                    "ujg-ua-teams-new h-7 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors flex items-center gap-1"
+                )
+                .html(utils.icon("plus", "w-3 h-3") + " <span>Новая</span>");
+            $teamsHeader.append($newBtn);
+            $colLeft.append($teamsHeader);
+
+            if (showCreate) {
+                var $createRow = $("<div/>").addClass("mb-3 overflow-hidden transition-all duration-150");
+                var $card = $("<div/>").addClass("dashboard-card p-3 flex items-center gap-2");
+                var $nameInput = $("<input type=\"text\"/>")
+                    .addClass(
+                        "ujg-ua-teams-new-name flex-1 h-8 px-3 text-sm bg-muted/50 border border-border rounded-md text-foreground outline-none focus:ring-1 focus:ring-ring"
+                    )
+                    .attr("placeholder", "Название команды...");
+                var $submitCreate = $("<button type=\"button\"/>")
+                    .addClass(
+                        "ujg-ua-teams-create-submit h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90"
+                    )
+                    .text("Создать");
+                var $cancelCreate = $("<button type=\"button\"/>")
+                    .addClass(
+                        "ujg-ua-teams-create-cancel h-8 w-8 flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground"
+                    )
+                    .html(utils.icon("x", "w-4 h-4"));
+                $card.append($nameInput, $submitCreate, $cancelCreate);
+                $createRow.append($card);
+                $colLeft.append($createRow);
+            }
+
+            var $list = $("<div/>").addClass("space-y-2");
+            teams.forEach(function(team) {
+                var active = editingTeamId === team.id;
+                var $row = $("<div/>").addClass(
+                    "ujg-ua-teams-row dashboard-card p-3 cursor-pointer transition-colors " +
+                        (active ? "ring-2 ring-primary" : "hover:bg-surface-hover")
+                );
+                $row.attr("data-team-id", team.id);
+                var $top = $("<div/>").addClass("flex items-center justify-between");
+                var $meta = $("<div/>");
+                $meta.append(
+                    $("<div/>").addClass("text-sm font-semibold text-foreground").text(team.name)
+                );
+                var memberCount = team.memberKeys.length;
+                $meta.append(
+                    $("<div/>")
+                        .addClass("text-xs text-muted-foreground mt-0.5")
+                        .text(memberCount + " " + pluralizeMembers(memberCount))
+                );
+                var $del = $("<button type=\"button\"/>")
+                    .addClass(
+                        "ujg-ua-teams-delete h-7 w-7 flex items-center justify-center rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    )
+                    .html(utils.icon("trash2", "w-3.5 h-3.5"))
+                    .attr("data-team-id", team.id);
+                $top.append($meta, $del);
+                $row.append($top);
+                if (team.memberKeys.length > 0) {
+                    var $tags = $("<div/>").addClass("flex flex-wrap gap-1 mt-2");
+                    team.memberKeys.forEach(function(key) {
+                        $tags.append(
+                            $("<span/>")
+                                .addClass("text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium")
+                                .text(memberLabel(key))
+                        );
+                    });
+                    $row.append($tags);
+                }
+                $list.append($row);
+            });
+            if (teams.length === 0) {
+                $list.append(
+                    $("<div/>")
+                        .addClass("text-center py-12 text-muted-foreground text-sm")
+                        .text("Нет команд. Создайте первую!")
+                );
+            }
+            $colLeft.append($list);
+
+            var editTeam = null;
+            if (editingTeamId) {
+                for (var i = 0; i < teams.length; i++) {
+                    if (teams[i].id === editingTeamId) {
+                        editTeam = teams[i];
+                        break;
+                    }
+                }
+            }
+
+            if (editTeam) {
+                $colRight.append(
+                    $("<h2/>")
+                        .addClass("text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3")
+                        .text("Участники — " + editTeam.name)
+                );
+                var $members = $("<div/>").addClass("space-y-1 mb-4");
+                editTeam.memberKeys.forEach(function(key) {
+                    var $mrow = $("<div/>").addClass("dashboard-card px-3 py-2 flex items-center justify-between");
+                    var $left = $("<div/>").addClass("flex items-center gap-2");
+                    var label = memberLabel(key);
+                    $left.append(
+                        $("<div/>")
+                            .addClass(
+                                "w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold"
+                            )
+                            .text(label ? label.charAt(0) : "?")
+                    );
+                    $left.append(
+                        $("<span/>").addClass("text-sm font-medium text-foreground").text(label)
+                    );
+                    var $rm = $("<button type=\"button\"/>")
+                        .addClass(
+                            "ujg-ua-teams-remove-member h-6 w-6 flex items-center justify-center rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                        )
+                        .html(utils.icon("x", "w-3.5 h-3.5"))
+                        .attr("data-team-id", editTeam.id)
+                        .attr("data-user-key", key);
+                    $mrow.append($left, $rm);
+                    $members.append($mrow);
+                });
+                if (editTeam.memberKeys.length === 0) {
+                    $members.append(
+                        $("<div/>")
+                            .addClass("text-center py-6 text-muted-foreground text-xs")
+                            .text("Добавьте участников из списка ниже")
+                    );
+                }
+                $colRight.append($members);
+
+                $colRight.append(
+                    $("<h3/>")
+                        .addClass("text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2")
+                        .text("Доступные пользователи")
+                );
+                var $searchInput = $("<input type=\"text\"/>")
+                    .addClass(
+                        "ujg-ua-teams-user-search w-full h-8 px-3 text-sm bg-muted/50 border border-border rounded-md text-foreground outline-none focus:ring-1 focus:ring-ring mb-2"
+                    )
+                    .attr("placeholder", "Поиск пользователей...");
+                var $results = $("<div/>").addClass("ujg-ua-teams-search-results space-y-1");
+                $colRight.append($searchInput, $results);
+
+                function renderResults(rows) {
+                    $results.empty();
+                    var keys = {};
+                    editTeam.memberKeys.forEach(function(key) {
+                        keys[key] = true;
+                    });
+                    rows.forEach(function(user) {
+                        if (keys[user.key]) return;
+                        var $btn = $("<button type=\"button\"/>")
+                            .addClass(
+                                "ujg-ua-teams-add-member w-full dashboard-card px-3 py-2 flex items-center gap-2 hover:bg-surface-hover transition-colors text-left"
+                            )
+                            .attr("data-team-id", editTeam.id)
+                            .attr("data-user-key", user.key)
+                            .attr("data-display-name", user.displayName);
+                        $btn.html(
+                            utils.icon("userPlus", "w-3.5 h-3.5 text-primary") +
+                                '<div class="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-muted-foreground text-xs font-bold">' +
+                                utils.escapeHtml(user.displayName ? user.displayName.charAt(0) : "?") +
+                                "</div>" +
+                                '<span class="text-sm text-foreground">' +
+                                utils.escapeHtml(user.displayName) +
+                                "</span>"
+                        );
+                        $results.append($btn);
+                    });
+                }
+
+                function runSearch() {
+                    var q = String($searchInput.val() || "").trim();
+                    lastSearchQuery = q;
+                    if (!q) {
+                        $results.empty();
+                        return;
+                    }
+                    searchUsers(q).done(function(rows) {
+                        if (String($searchInput.val() || "").trim() !== lastSearchQuery) return;
+                        renderResults(rows);
+                    });
+                }
+
+                $searchInput.on("input", function() {
+                    if (searchTimer) clearTimeout(searchTimer);
+                    searchTimer = setTimeout(runSearch, 300);
+                });
+            } else {
+                var $empty = $("<div/>").addClass(
+                    "flex flex-col items-center justify-center py-20 text-center"
+                );
+                $empty.append(utils.icon("users", "w-10 h-10 text-muted-foreground/30 mb-3"));
+                $empty.append(
+                    $("<p/>")
+                        .addClass("text-sm text-muted-foreground")
+                        .text("Выберите команду для редактирования")
+                );
+                $colRight.append($empty);
+            }
+        }
+
+        var ctrl = {
+            close: function() {
+                if (searchTimer) clearTimeout(searchTimer);
+                $overlay.remove();
+            },
+            destroy: function() {
+                ctrl.close();
+            }
+        };
+
+        $overlay.on("click", ".ujg-ua-teams-close", function() {
+            ctrl.close();
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-new", function() {
+            showCreate = true;
+            render();
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-create-submit", function() {
+            var name = String($overlay.find(".ujg-ua-teams-new-name").val() || "").trim();
+            if (!name) return;
+            var team = {
+                id: "team-" + Date.now(),
+                name: name,
+                memberKeys: []
+            };
+            persist(teams.concat([team]));
+            showCreate = false;
+            editingTeamId = team.id;
+            render();
+        });
+
+        $overlay.on("keydown", ".ujg-ua-teams-new-name", function(e) {
+            if (e.key === "Enter") {
+                $overlay.find(".ujg-ua-teams-create-submit").trigger("click");
+            }
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-create-cancel", function() {
+            showCreate = false;
+            render();
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-delete", function(e) {
+            e.stopPropagation();
+            var id = $(this).attr("data-team-id");
+            var next = teams.filter(function(team) {
+                return team.id !== id;
+            });
+            if (editingTeamId === id) editingTeamId = null;
+            persist(next);
+            render();
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-row", function(e) {
+            if ($(e.target).closest(".ujg-ua-teams-delete").length) return;
+            var id = $(this).attr("data-team-id");
+            if (!id) return;
+            editingTeamId = editingTeamId === id ? null : id;
+            render();
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-remove-member", function(e) {
+            e.stopPropagation();
+            var teamId = $(this).attr("data-team-id");
+            var key = $(this).attr("data-user-key");
+            var next = teams.map(function(team) {
+                if (team.id !== teamId) return team;
+                return {
+                    id: team.id,
+                    name: team.name,
+                    memberKeys: team.memberKeys.filter(function(memberKey) {
+                        return memberKey !== key;
+                    })
+                };
+            });
+            persist(next);
+            render();
+        });
+
+        $overlay.on("click", ".ujg-ua-teams-add-member", function() {
+            var teamId = $(this).attr("data-team-id");
+            var key = $(this).attr("data-user-key");
+            var displayName = $(this).attr("data-display-name");
+            if (displayName) {
+                store.setDisplayName(key, displayName);
+                syncState();
+            }
+            var next = teams.map(function(team) {
+                if (team.id !== teamId) return team;
+                if (team.memberKeys.indexOf(key) >= 0) return team;
+                return {
+                    id: team.id,
+                    name: team.name,
+                    memberKeys: team.memberKeys.concat([key])
+                };
+            });
+            persist(next);
+            render();
+        });
+
+        render();
+
+        return ctrl;
+    }
+
+    return {
+        detectDashboardId: detectDashboardId,
+        loadTeams: loadTeams,
+        saveTeams: saveTeams,
+        searchUsers: searchUsers,
+        create: create,
+        getTeams: getTeams,
+        memberLabel: memberLabel
+    };
+});
+
 /* === Module: rendering.js === */
 define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($, config, utils) {
     "use strict";
@@ -5673,7 +6165,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var currentTeams = [];
     var teamPickerInst = null;
     var teamStoreRef = null;
+    var teamManagerCtrl = null;
     var pendingUrlTeamIds = null;
+    var $popupHost = null;
 
     var stylesInjected = false;
 
@@ -5930,15 +6424,73 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $header.find(".ujg-ua-slot-team").empty().append(teamPickerInst.$el);
     }
 
+    function closeTeamManager() {
+        if (teamManagerCtrl && typeof teamManagerCtrl.close === "function") {
+            teamManagerCtrl.close();
+        } else if (teamManagerCtrl && typeof teamManagerCtrl.destroy === "function") {
+            teamManagerCtrl.destroy();
+        }
+        teamManagerCtrl = null;
+    }
+
+    function refreshTeamsAfterManagerChange($header) {
+        function applyTeams() {
+            var previousTeamIds = currentTeamIds.slice();
+            var validTeamIds = Object.create(null);
+            currentTeams = teamStoreRef && teamStoreRef.getTeams ? (teamStoreRef.getTeams() || []) : currentTeams;
+            currentTeams.forEach(function(team) {
+                if (team && team.id != null) validTeamIds[String(team.id)] = true;
+            });
+            currentTeamIds = currentTeamIds.filter(function(id) {
+                return validTeamIds[String(id)];
+            });
+            setupTeamPicker($header);
+            if (previousTeamIds.length) {
+                syncUsersFromTeams({ source: "team-sync" });
+                applyUrlQueryFromState();
+            }
+        }
+
+        if (teamStoreRef && typeof teamStoreRef.loadTeams === "function") {
+            attachAsync(teamStoreRef.loadTeams(), applyTeams, applyTeams);
+            return;
+        }
+        applyTeams();
+    }
+
+    function openTeamManager($header) {
+        if (!teamSyncEnabled() || !mods || !mods.teamManager || typeof mods.teamManager.create !== "function") return;
+        if (!$popupHost) return;
+        closeTeamManager();
+        teamManagerCtrl = mods.teamManager.create($popupHost, function() {
+            refreshTeamsAfterManagerChange($header);
+        });
+    }
+
     function renderShell() {
         if (teamPickerInst && teamPickerInst.destroy) {
             teamPickerInst.destroy();
             teamPickerInst = null;
         }
+        closeTeamManager();
         pendingUrlTeamIds = null;
         teamStoreRef = null;
+        $popupHost = null;
 
         $container.empty().addClass("bg-background");
+
+        var canManageTeams =
+            teamSyncEnabled() && mods && mods.teamManager && typeof mods.teamManager.create === "function";
+        var teamsButtonHtml = canManageTeams
+            ? '<button class="ujg-ua-teams-btn ml-auto h-5 px-1.5 rounded border border-border text-[9px] font-medium text-foreground hover:bg-muted flex items-center gap-0.5">' +
+                  utils.icon("settings", "w-2.5 h-2.5") +
+                  "<span> Команды</span>" +
+              "</button>"
+            : "";
+        var fullscreenBtnClasses =
+            "ujg-ua-btn-fullscreen " +
+            (canManageTeams ? "" : "ml-auto ") +
+            "h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground";
 
         var $header = $(
             '<header class="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-30">' +
@@ -5954,7 +6506,8 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         utils.icon("download", "w-3 h-3") +
                         " Загрузить" +
                     "</button>" +
-                    '<button class="ujg-ua-btn-fullscreen ml-auto h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">' +
+                    teamsButtonHtml +
+                    '<button class="' + fullscreenBtnClasses + '">' +
                         utils.icon("maximize2", "w-3.5 h-3.5") +
                     "</button>" +
                 "</div>" +
@@ -5977,6 +6530,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var period = currentPeriod || utils.getDefaultPeriod();
             loadData(currentUsers, period);
         });
+
+        if (canManageTeams) {
+            $header.find(".ujg-ua-teams-btn").on("click", function() {
+                openTeamManager($header);
+            });
+        }
 
         $header.find(".ujg-ua-btn-fullscreen").on("click", function() {
             var $el = $container.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
@@ -6001,6 +6560,8 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         $contentArea = $('<main class="w-full px-3 py-2 space-y-2"></main>');
         $container.append($contentArea);
+        $popupHost = $('<div class="ujg-ua-popup-host"></div>');
+        $container.append($popupHost);
 
         if (teamSyncEnabled()) {
             teamStoreRef = mods.teamStore;
@@ -6363,11 +6924,11 @@ define("_ujgUA_main", [
     "_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail", "_ujgUA_unifiedCalendar",
     "_ujgUA_projectBreakdown", "_ujgUA_issueList",
     "_ujgUA_activityLog", "_ujgUA_repoLog",
-    "_ujgShared_teamStore", "_ujgShared_teamPicker",
+    "_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager",
     "_ujgUA_rendering"
 ], function($, Common, config, utils, api, repoApi, dataProcessor, repoDataProcessor, progressLoader,
             userPicker, multiUserPicker, dateRangePicker, summaryCards, calendarHeatmap, repoCalendar, dailyDetail, unifiedCalendar,
-            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, rendering) {
+            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, teamManager, rendering) {
     "use strict";
 
     function MyGadget(API) {
@@ -6391,7 +6952,7 @@ define("_ujgUA_main", [
             summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar, unifiedCalendar: unifiedCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
             issueList: issueList, activityLog: activityLog, repoLog: repoLog,
-            teamStore: uaTeamStore, teamPicker: teamPicker,
+            teamStore: uaTeamStore, teamPicker: teamPicker, teamManager: teamManager,
             resize: function() { if (typeof API.resize === "function") API.resize(); }
         });
     }

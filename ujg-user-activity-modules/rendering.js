@@ -20,7 +20,9 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var currentTeams = [];
     var teamPickerInst = null;
     var teamStoreRef = null;
+    var teamManagerCtrl = null;
     var pendingUrlTeamIds = null;
+    var $popupHost = null;
 
     var stylesInjected = false;
 
@@ -277,15 +279,73 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $header.find(".ujg-ua-slot-team").empty().append(teamPickerInst.$el);
     }
 
+    function closeTeamManager() {
+        if (teamManagerCtrl && typeof teamManagerCtrl.close === "function") {
+            teamManagerCtrl.close();
+        } else if (teamManagerCtrl && typeof teamManagerCtrl.destroy === "function") {
+            teamManagerCtrl.destroy();
+        }
+        teamManagerCtrl = null;
+    }
+
+    function refreshTeamsAfterManagerChange($header) {
+        function applyTeams() {
+            var previousTeamIds = currentTeamIds.slice();
+            var validTeamIds = Object.create(null);
+            currentTeams = teamStoreRef && teamStoreRef.getTeams ? (teamStoreRef.getTeams() || []) : currentTeams;
+            currentTeams.forEach(function(team) {
+                if (team && team.id != null) validTeamIds[String(team.id)] = true;
+            });
+            currentTeamIds = currentTeamIds.filter(function(id) {
+                return validTeamIds[String(id)];
+            });
+            setupTeamPicker($header);
+            if (previousTeamIds.length) {
+                syncUsersFromTeams({ source: "team-sync" });
+                applyUrlQueryFromState();
+            }
+        }
+
+        if (teamStoreRef && typeof teamStoreRef.loadTeams === "function") {
+            attachAsync(teamStoreRef.loadTeams(), applyTeams, applyTeams);
+            return;
+        }
+        applyTeams();
+    }
+
+    function openTeamManager($header) {
+        if (!teamSyncEnabled() || !mods || !mods.teamManager || typeof mods.teamManager.create !== "function") return;
+        if (!$popupHost) return;
+        closeTeamManager();
+        teamManagerCtrl = mods.teamManager.create($popupHost, function() {
+            refreshTeamsAfterManagerChange($header);
+        });
+    }
+
     function renderShell() {
         if (teamPickerInst && teamPickerInst.destroy) {
             teamPickerInst.destroy();
             teamPickerInst = null;
         }
+        closeTeamManager();
         pendingUrlTeamIds = null;
         teamStoreRef = null;
+        $popupHost = null;
 
         $container.empty().addClass("bg-background");
+
+        var canManageTeams =
+            teamSyncEnabled() && mods && mods.teamManager && typeof mods.teamManager.create === "function";
+        var teamsButtonHtml = canManageTeams
+            ? '<button class="ujg-ua-teams-btn ml-auto h-5 px-1.5 rounded border border-border text-[9px] font-medium text-foreground hover:bg-muted flex items-center gap-0.5">' +
+                  utils.icon("settings", "w-2.5 h-2.5") +
+                  "<span> Команды</span>" +
+              "</button>"
+            : "";
+        var fullscreenBtnClasses =
+            "ujg-ua-btn-fullscreen " +
+            (canManageTeams ? "" : "ml-auto ") +
+            "h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground";
 
         var $header = $(
             '<header class="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-30">' +
@@ -301,7 +361,8 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         utils.icon("download", "w-3 h-3") +
                         " Загрузить" +
                     "</button>" +
-                    '<button class="ujg-ua-btn-fullscreen ml-auto h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">' +
+                    teamsButtonHtml +
+                    '<button class="' + fullscreenBtnClasses + '">' +
                         utils.icon("maximize2", "w-3.5 h-3.5") +
                     "</button>" +
                 "</div>" +
@@ -324,6 +385,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var period = currentPeriod || utils.getDefaultPeriod();
             loadData(currentUsers, period);
         });
+
+        if (canManageTeams) {
+            $header.find(".ujg-ua-teams-btn").on("click", function() {
+                openTeamManager($header);
+            });
+        }
 
         $header.find(".ujg-ua-btn-fullscreen").on("click", function() {
             var $el = $container.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
@@ -348,6 +415,8 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         $contentArea = $('<main class="w-full px-3 py-2 space-y-2"></main>');
         $container.append($contentArea);
+        $popupHost = $('<div class="ujg-ua-popup-host"></div>');
+        $container.append($popupHost);
 
         if (teamSyncEnabled()) {
             teamStoreRef = mods.teamStore;

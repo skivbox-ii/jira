@@ -34,6 +34,7 @@ var MODULE_ORDER = [
     { dir: MODULES_DIR, file: "issue-list.js" },
     { dir: MODULES_DIR, file: "activity-log.js" },
     { dir: MODULES_DIR, file: "repo-log.js" },
+    { dir: MODULES_DIR, file: "team-manager.js" },
     { dir: MODULES_DIR, file: "rendering.js" },
     { dir: MODULES_DIR, file: "main.js" }
 ];

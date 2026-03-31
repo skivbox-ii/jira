@@ -1355,6 +1355,117 @@ test("user-activity team sync: manual picker change clears selected teams in ren
     }]);
 });
 
+test("user-activity team manager button opens popup and refreshes team picker", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    var teams = [{ id: "team-1", name: "Alpha", memberKeys: ["u1"] }];
+    var teamPickerSnapshots = [];
+    var popupParent = null;
+    var popupOnChange = null;
+    var root = jqStub.createNode("root");
+
+    function resolvedAlways(value) {
+        var d = createDeferred();
+        d.always = function(handler) {
+            d.done(handler);
+            d.fail(handler);
+            return d;
+        };
+        d.resolve(value);
+        return d.promise();
+    }
+
+    function triggerClick(node) {
+        (node.handlers.click || []).forEach(function(binding) {
+            binding.handler.call(node, { target: node, type: "click" });
+        });
+    }
+
+    function findChildByHtml(node, needle) {
+        return (node.children || []).filter(function(child) {
+            return child && typeof child.html === "string" && child.html.indexOf(needle) >= 0;
+        })[0] || null;
+    }
+
+    mod.init(root, {
+        multiUserPicker: {
+            create: function() {
+                return {
+                    $el: jqStub.createNode("MultiUserPicker"),
+                    setFromUrl: function() {
+                        return resolvedAlways();
+                    },
+                    getSelectedUsers: function() {
+                        return [];
+                    },
+                    setSelectedUsers: function() {}
+                };
+            }
+        },
+        dateRangePicker: {
+            create: function(onChange) {
+                var period = { start: "2026-03-01", end: "2026-03-31" };
+                if (onChange) onChange(period);
+                return {
+                    $el: jqStub.createNode("DateRangePicker"),
+                    getPeriod: function() {
+                        return period;
+                    }
+                };
+            }
+        },
+        teamStore: {
+            loadTeams: function() {
+                return resolvedAlways(teams);
+            },
+            getTeams: function() {
+                return teams;
+            },
+            getDisplayNameByKey: function() {
+                return { u1: "User 1", u2: "User 2" };
+            }
+        },
+        teamPicker: {
+            create: function(options) {
+                teamPickerSnapshots.push(normalize(options.teams || []));
+                return {
+                    $el: jqStub.createNode("TeamPicker"),
+                    setSelectedTeamIds: function() {},
+                    destroy: function() {}
+                };
+            }
+        },
+        teamManager: {
+            create: function(parent, onChange) {
+                popupParent = parent;
+                popupOnChange = function(nextTeams) {
+                    teams = normalize(nextTeams || []);
+                    onChange(nextTeams);
+                };
+                return { close: function() {} };
+            }
+        }
+    });
+
+    var headerNode = root.__el.children[0];
+    var teamsButtonNode = headerNode && headerNode.slots[".ujg-ua-teams-btn"];
+    var popupHostNode = findChildByHtml(root.__el, "ujg-ua-popup-host");
+
+    assert.match(headerNode.html, /ujg-ua-teams-btn/);
+    assert.match(headerNode.html, /Команды/);
+    assert.ok(teamsButtonNode, "teams button should have a click binding node");
+    assert.ok(popupHostNode, "popup host should be mounted into the container");
+    assert.deepEqual(teamPickerSnapshots, [[{ id: "team-1", name: "Alpha", memberKeys: ["u1"] }]]);
+
+    triggerClick(teamsButtonNode);
+    assert.equal(popupParent && popupParent.__el, popupHostNode);
+    assert.equal(typeof popupOnChange, "function");
+
+    popupOnChange([{ id: "team-2", name: "Beta", memberKeys: ["u2"] }]);
+    assert.deepEqual(teamPickerSnapshots[1], [{ id: "team-2", name: "Beta", memberKeys: ["u2"] }]);
+});
+
 test("user-activity team sync: URL teams param derives users", function() {
     var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
     var jqStub = createRenderingJqueryStub(docStub);
@@ -3675,17 +3786,18 @@ test("repo modules are wired in main module and build order", function() {
     var mainSource = fs.readFileSync(path.join(__dirname, "..", "ujg-user-activity-modules", "main.js"), "utf8");
     var buildSource = fs.readFileSync(path.join(__dirname, "..", "build-user-activity.js"), "utf8");
 
-    assert.match(mainSource, /"_ujgShared_teamStore", "_ujgShared_teamPicker"/);
-    assert.match(mainSource, /teamStore: uaTeamStore, teamPicker: teamPicker/);
+    assert.match(mainSource, /"_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager"/);
+    assert.match(mainSource, /teamStore: uaTeamStore, teamPicker: teamPicker, teamManager: teamManager/);
     assert.match(mainSource, /"_ujgUA_api", "_ujgUA_repoApi", "_ujgUA_dataProcessor", "_ujgUA_repoDataProcessor"/);
     assert.match(mainSource, /"_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail"/);
-    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog",\s*\n\s*"_ujgShared_teamStore", "_ujgShared_teamPicker",\s*\n\s*"_ujgUA_rendering"/);
+    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog",\s*\n\s*"_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager",\s*\n\s*"_ujgUA_rendering"/);
     assert.match(mainSource, /repoApi: repoApi, dataProcessor: dataProcessor, repoDataProcessor: repoDataProcessor/);
     assert.match(mainSource, /summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar/);
     assert.match(mainSource, /issueList: issueList, activityLog: activityLog, repoLog: repoLog/);
 
     assert.match(buildSource, /file:\s*"team-store\.js"/);
     assert.match(buildSource, /file:\s*"team-picker\.js"/);
+    assert.match(buildSource, /file:\s*"team-manager\.js"/);
     var iApi = buildSource.indexOf('file: "api.js"');
     var iRepoApi = buildSource.indexOf('file: "repo-api.js"');
     var iData = buildSource.indexOf('file: "data-processor.js"');
@@ -3697,8 +3809,9 @@ test("repo modules are wired in main module and build order", function() {
     assert.ok(iHeat < iRepoCal && iRepoCal < iDaily);
     var iAct = buildSource.indexOf('file: "activity-log.js"');
     var iRepoLog = buildSource.indexOf('file: "repo-log.js"');
+    var iTeamManager = buildSource.indexOf('file: "team-manager.js"');
     var iRender = buildSource.indexOf('file: "rendering.js"');
-    assert.ok(iAct < iRepoLog && iRepoLog < iRender);
+    assert.ok(iAct < iRepoLog && iRepoLog < iTeamManager && iTeamManager < iRender);
 });
 
 test("public user activity bundle includes repo modules", function() {
@@ -3710,6 +3823,7 @@ test("public user activity bundle includes repo modules", function() {
     assert.match(bundleSource, /_ujgUA_repoDataProcessor/);
     assert.match(bundleSource, /_ujgUA_repoCalendar/);
     assert.match(bundleSource, /_ujgUA_repoLog/);
+    assert.match(bundleSource, /_ujgUA_teamManager/);
 });
 
 test("build-user-activity updates bundle atomically for concurrent bootstrap readers", function() {
