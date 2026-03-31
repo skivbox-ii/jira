@@ -1919,6 +1919,43 @@ test("processRepoActivity builds commit and PR events for selected user", functi
     assert.equal(normalize(repoActivity.items[1].raw).id, "abc123");
 });
 
+test("processRepoActivity: repo items include issue summary and status from issueMap", function() {
+    var mod = loadRepoDataProcessor();
+    var issueMap = {
+        "ABC-123": { key: "ABC-123", summary: "Real summary", status: "In Progress" }
+    };
+    var issueDevStatusMap = {
+        "ABC-123": {
+            detail: [{
+                repositories: [{
+                    name: "demo-repo",
+                    url: "https://git/demo",
+                    commits: [{
+                        id: "commit1",
+                        message: "Do work",
+                        authorTimestamp: "2026-03-15T10:00:00.000Z",
+                        author: { displayName: "Commit Author" }
+                    }]
+                }]
+            }]
+        }
+    };
+    var repoActivity = mod.processRepoActivity(
+        issueMap,
+        issueDevStatusMap,
+        { displayName: "Commit Author" },
+        "2026-03-01",
+        "2026-03-31"
+    );
+    var item = repoActivity.items.find(function(i) {
+        return i.type === "commit";
+    });
+    assert.ok(item, "expected commit repo item");
+    assert.equal(item.issueSummary, "Real summary");
+    assert.equal(item.issueStatus, "In Progress");
+    assert.equal(item.author, "Commit Author");
+});
+
 test("processRepoActivity extracts branch commits and reviewer decisions for selected user", function() {
     var mod = loadRepoDataProcessor();
     var repoActivity = mod.processRepoActivity(
