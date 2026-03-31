@@ -626,7 +626,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                 repoItems: [],
                 users: {}
             };
-            detailInst.show(dateStr, dayData, data.issueMap);
+            detailInst.show(dateStr, dayData, data.issueMap, selectedUsers);
         });
 
         projBreakInst = mods.projectBreakdown.create();

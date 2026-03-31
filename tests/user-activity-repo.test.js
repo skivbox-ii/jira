@@ -3211,6 +3211,235 @@ test("daily detail summary shows full issue title in panel html", function() {
     assert.equal(lastHtml.indexOf("…"), -1, "ellipsis should not appear in day-detail panel for issue title");
 });
 
+function createDayDetailInteractiveStub() {
+    var lastHtml = "";
+    var handlers = Object.create(null);
+    function el() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    handlers = Object.create(null);
+                    lastHtml = String(h);
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function(sel) {
+                return {
+                    on: function(ev, fn) {
+                        if (!handlers[sel]) handlers[sel] = [];
+                        handlers[sel].push(fn);
+                    }
+                };
+            }
+        };
+    }
+    var root = el();
+    function $(input) {
+        if (typeof input === "string" && /^\s*</.test(input)) {
+            return root;
+        }
+        throw new Error("day detail jquery stub: unsupported " + input);
+    }
+    return {
+        $: $,
+        getHtml: function() {
+            return lastHtml;
+        },
+        triggerClick: function(sel, mockThis) {
+            (handlers[sel] || []).forEach(function(fn) {
+                fn.call(mockThis || {}, { target: mockThis || {} });
+            });
+        }
+    };
+}
+
+test("day detail defaults to issue mode", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "X-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, { "X-1": { key: "X-1", summary: "T1", status: "Open" } }, users);
+
+    var html = stub.getHtml();
+    assert.match(html, /По задачам/);
+    assert.equal(html.indexOf("ujg-ua-detail-timeline-grid"), -1, "issue mode should not render team timeline grid");
+    assert.ok(html.indexOf("ujg-ua-detail-issue") !== -1, "issue mode should render issue groups");
+});
+
+test("day detail toggle switches to team view", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "X-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, { "X-1": { key: "X-1", summary: "T1", status: "Open" } }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-mode" ? "team" : null;
+        }
+    });
+
+    var html = stub.getHtml();
+    assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should render timeline grid");
+});
+
+test("day detail team view builds one column per user", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" },
+        { name: "u3", key: "u3", displayName: "Carol" }
+    ];
+    panel.show("2026-03-16", {
+        worklogs: [
+            {
+                issueKey: "A-1",
+                timestamp: "2026-03-16T09:00:00.000Z",
+                author: { name: "u1", displayName: "Alice" },
+                timeSpentHours: 0.5,
+                comment: ""
+            },
+            {
+                issueKey: "A-2",
+                timestamp: "2026-03-16T11:00:00.000Z",
+                author: { name: "u2", displayName: "Bob" },
+                timeSpentHours: 0.5,
+                comment: ""
+            }
+        ]
+    }, {
+        "A-1": { key: "A-1", summary: "S1", status: "Open" },
+        "A-2": { key: "A-2", summary: "S2", status: "Open" }
+    }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+
+    var html = stub.getHtml();
+    var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
+    assert.equal(cols ? cols.length : 0, 3, "expected three user columns for three selected users");
+});
+
+test("day detail team view puts untimed actions in separate block", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    panel.show("2026-03-17", {
+        worklogs: [
+            {
+                issueKey: "U-1",
+                timestamp: "",
+                author: { name: "u1", displayName: "Alice" },
+                timeSpentHours: 0.25,
+                comment: "no time"
+            },
+            {
+                issueKey: "U-2",
+                timestamp: "2026-03-17T14:00:00.000Z",
+                author: { name: "u1", displayName: "Alice" },
+                timeSpentHours: 1,
+                comment: ""
+            }
+        ]
+    }, {
+        "U-1": { key: "U-1", summary: "Untimed", status: "Open" },
+        "U-2": { key: "U-2", summary: "Timed", status: "Open" }
+    }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+
+    var html = stub.getHtml();
+    assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "expected team timeline in team view");
+    var iUnd = html.indexOf("ujg-ua-detail-undated");
+    assert.ok(iUnd !== -1, "expected undated section in team view");
+    assert.ok(html.indexOf("Без точного времени") !== -1);
+    assert.ok(html.slice(iUnd).indexOf("Untimed") !== -1 || html.indexOf("U-1") !== -1);
+});
+
+test("day detail mode persists when opening another day", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [{ name: "u1", key: "u1", displayName: "Alice" }];
+    panel.show("2026-03-18", {
+        worklogs: [{
+            issueKey: "D-1",
+            timestamp: "2026-03-18T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, { "D-1": { key: "D-1", summary: "Day1", status: "Open" } }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+    assert.ok(stub.getHtml().indexOf("ujg-ua-detail-timeline-grid") !== -1);
+
+    panel.show("2026-03-19", {
+        worklogs: [{
+            issueKey: "D-2",
+            timestamp: "2026-03-19T11:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 0.5,
+            comment: ""
+        }]
+    }, { "D-2": { key: "D-2", summary: "Day2", status: "Open" } }, users);
+
+    assert.ok(stub.getHtml().indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should persist across days");
+});
+
 test("user activity data processor preserves Jira timestamps and authors for worklogs and status changes", function() {
     var mod = loadUserActivityDataProcessor();
     var rawData = {

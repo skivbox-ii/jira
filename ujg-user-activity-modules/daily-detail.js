@@ -318,32 +318,231 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return html;
     }
 
+    function filterActionsBySelectedUsers(actions, selectedUsers) {
+        if (!selectedUsers || !selectedUsers.length) return actions || [];
+        var allow = {};
+        selectedUsers.forEach(function(u) {
+            collectUserTokens(u).forEach(function(t) {
+                allow[t] = true;
+            });
+        });
+        return (actions || []).filter(function(a) {
+            var tokens = collectUserTokens(a.author);
+            for (var i = 0; i < tokens.length; i++) {
+                if (allow[tokens[i]]) return true;
+            }
+            return false;
+        });
+    }
+
+    function columnKeyFromUser(u) {
+        return authorMatchKey(normalizeAuthor(u));
+    }
+
+    var TEAM_TIMELINE_HEIGHT_PX = 400;
+
+    function buildTimelineModel(actions, selectedUsers, dateStr) {
+        selectedUsers = selectedUsers || [];
+        var filtered = filterActionsBySelectedUsers(actions, selectedUsers);
+        var split = splitTimedAndUntimed(filtered);
+        var timed = split.timed.slice().sort(byTimestamp);
+
+        var users = [];
+        if (selectedUsers.length) {
+            users = selectedUsers.slice();
+        } else {
+            var seenU = Object.create(null);
+            timed.forEach(function(a) {
+                var k = authorMatchKey(a.author);
+                if (!seenU[k]) {
+                    seenU[k] = true;
+                    users.push({
+                        key: (a.author && a.author.key) || "",
+                        name: (a.author && a.author.name) || k,
+                        displayName: (a.author && a.author.displayName) || k
+                    });
+                }
+            });
+        }
+
+        var columns = {};
+        var orderedKeys = [];
+        users.forEach(function(u) {
+            var ck = columnKeyFromUser(u);
+            if (!columns[ck]) {
+                columns[ck] = { user: u, items: [] };
+                orderedKeys.push(ck);
+            }
+        });
+
+        function actionColumnKey(action) {
+            var ak = authorMatchKey(action.author);
+            if (columns[ak]) return ak;
+            var aTok = collectUserTokens(action.author);
+            for (var ui = 0; ui < users.length; ui++) {
+                var ck = columnKeyFromUser(users[ui]);
+                var uTok = collectUserTokens(users[ui]);
+                for (var j = 0; j < aTok.length; j++) {
+                    if (uTok.indexOf(aTok[j]) !== -1) return ck;
+                }
+            }
+            return orderedKeys[0] || ak;
+        }
+
+        timed.forEach(function(a) {
+            var ck = actionColumnKey(a);
+            if (!columns[ck]) {
+                columns[ck] = { user: { key: "", name: ck, displayName: ck }, items: [] };
+                orderedKeys.push(ck);
+            }
+            columns[ck].items.push(a);
+        });
+
+        var minMs = Infinity;
+        var maxMs = -Infinity;
+        timed.forEach(function(a) {
+            var ms = Date.parse(String(a.timestamp || ""));
+            if (!isNaN(ms)) {
+                if (ms < minMs) minMs = ms;
+                if (ms > maxMs) maxMs = ms;
+            }
+        });
+
+        if (minMs === Infinity) {
+            var ds = dateStr || "2000-01-01";
+            minMs = Date.parse(ds + "T09:00:00Z");
+            maxMs = minMs + 3600000;
+            if (isNaN(minMs)) {
+                minMs = Date.now();
+                maxMs = minMs + 3600000;
+            }
+        }
+
+        var MIN_RANGE_MS = 60 * 60 * 1000;
+        if (maxMs - minMs < MIN_RANGE_MS) {
+            var mid = (minMs + maxMs) / 2;
+            minMs = mid - MIN_RANGE_MS / 2;
+            maxMs = mid + MIN_RANGE_MS / 2;
+        }
+
+        var rangeStartMs = minMs;
+        var rangeEndMs = maxMs;
+        var span = rangeEndMs - rangeStartMs || 1;
+
+        var markers = [];
+        var step = 3600000;
+        var t = Math.floor(rangeStartMs / step) * step;
+        var guard = 0;
+        while (t <= rangeEndMs + step && guard < 48) {
+            if (t >= rangeStartMs - 1) {
+                markers.push({ ms: t, ratio: (t - rangeStartMs) / span });
+            }
+            t += step;
+            guard += 1;
+        }
+
+        return {
+            users: users,
+            orderedKeys: orderedKeys,
+            columns: columns,
+            markers: markers,
+            rangeStartMs: rangeStartMs,
+            rangeEndMs: rangeEndMs,
+            undated: split.undated
+        };
+    }
+
+    function renderTeamTimeline(model) {
+        var h = TEAM_TIMELINE_HEIGHT_PX;
+        var span = model.rangeEndMs - model.rangeStartMs || 1;
+
+        var markersHtml = "";
+        model.markers.forEach(function(mk) {
+            var topPx = Math.round(mk.ratio * h);
+            markersHtml += '<div class="ujg-ua-detail-time-marker" style="top:' + topPx + 'px"></div>';
+        });
+
+        var colsHtml = "";
+        model.orderedKeys.forEach(function(key) {
+            var col = model.columns[key];
+            var label = utils.escapeHtml(surname(col.user.displayName || col.user.name || key));
+            colsHtml += '<div class="ujg-ua-detail-user-col">';
+            colsHtml += '<div class="ujg-ua-detail-user-col-label text-xs font-semibold text-muted-foreground">' + label + "</div>";
+            colsHtml += '<div class="ujg-ua-detail-user-col-track" style="height:' + h + 'px">';
+            col.items.forEach(function(a) {
+                var ms = Date.parse(String(a.timestamp || ""));
+                if (isNaN(ms)) return;
+                var ratio = (ms - model.rangeStartMs) / span;
+                var topPx = Math.round(ratio * h);
+                colsHtml += '<div class="ujg-ua-detail-timeline-card" style="top:' + topPx + 'px">';
+                colsHtml += renderActionHtml(a);
+                colsHtml += "</div>";
+            });
+            colsHtml += "</div></div>";
+        });
+
+        var t0 = new Date(model.rangeStartMs).toISOString();
+        var t1 = new Date(model.rangeEndMs).toISOString();
+        var html = '<div class="ujg-ua-detail-timeline mt-2">';
+        html += '<div class="ujg-ua-detail-timeline-scale text-[10px] text-muted-foreground mb-1">' +
+            utils.escapeHtml(utils.formatTime(t0)) + " — " + utils.escapeHtml(utils.formatTime(t1)) + "</div>";
+        html += '<div class="ujg-ua-detail-timeline-grid relative" style="min-height:' + h + 'px">';
+        html += '<div class="ujg-ua-detail-time-markers pointer-events-none">' + markersHtml + "</div>";
+        html += '<div class="ujg-ua-detail-user-cols flex gap-2 min-w-0">' + colsHtml + "</div>";
+        html += "</div></div>";
+        return html;
+    }
+
     function create() {
         var $el = $('<div class="dashboard-card overflow-hidden" style="display:none"></div>');
+        var currentMode = "issue";
+        var lastArgs = null;
 
-        function renderContent(date, dayData, issueMap) {
+        function renderModeToggle(mode) {
+            var issueAct = mode === "issue" ? " ujg-ua-detail-mode-active" : "";
+            var teamAct = mode === "team" ? " ujg-ua-detail-mode-active" : "";
+            return (
+                '<div class="ujg-ua-detail-mode-toggle flex rounded-md border border-border overflow-hidden text-xs shrink-0">' +
+                '<button type="button" class="ujg-ua-detail-mode-btn ujg-ua-detail-mode-issue' + issueAct + '" data-ua-detail-mode="issue">По задачам</button>' +
+                '<button type="button" class="ujg-ua-detail-mode-btn ujg-ua-detail-mode-team' + teamAct + '" data-ua-detail-mode="team">По команде</button>' +
+                "</div>"
+            );
+        }
+
+        function renderInner(date, dayData, issueMap, selectedUsers, mode) {
             var html = '<div class="p-5">' +
-                '<div class="flex items-center justify-between mb-4">' +
-                    '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + "</h3>" +
-                    '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
-                        '<span class="w-4 h-4">' + ICONS.x + "</span>" +
-                    "</button>" +
-                "</div>" +
+                '<div class="flex items-center justify-between gap-2 mb-4 flex-wrap">' +
+                '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + "</h3>" +
+                '<div class="flex items-center gap-2">' +
+                renderModeToggle(mode) +
+                '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
+                '<span class="w-4 h-4">' + ICONS.x + "</span>" +
+                "</button></div></div>" +
                 '<div class="space-y-2">';
 
             var normalized = normalizeDayActions(dayData, issueMap);
 
             if (normalized.length === 0) {
                 html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности за этот день</div>';
+            } else if (mode === "team") {
+                var model = buildTimelineModel(normalized, selectedUsers, date);
+                html += renderTeamTimeline(model);
+                if (model.undated.length > 0) {
+                    var undTeam = groupActionsByIssue(model.undated);
+                    html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
+                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
+                    html += buildIssueGroupsHtml(undTeam.grouped, undTeam.unlinked);
+                    html += "</div>";
+                }
             } else {
                 var split = splitTimedAndUntimed(normalized);
                 var timedPart = groupActionsByIssue(split.timed);
                 html += buildIssueGroupsHtml(timedPart.grouped, timedPart.unlinked);
                 if (split.undated.length > 0) {
-                    var undatedPart = groupActionsByIssue(split.undated);
+                    var undIss = groupActionsByIssue(split.undated);
                     html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
                     html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
-                    html += buildIssueGroupsHtml(undatedPart.grouped, undatedPart.unlinked);
+                    html += buildIssueGroupsHtml(undIss.grouped, undIss.unlinked);
                     html += "</div>";
                 }
             }
@@ -352,9 +551,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             return html;
         }
 
-        function show(date, dayData, issueMap) {
-            $el.html(renderContent(date, dayData, issueMap)).slideDown(200);
+        function bindChrome() {
             $el.find(".ujg-ua-detail-close").on("click", function() { hide(); });
+            $el.find(".ujg-ua-detail-mode-issue").on("click", function() {
+                currentMode = "issue";
+                if (lastArgs) {
+                    $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
+                    bindChrome();
+                }
+            });
+            $el.find(".ujg-ua-detail-mode-team").on("click", function() {
+                currentMode = "team";
+                if (lastArgs) {
+                    $el.html(renderInner(lastArgs.date, lastArgs.dayData, lastArgs.issueMap, lastArgs.selectedUsers, currentMode));
+                    bindChrome();
+                }
+            });
+        }
+
+        function show(date, dayData, issueMap, selectedUsers) {
+            lastArgs = {
+                date: date,
+                dayData: dayData,
+                issueMap: issueMap,
+                selectedUsers: selectedUsers || []
+            };
+            $el.html(renderInner(date, dayData, issueMap, lastArgs.selectedUsers, currentMode)).slideDown(200);
+            bindChrome();
         }
 
         function hide() {
@@ -369,6 +592,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         normalizeDayActions: normalizeDayActions,
         groupActionsByIssue: groupActionsByIssue,
         groupActionsByUser: groupActionsByUser,
-        splitTimedAndUntimed: splitTimedAndUntimed
+        splitTimedAndUntimed: splitTimedAndUntimed,
+        buildTimelineModel: buildTimelineModel,
+        renderTeamTimeline: renderTeamTimeline
     };
 });
