@@ -470,6 +470,19 @@ function createMultiPickerJqueryStub(pickerDocument) {
             return combined.promise();
         }
         items.forEach(function(item, index) {
+            if (!item || typeof item.done !== "function") {
+                if (item && typeof item.then === "function") {
+                    var wrapped = createDeferred();
+                    item.then(function(value) {
+                        wrapped.resolve(value);
+                    }, function(err) {
+                        wrapped.reject(err);
+                    });
+                    item = wrapped.promise();
+                } else {
+                    throw new TypeError("multi-picker stub requires promise-like item");
+                }
+            }
             item.done(function() {
                 results[index] = arguments.length > 1 ? Array.prototype.slice.call(arguments) : arguments[0];
                 remaining -= 1;
@@ -538,6 +551,87 @@ test("multi-user-picker clearSelection passes source; reset button uses manual",
     picker.$el.find(".ujg-ua-picker-actions button").trigger("click");
     assert.deepEqual(normalize(picker.getSelectedUsers()), []);
     assert.equal(metaCalls[metaCalls.length - 1].meta.source, "manual");
+});
+
+test("multi-user-picker getSelectedUsers returns a safe copy", function() {
+    var pickerDoc = {};
+    var api = {
+        searchUsers: function() {
+            var d = createDeferred();
+            d.resolve([]);
+            return d.promise();
+        }
+    };
+    var mod = loadMultiUserPicker(pickerDoc, api);
+    var picker = mod.create(null, function() {});
+
+    picker.setSelectedUsers([{ name: "u1", displayName: "User 1" }], { source: "team-sync" });
+    var selected = picker.getSelectedUsers();
+    selected.push({ name: "u2", displayName: "User 2", key: "u2" });
+    selected[0].displayName = "Mutated";
+
+    assert.deepEqual(normalize(picker.getSelectedUsers()), [{ name: "u1", displayName: "User 1", key: "u1" }]);
+});
+
+test("multi-user-picker suppresses redundant notifications for unchanged programmatic selection", function() {
+    var metaCalls = [];
+    var pickerDoc = {};
+    var api = {
+        searchUsers: function() {
+            var d = createDeferred();
+            d.resolve([]);
+            return d.promise();
+        }
+    };
+    var mod = loadMultiUserPicker(pickerDoc, api);
+    var picker = mod.create(null, function(users, meta) {
+        metaCalls.push({ users: normalize(users), meta: normalize(meta) });
+    });
+
+    picker.setSelectedUsers([{ name: "u1", displayName: "User 1" }], { source: "team-sync" });
+    picker.setSelectedUsers([{ key: "u1", displayName: "User 1" }], { source: "team-sync" });
+    picker.clearSelection({ source: "team-sync" });
+    picker.clearSelection({ source: "team-sync" });
+
+    assert.deepEqual(metaCalls, [{
+        users: [{ name: "u1", displayName: "User 1", key: "u1" }],
+        meta: { source: "team-sync" }
+    }, {
+        users: [],
+        meta: { source: "team-sync" }
+    }]);
+});
+
+test("multi-user-picker setFromUrl defaults source to url and allows override", async function() {
+    var metaCalls = [];
+    var pickerDoc = {};
+    var api = {
+        searchUsers: function(query) {
+            var d = createDeferred();
+            d.resolve([{
+                name: query,
+                displayName: "User " + query.toUpperCase()
+            }]);
+            return d.promise();
+        }
+    };
+    var mod = loadMultiUserPicker(pickerDoc, api);
+    var picker = mod.create(null, function(users, meta) {
+        metaCalls.push({ users: normalize(users), meta: normalize(meta) });
+    });
+
+    picker.setFromUrl({ users: "u1" });
+    await new Promise(function(resolve) { setTimeout(resolve, 0); });
+    picker.setFromUrl({ users: "u2" }, { source: "team-sync" });
+    await new Promise(function(resolve) { setTimeout(resolve, 0); });
+
+    assert.deepEqual(metaCalls, [{
+        users: [{ name: "u1", displayName: "User U1", key: "u1" }],
+        meta: { source: "url" }
+    }, {
+        users: [{ name: "u2", displayName: "User U2", key: "u2" }],
+        meta: { source: "team-sync" }
+    }]);
 });
 
 function createHtmlJqueryStub() {

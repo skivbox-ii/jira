@@ -398,8 +398,10 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
         var teams = normalizeTeamsInput(options.teams);
         var selected = normalizeIds(options.selectedTeamIds, mode);
         var onChange = typeof options.onChange === "function" ? options.onChange : function() {};
+        var getTeamLabel = typeof options.getTeamLabel === "function" ? options.getTeamLabel : null;
         var pickerId = nextPickerId++;
         var panelOpen = false;
+        var destroyed = false;
 
         var $root = $("<div/>").addClass("ujg-st-team-picker");
         var $trigger = $("<button type=\"button\"/>")
@@ -419,6 +421,25 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
             options.$container.append($root);
         }
 
+        function defaultTeamLabel(team) {
+            var id = team && team.id != null ? String(team.id) : "";
+            return team && team.name ? team.name : id;
+        }
+
+        function formatTeamLabel(team, context) {
+            var meta = {
+                context: context,
+                mode: mode,
+                selectedTeamIds: selected.slice(),
+                selectedCount: selected.length
+            };
+            var fallback = defaultTeamLabel(team);
+            var label;
+            if (!getTeamLabel) return fallback;
+            label = getTeamLabel(team || {}, meta);
+            return label == null || label === "" ? fallback : String(label);
+        }
+
         function updateTriggerText() {
             var n = selected.length;
             if (mode === "single") {
@@ -426,14 +447,14 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                     $trigger.text("Команда");
                 } else {
                     var t = teamById(teams, selected[0]);
-                    $trigger.text(t && t.name ? t.name : selected[0]);
+                    $trigger.text(formatTeamLabel(t || { id: selected[0] }, "trigger"));
                 }
             } else {
                 if (n === 0) {
                     $trigger.text("0 команд");
                 } else if (n === 1) {
                     var one = teamById(teams, selected[0]);
-                    $trigger.text(one && one.name ? one.name : selected[0]);
+                    $trigger.text(formatTeamLabel(one || { id: selected[0] }, "trigger"));
                 } else {
                     $trigger.text(teamsCountLabel(n));
                 }
@@ -462,7 +483,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                         .attr("data-team-id", id)
                         .prop("checked", checked);
                     $row.append($rb);
-                    $row.append($("<span/>").text(t.name || id));
+                    $row.append($("<span/>").text(formatTeamLabel(t, "list")));
                 } else {
                     var cid = name + "-c-" + i;
                     var $cb = $("<input/>")
@@ -472,7 +493,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                         .attr("data-team-id", id)
                         .prop("checked", checked);
                     $row.append($cb);
-                    $row.append($("<span/>").text(t.name || id));
+                    $row.append($("<span/>").text(formatTeamLabel(t, "list")));
                 }
                 $list.append($row);
             }
@@ -495,6 +516,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
         }
 
         function openPanel() {
+            if (destroyed) return;
             if (panelOpen) return;
             panelOpen = true;
             $panel.show();
@@ -510,6 +532,7 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
         }
 
         function togglePanel() {
+            if (destroyed) return;
             if (panelOpen) closePanel();
             else openPanel();
         }
@@ -564,13 +587,20 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
                 return selected.slice();
             },
             setSelectedTeamIds: function(ids) {
+                if (destroyed) return;
                 selected = normalizeIds(ids, mode);
                 if (panelOpen) renderList();
                 else updateTriggerText();
                 notify();
             },
             openPanel: openPanel,
-            closePanel: closePanel
+            closePanel: closePanel,
+            destroy: function() {
+                if (destroyed) return;
+                closePanel();
+                destroyed = true;
+                $root.remove();
+            }
         };
     }
 
@@ -2663,6 +2693,23 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
             };
         }
 
+        function cloneUsers(users) {
+            return (users || []).map(normalizeUser);
+        }
+
+        function sameSelection(nextUsers) {
+            if (selectedUsers.length !== nextUsers.length) return false;
+            for (var i = 0; i < nextUsers.length; i++) {
+                var prev = selectedUsers[i];
+                var next = nextUsers[i];
+                if (!prev || !next) return false;
+                if (prev.name !== next.name || prev.displayName !== next.displayName || prev.key !== next.key) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         function selectedIndexByName(name) {
             for (var i = 0; i < selectedUsers.length; i++) {
                 if (selectedUsers[i].name === name) return i;
@@ -2700,8 +2747,30 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
             updateTriggerText();
         }
 
-        function notifyChange() {
-            if (onChange) onChange(selectedUsers);
+        function notifyChange(options) {
+            if (onChange) {
+                onChange(cloneUsers(selectedUsers), {
+                    source: (options && options.source) || "manual"
+                });
+            }
+        }
+
+        function applySelection(nextUsers, options, shouldRenderResults) {
+            var normalizedUsers = cloneUsers(nextUsers);
+            if (sameSelection(normalizedUsers)) return false;
+            selectedUsers = normalizedUsers;
+            renderChips();
+            if (shouldRenderResults) renderResults();
+            notifyChange(options);
+            return true;
+        }
+
+        function setSelectedUsers(nextUsers, options) {
+            applySelection(nextUsers, options, panelOpen);
+        }
+
+        function clearSelection(options) {
+            applySelection([], options, panelOpen);
         }
 
         function renderResults() {
@@ -2796,13 +2865,15 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
             }
             if (!user) return;
             var idx = selectedIndexByName(name);
+            var nextUsers = cloneUsers(selectedUsers);
             if (checked && idx < 0) {
-                selectedUsers.push(user);
+                nextUsers.push(user);
             } else if (!checked && idx >= 0) {
-                selectedUsers.splice(idx, 1);
+                nextUsers.splice(idx, 1);
+            } else {
+                return;
             }
-            renderChips();
-            notifyChange();
+            applySelection(nextUsers);
         });
 
         $chipsWrap.on("click", ".ujg-ua-chip-remove", function(e) {
@@ -2810,22 +2881,18 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
             var name = $(this).attr("data-name");
             var idx = selectedIndexByName(name);
             if (idx >= 0) {
-                selectedUsers.splice(idx, 1);
-                renderChips();
-                renderResults();
-                notifyChange();
+                var nextUsers = cloneUsers(selectedUsers);
+                nextUsers.splice(idx, 1);
+                applySelection(nextUsers, null, true);
             }
         });
 
         $btnReset.on("click", function(e) {
             e.stopPropagation();
-            selectedUsers = [];
-            renderChips();
-            renderResults();
-            notifyChange();
+            applySelection([], null, true);
         });
 
-        function setFromUrl(urlParams) {
+        function setFromUrl(urlParams, options) {
             if (!urlParams || urlParams.users == null || urlParams.users === "") return;
             var names = String(urlParams.users)
                 .split(",")
@@ -2870,10 +2937,9 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
                     }
                     if (!dup) next.push(m);
                 }
-                selectedUsers = next;
-                renderChips();
-                renderResults();
-                notifyChange();
+                applySelection(next, {
+                    source: (options && options.source) || "url"
+                }, true);
             });
         }
 
@@ -2882,8 +2948,10 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
         return {
             $el: $root,
             getSelectedUsers: function() {
-                return selectedUsers;
+                return cloneUsers(selectedUsers);
             },
+            setSelectedUsers: setSelectedUsers,
+            clearSelection: clearSelection,
             setFromUrl: setFromUrl
         };
     }
