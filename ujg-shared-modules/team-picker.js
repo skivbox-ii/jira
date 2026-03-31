@@ -1,4 +1,35 @@
-define("_ujgShared_teamPicker", ["jquery"], function($) {
+(function(moduleId) {
+    function hasDefinedModule(loader) {
+        var contexts;
+        var contextName;
+        if (!loader) return false;
+        if (typeof loader.defined === "function") {
+            try {
+                if (loader.defined(moduleId)) return true;
+            } catch (e) {}
+        }
+        if (loader._defined && Object.prototype.hasOwnProperty.call(loader._defined, moduleId)) {
+            return true;
+        }
+        contexts = loader.s && loader.s.contexts;
+        if (!contexts) return false;
+        for (contextName in contexts) {
+            if (
+                Object.prototype.hasOwnProperty.call(contexts, contextName) &&
+                contexts[contextName] &&
+                contexts[contextName].defined &&
+                Object.prototype.hasOwnProperty.call(contexts[contextName].defined, moduleId)
+            ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (hasDefinedModule(typeof requirejs !== "undefined" ? requirejs : null)) return;
+    if (hasDefinedModule(typeof require !== "undefined" ? require : null)) return;
+
+define(moduleId, ["jquery"], function($) {
     "use strict";
 
     var nextPickerId = 1;
@@ -249,3 +280,4 @@ define("_ujgShared_teamPicker", ["jquery"], function($) {
 
     return { create: create };
 });
+}("_ujgShared_teamPicker"));

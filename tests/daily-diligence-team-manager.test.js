@@ -1,7 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const assertLoose = require("node:assert");
+const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 const loadAmdModule = require("./helpers/load-amd-module");
 
 function createDeferred() {
@@ -170,6 +172,41 @@ function loadTeamPicker(jquery, extraGlobals) {
     );
 }
 
+function loadSharedModuleTwiceInAmdContext(fileName, amdId) {
+    var filePath = path.join(__dirname, "..", "ujg-shared-modules", fileName);
+    var source = fs.readFileSync(filePath, "utf8");
+    var amdRegistry = Object.create(null);
+    var defineCalls = 0;
+    var sandbox = {
+        define: function(name, deps, factory) {
+            if (typeof deps === "function") {
+                factory = deps;
+                deps = [];
+            }
+            if (Object.prototype.hasOwnProperty.call(amdRegistry, name)) {
+                throw new Error("duplicate define: " + name);
+            }
+            amdRegistry[name] = {
+                deps: deps || [],
+                factory: factory
+            };
+            defineCalls += 1;
+        },
+        requirejs: {
+            defined: function(name) {
+                return Object.prototype.hasOwnProperty.call(amdRegistry, name);
+            }
+        }
+    };
+    sandbox.define.amd = true;
+
+    vm.runInNewContext(source, sandbox, { filename: filePath });
+    vm.runInNewContext(source, sandbox, { filename: filePath });
+
+    assert.ok(Object.prototype.hasOwnProperty.call(amdRegistry, amdId));
+    return defineCalls;
+}
+
 function loadTeamManager(jquery, windowMock, localStorageMock, configOverrides, extraGlobals) {
     var config = {
         jiraBaseUrl: "https://jira.example.com",
@@ -244,6 +281,14 @@ function loadTeamManager(jquery, windowMock, localStorageMock, configOverrides, 
         globals
     );
 }
+
+test("shared team-store skips duplicate AMD define when loader already has the module", function() {
+    assert.equal(loadSharedModuleTwiceInAmdContext("team-store.js", "_ujgShared_teamStore"), 1);
+});
+
+test("shared team-picker skips duplicate AMD define when loader already has the module", function() {
+    assert.equal(loadSharedModuleTwiceInAmdContext("team-picker.js", "_ujgShared_teamPicker"), 1);
+});
 
 test("shared team-store normalizes teams and matches team-manager loadTeams", async function() {
     var ls = makeLocalStorage();
