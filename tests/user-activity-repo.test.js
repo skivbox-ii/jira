@@ -766,6 +766,15 @@ function createHtmlJqueryStub() {
                     }
                 });
                 return this;
+            },
+            each: function() {
+                return this;
+            },
+            css: function() {
+                return this;
+            },
+            outerHeight: function() {
+                return 0;
             }
         };
     }
@@ -903,23 +912,179 @@ function loadRepoCalendar(jquery, utilsOverrides) {
     });
 }
 
+function uaUtilsForLinks() {
+    return loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+}
+
 function loadRepoLog(jquery, utilsOverrides, configOverrides) {
     utilsOverrides = utilsOverrides || {};
     configOverrides = configOverrides || {};
+    var u = uaUtilsForLinks();
     return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "repo-log.js"), {
         jquery: jquery,
         _ujgUA_config: configOverrides,
         _ujgUA_utils: Object.assign({
-            escapeHtml: function(value) {
-                return String(value || "")
-                    .replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;")
-                    .replace(/"/g, "&quot;")
-                    .replace(/'/g, "&#39;");
-            }
+            escapeHtml: u.escapeHtml,
+            renderIssueLink: u.renderIssueLink,
+            buildIssueUrl: u.buildIssueUrl,
+            getJiraBaseUrl: u.getJiraBaseUrl
         }, utilsOverrides)
     });
+}
+
+function loadUnifiedCalendar(jquery, utilsOverrides) {
+    utilsOverrides = utilsOverrides || {};
+    var configMod = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var u = uaUtilsForLinks();
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "unified-calendar.js"), {
+        jquery: jquery,
+        _ujgUA_config: configMod,
+        _ujgUA_utils: Object.assign({
+            WEEKDAYS_RU: ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
+            MONTHS_RU: ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"],
+            getDayKey: function(date) {
+                var y = date.getFullYear();
+                var m = String(date.getMonth() + 1).padStart(2, "0");
+                var d = String(date.getDate()).padStart(2, "0");
+                return y + "-" + m + "-" + d;
+            },
+            getHeatBg: function(value) {
+                return value > 0 ? "bg-heat-1" : "bg-heat-0";
+            },
+            formatTime: function(ts) {
+                if (!ts) return "";
+                var date = new Date(ts);
+                if (isNaN(date.getTime())) return "";
+                return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+            },
+            truncate: function(s, n) {
+                s = String(s || "");
+                return s.length <= n ? s : s.slice(0, n) + "…";
+            },
+            isWeekendDay: function(dateStr) {
+                var dt = new Date(dateStr + "T00:00:00");
+                var dow = dt.getDay();
+                return dow === 0 || dow === 6;
+            },
+            escapeHtml: u.escapeHtml,
+            renderIssueLink: u.renderIssueLink,
+            buildIssueUrl: u.buildIssueUrl,
+            getJiraBaseUrl: u.getJiraBaseUrl
+        }, utilsOverrides)
+    }, { requestAnimationFrame: function(fn) { if (fn) fn(); } });
+}
+
+function createActivityLogJqueryStub() {
+    var doc = {};
+    var tbodyInner = "";
+    var expandHandler = null;
+
+    var root = {
+        find: function(sel) {
+            if (sel === ".ujg-ua-log-tbody") {
+                return {
+                    html: function(v) {
+                        if (v === undefined) return tbodyInner;
+                        tbodyInner = String(v);
+                        return this;
+                    },
+                    on: function(ev, sub, fn) {
+                        if (ev === "click" && sub === ".ujg-ua-row-expand") expandHandler = fn;
+                        return this;
+                    }
+                };
+            }
+            if (sel === ".ujg-ua-log-count") {
+                return { text: function() { return this; } };
+            }
+            if (/^\.ujg-ua-th-/.test(sel)) {
+                return { empty: function() { return this; }, append: function() { return this; } };
+            }
+            return root;
+        }
+    };
+
+    function inner() {
+        var c = {
+            append: function() { return c; },
+            empty: function() { return c; },
+            on: function() { return c; },
+            html: function() { return c; },
+            val: function() { return c; },
+            show: function() { return c; },
+            hide: function() { return c; },
+            focus: function() { return c; },
+            toggle: function() { return c; },
+            addClass: function() { return c; },
+            removeClass: function() { return c; },
+            closest: function() { return { length: 0 }; },
+            stopPropagation: function() {}
+        };
+        return c;
+    }
+
+    function $(input) {
+        if (input === doc) {
+            return { on: function() { return inner(); } };
+        }
+        if (typeof input === "string") {
+            if (/dashboard-card|ujg-ua-log-tbody/.test(input)) return root;
+            return inner();
+        }
+        if (input && typeof input.getAttribute === "function") {
+            return {
+                attr: function(n) {
+                    return input.getAttribute(n);
+                }
+            };
+        }
+        throw new Error("activity log jquery stub: unsupported input");
+    }
+
+    return {
+        doc: doc,
+        $: $,
+        getTbodyHtml: function() {
+            return tbodyInner;
+        },
+        clickExpandFirstRow: function() {
+            if (!expandHandler) throw new Error("missing expand handler");
+            var el = {
+                getAttribute: function(n) {
+                    return n === "data-idx" ? "0" : null;
+                }
+            };
+            expandHandler.call(el, { target: el });
+        }
+    };
+}
+
+function loadActivityLog(jquery, utilsOverrides, documentRef) {
+    utilsOverrides = utilsOverrides || {};
+    var u = uaUtilsForLinks();
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "activity-log.js"), {
+        jquery: jquery,
+        _ujgUA_config: {},
+        _ujgUA_utils: Object.assign({
+            escapeHtml: u.escapeHtml,
+            renderIssueLink: u.renderIssueLink,
+            buildIssueUrl: u.buildIssueUrl,
+            getJiraBaseUrl: u.getJiraBaseUrl,
+            getProjectKey: u.getProjectKey,
+            formatTime: function(ts) {
+                if (!ts) return "";
+                var date = new Date(ts);
+                if (isNaN(date.getTime())) return "";
+                return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+            },
+            icon: function() {
+                return "";
+            }
+        }, utilsOverrides)
+    }, documentRef ? { document: documentRef } : {});
 }
 
 function countMatches(value, pattern) {
@@ -2418,6 +2583,112 @@ test("repo calendar switches selection between dates and toggles callback", func
     $otherCell.trigger("click");
     assert.deepEqual(selected, ["2026-03-08", "2026-03-09", null]);
     assert.equal(countMatches(widget.$el.html(), /ring-2/g), 0);
+});
+
+test("unified calendar Jira line renders issue link with target blank", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var dayMap = {
+        "2026-03-08": {
+            totalHours: 1,
+            allWorklogs: [{
+                timestamp: "2026-03-08T10:00:00.000Z",
+                issueKey: "CORE-1",
+                author: { displayName: "Test User" },
+                timeSpentHours: 1,
+                comment: ""
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        }
+    };
+    var issueMap = { "CORE-1": { key: "CORE-1", project: "CORE", summary: "T" } };
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render(dayMap, issueMap, users, start, end);
+    var html = out.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+    assert.match(html, />CORE-1<\/a>/);
+});
+
+test("unified calendar repo line shows issue link status badge and summary meta", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 0,
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Repo Dev",
+                issueKey: "CORE-9",
+                issueStatus: "In Progress",
+                message: "fix: typo",
+                issueSummary: "Different summary text for task"
+            }]
+        }
+    };
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render(dayMap, {}, users, start, end);
+    var html = out.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-9"[^>]*target="_blank"/);
+    assert.match(html, /ujg-ua-inline-status/);
+    assert.match(html, /In Progress/);
+    assert.match(html, /Different summary text for task/);
+});
+
+test("activity log renders issue link in column and expanded issue link", function() {
+    var stub = createActivityLogJqueryStub();
+    var mod = loadActivityLog(stub.$, {}, stub.doc);
+    var log = mod.create();
+    log.render({
+        issueMap: {
+            "CORE-1": {
+                key: "CORE-1",
+                summary: "Task summary",
+                worklogs: [{
+                    timestamp: "2026-03-08T10:00:00.000Z",
+                    date: "2026-03-08",
+                    author: { displayName: "Author One" },
+                    timeSpentHours: 1,
+                    comment: "note"
+                }],
+                changelogs: []
+            }
+        }
+    });
+    var h = stub.getTbodyHtml();
+    assert.match(h, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+    stub.clickExpandFirstRow();
+    h = stub.getTbodyHtml();
+    assert.match(h, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+});
+
+test("repo log renders issue link in issue column and details panel", function() {
+    var mod = loadRepoLog(createHtmlJqueryStub());
+    var log = mod.create();
+    log.render({
+        items: [{
+            type: "commit",
+            date: "2026-03-08",
+            timestamp: "2026-03-08T10:00:00.000Z",
+            repoName: "core-api",
+            branchName: "main",
+            issueKey: "CORE-1",
+            message: "Fix auth",
+            hash: "abc123"
+        }]
+    }, null);
+    var html = log.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
+    log.$el.find('button[data-idx="0"]').trigger("click");
+    html = log.$el.html();
+    assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-1"[^>]*target="_blank"/);
 });
 
 test("repo log renders rows for repository events", function() {

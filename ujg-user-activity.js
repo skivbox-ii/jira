@@ -758,6 +758,12 @@ define("_ujgUA_config", [], function() {
         ".ujg-ua-repo-block { padding: 4px; background: #f4f5f7; min-height: 16px; }",
         ".ujg-ua-jira-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
         ".ujg-ua-repo-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
+        ".ujg-ua-inline-status { font-size: 9px; padding: 0 4px; border-radius: 4px; background: #ebecf0; color: #42526e; }",
+        ".ujg-ua-issue-key { text-decoration: none; }",
+        ".ujg-ua-issue-key:hover { text-decoration: underline; }",
+        ".ujg-ua-repo-msg, .ujg-ua-repo-summary { overflow-wrap: anywhere; word-break: break-word; }",
+        ".ujg-ua-jira-line, .ujg-ua-repo-line { overflow-wrap: anywhere; }",
+        ".ujg-ua-log-tbody td, .ujg-ua-repo-row td { overflow-wrap: anywhere; }",
         ".ujg-ua-time { color: #6b778c; font-size: 10px; font-family: monospace; }",
         ".ujg-ua-author { color: #0052cc; font-size: 11px; }",
         ".ujg-ua-day-cell { vertical-align: top; border: 1px solid #dfe1e6; }",
@@ -4071,7 +4077,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(w.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(w.issueKey, w.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"') + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
@@ -4085,7 +4091,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(c.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"') + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
@@ -4097,7 +4103,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(c.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"') + " " +
                     '<span class="text-[9px]">💬</span>' +
                     '</div>'
             });
@@ -4136,7 +4142,19 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             if (item.authorName || (item.author && item.author.displayName)) {
                 html += '<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + '</span> ';
             }
-            html += '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(utils.truncate(item.message || item.title || item.name || "", 50)) + '</span>';
+            if (item.issueKey) {
+                html += utils.renderIssueLink(item.issueKey, item.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"');
+                if (item.issueStatus) {
+                    html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(item.issueStatus) + "</span>";
+                }
+                html += " ";
+            }
+            var repoMsg = item.message || item.title || item.name || "";
+            html += '<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg">' + utils.escapeHtml(utils.truncate(repoMsg, 50)) + '</span>';
+            if (item.issueSummary && String(item.issueSummary) !== String(repoMsg)) {
+                html += ' <span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary">' +
+                    utils.escapeHtml(utils.truncate(item.issueSummary, 60)) + "</span>";
+            }
             html += '</div>';
         }
         html += '</div>';
@@ -4731,7 +4749,9 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + r.time + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' + utils.escapeHtml(r.issueKey) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, ' class="text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"') : "") +
+                            "</td>" +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold px-1 py-0 rounded ' + actionCls + '">' + utils.escapeHtml(r.action) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground truncate max-w-[180px]">' + utils.escapeHtml(r.detail) + '</td>' +
@@ -4742,7 +4762,9 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 if (isExp) {
                     html +=
                         '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
-                            '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span><span class="font-mono font-semibold text-primary">' + utils.escapeHtml(r.issueKey) + '</span><span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
+                            '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span>' +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, ' class="font-mono font-semibold text-primary ujg-ua-issue-key"') : '<span class="font-mono font-semibold text-primary">-</span>') +
+                            '<span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
                             (r.author ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Автор:</span><span class="text-foreground">' + utils.escapeHtml(r.author) + '</span></div>' : '') +
@@ -4934,7 +4956,11 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         details += '<div class="grid gap-1 text-[11px]">';
         details += '<div><span class="text-muted-foreground">' + UI.repo + ':</span> <span class="font-semibold text-foreground">' + escapeHtml(item.repoName || "") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.branch + ':</span> <span class="text-foreground">' + escapeHtml(item.branchName || "-") + '</span></div>';
-        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> <span class="font-mono text-foreground">' + escapeHtml(item.issueKey || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> ' +
+            (item.issueKey
+                ? utils.renderIssueLink(item.issueKey, item.issueKey, ' class="font-mono text-foreground ujg-ua-issue-key"')
+                : '<span class="font-mono text-foreground">-</span>') +
+            "</div>";
         details += '<div><span class="text-muted-foreground">' + UI.author + ':</span> <span class="text-foreground">' + escapeHtml(item.author || "-") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.reviewers + ':</span> <span class="text-foreground">' + escapeHtml((item.reviewers || []).join(", ") || "-") + '</span></div>';
         if (pullRequestId) {
@@ -4984,7 +5010,9 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + escapeHtml(time) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-semibold text-primary">' + escapeHtml(item.repoName || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground">' + escapeHtml(item.branchName || "") + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' + escapeHtml(item.issueKey || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' +
+                (item.issueKey ? utils.renderIssueLink(item.issueKey, item.issueKey, ' class="text-[11px] font-mono text-foreground ujg-ua-issue-key"') : "") +
+                "</td>";
             html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] truncate">' + escapeHtml(getDescription(item)) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] truncate">' + escapeHtml(getStatusHash(item)) + "</td>";
