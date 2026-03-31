@@ -62,7 +62,6 @@ define("_ujgUA_config", [], function() {
         unknown_dev_event: "Прочее"
     };
 
-    /** CSS для мультипользовательской активности (picker, ячейки дней, детали, статистика). */
     var STYLES = [
         ".ujg-ua-multi-picker { position: relative; display: inline-block; }",
         ".ujg-ua-picker-panel { position: absolute; top: 100%; left: 0; z-index: 1000; background: #fff; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 2px 8px rgba(0,0,0,.15); min-width: 280px; max-height: 400px; overflow-y: auto; padding: 8px; }",
@@ -480,6 +479,64 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
         return d.promise();
     }
 
+    function fetchIssueComments(issueKeys, onProgress) {
+        var results = {};
+        var completed = 0;
+        var d = $.Deferred();
+
+        if (!issueKeys || issueKeys.length === 0) {
+            d.resolve(results);
+            return d.promise();
+        }
+
+        var queue = issueKeys.slice();
+        var maxConcurrent = CONFIG.maxConcurrent;
+        var running = 0;
+
+        function processNext() {
+            while (running < maxConcurrent && queue.length > 0) {
+                var key = queue.shift();
+                running++;
+                (function(issueKey) {
+                    $.ajax({
+                        url: baseUrl + "/rest/api/2/issue/" + issueKey + "/comment",
+                        type: "GET",
+                        dataType: "json"
+                    }).done(function(data) {
+                        results[issueKey] = (data.comments || []).map(function(c) {
+                            return {
+                                id: c.id,
+                                author: {
+                                    name: c.author && (c.author.name || c.author.key || ""),
+                                    displayName: c.author && (c.author.displayName || c.author.name || "")
+                                },
+                                body: c.body || "",
+                                created: c.created,
+                                updated: c.updated
+                            };
+                        });
+                    }).fail(function() {
+                        results[issueKey] = [];
+                    }).always(function() {
+                        running--;
+                        completed++;
+                        if (onProgress) {
+                            onProgress(completed, issueKeys.length);
+                        }
+                        if (queue.length > 0) {
+                            processNext();
+                        } else if (running === 0) {
+                            d.resolve(results);
+                        }
+                    });
+                })(key);
+            }
+        }
+
+        processNext();
+        return d.promise();
+    }
+
     function searchUsers(query) {
         return $.ajax({
             url: baseUrl + "/rest/api/2/user/picker",
@@ -495,6 +552,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
 
     return {
         fetchAllData: fetchAllData,
+        fetchIssueComments: fetchIssueComments,
         searchUsers: searchUsers
     };
 });

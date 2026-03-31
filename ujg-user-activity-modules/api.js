@@ -165,6 +165,64 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
         return d.promise();
     }
 
+    function fetchIssueComments(issueKeys, onProgress) {
+        var results = {};
+        var completed = 0;
+        var d = $.Deferred();
+
+        if (!issueKeys || issueKeys.length === 0) {
+            d.resolve(results);
+            return d.promise();
+        }
+
+        var queue = issueKeys.slice();
+        var maxConcurrent = CONFIG.maxConcurrent;
+        var running = 0;
+
+        function processNext() {
+            while (running < maxConcurrent && queue.length > 0) {
+                var key = queue.shift();
+                running++;
+                (function(issueKey) {
+                    $.ajax({
+                        url: baseUrl + "/rest/api/2/issue/" + issueKey + "/comment",
+                        type: "GET",
+                        dataType: "json"
+                    }).done(function(data) {
+                        results[issueKey] = (data.comments || []).map(function(c) {
+                            return {
+                                id: c.id,
+                                author: {
+                                    name: c.author && (c.author.name || c.author.key || ""),
+                                    displayName: c.author && (c.author.displayName || c.author.name || "")
+                                },
+                                body: c.body || "",
+                                created: c.created,
+                                updated: c.updated
+                            };
+                        });
+                    }).fail(function() {
+                        results[issueKey] = [];
+                    }).always(function() {
+                        running--;
+                        completed++;
+                        if (onProgress) {
+                            onProgress(completed, issueKeys.length);
+                        }
+                        if (queue.length > 0) {
+                            processNext();
+                        } else if (running === 0) {
+                            d.resolve(results);
+                        }
+                    });
+                })(key);
+            }
+        }
+
+        processNext();
+        return d.promise();
+    }
+
     function searchUsers(query) {
         return $.ajax({
             url: baseUrl + "/rest/api/2/user/picker",
@@ -180,6 +238,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
 
     return {
         fetchAllData: fetchAllData,
+        fetchIssueComments: fetchIssueComments,
         searchUsers: searchUsers
     };
 });
