@@ -178,6 +178,368 @@ function loadUserActivityDataProcessor() {
     });
 }
 
+function createMultiPickerJqueryStub(pickerDocument) {
+    var docHandlers = [];
+
+    function El(tag, className) {
+        return {
+            tagName: String(tag).toUpperCase(),
+            className: className || "",
+            attrs: {},
+            style: { display: "" },
+            textContent: "",
+            childNodes: [],
+            parentNode: null,
+            contains: function(other) {
+                var p = other;
+                while (p) {
+                    if (p === this) return true;
+                    p = p.parentNode;
+                }
+                return false;
+            }
+        };
+    }
+
+    function appendNode(parent, child) {
+        parent.childNodes.push(child);
+        child.parentNode = parent;
+    }
+
+    function hasClass(n, c) {
+        return (" " + (n.className || "") + " ").indexOf(" " + c + " ") >= 0;
+    }
+
+    function matchSel(n, selector) {
+        if (!n || !n.tagName) return false;
+        selector = String(selector || "").trim();
+        var compound = selector.match(/^(\.[a-zA-Z0-9_-]+)\s+(\w+)$/);
+        if (compound) {
+            return hasClass(n, compound[1].slice(1)) && n.tagName === compound[2].toUpperCase();
+        }
+        var tc = selector.match(/^(\w+)\[type="checkbox"\]$/i);
+        if (tc) return n.tagName === tc[1].toUpperCase() && n.attrs.type === "checkbox";
+        var onlyClass = selector.match(/^\.([a-zA-Z0-9_-]+)$/);
+        if (onlyClass) return hasClass(n, onlyClass[1]);
+        var parts = selector.split(".").filter(Boolean);
+        if (!parts.length) return false;
+        if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(parts[0]) && parts.length > 1) {
+            var tag = parts.shift().toUpperCase();
+            if (n.tagName !== tag) return false;
+            return parts.every(function(c) { return hasClass(n, c); });
+        }
+        if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(parts[0]) && parts.length === 1) {
+            return n.tagName === parts[0].toUpperCase();
+        }
+        return parts.every(function(c) { return hasClass(n, c); });
+    }
+
+    function walkDesc(n, fn) {
+        (n.childNodes || []).forEach(function(ch) {
+            fn(ch);
+            walkDesc(ch, fn);
+        });
+    }
+
+    function findDesc(start, selector) {
+        var out = [];
+        var compound = selector.match(/^(\.[a-zA-Z0-9_-]+)\s+(\w+)$/);
+        if (compound) {
+            walkDesc(start, function(ch) {
+                if (hasClass(ch, compound[1].slice(1))) {
+                    walkDesc(ch, function(x) {
+                        if (x.tagName === compound[2].toUpperCase()) out.push(x);
+                    });
+                }
+            });
+            return out;
+        }
+        walkDesc(start, function(ch) {
+            if (matchSel(ch, selector)) out.push(ch);
+        });
+        return out;
+    }
+
+    function parseAttrs(attrStr, node) {
+        String(attrStr || "").replace(/([a-zA-Z0-9:-]+)(?:="([^"]*)")?/g, function(_, key, val) {
+            if (key === "class") node.className = val || "";
+            else node.attrs[key] = val === undefined ? "" : val;
+        });
+    }
+
+    function parseHtml(html) {
+        html = String(html || "").trim();
+        var inputRe = /^<input([^>]*)\/?>/i.exec(html);
+        if (inputRe) {
+            var inp = El("input", "");
+            parseAttrs(inputRe[1], inp);
+            return inp;
+        }
+        var selfRe = /^<(\w+)((?:\s[^>]+)?)\s*\/>\s*$/.exec(html);
+        if (selfRe) {
+            var s = El(selfRe[1], "");
+            parseAttrs(selfRe[2], s);
+            return s;
+        }
+        var pair = /^<(\w+)((?:\s[^>]+)?)\s*>([\s\S]*)<\/\1>\s*$/i.exec(html);
+        if (!pair) throw new Error("multi-picker stub: bad html " + html.slice(0, 80));
+        var el = El(pair[1], "");
+        parseAttrs(pair[2], el);
+        var inner = pair[3].trim();
+        if (inner && inner.indexOf("<") < 0) {
+            el.textContent = inner;
+        } else if (inner) {
+            appendNode(el, parseHtml(inner));
+        }
+        return el;
+    }
+
+    function buildPickerRoot() {
+        var root = El("div", "ujg-ua-multi-picker");
+        var trigger = El("button", "aui-button ujg-ua-picker-trigger");
+        trigger.attrs.type = "button";
+        trigger.textContent = "0 пользователей";
+        var panel = El("div", "ujg-ua-picker-panel");
+        panel.style.display = "none";
+        var search = El("input", "ujg-ua-picker-search");
+        search.attrs.type = "search";
+        search.attrs.placeholder = "Поиск пользователей...";
+        var chips = El("div", "ujg-ua-picker-selected");
+        var actions = El("div", "ujg-ua-picker-actions");
+        var reset = El("button", "aui-button aui-button-link");
+        reset.attrs.type = "button";
+        reset.textContent = "Сбросить";
+        var results = El("div", "ujg-ua-picker-results");
+        appendNode(actions, reset);
+        appendNode(panel, search);
+        appendNode(panel, chips);
+        appendNode(panel, actions);
+        appendNode(panel, results);
+        appendNode(root, trigger);
+        appendNode(root, panel);
+        return root;
+    }
+
+    function jq(nodes) {
+        nodes = (nodes || []).filter(Boolean);
+        var col = {
+            length: nodes.length,
+            find: function(sel) {
+                var acc = [];
+                nodes.forEach(function(start) {
+                    findDesc(start, sel).forEach(function(x) {
+                        acc.push(x);
+                    });
+                });
+                return jq(acc);
+            },
+            append: function(other) {
+                var raw = other && typeof other.length === "number" && other[0] !== undefined ? other[0] : other;
+                nodes.forEach(function(n) {
+                    appendNode(n, raw);
+                });
+                return col;
+            },
+            empty: function() {
+                nodes.forEach(function(n) {
+                    n.childNodes.forEach(function(ch) {
+                        ch.parentNode = null;
+                    });
+                    n.childNodes = [];
+                });
+                return col;
+            },
+            text: function(val) {
+                if (val === undefined) {
+                    return nodes[0] ? String(nodes[0].textContent || "") : "";
+                }
+                nodes.forEach(function(n) {
+                    n.textContent = String(val);
+                });
+                return col;
+            },
+            attr: function(name, val) {
+                if (val === undefined) return nodes[0] ? nodes[0].attrs[name] : undefined;
+                nodes.forEach(function(n) {
+                    n.attrs[name] = String(val);
+                });
+                return col;
+            },
+            prop: function(name, val) {
+                if (val === undefined) {
+                    if (name === "checked") return !!(nodes[0] && nodes[0]._checked);
+                    return nodes[0] && nodes[0].attrs[name];
+                }
+                if (name === "checked") {
+                    nodes.forEach(function(n) {
+                        n._checked = !!val;
+                    });
+                }
+                return col;
+            },
+            show: function() {
+                nodes.forEach(function(n) {
+                    n.style.display = "";
+                });
+                return col;
+            },
+            hide: function() {
+                nodes.forEach(function(n) {
+                    n.style.display = "none";
+                });
+                return col;
+            },
+            focus: function() {
+                return col;
+            },
+            on: function(a, b, c) {
+                var delegate;
+                var handler;
+                if (typeof b === "function") {
+                    handler = b;
+                    delegate = null;
+                } else {
+                    delegate = b;
+                    handler = c;
+                }
+                var ev = String(a).split(".")[0];
+                nodes.forEach(function(node) {
+                    if (!node._handlers) node._handlers = {};
+                    if (!node._handlers[ev]) node._handlers[ev] = [];
+                    node._handlers[ev].push({ delegate: delegate, handler: handler });
+                });
+                return col;
+            },
+            trigger: function(evName) {
+                var type = String(evName).split(".")[0];
+                var target = nodes[0];
+                if (!target) return col;
+                var evt = { target: target, stopPropagation: function() {}, type: type };
+                var chain = [];
+                var p = target;
+                while (p) {
+                    chain.push(p);
+                    p = p.parentNode;
+                }
+                chain.forEach(function(node) {
+                    var bindings = (node._handlers && node._handlers[type]) || [];
+                    bindings.forEach(function(b) {
+                        if (!b.delegate) {
+                            if (node === target) b.handler.call(target, evt);
+                        } else if (matchSel(target, b.delegate)) {
+                            b.handler.call(target, evt);
+                        }
+                    });
+                });
+                return col;
+            }
+        };
+        for (var i = 0; i < nodes.length; i++) col[i] = nodes[i];
+        return col;
+    }
+
+    function $(arg) {
+        if (arg === pickerDocument) {
+            return {
+                on: function(full, h) {
+                    docHandlers.push({ full: full, h: h });
+                },
+                off: function(full) {
+                    docHandlers = docHandlers.filter(function(x) {
+                        return x.full !== full;
+                    });
+                }
+            };
+        }
+        if (typeof arg === "string" && arg.indexOf("ujg-ua-multi-picker") >= 0) {
+            return jq([buildPickerRoot()]);
+        }
+        if (typeof arg === "string" && arg.charAt(0) === "<") {
+            return jq([parseHtml(arg)]);
+        }
+        throw new Error("multi-picker jquery stub: unsupported arg");
+    }
+
+    $.when = function() {
+        var items = Array.prototype.slice.call(arguments);
+        var combined = createDeferred();
+        var remaining = items.length;
+        var results = new Array(items.length);
+        if (!remaining) {
+            combined.resolve();
+            return combined.promise();
+        }
+        items.forEach(function(item, index) {
+            item.done(function() {
+                results[index] = arguments.length > 1 ? Array.prototype.slice.call(arguments) : arguments[0];
+                remaining -= 1;
+                if (remaining === 0) combined.resolve.apply(combined, results);
+            }).fail(function() {
+                combined.reject.apply(combined, arguments);
+            });
+        });
+        return combined.promise();
+    };
+    $.Deferred = createDeferred;
+    return $;
+}
+
+function loadMultiUserPicker(pickerDocument, api) {
+    var $ = createMultiPickerJqueryStub(pickerDocument);
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "multi-user-picker.js"), {
+        jquery: $,
+        _ujgUA_config: {},
+        _ujgUA_api: api
+    }, { document: pickerDocument });
+}
+
+test("multi-user-picker setSelectedUsers normalizes users and distinguishes team-sync vs manual", function() {
+    var metaCalls = [];
+    var pickerDoc = {};
+    var api = {
+        searchUsers: function() {
+            var d = createDeferred();
+            d.resolve([]);
+            return d.promise();
+        }
+    };
+    var mod = loadMultiUserPicker(pickerDoc, api);
+    var picker = mod.create(null, function(users, meta) {
+        metaCalls.push({ users: normalize(users), meta: normalize(meta) });
+    });
+    picker.setSelectedUsers([{ name: "u1", displayName: "User 1" }], { source: "team-sync" });
+    assert.deepEqual(normalize(picker.getSelectedUsers()), [{ name: "u1", displayName: "User 1", key: "u1" }]);
+    assert.equal(metaCalls.length, 1);
+    assert.equal(metaCalls[0].meta.source, "team-sync");
+    picker.setSelectedUsers([{ name: "u2", displayName: "U2" }]);
+    assert.equal(metaCalls[metaCalls.length - 1].meta.source, "manual");
+});
+
+test("multi-user-picker clearSelection passes source; reset button uses manual", function() {
+    var metaCalls = [];
+    var pickerDoc = {};
+    var api = {
+        searchUsers: function() {
+            var d = createDeferred();
+            d.resolve([]);
+            return d.promise();
+        }
+    };
+    var mod = loadMultiUserPicker(pickerDoc, api);
+    var picker = mod.create(null, function(users, meta) {
+        metaCalls.push({ users: normalize(users), meta: normalize(meta) });
+    });
+    picker.setSelectedUsers([{ name: "u1", displayName: "User 1" }], { source: "team-sync" });
+    var nAfterSet = metaCalls.length;
+    picker.clearSelection({ source: "team-sync" });
+    assert.deepEqual(normalize(picker.getSelectedUsers()), []);
+    assert.equal(metaCalls[nAfterSet].meta.source, "team-sync");
+    picker.setSelectedUsers([{ name: "x", displayName: "X" }], { source: "team-sync" });
+    picker.$el.find(".ujg-ua-picker-actions button").trigger("click");
+    assert.deepEqual(normalize(picker.getSelectedUsers()), []);
+    assert.equal(metaCalls[metaCalls.length - 1].meta.source, "manual");
+});
+
 function createHtmlJqueryStub() {
     function createCollection(root, selectors, singleNode) {
         return {

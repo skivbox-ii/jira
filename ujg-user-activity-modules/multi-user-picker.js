@@ -81,8 +81,26 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
             updateTriggerText();
         }
 
-        function notifyChange() {
-            if (onChange) onChange(selectedUsers);
+        function notifyChange(options) {
+            if (onChange) {
+                onChange(selectedUsers, {
+                    source: (options && options.source) || "manual"
+                });
+            }
+        }
+
+        function setSelectedUsers(nextUsers, options) {
+            selectedUsers = (nextUsers || []).map(normalizeUser);
+            renderChips();
+            if (panelOpen) renderResults();
+            notifyChange(options);
+        }
+
+        function clearSelection(options) {
+            selectedUsers = [];
+            renderChips();
+            if (panelOpen) renderResults();
+            notifyChange(options);
         }
 
         function renderResults() {
@@ -265,6 +283,8 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
             getSelectedUsers: function() {
                 return selectedUsers;
             },
+            setSelectedUsers: setSelectedUsers,
+            clearSelection: clearSelection,
             setFromUrl: setFromUrl
         };
     }
