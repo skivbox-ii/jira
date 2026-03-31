@@ -2432,6 +2432,44 @@ test("processRepoActivity builds commit and PR events for selected user", functi
     assert.equal(prOpenedItem.pullRequestAuthor, "Dima Torzok");
 });
 
+test("processRepoActivity keeps source day keys for offset timestamps", function() {
+    var mod = loadRepoDataProcessor();
+    var repoActivity = mod.processRepoActivity(
+        {
+            "CORE-1": { key: "CORE-1", summary: "Timezone task", status: "In Progress" }
+        },
+        {
+            "CORE-1": {
+                detail: [{
+                    repositories: [{
+                        name: "core-api",
+                        commits: [{
+                            id: "late30",
+                            message: "Late 30th commit",
+                            authorTimestamp: "2026-03-30T23:30:00-02:00",
+                            author: { name: "tz-user", displayName: "Timezone User" }
+                        }, {
+                            id: "early31",
+                            message: "Early 31st commit",
+                            authorTimestamp: "2026-03-31T00:10:00-02:00",
+                            author: { name: "tz-user", displayName: "Timezone User" }
+                        }]
+                    }]
+                }]
+            }
+        },
+        { name: "tz-user", displayName: "Timezone User" },
+        "2026-03-30",
+        "2026-03-31"
+    );
+
+    assert.equal(repoActivity.items.length, 2);
+    assert.equal(repoActivity.items[0].date, "2026-03-30");
+    assert.equal(repoActivity.items[1].date, "2026-03-31");
+    assert.equal(repoActivity.dayMap["2026-03-30"].items.length, 1);
+    assert.equal(repoActivity.dayMap["2026-03-31"].items.length, 1);
+});
+
 test("processRepoActivity matches multi-user selection passed as user objects array", function() {
     var mod = loadRepoDataProcessor();
     var repoActivity = mod.processRepoActivity(
@@ -4042,6 +4080,44 @@ test("day detail user filter narrows team view to one column", function() {
     var html = stub.getHtml();
     var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
     assert.equal(cols ? cols.length : 0, 1, "expected one user column after selecting a single user");
+});
+
+test("day detail user filter keeps repo activity matched by authorMeta", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-03-31", {
+        repoItems: [{
+            type: "commit",
+            timestamp: "2026-03-31T09:10:00.000Z",
+            issueKey: "REP-1",
+            issueSummary: "Repo task",
+            issueStatus: "In Progress",
+            author: "alice.repo",
+            authorMeta: { name: "u1", displayName: "Alice" },
+            repoName: "core-api",
+            message: "Repo change visible for Alice",
+            hash: "abc123def456",
+            commitUrl: "https://git/repo/commits/abc123def456"
+        }]
+    }, {
+        "REP-1": { key: "REP-1", summary: "Repo task", status: "In Progress" }
+    }, users);
+
+    stub.triggerChange(".ujg-ua-detail-user-filter", {
+        value: "sel-0"
+    });
+
+    var html = stub.getHtml();
+    assert.match(html, /Bitbucket за день/);
+    assert.match(html, /Repo change visible for Alice/);
+    assert.match(html, /core-api/);
 });
 
 test("day detail team view builds one column per user", function() {

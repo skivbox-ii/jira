@@ -140,7 +140,9 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
         (dayData.repoItems || []).forEach(function(r) {
             var repoAuthor = { name: "", displayName: "" };
-            if (r.author) {
+            if (r.authorMeta) {
+                repoAuthor = normalizeAuthor(r.authorMeta);
+            } else if (r.author) {
                 repoAuthor = normalizeAuthor(r.author);
             } else if (r.authorName) {
                 repoAuthor = { name: "", displayName: r.authorName };

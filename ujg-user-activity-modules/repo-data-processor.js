@@ -93,8 +93,22 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         return utils.parseDate ? utils.parseDate(value) : new Date(value);
     }
 
+    function extractSourceDateKey(value, normalizedDate) {
+        if (typeof value === "string") {
+            var match = /^\s*(\d{4}-\d{2}-\d{2})/.exec(value);
+            if (match) return match[1];
+        }
+        return normalizedDate ? utils.getDayKey(normalizedDate) : "";
+    }
+
+    function isDateKeyInRange(state, dateKey) {
+        return !!dateKey && dateKey >= state.startDate && dateKey <= state.endDate;
+    }
+
     function isTimestampInRange(state, value) {
         var timestamp = normalizeTimestamp(value);
+        var dateKey = extractSourceDateKey(value, timestamp);
+        if (dateKey) return isDateKeyInRange(state, dateKey);
         if (!timestamp) return false;
         return timestamp.getTime() >= state.startMs && timestamp.getTime() <= state.endMs;
     }
@@ -143,15 +157,21 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
     }
 
     function pushEvent(state, item) {
-        var timestamp = normalizeTimestamp(item && item.timestamp);
+        var rawTimestamp = item && item.timestamp;
+        var timestamp = normalizeTimestamp(rawTimestamp);
         var dateKey;
         var day;
         var repo;
+        var authorLike;
 
         if (!timestamp) return;
-        if (timestamp.getTime() < state.startMs || timestamp.getTime() > state.endMs) return;
+        dateKey = extractSourceDateKey(rawTimestamp, timestamp);
+        if (dateKey) {
+            if (!isDateKeyInRange(state, dateKey)) return;
+        } else if (timestamp.getTime() < state.startMs || timestamp.getTime() > state.endMs) {
+            return;
+        }
 
-        dateKey = utils.getDayKey(timestamp);
         item.timestamp = timestamp.toISOString();
         item.date = dateKey;
         item.repoName = item.repoName || "(unknown)";
@@ -169,7 +189,10 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         item.pullRequestId = item.pullRequestId || "";
         item.pullRequestUrl = item.pullRequestUrl || "";
         item.pullRequestAuthor = item.pullRequestAuthor || "";
-        item.author = item.author || getUserLabel(item.userLike || item.raw && (item.raw.author || item.raw.user || item.raw.actor || item.raw.updatedBy)) || "";
+        authorLike = item.authorMeta || item.userLike || item.raw && (item.raw.author || item.raw.user || item.raw.actor || item.raw.updatedBy) || null;
+        item.authorMeta = authorLike;
+        item.author = item.author || getUserLabel(authorLike) || "";
+        item.authorName = item.authorName || item.author || getUserLabel(authorLike) || "";
         item.reviewers = item.reviewers || getReviewerLabels(item.raw && item.raw.reviewers);
         item.reviewerDetails = item.reviewerDetails || getReviewerDetails(item.raw && item.raw.reviewers);
         item.raw = item.raw || null;
@@ -565,6 +588,8 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             useStringUserFilter: useStringUserFilter,
             requestUsers: requestUsers,
             selectedUser: useStringUserFilter ? {} : (selectedUser || {}),
+            startDate: startDate,
+            endDate: endDate,
             startMs: new Date(startDate + "T00:00:00").getTime(),
             endMs: new Date(endDate + "T23:59:59").getTime(),
             items: [],
