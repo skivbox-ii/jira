@@ -988,6 +988,32 @@ function loadUnifiedCalendar(jquery, utilsOverrides) {
     }, { requestAnimationFrame: function(fn) { if (fn) fn(); } });
 }
 
+function loadDailyDetail(jqueryFactory) {
+    var configMod = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var u = uaUtilsForLinks();
+    var $fn = jqueryFactory || function() {
+        return {
+            html: function() {
+                return this;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "daily-detail.js"), {
+        jquery: $fn,
+        _ujgUA_config: configMod,
+        _ujgUA_utils: u
+    });
+}
+
 function createActivityLogJqueryStub() {
     var doc = {};
     var tbodyInner = "";
@@ -3002,6 +3028,140 @@ test("repo config exposes repo activity labels", function() {
     assert.ok(config.REPO_ACTIVITY_LABELS);
     assert.equal(config.REPO_ACTIVITY_LABELS.commit, "Коммит");
     assert.equal(config.REPO_ACTIVITY_LABELS.pull_request_merged, "PR влит");
+});
+
+test("daily detail normalize merges worklog change comment repo with unified fields", function() {
+    var mod = loadDailyDetail();
+    var dayData = {
+        worklogs: [{
+            issueKey: "A-1",
+            timestamp: "2026-03-15T10:00:00.000Z",
+            author: { displayName: "John Doe" },
+            timeSpentHours: 1,
+            comment: "c1"
+        }],
+        changes: [{
+            issueKey: "A-1",
+            field: "status",
+            timestamp: "2026-03-15T11:00:00.000Z",
+            author: { displayName: "Jane" },
+            fromString: "Open",
+            toString: "Done"
+        }],
+        allComments: [{
+            issueKey: "A-2",
+            timestamp: "2026-03-15T12:00:00.000Z",
+            author: { displayName: "Bob" },
+            body: "hello"
+        }],
+        repoItems: [{
+            issueKey: "A-2",
+            timestamp: "2026-03-15T13:00:00.000Z",
+            message: "commit msg",
+            type: "commit",
+            authorName: "Dev",
+            issueSummary: "From repo only",
+            issueStatus: "In Progress"
+        }]
+    };
+    var issueMap = {
+        "A-1": { key: "A-1", summary: "First issue", status: "Open" },
+        "A-2": { key: "A-2", summary: "Second from map", status: "QA" }
+    };
+    var actions = mod.normalizeDayActions(dayData, issueMap);
+    assert.equal(actions.length, 4);
+
+    function pick(type) {
+        return actions.filter(function(a) {
+            return a.type === type;
+        });
+    }
+
+    var wl = pick("worklog")[0];
+    assert.equal(wl.issueKey, "A-1");
+    assert.equal(wl.issueSummary, "First issue");
+    assert.equal(wl.issueStatus, "Open");
+    assert.equal(wl.author.displayName, "John Doe");
+    assert.ok(String(wl.timestamp).length > 0);
+
+    var ch = pick("change")[0];
+    assert.equal(ch.issueSummary, "First issue");
+    assert.equal(ch.author.displayName, "Jane");
+
+    var cm = pick("comment")[0];
+    assert.equal(cm.issueKey, "A-2");
+    assert.equal(cm.issueSummary, "Second from map");
+    assert.equal(cm.issueStatus, "QA");
+
+    var rp = pick("repo")[0];
+    assert.equal(rp.issueKey, "A-2");
+    assert.equal(rp.issueSummary, "Second from map");
+    assert.equal(rp.author.displayName, "Dev");
+    assert.ok(String(rp.timestamp).length > 0);
+});
+
+test("daily detail undated splits repo rows without timestamp", function() {
+    var mod = loadDailyDetail();
+    var dayData = {
+        repoItems: [{
+            issueKey: "R-1",
+            message: "no time",
+            authorName: "Alice",
+            issueSummary: "S",
+            issueStatus: "Open"
+        }, {
+            issueKey: "R-2",
+            timestamp: "2026-03-15T14:00:00.000Z",
+            message: "with time"
+        }]
+    };
+    var actions = mod.normalizeDayActions(dayData, {});
+    var split = mod.splitTimedAndUntimed(actions);
+    assert.equal(split.undated.length, 1);
+    assert.equal(split.timed.length, 1);
+    assert.equal(split.undated[0].issueKey, "R-1");
+    assert.equal(split.timed[0].issueKey, "R-2");
+});
+
+test("daily detail summary shows full issue title in panel html", function() {
+    var lastHtml = "";
+    var $stub = function() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    lastHtml = h;
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    var mod = loadDailyDetail($stub);
+    var longSummary = new Array(30).join("ABCDEFGHIJ");
+    assert.ok(longSummary.length > 200);
+    var panel = mod.create();
+    panel.show("2026-03-15", {
+        worklogs: [{
+            issueKey: "LONG-1",
+            timestamp: "2026-03-15T09:00:00.000Z",
+            author: { displayName: "U" },
+            timeSpentHours: 0.5,
+            comment: ""
+        }]
+    }, {
+        "LONG-1": { key: "LONG-1", summary: longSummary, status: "Open" }
+    });
+    assert.ok(lastHtml.indexOf(longSummary) !== -1, "expected full summary in rendered html");
+    assert.equal(lastHtml.indexOf("…"), -1, "ellipsis should not appear in day-detail panel for issue title");
 });
 
 test("user activity data processor preserves Jira timestamps and authors for worklogs and status changes", function() {
