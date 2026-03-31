@@ -758,13 +758,20 @@ define("_ujgUA_config", [], function() {
         ".ujg-ua-repo-block { padding: 4px; background: #f4f5f7; min-height: 16px; }",
         ".ujg-ua-jira-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
         ".ujg-ua-repo-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
+        ".ujg-ua-inline-status { font-size: 9px; padding: 0 4px; border-radius: 4px; background: #ebecf0; color: #42526e; }",
+        ".ujg-ua-issue-key { text-decoration: none; }",
+        ".ujg-ua-issue-key:hover { text-decoration: underline; }",
+        ".ujg-ua-repo-msg, .ujg-ua-repo-summary { overflow-wrap: anywhere; word-break: break-word; }",
+        ".ujg-ua-jira-line, .ujg-ua-repo-line { overflow-wrap: anywhere; }",
+        ".ujg-ua-log-tbody td, .ujg-ua-repo-row td { overflow-wrap: anywhere; }",
         ".ujg-ua-time { color: #6b778c; font-size: 10px; font-family: monospace; }",
         ".ujg-ua-author { color: #0052cc; font-size: 11px; }",
         ".ujg-ua-day-cell { vertical-align: top; border: 1px solid #dfe1e6; }",
         ".ujg-ua-day-cell-red-border { border: 2px solid #de350b !important; }",
         "",
         ".ujg-ua-detail-issue { border: 1px solid #dfe1e6; border-radius: 3px; margin-bottom: 8px; padding: 8px; }",
-        ".ujg-ua-detail-issue-header { font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 4px; }",
+        ".ujg-ua-detail-issue-header { font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 4px; white-space: normal; word-break: break-word; }",
+        ".ujg-ua-detail-issue-summary { white-space: normal; word-break: break-word; }",
         ".ujg-ua-detail-issue-header a { color: #0052cc; text-decoration: none; }",
         ".ujg-ua-detail-action { padding: 3px 0; font-size: 13px; }",
         ".ujg-ua-detail-comment { color: #6b778c; font-size: 12px; margin-left: 16px; font-style: italic; }",
@@ -860,6 +867,44 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
     function escapeHtml(t) {
         if (!t) return "";
         return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
+    function getJiraBaseUrl() {
+        if (typeof window === "undefined") return "";
+        var fromAjs = window.AJS && window.AJS.params && String(window.AJS.params.baseURL || "").trim();
+        if (fromAjs) return fromAjs.replace(/\/$/, "");
+        var origin = window.location && String(window.location.origin || "").trim();
+        return origin ? origin.replace(/\/$/, "") : "";
+    }
+
+    function buildIssueUrl(issueKey) {
+        var key = String(issueKey || "").trim();
+        if (!key) return "";
+        return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + encodeURIComponent(key);
+    }
+
+    function normalizeLinkAttrs(extraAttrs) {
+        if (extraAttrs == null) return "";
+        if (typeof extraAttrs === "string") return String(extraAttrs).trim();
+        if (typeof extraAttrs !== "object") return String(extraAttrs).trim();
+
+        return Object.keys(extraAttrs).map(function(name) {
+            if (!Object.prototype.hasOwnProperty.call(extraAttrs, name)) return "";
+            if (!/^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/.test(name)) return "";
+            var value = extraAttrs[name];
+            if (value == null || value === false) return "";
+            if (value === true) return name;
+            return name + '="' + escapeHtml(String(value)) + '"';
+        }).filter(Boolean).join(" ");
+    }
+
+    function renderIssueLink(issueKey, label, extraAttrs) {
+        var url = buildIssueUrl(issueKey);
+        var text = label != null ? String(label) : String(issueKey || "");
+        var attrs = normalizeLinkAttrs(extraAttrs);
+        if (!url) return escapeHtml(text);
+        return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
+            (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
     }
 
     function getProjectKey(issueKey) {
@@ -970,6 +1015,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         formatDateTime: formatDateTime,
         formatDateShort: formatDateShort,
         escapeHtml: escapeHtml,
+        getJiraBaseUrl: getJiraBaseUrl,
+        buildIssueUrl: buildIssueUrl,
+        renderIssueLink: renderIssueLink,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
         getDefaultPeriod: getDefaultPeriod,
@@ -2118,6 +2166,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         item.repoUrl = item.repoUrl || "";
         item.issueKey = item.issueKey || "";
         item.issueSummary = item.issueSummary || "";
+        item.issueStatus = item.issueStatus || "";
         item.branchName = item.branchName || "";
         item.type = item.type || "unknown_dev_event";
         item.title = item.title || "";
@@ -2155,6 +2204,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
                 issueKey: issueKey,
                 issueSummary: issueInfo.summary || "",
+                issueStatus: issueInfo.status || "",
                 repoName: repo.name || repo.slug || "(unknown)",
                 repoUrl: repo.url || "",
                 branchName: commit.branchName || "",
@@ -2254,6 +2304,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             timestamp: getActivityTimestamp(repo),
             issueKey: issueKey,
             issueSummary: issueInfo.summary || "",
+            issueStatus: issueInfo.status || "",
             repoName: repo.name || repo.slug || "(unknown)",
             repoUrl: repo.url || "",
             title: repo.name || repo.slug || "(unknown)",
@@ -2300,6 +2351,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: getActivityTimestamp(item),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName || container.name || "(unknown)",
                     repoUrl: repoUrl || container.url || "",
                     title: item.title || item.name || item.id || key,
@@ -2324,6 +2376,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: pr.createdDate || pr.created || pr.openedDate,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName,
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2341,6 +2394,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.mergedDate || pr.completedDate || pr.closedDate,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2357,6 +2411,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.closedDate || pr.declinedDate || pr.updatedDate,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2375,6 +2430,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.updatedDate || pr.updated || pr.lastUpdated,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2400,6 +2456,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: extractReviewerTimestamp(reviewer),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName,
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2428,6 +2485,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repo.name || repo.slug || "(unknown)",
                     repoUrl: repo.url || "",
                     branchName: branchName,
@@ -2444,6 +2502,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repo.name || repo.slug || "(unknown)",
                     repoUrl: repo.url || "",
                     branchName: branchName,
@@ -3664,6 +3723,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
     var MONTHS_FULL_RU = utils.MONTHS_FULL_RU;
     var ICONS = config.ICONS;
+    var REPO_LABELS = config.REPO_ACTIVITY_LABELS || {};
 
     function formatFullDate(dateStr) {
         var d = new Date(dateStr + "T00:00:00");
@@ -3684,9 +3744,10 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
     }
 
     function normalizeAuthor(author) {
-        if (!author) return { name: "", displayName: "" };
-        if (typeof author === "string") return { name: "", displayName: author };
+        if (!author) return { key: "", name: "", displayName: "" };
+        if (typeof author === "string") return { key: "", name: "", displayName: author };
         return {
+            key: author.key || "",
             name: author.name || author.key || "",
             displayName: author.displayName || author.name || author.key || ""
         };
@@ -3716,13 +3777,33 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return dayData.changes || [];
     }
 
-    function collectActions(dayData) {
+    function pickComments(dayData) {
+        if (!dayData) return [];
+        if (dayData.allComments !== undefined && dayData.allComments !== null) {
+            return dayData.allComments || [];
+        }
+        return dayData.comments || [];
+    }
+
+    function metaFromIssue(issueKey, issueMap, repoItem) {
+        var issue = issueKey && issueMap && issueMap[issueKey];
+        return {
+            issueSummary: (issue && issue.summary) || (repoItem && repoItem.issueSummary) || "",
+            issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || ""
+        };
+    }
+
+    function normalizeDayActions(dayData, issueMap) {
+        issueMap = issueMap || {};
         var actions = [];
         if (!dayData) return actions;
 
         pickWorklogs(dayData).forEach(function(wl) {
+            var m = metaFromIssue(wl.issueKey, issueMap, null);
             actions.push({
                 issueKey: wl.issueKey,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: timestampFor(wl),
                 author: normalizeAuthor(wl.author),
                 type: "worklog",
@@ -3733,8 +3814,11 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
 
         pickChanges(dayData).forEach(function(ch) {
             if (ch.field !== "status") return;
+            var m = metaFromIssue(ch.issueKey, issueMap, null);
             actions.push({
                 issueKey: ch.issueKey,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: timestampFor(ch),
                 author: normalizeAuthor(ch.author),
                 type: "change",
@@ -3743,9 +3827,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             });
         });
 
-        (dayData.allComments || []).forEach(function(cm) {
+        pickComments(dayData).forEach(function(cm) {
+            var m = metaFromIssue(cm.issueKey, issueMap, null);
             actions.push({
                 issueKey: cm.issueKey,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: timestampFor(cm),
                 author: normalizeAuthor(cm.author),
                 type: "comment",
@@ -3760,8 +3847,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             } else if (r.authorName) {
                 repoAuthor = { name: "", displayName: r.authorName };
             }
+            var ik = r.issueKey || null;
+            var m = metaFromIssue(ik, issueMap, r);
             actions.push({
-                issueKey: r.issueKey || null,
+                issueKey: ik,
+                issueSummary: m.issueSummary,
+                issueStatus: m.issueStatus,
                 timestamp: r.timestamp || r.authorTimestamp || "",
                 author: repoAuthor,
                 type: "repo",
@@ -3771,6 +3862,78 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         });
 
         return actions;
+    }
+
+    function splitTimedAndUntimed(actions) {
+        var timed = [];
+        var undated = [];
+        (actions || []).forEach(function(a) {
+            if (String(a.timestamp || "").trim()) timed.push(a);
+            else undated.push(a);
+        });
+        return { timed: timed, undated: undated };
+    }
+
+    function groupActionsByIssue(actions) {
+        var grouped = {};
+        var unlinked = [];
+        (actions || []).forEach(function(act) {
+            var ik = act.issueKey;
+            if (ik == null || ik === "") {
+                unlinked.push(act);
+            } else {
+                if (!grouped[ik]) grouped[ik] = [];
+                grouped[ik].push(act);
+            }
+        });
+        return { grouped: grouped, unlinked: unlinked };
+    }
+
+    function normalizedToken(value) {
+        return String(value || "").trim().toLowerCase();
+    }
+
+    function collectUserTokens(user) {
+        var source = typeof user === "string" ? { key: user, name: user, displayName: user } : (user || {});
+        var tokens = [];
+
+        [source.key, source.name, source.displayName].forEach(function(value) {
+            var token = normalizedToken(value);
+            if (token && tokens.indexOf(token) === -1) tokens.push(token);
+        });
+
+        return tokens;
+    }
+
+    function authorMatchKey(author) {
+        var a = author || {};
+        return String(a.name || a.key || a.displayName || "").trim() || "__unknown__";
+    }
+
+    function groupActionsByUser(actions, selectedUsers) {
+        var list = actions || [];
+        if (selectedUsers && selectedUsers.length) {
+            var allow = {};
+            selectedUsers.forEach(function(u) {
+                collectUserTokens(u).forEach(function(token) {
+                    allow[token] = true;
+                });
+            });
+            list = list.filter(function(a) {
+                var tokens = collectUserTokens(a.author);
+                for (var i = 0; i < tokens.length; i++) {
+                    if (allow[tokens[i]]) return true;
+                }
+                return false;
+            });
+        }
+        var byUser = {};
+        list.forEach(function(a) {
+            var k = authorMatchKey(a.author);
+            if (!byUser[k]) byUser[k] = [];
+            byUser[k].push(a);
+        });
+        return byUser;
     }
 
     function minGroupTimestamp(arr) {
@@ -3787,7 +3950,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var authEsc = utils.escapeHtml(surname(action.author && action.author.displayName));
         var html = '<div class="ujg-ua-detail-action">';
         html += '<span class="ujg-ua-time">' + utils.escapeHtml(time) + '</span> ';
-        html += '<span class="ujg-ua-author">' + authEsc + '</span> — ';
+        html += '<span class="ujg-ua-author">' + authEsc + "</span> — ";
 
         switch (action.type) {
             case "worklog": {
@@ -3800,7 +3963,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 break;
             }
             case "change":
-                html += '<span class="text-warning">' + utils.escapeHtml(action.fromString || "") + '</span>';
+                html += '<span class="text-warning">' + utils.escapeHtml(action.fromString || "") + "</span>";
                 html += " → ";
                 html += '<span class="text-success">' + utils.escapeHtml(action.toString || "") + "</span>";
                 break;
@@ -3813,7 +3976,12 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 break;
             case "repo": {
                 var rt = String(action.repoType || "commit").toLowerCase();
-                html += utils.escapeHtml(rt);
+                var typeLabel = REPO_LABELS[rt] || rt;
+                html += utils.escapeHtml(typeLabel);
+                var st = action.issueStatus && String(action.issueStatus).trim();
+                if (st) {
+                    html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(st) + "</span>";
+                }
                 var msg = action.message && String(action.message).trim();
                 if (msg) {
                     html += '<div class="ujg-ua-detail-comment">"' + utils.escapeHtml(utils.truncate(msg, 200)) + '"</div>';
@@ -3828,74 +3996,74 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return html;
     }
 
+    function buildIssueGroupsHtml(grouped, unlinked) {
+        var html = "";
+        var keys = Object.keys(grouped);
+        var ki;
+        for (ki = 0; ki < keys.length; ki++) {
+            grouped[keys[ki]].sort(byTimestamp);
+        }
+        unlinked.sort(byTimestamp);
+
+        keys.sort(function(a, b) {
+            var cmp = minGroupTimestamp(grouped[a]).localeCompare(minGroupTimestamp(grouped[b]));
+            if (cmp !== 0) return cmp;
+            return a.localeCompare(b);
+        });
+
+        for (ki = 0; ki < keys.length; ki++) {
+            var key = keys[ki];
+            var entry = grouped[key];
+            var summary = (entry[0] && entry[0].issueSummary) || "";
+
+            html += '<div class="ujg-ua-detail-issue">';
+            html += '<div class="ujg-ua-detail-issue-header flex items-start gap-2">';
+            html += utils.renderIssueLink(key, key, 'class="font-mono text-xs font-semibold text-primary shrink-0 ujg-ua-issue-key"');
+            html += '<span class="text-foreground font-medium min-w-0 ujg-ua-detail-issue-summary">' + utils.escapeHtml(summary) + "</span>";
+            html += "</div>";
+            for (var gi = 0; gi < entry.length; gi++) {
+                html += renderActionHtml(entry[gi]);
+            }
+            html += "</div>";
+        }
+
+        if (unlinked.length > 0) {
+            html += '<div class="ujg-ua-detail-unlinked">';
+            html += '<div class="ujg-ua-detail-issue-header">Без привязки к задаче</div>';
+            for (var ui = 0; ui < unlinked.length; ui++) {
+                html += renderActionHtml(unlinked[ui]);
+            }
+            html += "</div>";
+        }
+        return html;
+    }
+
     function create() {
         var $el = $('<div class="dashboard-card overflow-hidden" style="display:none"></div>');
 
         function renderContent(date, dayData, issueMap) {
             var html = '<div class="p-5">' +
                 '<div class="flex items-center justify-between mb-4">' +
-                    '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + '</h3>' +
+                    '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + "</h3>" +
                     '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
-                        '<span class="w-4 h-4">' + ICONS.x + '</span>' +
-                    '</button>' +
-                '</div>' +
+                        '<span class="w-4 h-4">' + ICONS.x + "</span>" +
+                    "</button>" +
+                "</div>" +
                 '<div class="space-y-2">';
 
-            var actions = collectActions(dayData);
+            var normalized = normalizeDayActions(dayData, issueMap);
 
-            if (actions.length === 0) {
+            if (normalized.length === 0) {
                 html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности за этот день</div>';
             } else {
-                var grouped = {};
-                var unlinked = [];
-                var ai;
-                for (ai = 0; ai < actions.length; ai++) {
-                    var act = actions[ai];
-                    var ik = act.issueKey;
-                    if (ik == null || ik === "") {
-                        unlinked.push(act);
-                    } else {
-                        if (!grouped[ik]) grouped[ik] = [];
-                        grouped[ik].push(act);
-                    }
-                }
-
-                var keys = Object.keys(grouped);
-                var ki;
-                for (ki = 0; ki < keys.length; ki++) {
-                    grouped[keys[ki]].sort(byTimestamp);
-                }
-                unlinked.sort(byTimestamp);
-
-                keys.sort(function(a, b) {
-                    var cmp = minGroupTimestamp(grouped[a]).localeCompare(minGroupTimestamp(grouped[b]));
-                    if (cmp !== 0) return cmp;
-                    return a.localeCompare(b);
-                });
-
-                for (ki = 0; ki < keys.length; ki++) {
-                    var key = keys[ki];
-                    var entry = grouped[key];
-                    var issue = issueMap[key];
-                    var summary = (issue && issue.summary) || "";
-
-                    html += '<div class="ujg-ua-detail-issue">';
-                    html += '<div class="ujg-ua-detail-issue-header flex items-start gap-2">';
-                    html += '<span class="font-mono text-xs font-semibold text-primary shrink-0">' + utils.escapeHtml(key) + "</span>";
-                    html += '<span class="text-foreground font-medium truncate min-w-0">' + utils.escapeHtml(summary) + "</span>";
-                    html += "</div>";
-                    for (var gi = 0; gi < entry.length; gi++) {
-                        html += renderActionHtml(entry[gi]);
-                    }
-                    html += "</div>";
-                }
-
-                if (unlinked.length > 0) {
-                    html += '<div class="ujg-ua-detail-unlinked">';
-                    html += '<div class="ujg-ua-detail-issue-header">Без привязки к задаче</div>';
-                    for (var ui = 0; ui < unlinked.length; ui++) {
-                        html += renderActionHtml(unlinked[ui]);
-                    }
+                var split = splitTimedAndUntimed(normalized);
+                var timedPart = groupActionsByIssue(split.timed);
+                html += buildIssueGroupsHtml(timedPart.grouped, timedPart.unlinked);
+                if (split.undated.length > 0) {
+                    var undatedPart = groupActionsByIssue(split.undated);
+                    html += '<div class="ujg-ua-detail-undated mt-3 pt-2 border-t border-dashed border-border">';
+                    html += '<div class="text-xs font-semibold text-muted-foreground mb-2">Без точного времени</div>';
+                    html += buildIssueGroupsHtml(undatedPart.grouped, undatedPart.unlinked);
                     html += "</div>";
                 }
             }
@@ -3916,7 +4084,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         return { $el: $el, show: show, hide: hide };
     }
 
-    return { create: create };
+    return {
+        create: create,
+        normalizeDayActions: normalizeDayActions,
+        groupActionsByIssue: groupActionsByIssue,
+        groupActionsByUser: groupActionsByUser,
+        splitTimedAndUntimed: splitTimedAndUntimed
+    };
 });
 
 /* === Module: unified-calendar.js === */
@@ -4034,7 +4208,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(w.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(w.issueKey, w.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
@@ -4048,7 +4224,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(c.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
@@ -4060,7 +4238,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    '<span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(c.issueKey || "") + '</span> ' +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px]">💬</span>' +
                     '</div>'
             });
@@ -4093,14 +4273,25 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             else if (type === "branch") icon = "🟡";
             else icon = "●";
 
-            html += '<div class="ujg-ua-repo-line">';
-            html += '<span class="ujg-ua-time">' + time + '</span> ';
-            html += icon + ' ';
+            var parts = ['<span class="ujg-ua-time">' + time + "</span>", icon];
             if (item.authorName || (item.author && item.author.displayName)) {
-                html += '<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + '</span> ';
+                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + "</span>");
             }
-            html += '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(utils.truncate(item.message || item.title || item.name || "", 50)) + '</span>';
-            html += '</div>';
+            if (item.issueKey) {
+                parts.push(utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                }));
+            }
+            if (item.issueStatus) {
+                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(item.issueStatus) + "</span>");
+            }
+            var repoMsg = item.message || item.title || item.name || "";
+            parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg">' + utils.escapeHtml(utils.truncate(repoMsg, 50)) + "</span>");
+            if (item.issueSummary && String(item.issueSummary) !== String(repoMsg)) {
+                parts.push('<span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary">' +
+                    utils.escapeHtml(utils.truncate(item.issueSummary, 60)) + "</span>");
+            }
+            html += '<div class="ujg-ua-repo-line">' + parts.join(" ") + "</div>";
         }
         html += '</div>';
         return html;
@@ -4694,7 +4885,11 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + r.time + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' + utils.escapeHtml(r.issueKey) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                                class: "text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"
+                            }) : "") +
+                            "</td>" +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold px-1 py-0 rounded ' + actionCls + '">' + utils.escapeHtml(r.action) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground truncate max-w-[180px]">' + utils.escapeHtml(r.detail) + '</td>' +
@@ -4705,7 +4900,11 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 if (isExp) {
                     html +=
                         '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
-                            '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span><span class="font-mono font-semibold text-primary">' + utils.escapeHtml(r.issueKey) + '</span><span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
+                            '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span>' +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                                class: "font-mono font-semibold text-primary ujg-ua-issue-key"
+                            }) : '<span class="font-mono font-semibold text-primary">-</span>') +
+                            '<span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
                             (r.author ? '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Автор:</span><span class="text-foreground">' + utils.escapeHtml(r.author) + '</span></div>' : '') +
@@ -4897,7 +5096,13 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         details += '<div class="grid gap-1 text-[11px]">';
         details += '<div><span class="text-muted-foreground">' + UI.repo + ':</span> <span class="font-semibold text-foreground">' + escapeHtml(item.repoName || "") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.branch + ':</span> <span class="text-foreground">' + escapeHtml(item.branchName || "-") + '</span></div>';
-        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> <span class="font-mono text-foreground">' + escapeHtml(item.issueKey || "-") + '</span></div>';
+        details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> ' +
+            (item.issueKey
+                ? utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "font-mono text-foreground ujg-ua-issue-key"
+                })
+                : '<span class="font-mono text-foreground">-</span>') +
+            "</div>";
         details += '<div><span class="text-muted-foreground">' + UI.author + ':</span> <span class="text-foreground">' + escapeHtml(item.author || "-") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.reviewers + ':</span> <span class="text-foreground">' + escapeHtml((item.reviewers || []).join(", ") || "-") + '</span></div>';
         if (pullRequestId) {
@@ -4947,7 +5152,11 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + escapeHtml(time) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-semibold text-primary">' + escapeHtml(item.repoName || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground">' + escapeHtml(item.branchName || "") + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' + escapeHtml(item.issueKey || "") + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' +
+                (item.issueKey ? utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "text-[11px] font-mono text-foreground ujg-ua-issue-key"
+                }) : "") +
+                "</td>";
             html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] truncate">' + escapeHtml(getDescription(item)) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] truncate">' + escapeHtml(getStatusHash(item)) + "</td>";
