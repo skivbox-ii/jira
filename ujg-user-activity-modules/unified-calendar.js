@@ -76,7 +76,23 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
     function surname(displayName) {
         if (!displayName) return "";
-        return displayName.split(" ")[0];
+        return String(displayName).split(" ")[0];
+    }
+
+    function repoItemAuthorDisplayName(item) {
+        if (item.authorName) return String(item.authorName);
+        var a = item.author;
+        if (!a) return "";
+        if (typeof a === "string") return a;
+        return String((a.displayName || a.name || a.key || ""));
+    }
+
+    function repoIssueMeta(issueKey, issueMap, item) {
+        var issue = issueKey && issueMap && issueMap[issueKey];
+        return {
+            issueSummary: (issue && issue.summary) || (item && item.issueSummary) || "",
+            issueStatus: (issue && issue.status) || (item && item.issueStatus) || ""
+        };
     }
 
     function renderUserChips(dayData, selectedUsers, dateStr) {
@@ -160,7 +176,8 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         return html;
     }
 
-    function renderRepoBlock(dayData) {
+    function renderRepoBlock(dayData, issueMap) {
+        issueMap = issueMap || {};
         var items = (dayData.repoItems || []).slice();
         items.sort(function(a, b) {
             return ((a.timestamp || "").localeCompare(b.timestamp || ""));
@@ -176,24 +193,30 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             else if (type === "pullrequest" || type === "pr") icon = "🔵";
             else if (type === "branch") icon = "🟡";
             else icon = "●";
+            var rt = String(type || "commit").toLowerCase();
+            var typeLabel = REPO_LABELS[rt] || REPO_LABELS[type] || type;
 
-            var parts = ['<span class="ujg-ua-time">' + time + "</span>", icon];
-            if (item.authorName || (item.author && item.author.displayName)) {
-                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + "</span>");
+            var meta = repoIssueMeta(item.issueKey, issueMap, item);
+            var authorDisp = repoItemAuthorDisplayName(item);
+            var parts = ['<span class="ujg-ua-time">' + time + "</span>", icon,
+                '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(typeLabel) + "</span>"];
+            if (authorDisp) {
+                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(authorDisp)) + "</span>");
             }
             if (item.issueKey) {
                 parts.push(utils.renderIssueLink(item.issueKey, item.issueKey, {
                     class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
                 }));
             }
-            if (item.issueStatus) {
-                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(item.issueStatus) + "</span>");
+            if (meta.issueStatus) {
+                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(meta.issueStatus) + "</span>");
             }
             var repoMsg = item.message || item.title || item.name || "";
-            parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg">' + utils.escapeHtml(utils.truncate(repoMsg, 50)) + "</span>");
-            if (item.issueSummary && String(item.issueSummary) !== String(repoMsg)) {
-                parts.push('<span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary">' +
-                    utils.escapeHtml(utils.truncate(item.issueSummary, 60)) + "</span>");
+            parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg whitespace-normal break-words min-w-0">' +
+                utils.escapeHtml(repoMsg) + "</span>");
+            if (meta.issueSummary && String(meta.issueSummary) !== String(repoMsg)) {
+                parts.push('<span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary whitespace-normal break-words min-w-0">' +
+                    utils.escapeHtml(meta.issueSummary) + "</span>");
             }
             html += '<div class="ujg-ua-repo-line">' + parts.join(" ") + "</div>";
         }
@@ -301,7 +324,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
                 html += chipsResult.html;
                 html += renderJiraBlock(dayData, issueMap);
-                html += renderRepoBlock(dayData);
+                html += renderRepoBlock(dayData, issueMap);
 
                 html += '</td>';
             }

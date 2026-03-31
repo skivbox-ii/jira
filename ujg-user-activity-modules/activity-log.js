@@ -264,16 +264,16 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     '<tr class="border-b border-border/50 hover:bg-muted/30">' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground whitespace-nowrap">' + r.date + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground">' + r.time + '</td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[140px] min-w-0 whitespace-normal break-words" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' +
                             (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
                                 class: "text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"
                             }) : "") +
                             "</td>" +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[200px] min-w-0 whitespace-normal break-words">' + utils.escapeHtml(r.summary) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold px-1 py-0 rounded ' + actionCls + '">' + utils.escapeHtml(r.action) + '</span></td>' +
-                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground truncate max-w-[180px]">' + utils.escapeHtml(r.detail) + '</td>' +
+                        '<td class="h-[20px] px-1.5 py-0 text-[11px] text-muted-foreground max-w-[180px] min-w-0 whitespace-normal break-words">' + utils.escapeHtml(r.detail) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-right font-medium text-foreground">' + hrs + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><button class="text-[9px] text-primary hover:underline ujg-ua-row-expand" data-idx="' + i + '">' + (isExp ? '&#9650;' : '&#9654;') + '</button></td>' +
                     '</tr>';

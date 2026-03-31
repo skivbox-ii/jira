@@ -278,7 +278,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 }
                 var msg = action.message && String(action.message).trim();
                 if (msg) {
-                    html += '<div class="ujg-ua-detail-comment">"' + utils.escapeHtml(utils.truncate(msg, 200)) + '"</div>';
+                    html += '<div class="ujg-ua-detail-comment whitespace-normal break-words">"' + utils.escapeHtml(msg) + '"</div>';
                 }
                 break;
             }

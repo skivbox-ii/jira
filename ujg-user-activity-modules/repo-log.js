@@ -209,8 +209,8 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
                 }) : "") +
                 "</td>";
             html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] truncate">' + escapeHtml(getDescription(item)) + "</td>";
-            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] truncate">' + escapeHtml(getStatusHash(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] min-w-0 whitespace-normal break-words">' + escapeHtml(getDescription(item)) + "</td>";
+            html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-muted-foreground max-w-[160px] min-w-0 whitespace-normal break-all">' + escapeHtml(getStatusHash(item)) + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-right"><button class="text-[10px] text-primary hover:underline ujg-ua-repo-row-expand" data-idx="' + index + '">' + (isExpanded ? UI.hide : UI.show) + "</button></td>";
             html += "</tr>";
 
