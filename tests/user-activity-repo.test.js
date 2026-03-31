@@ -146,6 +146,24 @@ function loadUserActivityApi(jquery) {
     });
 }
 
+function loadUserActivityUtils(windowStub) {
+    var config = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var globals = windowStub ? { window: windowStub } : {};
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "utils.js"), {
+        _ujgUA_config: config
+    }, globals);
+}
+
+test("user-activity utils: issue URL and issue link", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(utils.buildIssueUrl("ABC-123"), "https://jira.example.com/browse/ABC-123");
+    assert.match(utils.renderIssueLink("ABC-123"), /target="_blank"/);
+    assert.match(utils.renderIssueLink("ABC-123"), />ABC-123</);
+});
+
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
     var captured = [];
     var $ = createJqueryStub(function(options) {

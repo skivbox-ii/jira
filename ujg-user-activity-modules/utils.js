@@ -62,6 +62,28 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
+    function getJiraBaseUrl() {
+        if (typeof window === "undefined") return "";
+        var fromAjs = window.AJS && window.AJS.params && String(window.AJS.params.baseURL || "").trim();
+        if (fromAjs) return fromAjs.replace(/\/$/, "");
+        var origin = window.location && String(window.location.origin || "").trim();
+        return origin ? origin.replace(/\/$/, "") : "";
+    }
+
+    function buildIssueUrl(issueKey) {
+        var key = String(issueKey || "").trim();
+        if (!key) return "";
+        return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + key;
+    }
+
+    function renderIssueLink(issueKey, label, extraAttrs) {
+        var url = buildIssueUrl(issueKey);
+        var text = label != null ? String(label) : String(issueKey || "");
+        if (!url) return escapeHtml(text);
+        return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
+            (extraAttrs || "") + ">" + escapeHtml(text) + "</a>";
+    }
+
     function getProjectKey(issueKey) {
         if (!issueKey) return "";
         var idx = issueKey.indexOf("-");
@@ -170,6 +192,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         formatDateTime: formatDateTime,
         formatDateShort: formatDateShort,
         escapeHtml: escapeHtml,
+        getJiraBaseUrl: getJiraBaseUrl,
+        buildIssueUrl: buildIssueUrl,
+        renderIssueLink: renderIssueLink,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
         getDefaultPeriod: getDefaultPeriod,
