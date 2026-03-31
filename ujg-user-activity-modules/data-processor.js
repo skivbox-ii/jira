@@ -84,7 +84,19 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 var dateStr = utils.getDayKey(started);
                 var comment = wl.comment || "";
 
-                var wlEntry = { issueKey: key, date: dateStr, timeSpentHours: Math.round(hours * 100) / 100, comment: comment };
+                var wlAuthor = {
+                    name: author,
+                    displayName: (wl.author && (wl.author.displayName || wl.author.name || wl.author.key)) || author
+                };
+                var wlEntry = {
+                    issueKey: key,
+                    date: dateStr,
+                    started: wl.started,
+                    timestamp: started.toISOString(),
+                    timeSpentHours: Math.round(hours * 100) / 100,
+                    comment: comment,
+                    author: wlAuthor
+                };
                 issueEntry.worklogs.push(wlEntry);
                 issueEntry.totalTimeHours += hours;
 
@@ -110,9 +122,15 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     var changeEntry = {
                         issueKey: key,
                         date: dateStr,
+                        created: history.created,
+                        timestamp: created.toISOString(),
                         field: item.field || "",
                         fromString: item.fromString || "",
-                        toString: item.toString || ""
+                        toString: item.toString || "",
+                        author: {
+                            name: authorName,
+                            displayName: (history.author && (history.author.displayName || history.author.name || history.author.key)) || authorName
+                        }
                     };
                     issueEntry.changelogs.push(changeEntry);
 
@@ -293,10 +311,11 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     var wlCopy = {
                         issueKey: w.issueKey,
                         date: w.date,
+                        started: w.started,
                         timeSpentHours: w.timeSpentHours,
                         comment: w.comment,
-                        author: author,
-                        timestamp: w.started || w.date
+                        author: w.author || author,
+                        timestamp: w.timestamp || w.started || w.date
                     };
                     userSlice.worklogs.push(wlCopy);
                     multiDay.allWorklogs.push(wlCopy);
@@ -306,11 +325,12 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     var chCopy = {
                         issueKey: c.issueKey,
                         date: c.date,
+                        created: c.created,
                         field: c.field,
                         fromString: c.fromString,
                         toString: c.toString,
-                        author: author,
-                        timestamp: c.created || c.date
+                        author: c.author || author,
+                        timestamp: c.timestamp || c.created || c.date
                     };
                     userSlice.changes.push(chCopy);
                     multiDay.allChanges.push(chCopy);

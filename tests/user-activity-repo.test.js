@@ -156,6 +156,28 @@ function loadRepoDataProcessor() {
     });
 }
 
+function loadUserActivityDataProcessor() {
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "data-processor.js"), {
+        _ujgUA_config: {},
+        _ujgUA_utils: {
+            parseDate: function(value) {
+                if (!value) return null;
+                var date = new Date(value);
+                return isNaN(date.getTime()) ? null : date;
+            },
+            getDayKey: function(date) {
+                var year = date.getFullYear();
+                var month = String(date.getMonth() + 1).padStart(2, "0");
+                var day = String(date.getDate()).padStart(2, "0");
+                return year + "-" + month + "-" + day;
+            },
+            getProjectKey: function(issueKey) {
+                return String(issueKey || "").split("-")[0] || "";
+            }
+        }
+    });
+}
+
 function createHtmlJqueryStub() {
     function createCollection(root, selectors, singleNode) {
         return {
@@ -1852,6 +1874,58 @@ test("repo config exposes repo activity labels", function() {
     assert.ok(config.REPO_ACTIVITY_LABELS);
     assert.equal(config.REPO_ACTIVITY_LABELS.commit, "Коммит");
     assert.equal(config.REPO_ACTIVITY_LABELS.pull_request_merged, "PR влит");
+});
+
+test("user activity data processor preserves Jira timestamps and authors for worklogs and status changes", function() {
+    var mod = loadUserActivityDataProcessor();
+    var rawData = {
+        issues: [{
+            key: "CORE-1",
+            fields: {
+                project: { key: "CORE", name: "Core" },
+                status: { name: "Done" },
+                issuetype: { name: "Task" },
+                summary: "Test task"
+            }
+        }],
+        details: {
+            "CORE-1": {
+                worklogs: [{
+                    started: "2026-03-30T08:15:00.000Z",
+                    timeSpentSeconds: 7200,
+                    comment: "Worked",
+                    author: { name: "u1", displayName: "Ivan Ivanov" }
+                }],
+                changelog: [{
+                    created: "2026-03-30T10:45:00.000Z",
+                    author: { name: "u1", displayName: "Ivan Ivanov" },
+                    items: [{
+                        field: "status",
+                        fromString: "Open",
+                        toString: "Done"
+                    }]
+                }]
+            }
+        }
+    };
+
+    var single = mod.processData(rawData, "u1", "2026-03-01", "2026-03-31");
+    assert.equal(single.issueMap["CORE-1"].worklogs[0].started, "2026-03-30T08:15:00.000Z");
+    assert.equal(single.issueMap["CORE-1"].worklogs[0].timestamp, "2026-03-30T08:15:00.000Z");
+    assert.equal(single.issueMap["CORE-1"].worklogs[0].author.displayName, "Ivan Ivanov");
+    assert.equal(single.dayMap["2026-03-30"].changes[0].created, "2026-03-30T10:45:00.000Z");
+    assert.equal(single.dayMap["2026-03-30"].changes[0].timestamp, "2026-03-30T10:45:00.000Z");
+    assert.equal(single.dayMap["2026-03-30"].changes[0].author.displayName, "Ivan Ivanov");
+
+    var multi = mod.processMultiUserData([{
+        username: "u1",
+        displayName: "Ivan Ivanov",
+        rawData: rawData,
+        comments: {}
+    }], "2026-03-01", "2026-03-31");
+    assert.equal(multi.dayMap["2026-03-30"].allWorklogs[0].timestamp, "2026-03-30T08:15:00.000Z");
+    assert.equal(multi.dayMap["2026-03-30"].allChanges[0].timestamp, "2026-03-30T10:45:00.000Z");
+    assert.equal(multi.issueMap["CORE-1"].worklogs[0].author.displayName, "Ivan Ivanov");
 });
 
 test("repo modules are wired in main module and build order", function() {
