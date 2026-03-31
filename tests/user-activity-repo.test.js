@@ -1935,6 +1935,14 @@ test("processRepoActivity: repo items include issue summary and status from issu
                         message: "Do work",
                         authorTimestamp: "2026-03-15T10:00:00.000Z",
                         author: { displayName: "Commit Author" }
+                    }],
+                    pullRequests: [{
+                        id: "pr1",
+                        title: "Review work",
+                        status: "OPEN",
+                        createdDate: "2026-03-15T11:00:00.000Z",
+                        author: { displayName: "Commit Author" },
+                        reviewers: []
                     }]
                 }]
             }]
@@ -1950,10 +1958,17 @@ test("processRepoActivity: repo items include issue summary and status from issu
     var item = repoActivity.items.find(function(i) {
         return i.type === "commit";
     });
+    var prItem = repoActivity.items.find(function(i) {
+        return i.type === "pull_request_opened";
+    });
     assert.ok(item, "expected commit repo item");
+    assert.ok(prItem, "expected pull request repo item");
     assert.equal(item.issueSummary, "Real summary");
     assert.equal(item.issueStatus, "In Progress");
     assert.equal(item.author, "Commit Author");
+    assert.equal(prItem.issueSummary, "Real summary");
+    assert.equal(prItem.issueStatus, "In Progress");
+    assert.equal(prItem.author, "Commit Author");
 });
 
 test("processRepoActivity extracts branch commits and reviewer decisions for selected user", function() {

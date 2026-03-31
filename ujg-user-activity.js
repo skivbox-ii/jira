@@ -862,6 +862,29 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
+    function getJiraBaseUrl() {
+        if (typeof window === "undefined") return "";
+        var fromAjs = window.AJS && window.AJS.params && String(window.AJS.params.baseURL || "").trim();
+        if (fromAjs) return fromAjs.replace(/\/$/, "");
+        var origin = window.location && String(window.location.origin || "").trim();
+        return origin ? origin.replace(/\/$/, "") : "";
+    }
+
+    function buildIssueUrl(issueKey) {
+        var key = String(issueKey || "").trim();
+        if (!key) return "";
+        return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + encodeURIComponent(key);
+    }
+
+    function renderIssueLink(issueKey, label, extraAttrs) {
+        var url = buildIssueUrl(issueKey);
+        var text = label != null ? String(label) : String(issueKey || "");
+        var attrs = extraAttrs == null ? "" : String(extraAttrs).trim();
+        if (!url) return escapeHtml(text);
+        return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
+            (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
+    }
+
     function getProjectKey(issueKey) {
         if (!issueKey) return "";
         var idx = issueKey.indexOf("-");
@@ -970,6 +993,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         formatDateTime: formatDateTime,
         formatDateShort: formatDateShort,
         escapeHtml: escapeHtml,
+        getJiraBaseUrl: getJiraBaseUrl,
+        buildIssueUrl: buildIssueUrl,
+        renderIssueLink: renderIssueLink,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
         getDefaultPeriod: getDefaultPeriod,
@@ -2118,6 +2144,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         item.repoUrl = item.repoUrl || "";
         item.issueKey = item.issueKey || "";
         item.issueSummary = item.issueSummary || "";
+        item.issueStatus = item.issueStatus || "";
         item.branchName = item.branchName || "";
         item.type = item.type || "unknown_dev_event";
         item.title = item.title || "";
@@ -2155,6 +2182,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
                 issueKey: issueKey,
                 issueSummary: issueInfo.summary || "",
+                issueStatus: issueInfo.status || "",
                 repoName: repo.name || repo.slug || "(unknown)",
                 repoUrl: repo.url || "",
                 branchName: commit.branchName || "",
@@ -2254,6 +2282,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             timestamp: getActivityTimestamp(repo),
             issueKey: issueKey,
             issueSummary: issueInfo.summary || "",
+            issueStatus: issueInfo.status || "",
             repoName: repo.name || repo.slug || "(unknown)",
             repoUrl: repo.url || "",
             title: repo.name || repo.slug || "(unknown)",
@@ -2300,6 +2329,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: getActivityTimestamp(item),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName || container.name || "(unknown)",
                     repoUrl: repoUrl || container.url || "",
                     title: item.title || item.name || item.id || key,
@@ -2324,6 +2354,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: pr.createdDate || pr.created || pr.openedDate,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName,
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2341,6 +2372,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.mergedDate || pr.completedDate || pr.closedDate,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2357,6 +2389,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.closedDate || pr.declinedDate || pr.updatedDate,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2375,6 +2408,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         timestamp: pr.updatedDate || pr.updated || pr.lastUpdated,
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
+                        issueStatus: issueInfo.status || "",
                         repoName: repoName,
                         repoUrl: repoUrl,
                         branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2400,6 +2434,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: extractReviewerTimestamp(reviewer),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repoName,
                     repoUrl: repoUrl,
                     branchName: pr.source && pr.source.branch || pr.fromRef && pr.fromRef.displayId || "",
@@ -2428,6 +2463,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repo.name || repo.slug || "(unknown)",
                     repoUrl: repo.url || "",
                     branchName: branchName,
@@ -2444,6 +2480,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
+                    issueStatus: issueInfo.status || "",
                     repoName: repo.name || repo.slug || "(unknown)",
                     repoUrl: repo.url || "",
                     branchName: branchName,
