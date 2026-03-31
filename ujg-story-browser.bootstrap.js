@@ -4,7 +4,7 @@ define("_ujgStoryBrowser", [], function() {
   var widgetCssFile = "ujg-story-browser.css";
   var widgetRuntimeFile = "ujg-story-browser.runtime.js";
   var runtimeAmd = "_ujgStoryBrowserRuntime";
-  var releaseRef = "05da5dc";
+  var releaseRef = "36b059e";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
