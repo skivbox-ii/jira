@@ -6,8 +6,9 @@ define("_ujgDD_rendering", [
     "_ujgDD_apiBitbucket",
     "_ujgDD_apiConfluence",
     "_ujgDD_dataProcessor",
-    "_ujgDD_teamManager"
-], function($, config, utils) {
+    "_ujgDD_teamManager",
+    "_ujgShared_teamPicker"
+], function($, config, utils, _apiJira, _apiBb, _apiCf, _dataProc, _teamMgr, teamPickerMod) {
     "use strict";
 
     function normalizePrStateLabel(stateValue) {
@@ -471,7 +472,7 @@ define("_ujgDD_rendering", [
             $headerInner.append(
                 $("<span/>").html(utils.icon("activity", "w-3 h-3 text-primary")),
                 $("<span/>").addClass("text-[9px] font-bold text-foreground").text("Team Dashboard"),
-                buildTeamSelect(),
+                buildTeamPicker(),
                 $dateControls,
                 buildLoadButton(),
                 buildLegend(),
@@ -502,31 +503,19 @@ define("_ujgDD_rendering", [
             }
         }
 
-        function buildTeamSelect() {
-            var $select = $("<select/>")
-                .addClass("ujg-dd-team-select h-5 px-1 pr-4 text-[9px] bg-card border border-border rounded text-foreground outline-none focus:ring-1 focus:ring-ring appearance-none cursor-pointer")
-                .val(state.selectedTeamId);
-
-            state.teams.forEach(function(team) {
-                $select.append($("<option/>").attr("value", team.id).text(team.name + " (" + team.memberKeys.length + ")"));
-            });
-
-            $select.val(state.selectedTeamId);
-            $select.on("change", function() {
-                state.selectedTeamId = normalizeId($select.val());
-                clearLoadedRangeState();
-                render();
-                autoLoadSelectedTeam();
-            });
-
-            return $("<div/>")
-                .addClass("relative")
-                .append($select)
-                .append(
-                    $("<span/>")
-                        .addClass("pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2")
-                        .html(utils.icon("chevronDown", "w-2.5 h-2.5 text-muted-foreground"))
-                );
+        function buildTeamPicker() {
+            var lib = mods.teamPicker || teamPickerMod;
+            return lib.create({
+                mode: "single",
+                teams: state.teams,
+                selectedTeamIds: state.selectedTeamId ? [state.selectedTeamId] : [],
+                onChange: function(ids) {
+                    state.selectedTeamId = normalizeId(ids[0] || "");
+                    clearLoadedRangeState();
+                    render();
+                    autoLoadSelectedTeam();
+                }
+            }).$el;
         }
         function buildDateControls(presets) {
             var $wrap = $("<div/>").addClass("ujg-dd-date-controls flex items-center gap-0.5 relative");

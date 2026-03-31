@@ -284,9 +284,55 @@ function createMiniJquery(documentNode) {
         return wrap(out);
     };
 
-    $.fn.on = function(type, handler) {
+    $.fn.eq = function(idx) {
+        var col = Object.create($.fn);
+        var n = this[idx];
+        col.length = n ? 1 : 0;
+        col.jquery = true;
+        col[0] = n;
+        return col;
+    };
+
+    $.fn.css = function(key, val) {
+        if (arguments.length === 2 && key === "display") {
+            return this.each(function() {
+                this.style = this.style || {};
+                this.style.display = val;
+            });
+        }
+        return this;
+    };
+
+    $.fn.show = function() {
+        return this.css("display", "");
+    };
+
+    $.fn.hide = function() {
+        return this.css("display", "none");
+    };
+
+    $.fn.on = function(type, sel, fn) {
+        if (typeof sel === "function") {
+            fn = sel;
+            sel = null;
+        }
         return this.each(function() {
-            this.addEventListener(type, handler);
+            var el = this;
+            if (!sel) {
+                el.addEventListener(type, fn);
+                return;
+            }
+            var want = sel.charAt(0) === "." ? sel.slice(1) : sel;
+            el.addEventListener(type, function(e) {
+                var t = e.target;
+                while (t && t !== el) {
+                    if (hasClass(t, want)) {
+                        fn.call(t, e);
+                        return;
+                    }
+                    t = t.parentNode;
+                }
+            });
         });
     };
 
@@ -428,6 +474,16 @@ function createTestEnv() {
 }
 
 function loadRendering(env) {
+    var teamPickerMod = loadAmdModule(
+        path.join(__dirname, "..", "ujg-shared-modules", "team-picker.js"),
+        { jquery: env.$ },
+        {
+            document: env.documentNode,
+            window: env.window || { document: env.documentNode },
+            setTimeout: env.setTimeout || setTimeout,
+            clearTimeout: env.clearTimeout || clearTimeout
+        }
+    );
     return loadAmdModule(
         path.join(__dirname, "..", "ujg-daily-diligence-modules", "rendering.js"),
         {
@@ -438,7 +494,8 @@ function loadRendering(env) {
             _ujgDD_apiBitbucket: {},
             _ujgDD_apiConfluence: {},
             _ujgDD_dataProcessor: {},
-            _ujgDD_teamManager: {}
+            _ujgDD_teamManager: {},
+            _ujgShared_teamPicker: teamPickerMod
         },
         {
             document: env.documentNode,
@@ -448,6 +505,20 @@ function loadRendering(env) {
             clearTimeout: env.clearTimeout || clearTimeout
         }
     );
+}
+
+function pickTeamInSharedPicker($, $container, teamId) {
+    $container.find(".ujg-st-team-picker-trigger").eq(0).trigger("click");
+    var radios = $container.find(".ujg-st-team-picker-radio").toArray();
+    var i;
+    for (i = 0; i < radios.length; i++) {
+        if (radios[i].getAttribute("data-team-id") === String(teamId)) {
+            $(radios[i]).prop("checked", true);
+            $(radios[i]).trigger("change");
+            return;
+        }
+    }
+    assert.fail("shared picker: no radio for " + teamId);
 }
 
 function resolvedDeferred(value) {
@@ -518,6 +589,66 @@ function createMappedDate(map) {
     return FakeDate;
 }
 
+test("header uses shared team picker instead of native select; picking another team loads it", function() {
+    var env = createTestEnv();
+    var rendering = loadRendering(env);
+    var jiraCalls = [];
+    var jiraDeferreds = [createDeferred(), createDeferred()];
+    var bb = createDeferred();
+    var cf = createDeferred();
+
+    rendering.init(env.$container, {
+        config: env.config,
+        utils: env.utils,
+        apiJira: {
+            fetchTeamData: function() {
+                jiraCalls.push(Array.prototype.slice.call(arguments));
+                return jiraDeferreds[jiraCalls.length - 1].promise();
+            }
+        },
+        apiBitbucket: {
+            fetchTeamActivity: function() {
+                return bb.promise();
+            }
+        },
+        apiConfluence: {
+            fetchTeamActivity: function() {
+                return cf.promise();
+            }
+        },
+        dataProcessor: {
+            processTeamData: function() {
+                return {};
+            }
+        },
+        teamManager: {
+            loadTeams: function() {
+                return resolvedDeferred([
+                    { id: "team-a", name: "Team A", memberKeys: ["u1"] },
+                    { id: "team-b", name: "Team B", memberKeys: ["u2"] }
+                ]);
+            },
+            create: function() {
+                return { close: function() {} };
+            }
+        },
+        resize: function() {}
+    });
+
+    assert.equal(env.$container.find("select").length, 0);
+    assert.ok(env.$container.find(".ujg-st-team-picker").length >= 1);
+    assert.equal(jiraCalls.length, 1);
+    assert.deepEqual(jiraCalls[0].slice(0, 3), [["u1"], "2026-03-09", "2026-03-13"]);
+
+    jiraDeferreds[0].resolve({ issues: [] });
+    bb.resolve({ commits: [], pullRequests: [] });
+    cf.resolve([]);
+
+    pickTeamInSharedPicker(env.$, env.$container, "team-b");
+    assert.equal(jiraCalls.length, 2);
+    assert.deepEqual(jiraCalls[1].slice(0, 3), [["u2"], "2026-03-09", "2026-03-13"]);
+});
+
 test("init loads teams and renders empty state without firing data APIs for empty team", function() {
     var env = createTestEnv();
     var rendering = loadRendering(env);
@@ -569,8 +700,9 @@ test("init loads teams and renders empty state without firing data APIs for empt
     assert.equal(bitbucketCalls.length, 0);
     assert.equal(confluenceCalls.length, 0);
     assert.equal(env.$container.find(".ujg-dd-empty").length, 1);
-    assert.equal(env.$container.find(".ujg-dd-team-select").length, 1);
-    assert.equal(env.$container.find(".ujg-dd-team-select").val(), "team-empty");
+    assert.equal(env.$container.find("select").length, 0);
+    assert.ok(env.$container.find(".ujg-st-team-picker").length >= 1);
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Alpha");
     assert.equal(env.$container.find(".ujg-dd-load-btn").prop("disabled"), false);
     assert.match(env.$container.text(), /Добавьте участников/);
     assert.match(env.$container.text(), /Team Dashboard/);
@@ -636,7 +768,8 @@ test("numeric team ids are normalized so selection and auto-load still work", fu
         resize: function() {}
     });
 
-    assert.equal(env.$container.find(".ujg-dd-team-select").val(), "42");
+    assert.equal(env.$container.find("select").length, 0);
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Numbers");
     assert.equal(jiraCalls.length, 1);
     assert.deepEqual(jiraCalls[0].slice(0, 3), [["u1"], "2026-03-09", "2026-03-13"]);
 
@@ -1030,7 +1163,7 @@ test("teams button opens the popup and popup changes sync teams state then auto-
 
     popupOnChange([{ id: "team-live", name: "Live", memberKeys: ["u9"] }]);
 
-    assert.equal(env.$container.find(".ujg-dd-team-select").val(), "team-live");
+    assert.equal(env.$container.find(".ujg-st-team-picker-trigger").text(), "Live");
     assert.equal(jiraCalls.length, 1);
     assert.deepEqual(jiraCalls[0].slice(0, 3), [["u9"], "2026-03-09", "2026-03-13"]);
     assert.equal(env.$container.find(".ujg-dd-loading").length, 1);
@@ -1256,7 +1389,7 @@ test("stale async responses are ignored when a later team load starts", function
     assert.equal(jiraCalls.length, 1);
     assert.deepEqual(jiraCalls[0].slice(0, 3), [["u1"], "2026-03-09", "2026-03-13"]);
 
-    env.$container.find(".ujg-dd-team-select").val("team-b").trigger("change");
+    pickTeamInSharedPicker(env.$, env.$container, "team-b");
 
     assert.equal(jiraCalls.length, 2);
     assert.deepEqual(jiraCalls[1].slice(0, 3), [["u2"], "2026-03-09", "2026-03-13"]);
@@ -1992,7 +2125,7 @@ test("switching to an empty team via select clears loading and ignores the stale
 
     assert.equal(env.$container.find(".ujg-dd-loading").length, 1);
 
-    env.$container.find(".ujg-dd-team-select").val("team-empty").trigger("change");
+    pickTeamInSharedPicker(env.$, env.$container, "team-empty");
 
     assert.equal(env.$container.find(".ujg-dd-loading").length, 0);
     assert.equal(env.$container.find(".ujg-dd-error").length, 0);

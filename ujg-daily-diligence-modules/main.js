@@ -2,8 +2,8 @@ define("_ujgDD_main", [
     "jquery", "_ujgCommon",
     "_ujgDD_config", "_ujgDD_utils",
     "_ujgDD_apiJira", "_ujgDD_apiBitbucket", "_ujgDD_apiConfluence",
-    "_ujgDD_dataProcessor", "_ujgDD_teamManager", "_ujgDD_rendering"
-], function($, Common, config, utils, apiJira, apiBitbucket, apiConfluence, dataProcessor, teamManager, rendering) {
+    "_ujgDD_dataProcessor", "_ujgDD_teamManager", "_ujgShared_teamPicker", "_ujgDD_rendering"
+], function($, Common, config, utils, apiJira, apiBitbucket, apiConfluence, dataProcessor, teamManager, teamPicker, rendering) {
     "use strict";
 
     function MyGadget(API) {
@@ -36,6 +36,7 @@ define("_ujgDD_main", [
             apiConfluence: apiConfluence,
             dataProcessor: dataProcessor,
             teamManager: teamManager,
+            teamPicker: teamPicker,
             common: Common,
             resize: function() {
                 if (typeof API.resize === "function") {

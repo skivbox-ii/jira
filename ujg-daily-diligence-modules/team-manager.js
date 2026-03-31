@@ -138,6 +138,7 @@ define("_ujgDD_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgDD_config",
         }
 
         function render() {
+            syncState();
             if (searchTimer) {
                 clearTimeout(searchTimer);
                 searchTimer = null;

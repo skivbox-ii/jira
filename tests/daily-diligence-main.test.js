@@ -66,6 +66,7 @@ function loadMain(rendering) {
       _ujgDD_apiConfluence: { id: "apiConfluence" },
       _ujgDD_dataProcessor: { id: "dataProcessor" },
       _ujgDD_teamManager: { id: "teamManager" },
+      _ujgShared_teamPicker: { create: function() { return { $el: { length: 0 } }; } },
       _ujgDD_rendering: rendering
     }
   );
