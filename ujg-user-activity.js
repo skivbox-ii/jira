@@ -85,9 +85,15 @@ define(moduleId, ["jquery"], function($) {
 
     function normalizeUserRow(u) {
         if (!u || typeof u !== "object") return null;
-        var key = u.accountId || u.key || u.name || u.username || "";
+        var key = u.accountId || u.key || u.name || u.username || u.userKey || "";
+        var queryName = u.name || u.username || u.userName || u.key || u.accountId || u.userKey || "";
         var displayName = u.displayName || u.name || key || "";
-        return { key: String(key), displayName: String(displayName) };
+        if (!key) return null;
+        return {
+            key: String(key),
+            queryName: String(queryName || key),
+            displayName: String(displayName)
+        };
     }
 
     function detectDashboardId() {
@@ -109,6 +115,7 @@ define(moduleId, ["jquery"], function($) {
         var teams = [];
         var dashboardId = null;
         var displayNameByKey = {};
+        var queryNameByKey = {};
 
         function getStorageKey() {
             var storageKey = settings.storageKey != null ? String(settings.storageKey).trim() : "";
@@ -130,19 +137,27 @@ define(moduleId, ["jquery"], function($) {
         function readStoredState() {
             try {
                 if (typeof localStorage === "undefined") {
-                    return { teams: [], displayNameByKey: {} };
+                    return { teams: [], displayNameByKey: {}, queryNameByKey: {} };
                 }
                 var raw = localStorage.getItem(getStorageKey());
-                if (!raw) return { teams: [], displayNameByKey: {} };
+                if (!raw) return { teams: [], displayNameByKey: {}, queryNameByKey: {} };
                 var parsed = JSON.parse(raw);
                 var teamsPart = parsed && Array.isArray(parsed.teams) ? normalizeTeams(parsed.teams) : [];
                 var names =
                     parsed && parsed.displayNameByKey && typeof parsed.displayNameByKey === "object"
                         ? parsed.displayNameByKey
                         : {};
-                return { teams: teamsPart, displayNameByKey: Object.assign({}, names) };
+                var queryNames =
+                    parsed && parsed.queryNameByKey && typeof parsed.queryNameByKey === "object"
+                        ? parsed.queryNameByKey
+                        : {};
+                return {
+                    teams: teamsPart,
+                    displayNameByKey: Object.assign({}, names),
+                    queryNameByKey: Object.assign({}, queryNames)
+                };
             } catch (e) {
-                return { teams: [], displayNameByKey: {} };
+                return { teams: [], displayNameByKey: {}, queryNameByKey: {} };
             }
         }
 
@@ -153,7 +168,8 @@ define(moduleId, ["jquery"], function($) {
                         getStorageKey(),
                         JSON.stringify({
                             teams: list,
-                            displayNameByKey: displayNameByKey
+                            displayNameByKey: displayNameByKey,
+                            queryNameByKey: queryNameByKey
                         })
                     );
                 }
@@ -166,6 +182,10 @@ define(moduleId, ["jquery"], function($) {
                 storedState.displayNameByKey && typeof storedState.displayNameByKey === "object"
                     ? storedState.displayNameByKey
                     : {};
+            var localQueryNameByKey =
+                storedState.queryNameByKey && typeof storedState.queryNameByKey === "object"
+                    ? storedState.queryNameByKey
+                    : {};
             var i;
             var j;
             var key;
@@ -177,47 +197,55 @@ define(moduleId, ["jquery"], function($) {
                     if (key && !displayNameByKey[key] && localDisplayNameByKey[key]) {
                         displayNameByKey[key] = localDisplayNameByKey[key];
                     }
+                    if (key && !queryNameByKey[key] && localQueryNameByKey[key]) {
+                        queryNameByKey[key] = localQueryNameByKey[key];
+                    }
                 }
             }
         }
 
-        function fetchUserDisplayName(key) {
+        function fetchUserIdentity(key) {
             var d = $.Deferred();
-            $.ajax({
-                url: apiUrl("/rest/api/2/user"),
-                type: "GET",
-                dataType: "json",
-                data: { key: key }
-            })
-                .done(function(user) {
-                    var row = normalizeUserRow(user);
-                    if (row && row.displayName) {
-                        displayNameByKey[key] = row.displayName;
-                    }
+            var lookups = [
+                { key: key },
+                { accountId: key },
+                { username: key }
+            ];
+
+            function tryLookup(index) {
+                if (index >= lookups.length) {
                     d.resolve();
+                    return;
+                }
+                $.ajax({
+                    url: apiUrl("/rest/api/2/user"),
+                    type: "GET",
+                    dataType: "json",
+                    data: lookups[index]
                 })
-                .fail(function() {
-                    $.ajax({
-                        url: apiUrl("/rest/api/2/user"),
-                        type: "GET",
-                        dataType: "json",
-                        data: { accountId: key }
+                    .done(function(user) {
+                        var row = normalizeUserRow(user);
+                        if (row && row.displayName) {
+                            displayNameByKey[key] = row.displayName;
+                        }
+                        if (row && row.queryName) {
+                            queryNameByKey[key] = row.queryName;
+                        }
+                        if (!queryNameByKey[key] && key) {
+                            queryNameByKey[key] = String(key);
+                        }
+                        d.resolve();
                     })
-                        .done(function(user) {
-                            var row = normalizeUserRow(user);
-                            if (row && row.displayName) {
-                                displayNameByKey[key] = row.displayName;
-                            }
-                            d.resolve();
-                        })
-                        .fail(function() {
-                            d.resolve();
-                        });
-                });
+                    .fail(function() {
+                        tryLookup(index + 1);
+                    });
+            }
+
+            tryLookup(0);
             return d.promise();
         }
 
-        function backfillDisplayNames() {
+        function backfillUserInfo() {
             var needed = [];
             var seen = Object.create(null);
             var i;
@@ -229,7 +257,7 @@ define(moduleId, ["jquery"], function($) {
                 memberKeys = teams[i].memberKeys || [];
                 for (j = 0; j < memberKeys.length; j++) {
                     key = memberKeys[j];
-                    if (!key || displayNameByKey[key] || seen[key]) {
+                    if (!key || (displayNameByKey[key] && queryNameByKey[key]) || seen[key]) {
                         continue;
                     }
                     seen[key] = true;
@@ -244,7 +272,7 @@ define(moduleId, ["jquery"], function($) {
             var dAll = $.Deferred();
             var remaining = needed.length;
             for (i = 0; i < needed.length; i++) {
-                fetchUserDisplayName(needed[i]).always(function() {
+                fetchUserIdentity(needed[i]).always(function() {
                     remaining -= 1;
                     if (remaining === 0) {
                         dAll.resolve(teams);
@@ -256,7 +284,7 @@ define(moduleId, ["jquery"], function($) {
 
         function finishLoadTeams(d) {
             augmentDisplayNamesFromLocalCache();
-            backfillDisplayNames().always(function() {
+            backfillUserInfo().always(function() {
                 writeLocalTeams(teams);
                 d.resolve(teams);
             });
@@ -270,6 +298,7 @@ define(moduleId, ["jquery"], function($) {
                 var localOnly = readStoredState();
                 teams = localOnly.teams;
                 displayNameByKey = Object.assign({}, localOnly.displayNameByKey || {});
+                queryNameByKey = Object.assign({}, localOnly.queryNameByKey || {});
                 finishLoadTeams(d);
                 return d.promise();
             }
@@ -292,10 +321,17 @@ define(moduleId, ["jquery"], function($) {
                                 ? data.value.displayNameByKey
                                 : {}
                         );
+                        queryNameByKey = Object.assign(
+                            {},
+                            data.value.queryNameByKey && typeof data.value.queryNameByKey === "object"
+                                ? data.value.queryNameByKey
+                                : {}
+                        );
                     } else {
                         var storedState = readStoredState();
                         teams = storedState.teams;
                         displayNameByKey = Object.assign({}, storedState.displayNameByKey || {});
+                        queryNameByKey = Object.assign({}, storedState.queryNameByKey || {});
                     }
                     finishLoadTeams(d);
                 })
@@ -303,6 +339,7 @@ define(moduleId, ["jquery"], function($) {
                     var storedState = readStoredState();
                     teams = storedState.teams;
                     displayNameByKey = Object.assign({}, storedState.displayNameByKey || {});
+                    queryNameByKey = Object.assign({}, storedState.queryNameByKey || {});
                     finishLoadTeams(d);
                 });
             return d.promise();
@@ -327,7 +364,11 @@ define(moduleId, ["jquery"], function($) {
                 type: "PUT",
                 contentType: "application/json",
                 dataType: "json",
-                data: JSON.stringify({ teams: list, displayNameByKey: displayNameByKey })
+                data: JSON.stringify({
+                    teams: list,
+                    displayNameByKey: displayNameByKey,
+                    queryNameByKey: queryNameByKey
+                })
             })
                 .done(function() {
                     d.resolve(list);
@@ -346,9 +387,18 @@ define(moduleId, ["jquery"], function($) {
             return Object.assign({}, displayNameByKey);
         }
 
+        function getQueryNameByKey() {
+            return Object.assign({}, queryNameByKey);
+        }
+
         function setDisplayName(key, displayName) {
             if (!key) return;
             displayNameByKey[String(key)] = String(displayName || "");
+        }
+
+        function setQueryName(key, queryName) {
+            if (!key) return;
+            queryNameByKey[String(key)] = String(queryName || key);
         }
 
         return {
@@ -357,7 +407,9 @@ define(moduleId, ["jquery"], function($) {
             saveTeams: saveTeams,
             getTeams: getTeams,
             getDisplayNameByKey: getDisplayNameByKey,
-            setDisplayName: setDisplayName
+            getQueryNameByKey: getQueryNameByKey,
+            setDisplayName: setDisplayName,
+            setQueryName: setQueryName
         };
     }
 
@@ -376,11 +428,17 @@ define(moduleId, ["jquery"], function($) {
         getDisplayNameByKey: function() {
             return defaultStore.getDisplayNameByKey();
         },
+        getQueryNameByKey: function() {
+            return defaultStore.getQueryNameByKey();
+        },
         getTeams: function() {
             return defaultStore.getTeams();
         },
         setDisplayName: function(key, displayName) {
             defaultStore.setDisplayName(key, displayName);
+        },
+        setQueryName: function(key, queryName) {
+            defaultStore.setQueryName(key, queryName);
         }
     };
 });
@@ -1016,7 +1074,6 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         }
         var attrs = Object.assign({}, extraAttrs || {});
         var title = attrs.title || getIssueStatusTitle(status);
-        attrs.class = joinClassNames(attrs.class, isDoneStatus(status) ? "ujg-ua-issue-done" : "");
         if (title) attrs.title = title;
         else delete attrs.title;
         var attrString = normalizeLinkAttrs(attrs);
@@ -6295,9 +6352,15 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
 
     function normalizeUserRow(u) {
         if (!u || typeof u !== "object") return null;
-        var key = u.accountId || u.key || u.name || u.username || "";
+        var key = u.accountId || u.key || u.name || u.username || u.userKey || "";
+        var queryName = u.name || u.username || u.userName || u.key || u.accountId || u.userKey || "";
         var displayName = u.displayName || u.name || key || "";
-        return { key: String(key), displayName: String(displayName) };
+        if (!key) return null;
+        return {
+            key: String(key),
+            queryName: String(queryName || key),
+            displayName: String(displayName)
+        };
     }
 
     function searchUsers(query) {
@@ -6552,6 +6615,7 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
                             )
                             .attr("data-team-id", editTeam.id)
                             .attr("data-user-key", user.key)
+                            .attr("data-query-name", user.queryName || user.key)
                             .attr("data-display-name", user.displayName);
                         $btn.html(
                             utils.icon("userPlus", "w-3.5 h-3.5 text-primary") +
@@ -6681,11 +6745,15 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
         $overlay.on("click", ".ujg-ua-teams-add-member", function() {
             var teamId = $(this).attr("data-team-id");
             var key = $(this).attr("data-user-key");
+            var queryName = $(this).attr("data-query-name");
             var displayName = $(this).attr("data-display-name");
             if (displayName) {
                 store.setDisplayName(key, displayName);
-                syncState();
             }
+            if (queryName) {
+                store.setQueryName(key, queryName);
+            }
+            syncState();
             var next = teams.map(function(team) {
                 if (team.id !== teamId) return team;
                 if (team.memberKeys.indexOf(key) >= 0) return team;
@@ -6780,8 +6848,10 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     function makeResolveUser(store) {
         return function(memberKey) {
             var map = store && store.getDisplayNameByKey ? store.getDisplayNameByKey() : {};
+            var queryMap = store && store.getQueryNameByKey ? store.getQueryNameByKey() : {};
             var dn = (map && map[memberKey]) || memberKey;
-            return { name: memberKey, displayName: dn, key: memberKey };
+            var queryName = (queryMap && queryMap[memberKey]) || memberKey;
+            return { name: queryName, displayName: dn, key: memberKey };
         };
     }
 

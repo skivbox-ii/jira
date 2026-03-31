@@ -176,7 +176,6 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         }
         var attrs = Object.assign({}, extraAttrs || {});
         var title = attrs.title || getIssueStatusTitle(status);
-        attrs.class = joinClassNames(attrs.class, isDoneStatus(status) ? "ujg-ua-issue-done" : "");
         if (title) attrs.title = title;
         else delete attrs.title;
         var attrString = normalizeLinkAttrs(attrs);

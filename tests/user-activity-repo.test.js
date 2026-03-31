@@ -223,7 +223,8 @@ test("user-activity utils: done issue ref adds strike class and status tooltip",
     assert.equal(utils.isDoneStatus({ name: "Done" }), true);
     assert.equal(utils.isDoneStatus("Resolved"), true);
     assert.equal(utils.isDoneStatus("Open"), false);
-    assert.match(html, /ujg-ua-issue-done/);
+    assert.match(html, /class="[^"]*ujg-ua-issue-key[^"]*ujg-ua-issue-done/);
+    assert.doesNotMatch(html, /class="[^"]*ujg-ua-issue-summary[^"]*ujg-ua-issue-done/);
     assert.match(html, /title="Текущий статус: Done"/);
     assert.match(html, /Closed task/);
 });
@@ -1624,6 +1625,28 @@ test("user-activity team sync: URL teams param derives users", function() {
     assert.deepEqual(normalize(out.users), normalize([{ name: "u1", displayName: "User One", key: "u1" }]));
 });
 
+test("user-activity team sync: URL teams param resolves JQL username from queryNameByKey", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    var store = {
+        getDisplayNameByKey: function() {
+            return { JIRAUSER12028: "Alice Example" };
+        },
+        getQueryNameByKey: function() {
+            return { JIRAUSER12028: "alice.example" };
+        }
+    };
+    var teams = [{ id: "team-legacy", memberKeys: ["JIRAUSER12028"] }];
+    var out = mod.applyStateFromUrlParams({ teams: "team-legacy" }, teams, store);
+
+    assert.equal(out.mode, "teams");
+    assert.deepEqual(
+        normalize(out.users),
+        normalize([{ name: "alice.example", displayName: "Alice Example", key: "JIRAUSER12028" }])
+    );
+});
+
 test("user-activity team sync: planUrlSerialization prefers teams when users match union", function() {
     var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
     var jqStub = createRenderingJqueryStub(docStub);
@@ -3011,7 +3034,8 @@ test("unified calendar Jira line shows summary and done-state tooltip", function
     var html = out.$el.html();
 
     assert.match(html, /Closed task summary/);
-    assert.match(html, /ujg-ua-issue-done/);
+    assert.match(html, /class="[^"]*ujg-ua-issue-key[^"]*ujg-ua-issue-done/);
+    assert.doesNotMatch(html, /class="[^"]*ujg-ua-issue-summary[^"]*ujg-ua-issue-done/);
     assert.match(html, /title="Текущий статус: Done"/);
 });
 

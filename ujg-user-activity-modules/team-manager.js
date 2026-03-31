@@ -63,9 +63,15 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
 
     function normalizeUserRow(u) {
         if (!u || typeof u !== "object") return null;
-        var key = u.accountId || u.key || u.name || u.username || "";
+        var key = u.accountId || u.key || u.name || u.username || u.userKey || "";
+        var queryName = u.name || u.username || u.userName || u.key || u.accountId || u.userKey || "";
         var displayName = u.displayName || u.name || key || "";
-        return { key: String(key), displayName: String(displayName) };
+        if (!key) return null;
+        return {
+            key: String(key),
+            queryName: String(queryName || key),
+            displayName: String(displayName)
+        };
     }
 
     function searchUsers(query) {
@@ -320,6 +326,7 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
                             )
                             .attr("data-team-id", editTeam.id)
                             .attr("data-user-key", user.key)
+                            .attr("data-query-name", user.queryName || user.key)
                             .attr("data-display-name", user.displayName);
                         $btn.html(
                             utils.icon("userPlus", "w-3.5 h-3.5 text-primary") +
@@ -449,11 +456,15 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
         $overlay.on("click", ".ujg-ua-teams-add-member", function() {
             var teamId = $(this).attr("data-team-id");
             var key = $(this).attr("data-user-key");
+            var queryName = $(this).attr("data-query-name");
             var displayName = $(this).attr("data-display-name");
             if (displayName) {
                 store.setDisplayName(key, displayName);
-                syncState();
             }
+            if (queryName) {
+                store.setQueryName(key, queryName);
+            }
+            syncState();
             var next = teams.map(function(team) {
                 if (team.id !== teamId) return team;
                 if (team.memberKeys.indexOf(key) >= 0) return team;

@@ -62,8 +62,10 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     function makeResolveUser(store) {
         return function(memberKey) {
             var map = store && store.getDisplayNameByKey ? store.getDisplayNameByKey() : {};
+            var queryMap = store && store.getQueryNameByKey ? store.getQueryNameByKey() : {};
             var dn = (map && map[memberKey]) || memberKey;
-            return { name: memberKey, displayName: dn, key: memberKey };
+            var queryName = (queryMap && queryMap[memberKey]) || memberKey;
+            return { name: queryName, displayName: dn, key: memberKey };
         };
     }
 

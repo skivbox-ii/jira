@@ -1133,3 +1133,35 @@ test("legacy teams without displayNameByKey backfill display names via GET /rest
     var cached = JSON.parse(ls.getItem("ujg-dd-teams"));
     assert.equal(cached.displayNameByKey.JIRAUSER12028, "Alice Example");
 });
+
+test("shared team-store backfills queryNameByKey for legacy Jira user keys", async function() {
+    var ls = makeLocalStorage();
+    ls.setItem(
+        "ujg-dd-teams",
+        JSON.stringify({
+            teams: [{ id: "leg", name: "Legacy", memberKeys: ["JIRAUSER12028"] }]
+        })
+    );
+    var jq = createJqueryStub(function(options) {
+        var url = String(options.url || "");
+        if (url.indexOf("/rest/api/2/user") !== -1 && url.indexOf("user/search") === -1) {
+            assert.equal(options.data.key, "JIRAUSER12028");
+            return resolvedAjax({
+                key: "JIRAUSER12028",
+                name: "alice.example",
+                displayName: "Alice Example"
+            });
+        }
+        return resolvedAjax({});
+    });
+    var win = { location: { search: "", origin: "https://jira.example.com" }, AJS: { params: {} } };
+    var store = loadTeamStore(jq, win, ls);
+
+    await new Promise(function(resolve, reject) {
+        store.loadTeams().done(resolve).fail(reject);
+    });
+
+    assert.equal(store.getQueryNameByKey().JIRAUSER12028, "alice.example");
+    var cached = JSON.parse(ls.getItem("ujg-dd-teams"));
+    assert.equal(cached.queryNameByKey.JIRAUSER12028, "alice.example");
+});
