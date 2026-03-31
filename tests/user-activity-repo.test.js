@@ -904,6 +904,114 @@ function loadRendering(jquery, utilsOverrides, documentStub) {
     return exported;
 }
 
+test("user-activity team sync: one team yields all members", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    function resolveUser(k) {
+        return { name: k, displayName: "D_" + k, key: k };
+    }
+    var teams = [{ id: "t1", memberKeys: ["u1", "u2"] }];
+    assert.deepEqual(
+        normalize(mod.getUsersFromTeams(teams, ["t1"], resolveUser)),
+        normalize([
+            { name: "u1", displayName: "D_u1", key: "u1" },
+            { name: "u2", displayName: "D_u2", key: "u2" }
+        ])
+    );
+});
+
+test("user-activity team sync: two teams union without duplicate keys", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    function resolveUser(k) {
+        return { name: k, displayName: k, key: k };
+    }
+    var teams = [
+        { id: "a", memberKeys: ["x", "y"] },
+        { id: "b", memberKeys: ["y", "z"] }
+    ];
+    assert.deepEqual(
+        normalize(mod.getUsersFromTeams(teams, ["a", "b"], resolveUser)),
+        normalize([
+            { name: "x", displayName: "x", key: "x" },
+            { name: "y", displayName: "y", key: "y" },
+            { name: "z", displayName: "z", key: "z" }
+        ])
+    );
+});
+
+test("user-activity team sync: manual user list mismatch clears team union match", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    var store = {
+        getDisplayNameByKey: function() {
+            return { a: "A", b: "B" };
+        }
+    };
+    function resolveUser(k) {
+        var m = store.getDisplayNameByKey();
+        return { name: k, displayName: m[k] || k, key: k };
+    }
+    var teams = [{ id: "t1", memberKeys: ["a", "b"] }];
+    assert.equal(mod.usersMatchTeamUnion([{ name: "a", displayName: "A", key: "a" }], teams, ["t1"], resolveUser), false);
+    assert.equal(
+        mod.usersMatchTeamUnion(
+            [
+                { name: "a", displayName: "A", key: "a" },
+                { name: "b", displayName: "B", key: "b" }
+            ],
+            teams,
+            ["t1"],
+            resolveUser
+        ),
+        true
+    );
+});
+
+test("user-activity team sync: URL teams param derives users", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    var store = {
+        getDisplayNameByKey: function() {
+            return { u1: "User One" };
+        }
+    };
+    var teams = [{ id: "team-x", memberKeys: ["u1"] }];
+    var out = mod.applyStateFromUrlParams({ teams: "team-x" }, teams, store);
+    assert.equal(out.mode, "teams");
+    assert.deepEqual(normalize(out.teamIds), normalize(["team-x"]));
+    assert.deepEqual(normalize(out.users), normalize([{ name: "u1", displayName: "User One", key: "u1" }]));
+});
+
+test("user-activity team sync: planUrlSerialization prefers teams when users match union", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    function resolveUser(k) {
+        return { name: k, displayName: k, key: k };
+    }
+    var teams = [{ id: "t1", memberKeys: ["a"] }];
+    var users = [{ name: "a", displayName: "a", key: "a" }];
+    var plan = mod.planUrlSerialization(users, ["t1"], teams, resolveUser);
+    assert.equal(plan.teams, "t1");
+    assert.equal(plan.users, "");
+    var planManual = mod.planUrlSerialization(
+        [
+            { name: "a", displayName: "a", key: "a" },
+            { name: "extra", displayName: "extra", key: "extra" }
+        ],
+        ["t1"],
+        teams,
+        resolveUser
+    );
+    assert.equal(planManual.teams, "");
+    assert.equal(planManual.users, "a,extra");
+});
+
 function createRenderingJqueryStub(documentStub) {
     function parseEventName(eventName) {
         var parts = String(eventName || "").split(".");
@@ -992,6 +1100,30 @@ function createRenderingJqueryStub(documentStub) {
         if (typeof input === "string") return wrap(createElement(inferLabel(input), input));
         throw new Error("Unsupported jquery stub input");
     }
+
+    $.Deferred = createDeferred;
+    $.when = function() {
+        var items = Array.prototype.slice.call(arguments);
+        var combined = createDeferred();
+        var remaining = items.length;
+        var results = new Array(items.length);
+        if (!remaining) {
+            combined.resolve();
+            return combined.promise();
+        }
+        items.forEach(function(item, index) {
+            item.done(function() {
+                results[index] = arguments.length > 1 ? Array.prototype.slice.call(arguments) : arguments[0];
+                remaining -= 1;
+                if (remaining === 0) {
+                    combined.resolve.apply(combined, results);
+                }
+            }).fail(function() {
+                combined.reject.apply(combined, arguments);
+            });
+        });
+        return combined.promise();
+    };
 
     return {
         $: $,
@@ -2388,9 +2520,11 @@ test("repo modules are wired in main module and build order", function() {
     var mainSource = fs.readFileSync(path.join(__dirname, "..", "ujg-user-activity-modules", "main.js"), "utf8");
     var buildSource = fs.readFileSync(path.join(__dirname, "..", "build-user-activity.js"), "utf8");
 
+    assert.match(mainSource, /"_ujgShared_teamStore", "_ujgShared_teamPicker"/);
+    assert.match(mainSource, /teamStore: uaTeamStore, teamPicker: teamPicker/);
     assert.match(mainSource, /"_ujgUA_api", "_ujgUA_repoApi", "_ujgUA_dataProcessor", "_ujgUA_repoDataProcessor"/);
     assert.match(mainSource, /"_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail"/);
-    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog", "_ujgUA_rendering"/);
+    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog",\s*\n\s*"_ujgShared_teamStore", "_ujgShared_teamPicker",\s*\n\s*"_ujgUA_rendering"/);
     assert.match(mainSource, /repoApi: repoApi, dataProcessor: dataProcessor, repoDataProcessor: repoDataProcessor/);
     assert.match(mainSource, /summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar/);
     assert.match(mainSource, /issueList: issueList, activityLog: activityLog, repoLog: repoLog/);

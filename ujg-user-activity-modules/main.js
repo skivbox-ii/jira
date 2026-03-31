@@ -4,16 +4,20 @@ define("_ujgUA_main", [
     "_ujgUA_userPicker", "_ujgUA_multiUserPicker", "_ujgUA_dateRangePicker", "_ujgUA_summaryCards",
     "_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail", "_ujgUA_unifiedCalendar",
     "_ujgUA_projectBreakdown", "_ujgUA_issueList",
-    "_ujgUA_activityLog", "_ujgUA_repoLog", "_ujgUA_rendering"
+    "_ujgUA_activityLog", "_ujgUA_repoLog",
+    "_ujgShared_teamStore", "_ujgShared_teamPicker",
+    "_ujgUA_rendering"
 ], function($, Common, config, utils, api, repoApi, dataProcessor, repoDataProcessor, progressLoader,
             userPicker, multiUserPicker, dateRangePicker, summaryCards, calendarHeatmap, repoCalendar, dailyDetail, unifiedCalendar,
-            projectBreakdown, issueList, activityLog, repoLog, rendering) {
+            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, rendering) {
     "use strict";
 
     function MyGadget(API) {
         if (!API) { console.error("[UJG-UserActivity] API object is missing!"); return; }
         var $content = API.getGadgetContentEl();
         if (!$content || $content.length === 0) { console.error("[UJG-UserActivity] No content element"); return; }
+
+        var uaTeamStore = teamStore.create({ storageKey: "ujg-ua-teams" });
 
         var $container = $content.find(".ujg-user-activity");
         if ($container.length === 0) {
@@ -29,6 +33,7 @@ define("_ujgUA_main", [
             summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar, unifiedCalendar: unifiedCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
             issueList: issueList, activityLog: activityLog, repoLog: repoLog,
+            teamStore: uaTeamStore, teamPicker: teamPicker,
             resize: function() { if (typeof API.resize === "function") API.resize(); }
         });
     }

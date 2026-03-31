@@ -58,6 +58,8 @@ define("_ujgUA_config", [], function() {
     };
 
     var STYLES = [
+        ".ujg-ua-slot-team, .ujg-ua-slot-user { display: inline-block; vertical-align: middle; }",
+        ".ujg-st-team-picker { position: relative; display: inline-block; vertical-align: middle; }",
         ".ujg-ua-multi-picker { position: relative; display: inline-block; }",
         ".ujg-ua-picker-panel { position: absolute; top: 100%; left: 0; z-index: 1000; background: #fff; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 2px 8px rgba(0,0,0,.15); min-width: 280px; max-height: 400px; overflow-y: auto; padding: 8px; }",
         ".ujg-ua-picker-search { width: 100%; padding: 6px 8px; border: 1px solid #dfe1e6; border-radius: 3px; margin-bottom: 6px; box-sizing: border-box; }",

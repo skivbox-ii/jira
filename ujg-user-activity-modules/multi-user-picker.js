@@ -244,14 +244,21 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
         });
 
         function setFromUrl(urlParams, options) {
-            if (!urlParams || urlParams.users == null || urlParams.users === "") return;
+            var d = $.Deferred();
+            if (!urlParams || urlParams.users == null || urlParams.users === "") {
+                d.resolve();
+                return d.promise();
+            }
             var names = String(urlParams.users)
                 .split(",")
                 .map(function(s) {
                     return s.trim();
                 })
                 .filter(Boolean);
-            if (!names.length) return;
+            if (!names.length) {
+                d.resolve();
+                return d.promise();
+            }
 
             var promises = names.map(function(name) {
                 return api.searchUsers(name).then(
@@ -291,7 +298,9 @@ define("_ujgUA_multiUserPicker", ["jquery", "_ujgUA_config", "_ujgUA_api"], func
                 applySelection(next, {
                     source: (options && options.source) || "url"
                 }, true);
+                d.resolve();
             });
+            return d.promise();
         }
 
         updateTriggerText();
