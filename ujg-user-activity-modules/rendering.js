@@ -503,6 +503,114 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
     }
 
+    function buildDayList(startDate, endDate) {
+        var days = [];
+        var cursor = new Date(endDate + "T00:00:00");
+        var startMs = new Date(startDate + "T00:00:00").getTime();
+
+        while (cursor.getTime() >= startMs) {
+            days.push(utils.getDayKey(cursor));
+            cursor.setDate(cursor.getDate() - 1);
+        }
+
+        return days;
+    }
+
+    function createEmptyMergedDay() {
+        return {
+            users: {},
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            totalHours: 0,
+            repoItems: []
+        };
+    }
+
+    function mergeIssueMap(target, source) {
+        Object.keys(source || {}).forEach(function(issueKey) {
+            target[issueKey] = source[issueKey];
+        });
+    }
+
+    function mergeDayMap(target, source) {
+        Object.keys(source || {}).forEach(function(dateKey) {
+            target[dateKey] = source[dateKey];
+        });
+    }
+
+    function mergeUserAccumulator(target, userData) {
+        if (!userData || !userData.username) return;
+
+        var existing = target[userData.username];
+        if (!existing) {
+            existing = target[userData.username] = {
+                username: userData.username,
+                displayName: userData.displayName || userData.username,
+                rawData: {
+                    issues: [],
+                    details: {}
+                },
+                comments: {}
+            };
+        }
+
+        var seenIssues = Object.create(null);
+        existing.rawData.issues.forEach(function(issue) {
+            if (issue && issue.key) seenIssues[issue.key] = true;
+        });
+        (userData.rawData && userData.rawData.issues || []).forEach(function(issue) {
+            if (!issue || !issue.key || seenIssues[issue.key]) return;
+            seenIssues[issue.key] = true;
+            existing.rawData.issues.push(issue);
+        });
+
+        Object.keys(userData.rawData && userData.rawData.details || {}).forEach(function(issueKey) {
+            existing.rawData.details[issueKey] = userData.rawData.details[issueKey];
+        });
+
+        Object.keys(userData.rawData || {}).forEach(function(key) {
+            if (key === "issues" || key === "details") return;
+            existing.rawData[key] = userData.rawData[key];
+        });
+
+        Object.keys(userData.comments || {}).forEach(function(issueKey) {
+            existing.comments[issueKey] = userData.comments[issueKey];
+        });
+    }
+
+    function dedupeIssues(issues) {
+        var seen = Object.create(null);
+        var out = [];
+
+        (issues || []).forEach(function(issue) {
+            if (!issue || !issue.key || seen[issue.key]) return;
+            seen[issue.key] = true;
+            out.push(issue);
+        });
+
+        return out;
+    }
+
+    function buildRequestUserFilter(users) {
+        return users.length === 1
+            ? Object.assign({}, users[0])
+            : users.map(function(user) {
+                  return Object.assign({}, user);
+              });
+    }
+
+    function mergeRepoItemsIntoProcessed(processed, repoActivity) {
+        if (!repoActivity || !repoActivity.dayMap) return;
+
+        Object.keys(repoActivity.dayMap).forEach(function(dateKey) {
+            if (!processed.dayMap[dateKey]) {
+                processed.dayMap[dateKey] = createEmptyMergedDay();
+            }
+            processed.dayMap[dateKey].repoItems = (repoActivity.dayMap[dateKey].items || []).slice();
+        });
+    }
+
     function loadData(selectedUsers, period) {
         var requestId = ++activeRequestId;
         var requestUsers = cloneUsers(selectedUsers);
@@ -517,9 +625,22 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             return;
         }
 
-        var usersData = new Array(requestUsers.length);
-        var pendingUsers = requestUsers.length;
+        if (mods.api.clearCache) {
+            mods.api.clearCache();
+        }
+
+        var startDate = new Date(period.start + "T00:00:00");
+        var endDate = new Date(period.end + "T23:59:59");
+        var dayKeys = buildDayList(period.start, period.end);
+        var requestUserFilter = buildRequestUserFilter(requestUsers);
+        var accumulatedUsers = Object.create(null);
+        var progressDayMap = {};
+        var progressIssueMap = {};
+        var silentLoader = {
+            update: function() {}
+        };
         var hasFailed = false;
+        var progressCalendar = null;
 
         function failLoad(err) {
             if (hasFailed || requestId !== activeRequestId) return;
@@ -534,32 +655,38 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             );
         }
 
-        function continueWithUsers() {
+        if (mods.unifiedCalendar) {
+            progressCalendar = mods.unifiedCalendar.render(progressDayMap, progressIssueMap, requestUsers, startDate, endDate);
+            $contentArea.append(progressCalendar.$el);
+
+            detailInst = mods.dailyDetail.create();
+            $contentArea.append(detailInst.$el);
+
+            progressCalendar.onSelectDate(function(dateStr) {
+                if (!dateStr) {
+                    detailInst.hide();
+                    return;
+                }
+                detailInst.show(dateStr, progressDayMap[dateStr] || createEmptyMergedDay(), progressIssueMap, getDetailSelectedUsers(requestUsers));
+            });
+        }
+
+        function finalizeLoad() {
             if (requestId !== activeRequestId) return;
 
-            var allIssueKeys = [];
-            var seenKeys = {};
-            usersData.forEach(function(ud) {
-                (ud.rawData.issues || []).forEach(function(issue) {
-                    if (!seenKeys[issue.key]) {
-                        seenKeys[issue.key] = true;
-                        allIssueKeys.push(issue.key);
-                    }
-                });
+            var usersData = Object.keys(accumulatedUsers).map(function(username) {
+                return accumulatedUsers[username];
             });
 
-            loadComments(allIssueKeys, loader, function(commentsMap) {
-                if (requestId !== activeRequestId) return;
-
-                usersData.forEach(function(ud) {
-                    ud.comments = commentsMap || {};
-                });
-
-                var processed;
+            var processed;
+            try {
                 if (mods.dataProcessor.processMultiUserData) {
                     processed = mods.dataProcessor.processMultiUserData(usersData, period.start, period.end);
                 } else {
-                    var singleUser = usersData[0];
+                    var singleUser = usersData[0] || {
+                        username: requestUsers[0].name,
+                        rawData: { issues: [], details: {} }
+                    };
                     processed = mods.dataProcessor.processData(
                         singleUser.rawData,
                         singleUser.username,
@@ -567,88 +694,190 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         period.end
                     );
                 }
+            } catch (err) {
+                failLoad(err);
+                return;
+            }
 
-                var startDate = new Date(period.start + "T00:00:00");
-                var endDate = new Date(period.end + "T23:59:59");
-                var allIssues = [];
-                var issueSeen = {};
-                usersData.forEach(function(ud) {
-                    (ud.rawData.issues || []).forEach(function(issue) {
-                        if (!issueSeen[issue.key]) {
-                            issueSeen[issue.key] = true;
-                            allIssues.push(issue);
-                        }
-                    });
-                });
+            var allIssues = dedupeIssues(
+                usersData.reduce(function(acc, userData) {
+                    return acc.concat(userData.rawData && userData.rawData.issues || []);
+                }, [])
+            );
 
-                var requestUserFilter =
-                    requestUsers.length === 1
-                        ? Object.assign({}, requestUsers[0])
-                        : requestUsers.map(function(user) {
-                              return Object.assign({}, user);
-                          });
+            attachAsync(
+                mods.repoApi.fetchRepoActivityForIssues(allIssues, function() {}),
+                function(repoData) {
+                    if (requestId !== activeRequestId) return;
+                    var repoActivity = mods.repoDataProcessor.processRepoActivity(
+                        processed.issueMap,
+                        repoData && repoData.issueDevStatusMap,
+                        requestUserFilter,
+                        period.start,
+                        period.end
+                    );
 
-                attachAsync(
-                    mods.repoApi.fetchRepoActivityForIssues(allIssues, function(progress) {
-                        loader.update(progress);
-                    }),
-                    function(repoData) {
-                        if (requestId !== activeRequestId) return;
-                        var repoActivity = mods.repoDataProcessor.processRepoActivity(
-                            processed.issueMap,
-                            repoData && repoData.issueDevStatusMap,
-                            requestUserFilter,
-                            period.start,
-                            period.end
-                        );
-
-                        if (repoActivity && repoActivity.dayMap) {
-                            Object.keys(repoActivity.dayMap).forEach(function(dateKey) {
-                                if (!processed.dayMap[dateKey]) {
-                                    processed.dayMap[dateKey] = {
-                                        users: {},
-                                        allWorklogs: [],
-                                        allChanges: [],
-                                        allComments: [],
-                                        totalHours: 0,
-                                        repoItems: []
-                                    };
-                                }
-                                processed.dayMap[dateKey].repoItems = (repoActivity.dayMap[dateKey].items || []).slice();
-                            });
-                        }
-
-                        if (requestId !== activeRequestId) return;
-                        renderDashboard(processed, startDate, endDate, requestUsers, { activity: repoActivity });
-                    },
-                    function(err) {
-                        if (requestId !== activeRequestId) return;
-                        renderDashboard(processed, startDate, endDate, requestUsers, { error: err });
-                    }
-                );
-            }, failLoad);
+                    mergeRepoItemsIntoProcessed(processed, repoActivity);
+                    renderDashboard(processed, startDate, endDate, requestUsers, { activity: repoActivity });
+                },
+                function(err) {
+                    if (requestId !== activeRequestId) return;
+                    renderDashboard(processed, startDate, endDate, requestUsers, { error: err });
+                }
+            );
         }
 
-        requestUsers.forEach(function(user, index) {
-            attachAsync(
-                mods.api.fetchAllData(user.name, period.start, period.end, function(progress) {
-                    loader.update(progress);
-                }),
-                function(rawData) {
-                    if (hasFailed || requestId !== activeRequestId) return;
-                    usersData[index] = {
-                        username: user.name,
-                        displayName: user.displayName || user.name,
-                        rawData: rawData
+        function afterDayUsers(dayKey, dayIndex, dayUsersData, dayIssues) {
+            if (requestId !== activeRequestId) return;
+
+            var processedDay;
+            try {
+                if (mods.dataProcessor.processMultiUserData) {
+                    processedDay = mods.dataProcessor.processMultiUserData(dayUsersData, dayKey, dayKey);
+                } else {
+                    var firstUser = dayUsersData[0] || {
+                        username: requestUsers[0].name,
+                        rawData: { issues: [], details: {} }
                     };
-                    pendingUsers -= 1;
-                    if (pendingUsers === 0) {
-                        continueWithUsers();
+                    processedDay = mods.dataProcessor.processData(
+                        firstUser.rawData,
+                        firstUser.username,
+                        dayKey,
+                        dayKey
+                    );
+                }
+            } catch (err) {
+                failLoad(err);
+                return;
+            }
+
+            attachAsync(
+                mods.repoApi.fetchRepoActivityForIssues(dayIssues, function() {}),
+                function(repoData) {
+                    if (requestId !== activeRequestId) return;
+                    var repoDay = mods.repoDataProcessor.processRepoActivity(
+                        processedDay.issueMap,
+                        repoData && repoData.issueDevStatusMap,
+                        requestUserFilter,
+                        dayKey,
+                        dayKey
+                    );
+
+                    mergeRepoItemsIntoProcessed(processedDay, repoDay);
+                    mergeIssueMap(progressIssueMap, processedDay.issueMap);
+                    mergeDayMap(progressDayMap, processedDay.dayMap);
+
+                    if (progressCalendar && progressCalendar.updateDayCell) {
+                        progressCalendar.updateDayCell(dayKey, progressDayMap[dayKey] || createEmptyMergedDay(), progressIssueMap);
                     }
+
+                    processDay(dayIndex + 1);
                 },
-                failLoad
+                function() {
+                    if (requestId !== activeRequestId) return;
+
+                    mergeIssueMap(progressIssueMap, processedDay.issueMap);
+                    mergeDayMap(progressDayMap, processedDay.dayMap);
+
+                    if (progressCalendar && progressCalendar.updateDayCell) {
+                        progressCalendar.updateDayCell(dayKey, progressDayMap[dayKey] || createEmptyMergedDay(), progressIssueMap);
+                    }
+
+                    processDay(dayIndex + 1);
+                }
             );
-        });
+        }
+
+        function processDay(dayIndex) {
+            if (requestId !== activeRequestId) return;
+            if (dayIndex >= dayKeys.length) {
+                finalizeLoad();
+                return;
+            }
+
+            var dayKey = dayKeys[dayIndex];
+            var dayUsersData = [];
+            var dayIssues = [];
+            var seenIssues = Object.create(null);
+
+            function processUser(userIndex) {
+                if (requestId !== activeRequestId) return;
+                if (userIndex >= requestUsers.length) {
+                    afterDayUsers(dayKey, dayIndex, dayUsersData, dayIssues);
+                    return;
+                }
+
+                var user = requestUsers[userIndex];
+                loader.update({
+                    phase: "day",
+                    currentDay: dayIndex + 1,
+                    totalDays: dayKeys.length,
+                    completedDays: dayIndex,
+                    dayKey: dayKey,
+                    userDisplayName: user.displayName || user.name
+                });
+
+                attachAsync(
+                    mods.api.fetchAllData(user.name, dayKey, dayKey, function() {}),
+                    function(rawData) {
+                        if (requestId !== activeRequestId) return;
+
+                        var normalizedRawData = rawData || { issues: [], details: {} };
+                        var issueKeys = (normalizedRawData.issues || []).map(function(issue) {
+                            return issue.key;
+                        });
+
+                        loadComments(issueKeys, silentLoader, function(commentsMap) {
+                            if (requestId !== activeRequestId) return;
+
+                            var userData = {
+                                username: user.name,
+                                displayName: user.displayName || user.name,
+                                rawData: normalizedRawData,
+                                comments: commentsMap || {}
+                            };
+                            dayUsersData.push(userData);
+                            mergeUserAccumulator(accumulatedUsers, userData);
+
+                            (normalizedRawData.issues || []).forEach(function(issue) {
+                                if (!issue || !issue.key || seenIssues[issue.key]) return;
+                                seenIssues[issue.key] = true;
+                                dayIssues.push(issue);
+                            });
+
+                            processUser(userIndex + 1);
+                        }, function() {
+                            if (requestId !== activeRequestId) return;
+
+                            var userData = {
+                                username: user.name,
+                                displayName: user.displayName || user.name,
+                                rawData: normalizedRawData,
+                                comments: {}
+                            };
+                            dayUsersData.push(userData);
+                            mergeUserAccumulator(accumulatedUsers, userData);
+
+                            (normalizedRawData.issues || []).forEach(function(issue) {
+                                if (!issue || !issue.key || seenIssues[issue.key]) return;
+                                seenIssues[issue.key] = true;
+                                dayIssues.push(issue);
+                            });
+
+                            processUser(userIndex + 1);
+                        });
+                    },
+                    function() {
+                        if (requestId !== activeRequestId) return;
+                        processUser(userIndex + 1);
+                    }
+                );
+            }
+
+            processUser(0);
+        }
+
+        processDay(0);
     }
 
     function renderRepoStateCard(title, message) {

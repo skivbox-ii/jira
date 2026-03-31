@@ -1,4 +1,4 @@
-define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], function($, Common, config, utils) {
+define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils", "_ujgUA_requestCache"], function($, Common, config, utils, requestCache) {
     "use strict";
 
     var baseUrl = Common.baseUrl || "";
@@ -28,7 +28,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
             };
             if (expand) body.expand = expand;
 
-            $.ajax({
+            requestCache.cachedAjax({
                 url: baseUrl + "/rest/api/2/search",
                 type: "POST",
                 contentType: "application/json",
@@ -65,7 +65,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
         var allHistories = [];
 
         function fetchPage(startAt) {
-            $.ajax({
+            requestCache.cachedAjax({
                 url: baseUrl + "/rest/api/2/issue/" + issueKey + "?expand=changelog&fields=summary",
                 type: "GET",
                 dataType: "json",
@@ -88,13 +88,17 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
     }
 
     function fetchIssueWorklogs(issueKey) {
-        return $.ajax({
+        var d = $.Deferred();
+        requestCache.cachedAjax({
             url: baseUrl + "/rest/api/2/issue/" + issueKey + "/worklog",
             type: "GET",
             dataType: "json"
-        }).then(function(resp) {
-            return resp.worklogs || [];
+        }).done(function(resp) {
+            d.resolve(resp.worklogs || []);
+        }).fail(function() {
+            d.reject.apply(d, arguments);
         });
+        return d.promise();
     }
 
     function fetchIssueDetails(issueKey) {
@@ -194,7 +198,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
                 var key = queue.shift();
                 running++;
                 (function(issueKey) {
-                    $.ajax({
+                    requestCache.cachedAjax({
                         url: baseUrl + "/rest/api/2/issue/" + issueKey + "/comment",
                         type: "GET",
                         dataType: "json"
@@ -246,9 +250,14 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
         });
     }
 
+    function clearCache() {
+        requestCache.clearCache();
+    }
+
     return {
         fetchAllData: fetchAllData,
         fetchIssueComments: fetchIssueComments,
-        searchUsers: searchUsers
+        searchUsers: searchUsers,
+        clearCache: clearCache
     };
 });

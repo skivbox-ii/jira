@@ -1294,8 +1294,101 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
     };
 });
 
+/* === Module: request-cache.js === */
+define("_ujgUA_requestCache", ["jquery"], function($) {
+    "use strict";
+
+    var store = Object.create(null);
+
+    function noop() {}
+
+    function stableStringify(value) {
+        if (value === null || value === undefined) return "";
+        if (typeof value !== "object") return JSON.stringify(value);
+        if (Array.isArray(value)) {
+            return "[" + value.map(stableStringify).join(",") + "]";
+        }
+        var keys = Object.keys(value).sort();
+        return "{" + keys.map(function(k) {
+            return JSON.stringify(k) + ":" + stableStringify(value[k]);
+        }).join(",") + "}";
+    }
+
+    function methodUsesQueryDataKey(method) {
+        return method === "GET" || method === "HEAD";
+    }
+
+    function bodyOrNonQueryDataKey(data) {
+        if (data === undefined || data === null) return "";
+        if (typeof data === "string") return data;
+        if (typeof data === "object") return stableStringify(data);
+        return String(data);
+    }
+
+    function queryStyleDataKey(data) {
+        var dataKey = "";
+        if (data && typeof data === "object" && !Array.isArray(data)) {
+            dataKey = stableStringify(data);
+        } else if (data !== undefined && data !== null && data !== "") {
+            dataKey = typeof data === "string" ? data : stableStringify(data);
+        }
+        return dataKey;
+    }
+
+    function cacheKey(options) {
+        options = options || {};
+        var method = String(options.type || options.method || "GET").toUpperCase();
+        var url = String(options.url || "");
+        var dataKey = methodUsesQueryDataKey(method)
+            ? queryStyleDataKey(options.data)
+            : bodyOrNonQueryDataKey(options.data);
+        return method + "\0" + url + "\0" + dataKey;
+    }
+
+    function clearCache() {
+        store = Object.create(null);
+    }
+
+    function wrapPromise(p, abortFn) {
+        p.abort = abortFn;
+        return p;
+    }
+
+    function cachedAjax(options) {
+        var key = cacheKey(options);
+        var outer = $.Deferred();
+        var p = outer.promise();
+
+        if (Object.prototype.hasOwnProperty.call(store, key)) {
+            outer.resolve.apply(outer, store[key]);
+            return wrapPromise(p, noop);
+        }
+
+        var xhr = $.ajax(options);
+        xhr.done(function() {
+            store[key] = Array.prototype.slice.call(arguments);
+            outer.resolve.apply(outer, arguments);
+        });
+        xhr.fail(function() {
+            outer.reject.apply(outer, arguments);
+        });
+
+        return wrapPromise(p, function() {
+            if (xhr && typeof xhr.abort === "function") {
+                xhr.abort();
+            }
+        });
+    }
+
+    return {
+        cachedAjax: cachedAjax,
+        clearCache: clearCache,
+        cacheKey: cacheKey
+    };
+});
+
 /* === Module: api.js === */
-define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], function($, Common, config, utils) {
+define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils", "_ujgUA_requestCache"], function($, Common, config, utils, requestCache) {
     "use strict";
 
     var baseUrl = Common.baseUrl || "";
@@ -1325,7 +1418,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
             };
             if (expand) body.expand = expand;
 
-            $.ajax({
+            requestCache.cachedAjax({
                 url: baseUrl + "/rest/api/2/search",
                 type: "POST",
                 contentType: "application/json",
@@ -1362,7 +1455,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
         var allHistories = [];
 
         function fetchPage(startAt) {
-            $.ajax({
+            requestCache.cachedAjax({
                 url: baseUrl + "/rest/api/2/issue/" + issueKey + "?expand=changelog&fields=summary",
                 type: "GET",
                 dataType: "json",
@@ -1385,13 +1478,17 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
     }
 
     function fetchIssueWorklogs(issueKey) {
-        return $.ajax({
+        var d = $.Deferred();
+        requestCache.cachedAjax({
             url: baseUrl + "/rest/api/2/issue/" + issueKey + "/worklog",
             type: "GET",
             dataType: "json"
-        }).then(function(resp) {
-            return resp.worklogs || [];
+        }).done(function(resp) {
+            d.resolve(resp.worklogs || []);
+        }).fail(function() {
+            d.reject.apply(d, arguments);
         });
+        return d.promise();
     }
 
     function fetchIssueDetails(issueKey) {
@@ -1491,7 +1588,7 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
                 var key = queue.shift();
                 running++;
                 (function(issueKey) {
-                    $.ajax({
+                    requestCache.cachedAjax({
                         url: baseUrl + "/rest/api/2/issue/" + issueKey + "/comment",
                         type: "GET",
                         dataType: "json"
@@ -1543,15 +1640,20 @@ define("_ujgUA_api", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], 
         });
     }
 
+    function clearCache() {
+        requestCache.clearCache();
+    }
+
     return {
         fetchAllData: fetchAllData,
         fetchIssueComments: fetchIssueComments,
-        searchUsers: searchUsers
+        searchUsers: searchUsers,
+        clearCache: clearCache
     };
 });
 
 /* === Module: repo-api.js === */
-define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], function($, Common, config, utils) {
+define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils", "_ujgUA_requestCache"], function($, Common, config, utils, requestCache) {
     "use strict";
 
     var baseUrl = Common.baseUrl || "";
@@ -1745,7 +1847,7 @@ define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils
             d.resolve(issue.devStatus);
         }
 
-        var repoReq = $.ajax({
+        var repoReq = requestCache.cachedAjax({
             url: baseUrl + "/rest/dev-status/1.0/issue/detail",
             type: "GET",
             dataType: "json",
@@ -1755,7 +1857,7 @@ define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils
                 dataType: "repository"
             }
         });
-        var prReq = $.ajax({
+        var prReq = requestCache.cachedAjax({
             url: baseUrl + "/rest/dev-status/1.0/issue/detail",
             type: "GET",
             dataType: "json",
@@ -3013,9 +3115,26 @@ define("_ujgUA_progressLoader", ["jquery", "_ujgUA_utils"], function($, utils) {
         function update(progress) {
             if (!progress) return;
             var pct = 0;
-            if (progress.total > 0) pct = Math.round((progress.loaded / progress.total) * 100);
+            var line = "";
+            if (progress.phase === "day") {
+                var totalDays = progress.totalDays | 0;
+                var completedDays = progress.completedDays != null ? progress.completedDays | 0 : 0;
+                if (totalDays > 0) {
+                    pct = Math.round((completedDays / totalDays) * 100);
+                    if (pct > 100) pct = 100;
+                }
+                var currentDay = progress.currentDay != null
+                    ? progress.currentDay | 0
+                    : (totalDays ? Math.min(completedDays + 1, totalDays) : completedDays + 1);
+                line = "День " + currentDay + " / " + totalDays;
+                if (progress.dayKey) line += " (" + progress.dayKey + ")";
+                if (progress.userDisplayName) line += " — " + progress.userDisplayName;
+            } else {
+                if (progress.total > 0) pct = Math.round((progress.loaded / progress.total) * 100);
+                line = "Загружено " + progress.loaded + "/" + progress.total + " задач...";
+            }
             $bar.css("width", pct + "%");
-            $text.text("Загружено " + progress.loaded + "/" + progress.total + " задач...");
+            $text.text(line);
         }
 
         return { $el: $el, show: show, hide: hide, update: update };
@@ -5415,15 +5534,17 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         });
     }
 
-    function render(dayMap, issueMap, selectedUsers, startDate, endDate) {
-        var data = buildWeeks(dayMap, issueMap, startDate, endDate);
-        var weeks = data.weeks;
-        var showSat = data.showSat;
-        var showSun = data.showSun;
-
+    function buildVisibleDays(showSat, showSun) {
         var visibleDays = [0, 1, 2, 3, 4];
         if (showSat) visibleDays.push(5);
         if (showSun) visibleDays.push(6);
+        return visibleDays;
+    }
+
+    function buildCalendarInnerHtml(dayMap, issueMap, selectedUsers, startDate, endDate) {
+        var data = buildWeeks(dayMap, issueMap, startDate, endDate);
+        var weeks = data.weeks;
+        var visibleDays = buildVisibleDays(data.showSat, data.showSun);
 
         var columnTotals = {};
         var vi, wi, dateStr, dayData, dayIdx;
@@ -5440,10 +5561,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             columnTotals[dayIdx] = Math.round(sum * 10) / 10;
         }
 
-        var selectedDate = null;
-        var selectCallback = null;
-
-        var html = '<div class="dashboard-card p-0 overflow-hidden"><div><table class="w-full table-fixed border-collapse text-[11px]"><colgroup>';
+        var html = '<div><table class="w-full table-fixed border-collapse text-[11px]"><colgroup>';
         for (vi = 0; vi < visibleDays.length; vi++) {
             html += "<col />";
         }
@@ -5517,13 +5635,17 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             html += '</td></tr>';
         }
 
-        html += '</tbody></table></div></div>';
+        html += '</tbody></table></div>';
+        return html;
+    }
 
-        var $el = $(html);
-
-        requestAnimationFrame(function() {
-            alignRowBorders($el.find("table"));
-        });
+    function render(dayMap, issueMap, selectedUsers, startDate, endDate) {
+        var currentDayMap = dayMap || {};
+        var currentIssueMap = issueMap || {};
+        var selectedUsersRef = selectedUsers || [];
+        var selectedDate = null;
+        var selectCallback = null;
+        var $el = $('<div class="dashboard-card p-0 overflow-hidden"></div>');
 
         function updateSelection(newDate) {
             $el.find("td[data-date]").removeClass("ring-2 ring-inset ring-primary bg-primary/5");
@@ -5532,6 +5654,22 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             }
             selectedDate = newDate;
         }
+
+        function repaint() {
+            $el.html(buildCalendarInnerHtml(currentDayMap, currentIssueMap, selectedUsersRef, startDate, endDate));
+            if (selectedDate) updateSelection(selectedDate);
+            requestAnimationFrame(function() {
+                alignRowBorders($el.find("table"));
+            });
+        }
+
+        function updateDayCell(dateStr, dayData, nextIssueMap) {
+            if (dateStr) currentDayMap[dateStr] = dayData || {};
+            if (nextIssueMap) currentIssueMap = nextIssueMap;
+            repaint();
+        }
+
+        repaint();
 
         $el.on("click", "td[data-date]", function() {
             var date = $(this).attr("data-date");
@@ -5546,7 +5684,8 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
         return {
             $el: $el,
-            onSelectDate: function(callback) { selectCallback = callback; }
+            onSelectDate: function(callback) { selectCallback = callback; },
+            updateDayCell: updateDayCell
         };
     }
 
@@ -7425,6 +7564,114 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
     }
 
+    function buildDayList(startDate, endDate) {
+        var days = [];
+        var cursor = new Date(endDate + "T00:00:00");
+        var startMs = new Date(startDate + "T00:00:00").getTime();
+
+        while (cursor.getTime() >= startMs) {
+            days.push(utils.getDayKey(cursor));
+            cursor.setDate(cursor.getDate() - 1);
+        }
+
+        return days;
+    }
+
+    function createEmptyMergedDay() {
+        return {
+            users: {},
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            totalHours: 0,
+            repoItems: []
+        };
+    }
+
+    function mergeIssueMap(target, source) {
+        Object.keys(source || {}).forEach(function(issueKey) {
+            target[issueKey] = source[issueKey];
+        });
+    }
+
+    function mergeDayMap(target, source) {
+        Object.keys(source || {}).forEach(function(dateKey) {
+            target[dateKey] = source[dateKey];
+        });
+    }
+
+    function mergeUserAccumulator(target, userData) {
+        if (!userData || !userData.username) return;
+
+        var existing = target[userData.username];
+        if (!existing) {
+            existing = target[userData.username] = {
+                username: userData.username,
+                displayName: userData.displayName || userData.username,
+                rawData: {
+                    issues: [],
+                    details: {}
+                },
+                comments: {}
+            };
+        }
+
+        var seenIssues = Object.create(null);
+        existing.rawData.issues.forEach(function(issue) {
+            if (issue && issue.key) seenIssues[issue.key] = true;
+        });
+        (userData.rawData && userData.rawData.issues || []).forEach(function(issue) {
+            if (!issue || !issue.key || seenIssues[issue.key]) return;
+            seenIssues[issue.key] = true;
+            existing.rawData.issues.push(issue);
+        });
+
+        Object.keys(userData.rawData && userData.rawData.details || {}).forEach(function(issueKey) {
+            existing.rawData.details[issueKey] = userData.rawData.details[issueKey];
+        });
+
+        Object.keys(userData.rawData || {}).forEach(function(key) {
+            if (key === "issues" || key === "details") return;
+            existing.rawData[key] = userData.rawData[key];
+        });
+
+        Object.keys(userData.comments || {}).forEach(function(issueKey) {
+            existing.comments[issueKey] = userData.comments[issueKey];
+        });
+    }
+
+    function dedupeIssues(issues) {
+        var seen = Object.create(null);
+        var out = [];
+
+        (issues || []).forEach(function(issue) {
+            if (!issue || !issue.key || seen[issue.key]) return;
+            seen[issue.key] = true;
+            out.push(issue);
+        });
+
+        return out;
+    }
+
+    function buildRequestUserFilter(users) {
+        return users.length === 1
+            ? Object.assign({}, users[0])
+            : users.map(function(user) {
+                  return Object.assign({}, user);
+              });
+    }
+
+    function mergeRepoItemsIntoProcessed(processed, repoActivity) {
+        if (!repoActivity || !repoActivity.dayMap) return;
+
+        Object.keys(repoActivity.dayMap).forEach(function(dateKey) {
+            if (!processed.dayMap[dateKey]) {
+                processed.dayMap[dateKey] = createEmptyMergedDay();
+            }
+            processed.dayMap[dateKey].repoItems = (repoActivity.dayMap[dateKey].items || []).slice();
+        });
+    }
+
     function loadData(selectedUsers, period) {
         var requestId = ++activeRequestId;
         var requestUsers = cloneUsers(selectedUsers);
@@ -7439,9 +7686,22 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             return;
         }
 
-        var usersData = new Array(requestUsers.length);
-        var pendingUsers = requestUsers.length;
+        if (mods.api.clearCache) {
+            mods.api.clearCache();
+        }
+
+        var startDate = new Date(period.start + "T00:00:00");
+        var endDate = new Date(period.end + "T23:59:59");
+        var dayKeys = buildDayList(period.start, period.end);
+        var requestUserFilter = buildRequestUserFilter(requestUsers);
+        var accumulatedUsers = Object.create(null);
+        var progressDayMap = {};
+        var progressIssueMap = {};
+        var silentLoader = {
+            update: function() {}
+        };
         var hasFailed = false;
+        var progressCalendar = null;
 
         function failLoad(err) {
             if (hasFailed || requestId !== activeRequestId) return;
@@ -7456,32 +7716,38 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             );
         }
 
-        function continueWithUsers() {
+        if (mods.unifiedCalendar) {
+            progressCalendar = mods.unifiedCalendar.render(progressDayMap, progressIssueMap, requestUsers, startDate, endDate);
+            $contentArea.append(progressCalendar.$el);
+
+            detailInst = mods.dailyDetail.create();
+            $contentArea.append(detailInst.$el);
+
+            progressCalendar.onSelectDate(function(dateStr) {
+                if (!dateStr) {
+                    detailInst.hide();
+                    return;
+                }
+                detailInst.show(dateStr, progressDayMap[dateStr] || createEmptyMergedDay(), progressIssueMap, getDetailSelectedUsers(requestUsers));
+            });
+        }
+
+        function finalizeLoad() {
             if (requestId !== activeRequestId) return;
 
-            var allIssueKeys = [];
-            var seenKeys = {};
-            usersData.forEach(function(ud) {
-                (ud.rawData.issues || []).forEach(function(issue) {
-                    if (!seenKeys[issue.key]) {
-                        seenKeys[issue.key] = true;
-                        allIssueKeys.push(issue.key);
-                    }
-                });
+            var usersData = Object.keys(accumulatedUsers).map(function(username) {
+                return accumulatedUsers[username];
             });
 
-            loadComments(allIssueKeys, loader, function(commentsMap) {
-                if (requestId !== activeRequestId) return;
-
-                usersData.forEach(function(ud) {
-                    ud.comments = commentsMap || {};
-                });
-
-                var processed;
+            var processed;
+            try {
                 if (mods.dataProcessor.processMultiUserData) {
                     processed = mods.dataProcessor.processMultiUserData(usersData, period.start, period.end);
                 } else {
-                    var singleUser = usersData[0];
+                    var singleUser = usersData[0] || {
+                        username: requestUsers[0].name,
+                        rawData: { issues: [], details: {} }
+                    };
                     processed = mods.dataProcessor.processData(
                         singleUser.rawData,
                         singleUser.username,
@@ -7489,88 +7755,190 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         period.end
                     );
                 }
+            } catch (err) {
+                failLoad(err);
+                return;
+            }
 
-                var startDate = new Date(period.start + "T00:00:00");
-                var endDate = new Date(period.end + "T23:59:59");
-                var allIssues = [];
-                var issueSeen = {};
-                usersData.forEach(function(ud) {
-                    (ud.rawData.issues || []).forEach(function(issue) {
-                        if (!issueSeen[issue.key]) {
-                            issueSeen[issue.key] = true;
-                            allIssues.push(issue);
-                        }
-                    });
-                });
+            var allIssues = dedupeIssues(
+                usersData.reduce(function(acc, userData) {
+                    return acc.concat(userData.rawData && userData.rawData.issues || []);
+                }, [])
+            );
 
-                var requestUserFilter =
-                    requestUsers.length === 1
-                        ? Object.assign({}, requestUsers[0])
-                        : requestUsers.map(function(user) {
-                              return Object.assign({}, user);
-                          });
+            attachAsync(
+                mods.repoApi.fetchRepoActivityForIssues(allIssues, function() {}),
+                function(repoData) {
+                    if (requestId !== activeRequestId) return;
+                    var repoActivity = mods.repoDataProcessor.processRepoActivity(
+                        processed.issueMap,
+                        repoData && repoData.issueDevStatusMap,
+                        requestUserFilter,
+                        period.start,
+                        period.end
+                    );
 
-                attachAsync(
-                    mods.repoApi.fetchRepoActivityForIssues(allIssues, function(progress) {
-                        loader.update(progress);
-                    }),
-                    function(repoData) {
-                        if (requestId !== activeRequestId) return;
-                        var repoActivity = mods.repoDataProcessor.processRepoActivity(
-                            processed.issueMap,
-                            repoData && repoData.issueDevStatusMap,
-                            requestUserFilter,
-                            period.start,
-                            period.end
-                        );
-
-                        if (repoActivity && repoActivity.dayMap) {
-                            Object.keys(repoActivity.dayMap).forEach(function(dateKey) {
-                                if (!processed.dayMap[dateKey]) {
-                                    processed.dayMap[dateKey] = {
-                                        users: {},
-                                        allWorklogs: [],
-                                        allChanges: [],
-                                        allComments: [],
-                                        totalHours: 0,
-                                        repoItems: []
-                                    };
-                                }
-                                processed.dayMap[dateKey].repoItems = (repoActivity.dayMap[dateKey].items || []).slice();
-                            });
-                        }
-
-                        if (requestId !== activeRequestId) return;
-                        renderDashboard(processed, startDate, endDate, requestUsers, { activity: repoActivity });
-                    },
-                    function(err) {
-                        if (requestId !== activeRequestId) return;
-                        renderDashboard(processed, startDate, endDate, requestUsers, { error: err });
-                    }
-                );
-            }, failLoad);
+                    mergeRepoItemsIntoProcessed(processed, repoActivity);
+                    renderDashboard(processed, startDate, endDate, requestUsers, { activity: repoActivity });
+                },
+                function(err) {
+                    if (requestId !== activeRequestId) return;
+                    renderDashboard(processed, startDate, endDate, requestUsers, { error: err });
+                }
+            );
         }
 
-        requestUsers.forEach(function(user, index) {
-            attachAsync(
-                mods.api.fetchAllData(user.name, period.start, period.end, function(progress) {
-                    loader.update(progress);
-                }),
-                function(rawData) {
-                    if (hasFailed || requestId !== activeRequestId) return;
-                    usersData[index] = {
-                        username: user.name,
-                        displayName: user.displayName || user.name,
-                        rawData: rawData
+        function afterDayUsers(dayKey, dayIndex, dayUsersData, dayIssues) {
+            if (requestId !== activeRequestId) return;
+
+            var processedDay;
+            try {
+                if (mods.dataProcessor.processMultiUserData) {
+                    processedDay = mods.dataProcessor.processMultiUserData(dayUsersData, dayKey, dayKey);
+                } else {
+                    var firstUser = dayUsersData[0] || {
+                        username: requestUsers[0].name,
+                        rawData: { issues: [], details: {} }
                     };
-                    pendingUsers -= 1;
-                    if (pendingUsers === 0) {
-                        continueWithUsers();
+                    processedDay = mods.dataProcessor.processData(
+                        firstUser.rawData,
+                        firstUser.username,
+                        dayKey,
+                        dayKey
+                    );
+                }
+            } catch (err) {
+                failLoad(err);
+                return;
+            }
+
+            attachAsync(
+                mods.repoApi.fetchRepoActivityForIssues(dayIssues, function() {}),
+                function(repoData) {
+                    if (requestId !== activeRequestId) return;
+                    var repoDay = mods.repoDataProcessor.processRepoActivity(
+                        processedDay.issueMap,
+                        repoData && repoData.issueDevStatusMap,
+                        requestUserFilter,
+                        dayKey,
+                        dayKey
+                    );
+
+                    mergeRepoItemsIntoProcessed(processedDay, repoDay);
+                    mergeIssueMap(progressIssueMap, processedDay.issueMap);
+                    mergeDayMap(progressDayMap, processedDay.dayMap);
+
+                    if (progressCalendar && progressCalendar.updateDayCell) {
+                        progressCalendar.updateDayCell(dayKey, progressDayMap[dayKey] || createEmptyMergedDay(), progressIssueMap);
                     }
+
+                    processDay(dayIndex + 1);
                 },
-                failLoad
+                function() {
+                    if (requestId !== activeRequestId) return;
+
+                    mergeIssueMap(progressIssueMap, processedDay.issueMap);
+                    mergeDayMap(progressDayMap, processedDay.dayMap);
+
+                    if (progressCalendar && progressCalendar.updateDayCell) {
+                        progressCalendar.updateDayCell(dayKey, progressDayMap[dayKey] || createEmptyMergedDay(), progressIssueMap);
+                    }
+
+                    processDay(dayIndex + 1);
+                }
             );
-        });
+        }
+
+        function processDay(dayIndex) {
+            if (requestId !== activeRequestId) return;
+            if (dayIndex >= dayKeys.length) {
+                finalizeLoad();
+                return;
+            }
+
+            var dayKey = dayKeys[dayIndex];
+            var dayUsersData = [];
+            var dayIssues = [];
+            var seenIssues = Object.create(null);
+
+            function processUser(userIndex) {
+                if (requestId !== activeRequestId) return;
+                if (userIndex >= requestUsers.length) {
+                    afterDayUsers(dayKey, dayIndex, dayUsersData, dayIssues);
+                    return;
+                }
+
+                var user = requestUsers[userIndex];
+                loader.update({
+                    phase: "day",
+                    currentDay: dayIndex + 1,
+                    totalDays: dayKeys.length,
+                    completedDays: dayIndex,
+                    dayKey: dayKey,
+                    userDisplayName: user.displayName || user.name
+                });
+
+                attachAsync(
+                    mods.api.fetchAllData(user.name, dayKey, dayKey, function() {}),
+                    function(rawData) {
+                        if (requestId !== activeRequestId) return;
+
+                        var normalizedRawData = rawData || { issues: [], details: {} };
+                        var issueKeys = (normalizedRawData.issues || []).map(function(issue) {
+                            return issue.key;
+                        });
+
+                        loadComments(issueKeys, silentLoader, function(commentsMap) {
+                            if (requestId !== activeRequestId) return;
+
+                            var userData = {
+                                username: user.name,
+                                displayName: user.displayName || user.name,
+                                rawData: normalizedRawData,
+                                comments: commentsMap || {}
+                            };
+                            dayUsersData.push(userData);
+                            mergeUserAccumulator(accumulatedUsers, userData);
+
+                            (normalizedRawData.issues || []).forEach(function(issue) {
+                                if (!issue || !issue.key || seenIssues[issue.key]) return;
+                                seenIssues[issue.key] = true;
+                                dayIssues.push(issue);
+                            });
+
+                            processUser(userIndex + 1);
+                        }, function() {
+                            if (requestId !== activeRequestId) return;
+
+                            var userData = {
+                                username: user.name,
+                                displayName: user.displayName || user.name,
+                                rawData: normalizedRawData,
+                                comments: {}
+                            };
+                            dayUsersData.push(userData);
+                            mergeUserAccumulator(accumulatedUsers, userData);
+
+                            (normalizedRawData.issues || []).forEach(function(issue) {
+                                if (!issue || !issue.key || seenIssues[issue.key]) return;
+                                seenIssues[issue.key] = true;
+                                dayIssues.push(issue);
+                            });
+
+                            processUser(userIndex + 1);
+                        });
+                    },
+                    function() {
+                        if (requestId !== activeRequestId) return;
+                        processUser(userIndex + 1);
+                    }
+                );
+            }
+
+            processUser(0);
+        }
+
+        processDay(0);
     }
 
     function renderRepoStateCard(title, message) {

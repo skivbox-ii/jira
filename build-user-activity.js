@@ -17,6 +17,7 @@ var MODULE_ORDER = [
     { dir: SHARED_DIR, file: "team-picker.js" },
     { dir: MODULES_DIR, file: "config.js" },
     { dir: MODULES_DIR, file: "utils.js" },
+    { dir: MODULES_DIR, file: "request-cache.js" },
     { dir: MODULES_DIR, file: "api.js" },
     { dir: MODULES_DIR, file: "repo-api.js" },
     { dir: MODULES_DIR, file: "data-processor.js" },

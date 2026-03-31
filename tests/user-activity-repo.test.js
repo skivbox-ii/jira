@@ -18,6 +18,12 @@ function createDeferred() {
     var settledArgs = [];
     var doneHandlers = [];
     var failHandlers = [];
+    var alwaysHandlers = [];
+    function runAlways() {
+        alwaysHandlers.slice().forEach(function(handler) {
+            handler.apply(null, settledArgs);
+        });
+    }
     var deferred = {
         resolve: function() {
             if (state !== "pending") return deferred;
@@ -26,6 +32,7 @@ function createDeferred() {
             doneHandlers.slice().forEach(function(handler) {
                 handler.apply(null, settledArgs);
             });
+            runAlways();
             return deferred;
         },
         reject: function() {
@@ -35,6 +42,7 @@ function createDeferred() {
             failHandlers.slice().forEach(function(handler) {
                 handler.apply(null, settledArgs);
             });
+            runAlways();
             return deferred;
         },
         done: function(handler) {
@@ -50,6 +58,14 @@ function createDeferred() {
                 handler.apply(null, settledArgs);
             } else if (state === "pending") {
                 failHandlers.push(handler);
+            }
+            return deferred;
+        },
+        always: function(handler) {
+            if (state === "resolved" || state === "rejected") {
+                handler.apply(null, settledArgs);
+            } else if (state === "pending") {
+                alwaysHandlers.push(handler);
             }
             return deferred;
         },
@@ -137,7 +153,14 @@ function loadRepoApi(jquery) {
         jquery: jquery,
         _ujgCommon: { baseUrl: "" },
         _ujgUA_config: { CONFIG: { maxConcurrent: 2 } },
-        _ujgUA_utils: {}
+        _ujgUA_utils: {},
+        _ujgUA_requestCache: loadRequestCache(jquery)
+    });
+}
+
+function loadRequestCache(jquery) {
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "request-cache.js"), {
+        jquery: jquery
     });
 }
 
@@ -146,7 +169,8 @@ function loadUserActivityApi(jquery) {
         jquery: jquery,
         _ujgCommon: { baseUrl: "" },
         _ujgUA_config: { CONFIG: { maxResults: 50, maxConcurrent: 2 } },
-        _ujgUA_utils: {}
+        _ujgUA_utils: {},
+        _ujgUA_requestCache: loadRequestCache(jquery)
     });
 }
 
@@ -157,6 +181,90 @@ function loadUserActivityUtils(windowStub) {
         _ujgUA_config: config
     }, globals);
 }
+
+function createProgressLoaderJqueryStub() {
+    var barWidth = "0%";
+    var labelText = "";
+    var $bar = {
+        css: function(prop, val) {
+            if (prop === "width") barWidth = String(val);
+            return $bar;
+        }
+    };
+    var $text = {
+        text: function(t) {
+            if (!arguments.length) return labelText;
+            labelText = t;
+            return $text;
+        }
+    };
+    var $root = {
+        find: function(sel) {
+            if (sel.indexOf("ujg-ua-progress-bar") !== -1) return $bar;
+            if (sel.indexOf("ujg-ua-progress-text") !== -1) return $text;
+            return $text;
+        },
+        show: function() {
+            return $root;
+        },
+        hide: function() {
+            return $root;
+        }
+    };
+    return {
+        $: function() {
+            return $root;
+        },
+        barWidth: function() {
+            return barWidth;
+        },
+        labelText: function() {
+            return labelText;
+        }
+    };
+}
+
+function loadProgressLoader(jqStub) {
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "progress-loader.js"), {
+        jquery: jqStub.$,
+        _ujgUA_utils: {}
+    });
+}
+
+test("progress-loader: day phase sets bar from completedDays over totalDays", function() {
+    var stub = createProgressLoaderJqueryStub();
+    var loader = loadProgressLoader(stub).create();
+    loader.update({
+        phase: "day",
+        currentDay: 3,
+        totalDays: 10,
+        completedDays: 2
+    });
+    assert.equal(stub.barWidth(), "20%");
+    assert.equal(stub.labelText(), "День 3 / 10");
+});
+
+test("progress-loader: day phase appends dayKey and userDisplayName", function() {
+    var stub = createProgressLoaderJqueryStub();
+    var loader = loadProgressLoader(stub).create();
+    loader.update({
+        phase: "day",
+        currentDay: 1,
+        totalDays: 5,
+        completedDays: 0,
+        dayKey: "2026-04-01",
+        userDisplayName: "Иван"
+    });
+    assert.equal(stub.labelText(), "День 1 / 5 (2026-04-01) — Иван");
+});
+
+test("progress-loader: legacy loaded total task text unchanged", function() {
+    var stub = createProgressLoaderJqueryStub();
+    var loader = loadProgressLoader(stub).create();
+    loader.update({ loaded: 7, total: 20 });
+    assert.equal(stub.barWidth(), "35%");
+    assert.equal(stub.labelText(), "Загружено 7/20 задач...");
+});
 
 test("user-activity utils: issue URL falls back to location origin", function() {
     var utils = loadUserActivityUtils({
@@ -259,6 +367,95 @@ test("user-activity API: activity JQL exclusive upper bound includes end date", 
             }
         }).fail(reject);
     });
+});
+
+test("user-activity API: fetchAllData second call reuses request cache", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function(options) {
+        ajaxCount += 1;
+        var url = options.url || "";
+        if (url.indexOf("/rest/api/2/search") !== -1) {
+            return resolvedAjax({
+                issues: [{ key: "ABC-1", id: "1" }],
+                total: 1
+            });
+        }
+        if (url.indexOf("/rest/api/2/issue/") !== -1 && url.indexOf("expand=changelog") !== -1) {
+            return resolvedAjax({
+                changelog: { histories: [], total: 0 },
+                fields: { summary: "S" }
+            });
+        }
+        if (url.indexOf("/worklog") !== -1 && url.indexOf("/comment") === -1) {
+            return resolvedAjax({ worklogs: [] });
+        }
+        return resolvedAjax({});
+    });
+    var api = loadUserActivityApi($);
+    await new Promise(function(resolve, reject) {
+        api.fetchAllData("u", "2026-01-01", "2026-01-01").done(resolve).fail(reject);
+    });
+    var afterFirst = ajaxCount;
+    await new Promise(function(resolve, reject) {
+        api.fetchAllData("u", "2026-01-01", "2026-01-01").done(resolve).fail(reject);
+    });
+    assert.ok(afterFirst > 0, "expected ajax on first load");
+    assert.equal(ajaxCount, afterFirst, "second fetchAllData should not duplicate ajax");
+});
+
+test("user-activity API: fetchIssueComments second call reuses request cache", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function(options) {
+        ajaxCount += 1;
+        if ((options.url || "").indexOf("/comment") !== -1) {
+            return resolvedAjax({ comments: [] });
+        }
+        return resolvedAjax({});
+    });
+    var api = loadUserActivityApi($);
+    await new Promise(function(resolve, reject) {
+        api.fetchIssueComments(["K-1"]).done(function() { resolve(); }).fail(reject);
+    });
+    var n1 = ajaxCount;
+    await new Promise(function(resolve, reject) {
+        api.fetchIssueComments(["K-1"]).done(function() { resolve(); }).fail(reject);
+    });
+    assert.equal(ajaxCount, n1, "second fetchIssueComments should not add ajax");
+});
+
+test("user-activity API: clearCache forces new requests", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function(options) {
+        ajaxCount += 1;
+        if ((options.url || "").indexOf("/comment") !== -1) {
+            return resolvedAjax({ comments: [] });
+        }
+        return resolvedAjax({});
+    });
+    var api = loadUserActivityApi($);
+    await new Promise(function(resolve, reject) {
+        api.fetchIssueComments(["K-2"]).done(function() { resolve(); }).fail(reject);
+    });
+    api.clearCache();
+    await new Promise(function(resolve, reject) {
+        api.fetchIssueComments(["K-2"]).done(function() { resolve(); }).fail(reject);
+    });
+    assert.equal(ajaxCount, 2);
+});
+
+test("user-activity API: searchUsers is not cached (repeated calls hit ajax)", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function(options) {
+        ajaxCount += 1;
+        if ((options.url || "").indexOf("/user/picker") !== -1) {
+            return resolvedAjax({ users: [] });
+        }
+        return resolvedAjax({});
+    });
+    var api = loadUserActivityApi($);
+    await api.searchUsers("a");
+    await api.searchUsers("a");
+    assert.equal(ajaxCount, 2);
 });
 
 function loadRepoDataProcessor() {
@@ -1798,6 +1995,8 @@ function createRenderingHarness(options) {
 
     var period = options.period || { start: "2026-03-01", end: "2026-03-31" };
     var selectedUser = options.selectedUser || { name: "dtorzok", displayName: "Dima Torzok" };
+    var selectedUsers = options.selectedUsers || null;
+    var useMultiUserPicker = !!(options.useMultiUserPicker || (selectedUsers && selectedUsers.length));
     var rawData = options.rawData || {
         issues: [{ id: "1001", key: "CORE-1" }]
     };
@@ -1860,12 +2059,15 @@ function createRenderingHarness(options) {
         processRepoArgsHistory: [],
         unifiedCalendarRenderArgs: null,
         unifiedCalendarRenderArgsHistory: [],
+        unifiedCalendarDayUpdates: [],
         repoLogCalls: [],
         dailyShows: [],
         dailyHides: 0,
         jiraSelect: null,
         repoSelect: null,
-        userChange: null
+        userChange: null,
+        loaderUpdates: [],
+        clearCacheCalls: 0
     };
 
     function resolvedPromise(value) {
@@ -1889,7 +2091,7 @@ function createRenderingHarness(options) {
     }
 
     var modules = {
-        userPicker: {
+        userPicker: useMultiUserPicker ? null : {
             create: function(_, onChange) {
                 events.userChange = onChange;
                 return {
@@ -1901,6 +2103,18 @@ function createRenderingHarness(options) {
                 };
             }
         },
+        multiUserPicker: useMultiUserPicker ? {
+            create: function(_, onChange) {
+                events.userChange = onChange;
+                return {
+                    $el: jquery.createNode("MultiUserPicker"),
+                    setFromUrl: function() {},
+                    getSelectedUsers: function() {
+                        return selectedUsers || [];
+                    }
+                };
+            }
+        } : null,
         dateRangePicker: {
             create: function(onChange) {
                 if (onChange) onChange(period);
@@ -1917,11 +2131,16 @@ function createRenderingHarness(options) {
                 return {
                     $el: jquery.createNode("Loader"),
                     show: function() {},
-                    update: function() {}
+                    update: function(progress) {
+                        events.loaderUpdates.push(normalize(progress));
+                    }
                 };
             }
         },
         api: {
+            clearCache: function() {
+                events.clearCacheCalls += 1;
+            },
             fetchAllData: function(username, startDate, endDate, onProgress) {
                 events.fetchAllDataCalls.push({
                     username: username,
@@ -1933,7 +2152,12 @@ function createRenderingHarness(options) {
                     return options.fetchAllDataImpl(username, startDate, endDate, onProgress, events);
                 }
                 return resolvedPromise(shiftOrValue(options.rawDataQueue, rawData));
-            }
+            },
+            fetchIssueComments: typeof options.fetchIssueCommentsImpl === "function"
+                ? function(issueKeys, onProgress) {
+                    return options.fetchIssueCommentsImpl(issueKeys, onProgress, events);
+                }
+                : undefined
         },
         repoApi: {
             fetchRepoActivityForIssues: function(issues, onProgress) {
@@ -2007,6 +2231,13 @@ function createRenderingHarness(options) {
                     $el: jquery.createNode("Jira Activity Calendar"),
                     onSelectDate: function(handler) {
                         events.jiraSelect = handler;
+                    },
+                    updateDayCell: function(dateStr, dayData, issueMapArg) {
+                        events.unifiedCalendarDayUpdates.push({
+                            dateStr: dateStr,
+                            dayData: dayData,
+                            issueMap: issueMapArg
+                        });
                     }
                 };
             }
@@ -2302,6 +2533,44 @@ test("fetchIssueDevStatus keeps repository data when pullrequest request fails",
     assert.deepEqual(normalize(devStatus.detail[0].repositories[0].commits), [{ id: "c1" }]);
     assert.equal(devStatus.detail[0].repositories[0].pullRequests, undefined);
     assert.deepEqual(normalize(issue.devStatus), normalize(devStatus));
+});
+
+test("fetchIssueDevStatus reuses request cache for same issue", async function() {
+    var $ = createJqueryStub(function(options) {
+        if (options.data.dataType === "repository") {
+            return resolvedAjax({ detail: [] });
+        }
+        if (options.data.dataType === "pullrequest") {
+            return resolvedAjax({ detail: [] });
+        }
+        throw new Error("Unexpected ajax call");
+    });
+    var mod = loadRepoApi($);
+    var issue = { id: "1001", key: "SDKU-1" };
+
+    await mod.fetchIssueDevStatus(issue);
+    assert.equal($.__calls.length, 2);
+    await mod.fetchIssueDevStatus(issue);
+    assert.equal($.__calls.length, 2);
+});
+
+test("fetchIssueDevStatus issues separate requests per issue id", async function() {
+    var $ = createJqueryStub(function(options) {
+        if (options.data.dataType === "repository") {
+            return resolvedAjax({
+                detail: [{ repositories: [{ id: "r-" + options.data.issueId }] }]
+            });
+        }
+        if (options.data.dataType === "pullrequest") {
+            return resolvedAjax({ detail: [] });
+        }
+        throw new Error("Unexpected ajax call");
+    });
+    var mod = loadRepoApi($);
+
+    await mod.fetchIssueDevStatus({ id: "1", key: "A-1" });
+    await mod.fetchIssueDevStatus({ id: "2", key: "A-2" });
+    assert.equal($.__calls.length, 4);
 });
 
 test("fetchRepoActivityForIssues resolves merged dev-status and keeps failed issues empty", async function() {
@@ -3195,6 +3464,42 @@ test("unified calendar repo line keeps status without issue key and no dangling 
     assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice<\/span> <span class="ujg-ua-inline-status">Blocked<\/span>/);
     assert.match(html, /<span class="[^"]*ujg-ua-repo-msg[^"]*">Refactor escape path<\/span>/);
     assert.doesNotMatch(html, /Alice<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
+});
+
+test("unified calendar updateDayCell rerenders updated day content", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render({}, {}, users, start, end);
+
+    assert.equal(typeof out.updateDayCell, "function");
+    assert.doesNotMatch(out.$el.html(), /CORE-7|Updated cell summary/);
+
+    out.updateDayCell("2026-03-04", {
+        totalHours: 3,
+        users: {
+            u1: { totalHours: 3 }
+        },
+        allWorklogs: [{
+            timestamp: "2026-03-04T10:00:00.000Z",
+            issueKey: "CORE-7",
+            author: { displayName: "User One" },
+            timeSpentHours: 3,
+            comment: "Investigated incremental render"
+        }],
+        allChanges: [],
+        allComments: [],
+        repoItems: []
+    }, {
+        "CORE-7": { key: "CORE-7", project: "CORE", summary: "Updated cell summary", status: "Open" }
+    });
+
+    var html = out.$el.html();
+    assert.match(html, /data-date="2026-03-04"/);
+    assert.match(html, /CORE-7/);
+    assert.match(html, /Updated cell summary/);
+    assert.match(html, /3ч/);
 });
 
 test("presentation consistency: repo author links and issue status align across calendar and day detail", function() {
@@ -4483,11 +4788,13 @@ test("repo modules are wired in main module and build order", function() {
     assert.match(buildSource, /file:\s*"team-store\.js"/);
     assert.match(buildSource, /file:\s*"team-picker\.js"/);
     assert.match(buildSource, /file:\s*"team-manager\.js"/);
+    assert.match(buildSource, /file:\s*"request-cache\.js"/);
+    var iRequestCache = buildSource.indexOf('file: "request-cache.js"');
     var iApi = buildSource.indexOf('file: "api.js"');
     var iRepoApi = buildSource.indexOf('file: "repo-api.js"');
     var iData = buildSource.indexOf('file: "data-processor.js"');
     var iRepoData = buildSource.indexOf('file: "repo-data-processor.js"');
-    assert.ok(iApi < iRepoApi && iRepoApi < iData && iData < iRepoData);
+    assert.ok(iRequestCache < iApi && iApi < iRepoApi && iRepoApi < iData && iData < iRepoData);
     var iHeat = buildSource.indexOf('file: "calendar-heatmap.js"');
     var iRepoCal = buildSource.indexOf('file: "repo-calendar.js"');
     var iDaily = buildSource.indexOf('file: "daily-detail.js"');
@@ -4509,6 +4816,7 @@ test("public user activity bundle includes repo modules", function() {
     assert.match(bundleSource, /_ujgUA_repoCalendar/);
     assert.match(bundleSource, /_ujgUA_repoLog/);
     assert.match(bundleSource, /_ujgUA_teamManager/);
+    assert.match(bundleSource, /_ujgUA_requestCache/);
 });
 
 test("build-user-activity updates bundle atomically for concurrent bootstrap readers", function() {
@@ -4682,6 +4990,66 @@ test("rendering with unified calendar keeps repo-only day entries in merged dayM
     assert.equal(harness.events.unifiedCalendarRenderArgs.dayMap["2026-03-09"].totalHours, 0);
 });
 
+test("rendering loads days newest-first for a single user", function() {
+    var harness = createRenderingHarness({
+        period: { start: "2026-03-01", end: "2026-03-03" },
+        rawData: { issues: [] }
+    });
+
+    assert.deepEqual(harness.events.fetchAllDataCalls.map(function(call) {
+        return {
+            username: call.username,
+            startDate: call.startDate,
+            endDate: call.endDate
+        };
+    }), [{
+        username: "dtorzok",
+        startDate: "2026-03-03",
+        endDate: "2026-03-03"
+    }, {
+        username: "dtorzok",
+        startDate: "2026-03-02",
+        endDate: "2026-03-02"
+    }, {
+        username: "dtorzok",
+        startDate: "2026-03-01",
+        endDate: "2026-03-01"
+    }]);
+});
+
+test("rendering loads users sequentially within each day", function() {
+    var harness = createRenderingHarness({
+        useMultiUserPicker: true,
+        selectedUsers: [
+            { name: "u1", displayName: "User One" },
+            { name: "u2", displayName: "User Two" }
+        ],
+        period: { start: "2026-03-01", end: "2026-03-02" },
+        rawData: { issues: [] }
+    });
+
+    assert.deepEqual(harness.events.fetchAllDataCalls.map(function(call) {
+        return call.username + ":" + call.startDate;
+    }), [
+        "u1:2026-03-02",
+        "u2:2026-03-02",
+        "u1:2026-03-01",
+        "u2:2026-03-01"
+    ]);
+});
+
+test("rendering updates unified calendar day-by-day during sequential load", function() {
+    var harness = createRenderingHarness({
+        useUnifiedCalendar: true,
+        period: { start: "2026-03-01", end: "2026-03-02" },
+        rawData: { issues: [] }
+    });
+
+    assert.deepEqual(harness.events.unifiedCalendarDayUpdates.map(function(update) {
+        return update.dateStr;
+    }), ["2026-03-02", "2026-03-01"]);
+});
+
 test("rendering keeps Jira blocks visible when repo loading fails", function() {
     var harness = createRenderingHarness({
         repoShouldFail: true
@@ -4707,6 +5075,7 @@ test("rendering ignores stale older request responses and keeps newer dashboard"
     var activeRepo = createDeferred();
     var apiCallCount = 0;
     var harness = createRenderingHarness({
+        period: { start: "2026-03-08", end: "2026-03-08" },
         selectedUser: { name: "first-user", displayName: "First User" },
         fetchAllDataImpl: function() {
             apiCallCount += 1;
@@ -4745,8 +5114,9 @@ test("rendering ignores stale older request responses and keeps newer dashboard"
         issueDevStatusMap: { "SECOND-2": { detail: [] } }
     });
 
-    assert.equal(harness.events.processRepoArgsHistory.length, 1);
+    assert.equal(harness.events.processRepoArgsHistory.length, 2);
     assert.equal(harness.events.processRepoArgsHistory[0].user.name, "second-user");
+    assert.equal(harness.events.processRepoArgsHistory[1].user.name, "second-user");
 
     firstApi.resolve({
         issues: [{ id: "1001", key: "FIRST-1" }],
@@ -4759,7 +5129,7 @@ test("rendering ignores stale older request responses and keeps newer dashboard"
         }
     });
 
-    assert.equal(harness.events.processRepoArgsHistory.length, 1);
+    assert.equal(harness.events.processRepoArgsHistory.length, 2);
     assert.deepEqual(harness.getDashboardLabels(), [
         "SummaryCards",
         "Jira Activity Calendar",
@@ -4771,12 +5141,13 @@ test("rendering ignores stale older request responses and keeps newer dashboard"
         "Repository Activity Log"
     ]);
     assert.equal(harness.events.fetchAllDataCalls.length, 2);
-    assert.equal(harness.events.fetchRepoArgsHistory.length, 1);
+    assert.equal(harness.events.fetchRepoArgsHistory.length, 2);
 });
 
 test("rendering invalidates in-flight request when selected user is cleared", function() {
     var apiDeferred = createDeferred();
     var harness = createRenderingHarness({
+        period: { start: "2026-03-08", end: "2026-03-08" },
         fetchAllDataImpl: function() {
             return apiDeferred.promise();
         }
@@ -4797,6 +5168,7 @@ test("rendering processes repo activity for request user snapshot, not later mut
     var repoDeferred = createDeferred();
     var selectedUser = { name: "first-user", displayName: "First User" };
     var harness = createRenderingHarness({
+        period: { start: "2026-03-08", end: "2026-03-08" },
         selectedUser: selectedUser,
         fetchAllDataImpl: function() {
             return apiDeferred.promise();
@@ -4831,4 +5203,147 @@ test("rendering reinit does not accumulate keydown handlers", function() {
 
     harness.reinit();
     assert.equal(harness.getRenderKeydownHandlerCount(), 1);
+});
+
+test("request cache: second identical GET uses cache", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function() {
+        ajaxCount += 1;
+        var d = createDeferred();
+        d.resolve({ id: 1 }, "success", {});
+        return d.promise();
+    });
+    var rc = loadRequestCache($);
+    var firstDone;
+    var secondDone;
+
+    await new Promise(function(res) {
+        rc.cachedAjax({ url: "/x", type: "GET" }).done(function(a, b, c) {
+            firstDone = [a, b, c];
+            res();
+        });
+    });
+    await new Promise(function(res) {
+        rc.cachedAjax({ url: "/x", type: "GET" }).done(function(a, b, c) {
+            secondDone = [a, b, c];
+            res();
+        });
+    });
+
+    assert.equal(ajaxCount, 1);
+    assert.deepEqual(firstDone, [{ id: 1 }, "success", {}]);
+    assert.deepEqual(secondDone, firstDone);
+});
+
+test("request cache: clearCache forces a new request", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function() {
+        ajaxCount += 1;
+        var d = createDeferred();
+        d.resolve({}, "success", {});
+        return d.promise();
+    });
+    var rc = loadRequestCache($);
+
+    await rc.cachedAjax({ url: "/y", type: "GET" });
+    rc.clearCache();
+    await rc.cachedAjax({ url: "/y", type: "GET" });
+
+    assert.equal(ajaxCount, 2);
+});
+
+test("request cache: different POST bodies are separate entries", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function() {
+        ajaxCount += 1;
+        var d = createDeferred();
+        d.resolve({ n: ajaxCount }, "success", {});
+        return d.promise();
+    });
+    var rc = loadRequestCache($);
+
+    await rc.cachedAjax({ url: "/p", type: "POST", data: { a: 1 } });
+    await rc.cachedAjax({ url: "/p", type: "POST", data: { a: 1 } });
+    assert.equal(ajaxCount, 1);
+    await rc.cachedAjax({ url: "/p", type: "POST", data: { b: 2 } });
+    assert.equal(ajaxCount, 2);
+});
+
+test("request cache: failed response is not cached", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function() {
+        ajaxCount += 1;
+        return rejectedAjax("error");
+    });
+    var rc = loadRequestCache($);
+
+    function expectFail(p) {
+        return new Promise(function(resolve, reject) {
+            p.fail(function(x) {
+                resolve(x);
+            }).done(function() {
+                reject(new Error("expected ajax failure"));
+            });
+        });
+    }
+
+    await expectFail(rc.cachedAjax({ url: "/z", type: "GET" }));
+    await expectFail(rc.cachedAjax({ url: "/z", type: "GET" }));
+    assert.equal(ajaxCount, 2);
+});
+
+test("request cache: live and cached returns expose abort and then", async function() {
+    var $ = createJqueryStub(function() {
+        var d = createDeferred();
+        d.resolve(0, "success", {});
+        return d.promise();
+    });
+    var rc = loadRequestCache($);
+
+    var live = rc.cachedAjax({ url: "/abort-shape", type: "GET" });
+    assert.equal(typeof live.abort, "function");
+    assert.equal(typeof live.then, "function");
+    live.abort();
+    await new Promise(function(res) {
+        live.done(res);
+    });
+
+    var cached = rc.cachedAjax({ url: "/abort-shape", type: "GET" });
+    assert.equal(typeof cached.abort, "function");
+    assert.equal(typeof cached.then, "function");
+    cached.abort();
+});
+
+test("request cache: live abort delegates to underlying jqXHR", function() {
+    var abortCalls = 0;
+    var $ = createJqueryStub(function() {
+        var d = createDeferred();
+        var p = d.promise();
+        p.abort = function() {
+            abortCalls += 1;
+        };
+        d.resolve({}, "success", {});
+        return p;
+    });
+    var rc = loadRequestCache($);
+
+    rc.cachedAjax({ url: "/delegate-abort", type: "GET" }).abort();
+    assert.equal(abortCalls, 1);
+});
+
+test("request cache: PATCH with different bodies are separate entries", async function() {
+    var ajaxCount = 0;
+    var $ = createJqueryStub(function() {
+        ajaxCount += 1;
+        var d = createDeferred();
+        d.resolve({ k: ajaxCount }, "success", {});
+        return d.promise();
+    });
+    var rc = loadRequestCache($);
+
+    await rc.cachedAjax({ url: "/patch", type: "PATCH", data: { x: 1 } });
+    await rc.cachedAjax({ url: "/patch", type: "PATCH", data: { x: 1 } });
+    assert.equal(ajaxCount, 1);
+    await rc.cachedAjax({ url: "/patch", type: "PATCH", data: { x: 2 } });
+    assert.equal(ajaxCount, 2);
 });

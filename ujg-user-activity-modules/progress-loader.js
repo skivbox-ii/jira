@@ -29,9 +29,26 @@ define("_ujgUA_progressLoader", ["jquery", "_ujgUA_utils"], function($, utils) {
         function update(progress) {
             if (!progress) return;
             var pct = 0;
-            if (progress.total > 0) pct = Math.round((progress.loaded / progress.total) * 100);
+            var line = "";
+            if (progress.phase === "day") {
+                var totalDays = progress.totalDays | 0;
+                var completedDays = progress.completedDays != null ? progress.completedDays | 0 : 0;
+                if (totalDays > 0) {
+                    pct = Math.round((completedDays / totalDays) * 100);
+                    if (pct > 100) pct = 100;
+                }
+                var currentDay = progress.currentDay != null
+                    ? progress.currentDay | 0
+                    : (totalDays ? Math.min(completedDays + 1, totalDays) : completedDays + 1);
+                line = "День " + currentDay + " / " + totalDays;
+                if (progress.dayKey) line += " (" + progress.dayKey + ")";
+                if (progress.userDisplayName) line += " — " + progress.userDisplayName;
+            } else {
+                if (progress.total > 0) pct = Math.round((progress.loaded / progress.total) * 100);
+                line = "Загружено " + progress.loaded + "/" + progress.total + " задач...";
+            }
             $bar.css("width", pct + "%");
-            $text.text("Загружено " + progress.loaded + "/" + progress.total + " задач...");
+            $text.text(line);
         }
 
         return { $el: $el, show: show, hide: hide, update: update };

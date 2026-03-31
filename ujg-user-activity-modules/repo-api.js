@@ -1,4 +1,4 @@
-define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils"], function($, Common, config, utils) {
+define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils", "_ujgUA_requestCache"], function($, Common, config, utils, requestCache) {
     "use strict";
 
     var baseUrl = Common.baseUrl || "";
@@ -192,7 +192,7 @@ define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils
             d.resolve(issue.devStatus);
         }
 
-        var repoReq = $.ajax({
+        var repoReq = requestCache.cachedAjax({
             url: baseUrl + "/rest/dev-status/1.0/issue/detail",
             type: "GET",
             dataType: "json",
@@ -202,7 +202,7 @@ define("_ujgUA_repoApi", ["jquery", "_ujgCommon", "_ujgUA_config", "_ujgUA_utils
                 dataType: "repository"
             }
         });
-        var prReq = $.ajax({
+        var prReq = requestCache.cachedAjax({
             url: baseUrl + "/rest/dev-status/1.0/issue/detail",
             type: "GET",
             dataType: "json",

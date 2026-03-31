@@ -271,15 +271,17 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         });
     }
 
-    function render(dayMap, issueMap, selectedUsers, startDate, endDate) {
-        var data = buildWeeks(dayMap, issueMap, startDate, endDate);
-        var weeks = data.weeks;
-        var showSat = data.showSat;
-        var showSun = data.showSun;
-
+    function buildVisibleDays(showSat, showSun) {
         var visibleDays = [0, 1, 2, 3, 4];
         if (showSat) visibleDays.push(5);
         if (showSun) visibleDays.push(6);
+        return visibleDays;
+    }
+
+    function buildCalendarInnerHtml(dayMap, issueMap, selectedUsers, startDate, endDate) {
+        var data = buildWeeks(dayMap, issueMap, startDate, endDate);
+        var weeks = data.weeks;
+        var visibleDays = buildVisibleDays(data.showSat, data.showSun);
 
         var columnTotals = {};
         var vi, wi, dateStr, dayData, dayIdx;
@@ -296,10 +298,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             columnTotals[dayIdx] = Math.round(sum * 10) / 10;
         }
 
-        var selectedDate = null;
-        var selectCallback = null;
-
-        var html = '<div class="dashboard-card p-0 overflow-hidden"><div><table class="w-full table-fixed border-collapse text-[11px]"><colgroup>';
+        var html = '<div><table class="w-full table-fixed border-collapse text-[11px]"><colgroup>';
         for (vi = 0; vi < visibleDays.length; vi++) {
             html += "<col />";
         }
@@ -373,13 +372,17 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             html += '</td></tr>';
         }
 
-        html += '</tbody></table></div></div>';
+        html += '</tbody></table></div>';
+        return html;
+    }
 
-        var $el = $(html);
-
-        requestAnimationFrame(function() {
-            alignRowBorders($el.find("table"));
-        });
+    function render(dayMap, issueMap, selectedUsers, startDate, endDate) {
+        var currentDayMap = dayMap || {};
+        var currentIssueMap = issueMap || {};
+        var selectedUsersRef = selectedUsers || [];
+        var selectedDate = null;
+        var selectCallback = null;
+        var $el = $('<div class="dashboard-card p-0 overflow-hidden"></div>');
 
         function updateSelection(newDate) {
             $el.find("td[data-date]").removeClass("ring-2 ring-inset ring-primary bg-primary/5");
@@ -388,6 +391,22 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             }
             selectedDate = newDate;
         }
+
+        function repaint() {
+            $el.html(buildCalendarInnerHtml(currentDayMap, currentIssueMap, selectedUsersRef, startDate, endDate));
+            if (selectedDate) updateSelection(selectedDate);
+            requestAnimationFrame(function() {
+                alignRowBorders($el.find("table"));
+            });
+        }
+
+        function updateDayCell(dateStr, dayData, nextIssueMap) {
+            if (dateStr) currentDayMap[dateStr] = dayData || {};
+            if (nextIssueMap) currentIssueMap = nextIssueMap;
+            repaint();
+        }
+
+        repaint();
 
         $el.on("click", "td[data-date]", function() {
             var date = $(this).attr("data-date");
@@ -402,7 +421,8 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
         return {
             $el: $el,
-            onSelectDate: function(callback) { selectCallback = callback; }
+            onSelectDate: function(callback) { selectCallback = callback; },
+            updateDayCell: updateDayCell
         };
     }
 
