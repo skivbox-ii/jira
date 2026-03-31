@@ -2470,6 +2470,39 @@ test("processRepoActivity keeps source day keys for offset timestamps", function
     assert.equal(repoActivity.dayMap["2026-03-31"].items.length, 1);
 });
 
+test("processRepoActivity prefers string source day over numeric commit timestamp", function() {
+    var mod = loadRepoDataProcessor();
+    var shiftedMs = Date.parse("2026-03-30T23:30:00-02:00");
+    var repoActivity = mod.processRepoActivity(
+        {
+            "CORE-1": { key: "CORE-1", summary: "Timezone task", status: "In Progress" }
+        },
+        {
+            "CORE-1": {
+                detail: [{
+                    repositories: [{
+                        name: "core-api",
+                        commits: [{
+                            id: "mixed30",
+                            message: "Mixed timestamp commit",
+                            authorTimestamp: shiftedMs,
+                            date: "2026-03-30T23:30:00-02:00",
+                            author: { name: "tz-user", displayName: "Timezone User" }
+                        }]
+                    }]
+                }]
+            }
+        },
+        { name: "tz-user", displayName: "Timezone User" },
+        "2026-03-30",
+        "2026-03-31"
+    );
+
+    assert.equal(repoActivity.items.length, 1);
+    assert.equal(repoActivity.items[0].date, "2026-03-30");
+    assert.equal(repoActivity.dayMap["2026-03-30"].items.length, 1);
+});
+
 test("processRepoActivity matches multi-user selection passed as user objects array", function() {
     var mod = loadRepoDataProcessor();
     var repoActivity = mod.processRepoActivity(

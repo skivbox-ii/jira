@@ -101,6 +101,30 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         return normalizedDate ? utils.getDayKey(normalizedDate) : "";
     }
 
+    function pickSourceDateKey() {
+        var i;
+        var value;
+        var normalized;
+        var key;
+
+        for (i = 0; i < arguments.length; i++) {
+            value = arguments[i];
+            if (typeof value !== "string") continue;
+            normalized = normalizeTimestamp(value);
+            key = extractSourceDateKey(value, normalized);
+            if (key) return key;
+        }
+
+        for (i = 0; i < arguments.length; i++) {
+            value = arguments[i];
+            normalized = normalizeTimestamp(value);
+            key = extractSourceDateKey(value, normalized);
+            if (key) return key;
+        }
+
+        return "";
+    }
+
     function isDateKeyInRange(state, dateKey) {
         return !!dateKey && dateKey >= state.startDate && dateKey <= state.endDate;
     }
@@ -165,7 +189,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         var authorLike;
 
         if (!timestamp) return;
-        dateKey = extractSourceDateKey(rawTimestamp, timestamp);
+        dateKey = item.sourceDateKey || extractSourceDateKey(rawTimestamp, timestamp);
         if (dateKey) {
             if (!isDateKeyInRange(state, dateKey)) return;
         } else if (timestamp.getTime() < state.startMs || timestamp.getTime() > state.endMs) {
@@ -223,6 +247,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
             pushEvent(state, {
                 type: "commit",
                 timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
+                sourceDateKey: pickSourceDateKey(commit.date, commit.authorTimestamp, commit.commitTimestamp),
                 issueKey: issueKey,
                 issueSummary: issueInfo.summary || "",
                 issueStatus: issueInfo.status || "",
@@ -351,6 +376,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
         pushEvent(state, {
             type: "repository_update",
             timestamp: getActivityTimestamp(repo),
+            sourceDateKey: pickSourceDateKey(repo.updatedDate, repo.lastUpdated, repo.lastUpdatedDate, repo.createdDate, repo.date, repo.timestamp),
             issueKey: issueKey,
             issueSummary: issueInfo.summary || "",
             issueStatus: issueInfo.status || "",
@@ -398,6 +424,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 pushEvent(state, {
                     type: "unknown_dev_event",
                     timestamp: getActivityTimestamp(item),
+                    sourceDateKey: pickSourceDateKey(item.updatedDate, item.lastUpdated, item.lastUpdatedDate, item.createdDate, item.date, item.timestamp),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
                     issueStatus: issueInfo.status || "",
@@ -424,6 +451,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 pushEvent(state, {
                     type: "pull_request_opened",
                     timestamp: pr.createdDate || pr.created || pr.openedDate,
+                    sourceDateKey: pickSourceDateKey(pr.createdDate, pr.created, pr.openedDate),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
                     issueStatus: issueInfo.status || "",
@@ -444,6 +472,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     pushEvent(state, {
                         type: "pull_request_merged",
                         timestamp: pr.mergedDate || pr.completedDate || pr.closedDate,
+                        sourceDateKey: pickSourceDateKey(pr.mergedDate, pr.completedDate, pr.closedDate),
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
                         issueStatus: issueInfo.status || "",
@@ -463,6 +492,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     pushEvent(state, {
                         type: "pull_request_declined",
                         timestamp: pr.closedDate || pr.declinedDate || pr.updatedDate,
+                        sourceDateKey: pickSourceDateKey(pr.closedDate, pr.declinedDate, pr.updatedDate, pr.updated, pr.lastUpdated),
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
                         issueStatus: issueInfo.status || "",
@@ -484,6 +514,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                     pushEvent(state, {
                         type: "repository_update",
                         timestamp: pr.updatedDate || pr.updated || pr.lastUpdated,
+                        sourceDateKey: pickSourceDateKey(pr.updatedDate, pr.updated, pr.lastUpdated, pr.createdDate, pr.created),
                         issueKey: issueKey,
                         issueSummary: issueInfo.summary || "",
                         issueStatus: issueInfo.status || "",
@@ -512,6 +543,12 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                         ? "pull_request_needs_work"
                         : "pull_request_reviewed",
                     timestamp: extractReviewerTimestamp(reviewer),
+                    sourceDateKey: pickSourceDateKey(
+                        reviewer.lastReviewedDate,
+                        reviewer.approvedDate,
+                        reviewer.updatedDate,
+                        reviewer.reviewedDate
+                    ),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
                     issueStatus: issueInfo.status || "",
@@ -544,6 +581,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 pushEvent(state, {
                     type: "branch_update",
                     timestamp: branch.lastUpdated || branch.lastUpdatedDate || branch.createdDate || branch.date,
+                    sourceDateKey: pickSourceDateKey(branch.lastUpdated, branch.lastUpdatedDate, branch.createdDate, branch.date),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
                     issueStatus: issueInfo.status || "",
@@ -562,6 +600,7 @@ define("_ujgUA_repoDataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(c
                 pushEvent(state, {
                     type: "branch_commit",
                     timestamp: commit.authorTimestamp || commit.commitTimestamp || commit.date,
+                    sourceDateKey: pickSourceDateKey(commit.date, commit.authorTimestamp, commit.commitTimestamp),
                     issueKey: issueKey,
                     issueSummary: issueInfo.summary || "",
                     issueStatus: issueInfo.status || "",
