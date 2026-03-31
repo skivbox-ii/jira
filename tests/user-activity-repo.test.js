@@ -971,6 +971,107 @@ test("user-activity team sync: manual user list mismatch clears team union match
     );
 });
 
+test("user-activity team sync: manual picker change clears selected teams in rendering", function() {
+    var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
+    var jqStub = createRenderingJqueryStub(docStub);
+    var mod = loadRendering(jqStub.$, {}, docStub);
+    var selectedUsers = [];
+    var teamPickerSelected = [];
+    var teamPickerSetCalls = [];
+    var teamPickerChange = null;
+    var pickerOnChange = null;
+
+    function resolvedAlways(value) {
+        var d = createDeferred();
+        d.always = function(handler) {
+            d.done(handler);
+            d.fail(handler);
+            return d;
+        };
+        d.resolve(value);
+        return d.promise();
+    }
+
+    mod.init(jqStub.createNode("root"), {
+        multiUserPicker: {
+            create: function(_, onChange) {
+                pickerOnChange = onChange;
+                return {
+                    $el: jqStub.createNode("MultiUserPicker"),
+                    setFromUrl: function() {
+                        return resolvedAlways();
+                    },
+                    getSelectedUsers: function() {
+                        return normalize(selectedUsers);
+                    },
+                    setSelectedUsers: function(nextUsers, options) {
+                        selectedUsers = normalize(nextUsers || []);
+                        onChange(normalize(selectedUsers), normalize(options || {}));
+                    }
+                };
+            }
+        },
+        dateRangePicker: {
+            create: function(onChange) {
+                var period = { start: "2026-03-01", end: "2026-03-31" };
+                if (onChange) onChange(period);
+                return {
+                    $el: jqStub.createNode("DateRangePicker"),
+                    getPeriod: function() {
+                        return period;
+                    }
+                };
+            }
+        },
+        teamStore: {
+            loadTeams: function() {
+                return resolvedAlways([{ id: "team-1", memberKeys: ["u1", "u2"] }]);
+            },
+            getTeams: function() {
+                return [{ id: "team-1", memberKeys: ["u1", "u2"] }];
+            },
+            getDisplayNameByKey: function() {
+                return { u1: "User 1", u2: "User 2", u3: "User 3" };
+            }
+        },
+        teamPicker: {
+            create: function(options) {
+                teamPickerChange = function(nextIds) {
+                    teamPickerSelected = normalize(nextIds || []);
+                    options.onChange(nextIds);
+                };
+                teamPickerSelected = normalize(options.selectedTeamIds || []);
+                return {
+                    $el: jqStub.createNode("TeamPicker"),
+                    setSelectedTeamIds: function(nextIds, callOptions) {
+                        teamPickerSelected = normalize(nextIds || []);
+                        teamPickerSetCalls.push({
+                            ids: normalize(nextIds || []),
+                            options: normalize(callOptions || {})
+                        });
+                    },
+                    destroy: function() {}
+                };
+            }
+        }
+    });
+
+    teamPickerChange(["team-1"]);
+    assert.deepEqual(teamPickerSelected, ["team-1"]);
+    assert.deepEqual(normalize(selectedUsers), [
+        { name: "u1", displayName: "User 1", key: "u1" },
+        { name: "u2", displayName: "User 2", key: "u2" }
+    ]);
+
+    pickerOnChange([{ name: "u3", displayName: "User 3", key: "u3" }], { source: "manual" });
+
+    assert.deepEqual(teamPickerSelected, []);
+    assert.deepEqual(teamPickerSetCalls, [{
+        ids: [],
+        options: { silent: true }
+    }]);
+});
+
 test("user-activity team sync: URL teams param derives users", function() {
     var docStub = { __node: { label: "document", children: [], slots: {}, handlers: {} } };
     var jqStub = createRenderingJqueryStub(docStub);
