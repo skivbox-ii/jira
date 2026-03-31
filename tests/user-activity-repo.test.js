@@ -182,6 +182,17 @@ test("user-activity utils: issue link normalizes extra attrs", function() {
     );
 });
 
+test("user-activity utils: issue link escapes object attrs", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    assert.equal(
+        utils.renderIssueLink("ABC-123", null, { class: 'foo" onclick="x' }),
+        '<a href="https://jira.example.com/browse/ABC-123" target="_blank" rel="noopener noreferrer" class="foo&quot; onclick=&quot;x">ABC-123</a>'
+    );
+});
+
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
     var captured = [];
     var $ = createJqueryStub(function(options) {
@@ -2640,6 +2651,34 @@ test("unified calendar repo line shows issue link status badge and summary meta"
     assert.match(html, /ujg-ua-inline-status/);
     assert.match(html, /In Progress/);
     assert.match(html, /Different summary text for task/);
+});
+
+test("unified calendar repo line keeps status without issue key and no dangling gap", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 0,
+            allWorklogs: [],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Repo Dev",
+                issueStatus: "Blocked",
+                message: "Refactor escape path"
+            }]
+        }
+    };
+    var users = [{ name: "u1", displayName: "User One" }];
+    var out = mod.render(dayMap, {}, users, start, end);
+    var html = out.$el.html();
+
+    assert.match(html, /<span class="ujg-ua-inline-status">Blocked<\/span>/);
+    assert.match(html, /Repo<\/span> <span class="ujg-ua-inline-status">Blocked<\/span> <span class="text-\[9px\] text-muted-foreground ujg-ua-repo-msg">Refactor escape path<\/span>/);
+    assert.doesNotMatch(html, /Repo<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
 });
 
 test("activity log renders issue link in column and expanded issue link", function() {

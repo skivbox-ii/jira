@@ -882,10 +882,25 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + encodeURIComponent(key);
     }
 
+    function normalizeLinkAttrs(extraAttrs) {
+        if (extraAttrs == null) return "";
+        if (typeof extraAttrs === "string") return String(extraAttrs).trim();
+        if (typeof extraAttrs !== "object") return String(extraAttrs).trim();
+
+        return Object.keys(extraAttrs).map(function(name) {
+            if (!Object.prototype.hasOwnProperty.call(extraAttrs, name)) return "";
+            if (!/^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/.test(name)) return "";
+            var value = extraAttrs[name];
+            if (value == null || value === false) return "";
+            if (value === true) return name;
+            return name + '="' + escapeHtml(String(value)) + '"';
+        }).filter(Boolean).join(" ");
+    }
+
     function renderIssueLink(issueKey, label, extraAttrs) {
         var url = buildIssueUrl(issueKey);
         var text = label != null ? String(label) : String(issueKey || "");
-        var attrs = extraAttrs == null ? "" : String(extraAttrs).trim();
+        var attrs = normalizeLinkAttrs(extraAttrs);
         if (!url) return escapeHtml(text);
         return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
             (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
@@ -4077,7 +4092,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    utils.renderIssueLink(w.issueKey, w.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"') + " " +
+                    utils.renderIssueLink(w.issueKey, w.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
@@ -4091,7 +4108,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    utils.renderIssueLink(c.issueKey, c.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"') + " " +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
@@ -4103,7 +4122,9 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    utils.renderIssueLink(c.issueKey, c.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"') + " " +
+                    utils.renderIssueLink(c.issueKey, c.issueKey, {
+                        class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                    }) + " " +
                     '<span class="text-[9px]">💬</span>' +
                     '</div>'
             });
@@ -4136,26 +4157,25 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             else if (type === "branch") icon = "🟡";
             else icon = "●";
 
-            html += '<div class="ujg-ua-repo-line">';
-            html += '<span class="ujg-ua-time">' + time + '</span> ';
-            html += icon + ' ';
+            var parts = ['<span class="ujg-ua-time">' + time + "</span>", icon];
             if (item.authorName || (item.author && item.author.displayName)) {
-                html += '<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + '</span> ';
+                parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(surname(item.authorName || (item.author && item.author.displayName) || "")) + "</span>");
             }
             if (item.issueKey) {
-                html += utils.renderIssueLink(item.issueKey, item.issueKey, ' class="text-[10px] font-semibold text-primary ujg-ua-issue-key"');
-                if (item.issueStatus) {
-                    html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(item.issueStatus) + "</span>";
-                }
-                html += " ";
+                parts.push(utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "text-[10px] font-semibold text-primary ujg-ua-issue-key"
+                }));
+            }
+            if (item.issueStatus) {
+                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(item.issueStatus) + "</span>");
             }
             var repoMsg = item.message || item.title || item.name || "";
-            html += '<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg">' + utils.escapeHtml(utils.truncate(repoMsg, 50)) + '</span>';
+            parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg">' + utils.escapeHtml(utils.truncate(repoMsg, 50)) + "</span>");
             if (item.issueSummary && String(item.issueSummary) !== String(repoMsg)) {
-                html += ' <span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary">' +
-                    utils.escapeHtml(utils.truncate(item.issueSummary, 60)) + "</span>";
+                parts.push('<span class="text-[9px] text-muted-foreground/80 ujg-ua-repo-summary">' +
+                    utils.escapeHtml(utils.truncate(item.issueSummary, 60)) + "</span>");
             }
-            html += '</div>';
+            html += '<div class="ujg-ua-repo-line">' + parts.join(" ") + "</div>";
         }
         html += '</div>';
         return html;
@@ -4750,7 +4770,9 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[140px]" title="' + utils.escapeHtml(r.author || "") + '">' + utils.escapeHtml(r.author || "") + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold text-primary">' + utils.escapeHtml(r.project) + '</span></td>' +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono font-medium text-foreground">' +
-                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, ' class="text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"') : "") +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                                class: "text-[11px] font-mono font-medium text-foreground ujg-ua-issue-key"
+                            }) : "") +
                             "</td>" +
                         '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground truncate max-w-[200px]">' + utils.escapeHtml(r.summary) + '</td>' +
                         '<td class="h-[20px] px-1.5 py-0"><span class="text-[10px] font-semibold px-1 py-0 rounded ' + actionCls + '">' + utils.escapeHtml(r.action) + '</span></td>' +
@@ -4763,7 +4785,9 @@ define("_ujgUA_activityLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                     html +=
                         '<tr class="bg-muted/20"><td colspan="10" class="px-3 py-2"><div class="text-[11px] space-y-1">' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Задача:</span>' +
-                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, ' class="font-mono font-semibold text-primary ujg-ua-issue-key"') : '<span class="font-mono font-semibold text-primary">-</span>') +
+                            (r.issueKey ? utils.renderIssueLink(r.issueKey, r.issueKey, {
+                                class: "font-mono font-semibold text-primary ujg-ua-issue-key"
+                            }) : '<span class="font-mono font-semibold text-primary">-</span>') +
                             '<span class="text-foreground">' + utils.escapeHtml(r.summary) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Проект:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.project) + '</span></div>' +
                             '<div class="flex gap-4 flex-wrap"><span class="text-muted-foreground">Тип:</span><span class="font-semibold text-foreground">' + utils.escapeHtml(r.action) + '</span></div>' +
@@ -4958,7 +4982,9 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
         details += '<div><span class="text-muted-foreground">' + UI.branch + ':</span> <span class="text-foreground">' + escapeHtml(item.branchName || "-") + '</span></div>';
         details += '<div><span class="text-muted-foreground">' + UI.issue + ':</span> ' +
             (item.issueKey
-                ? utils.renderIssueLink(item.issueKey, item.issueKey, ' class="font-mono text-foreground ujg-ua-issue-key"')
+                ? utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "font-mono text-foreground ujg-ua-issue-key"
+                })
                 : '<span class="font-mono text-foreground">-</span>') +
             "</div>";
         details += '<div><span class="text-muted-foreground">' + UI.author + ':</span> <span class="text-foreground">' + escapeHtml(item.author || "-") + '</span></div>';
@@ -5011,7 +5037,9 @@ define("_ujgUA_repoLog", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-semibold text-primary">' + escapeHtml(item.repoName || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground">' + escapeHtml(item.branchName || "") + "</td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] font-mono text-foreground">' +
-                (item.issueKey ? utils.renderIssueLink(item.issueKey, item.issueKey, ' class="text-[11px] font-mono text-foreground ujg-ua-issue-key"') : "") +
+                (item.issueKey ? utils.renderIssueLink(item.issueKey, item.issueKey, {
+                    class: "text-[11px] font-mono text-foreground ujg-ua-issue-key"
+                }) : "") +
                 "</td>";
             html += '<td class="h-[20px] px-1.5 py-0"><span class="rounded px-1 py-0 text-[10px] font-semibold bg-accent text-accent-foreground">' + escapeHtml(getTypeLabel(item.type)) + "</span></td>";
             html += '<td class="h-[20px] px-1.5 py-0 text-[11px] text-foreground max-w-[280px] truncate">' + escapeHtml(getDescription(item)) + "</td>";

@@ -76,10 +76,25 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return getJiraBaseUrl().replace(/\/$/, "") + "/browse/" + encodeURIComponent(key);
     }
 
+    function normalizeLinkAttrs(extraAttrs) {
+        if (extraAttrs == null) return "";
+        if (typeof extraAttrs === "string") return String(extraAttrs).trim();
+        if (typeof extraAttrs !== "object") return String(extraAttrs).trim();
+
+        return Object.keys(extraAttrs).map(function(name) {
+            if (!Object.prototype.hasOwnProperty.call(extraAttrs, name)) return "";
+            if (!/^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/.test(name)) return "";
+            var value = extraAttrs[name];
+            if (value == null || value === false) return "";
+            if (value === true) return name;
+            return name + '="' + escapeHtml(String(value)) + '"';
+        }).filter(Boolean).join(" ");
+    }
+
     function renderIssueLink(issueKey, label, extraAttrs) {
         var url = buildIssueUrl(issueKey);
         var text = label != null ? String(label) : String(issueKey || "");
-        var attrs = extraAttrs == null ? "" : String(extraAttrs).trim();
+        var attrs = normalizeLinkAttrs(extraAttrs);
         if (!url) return escapeHtml(text);
         return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"' +
             (attrs ? " " + attrs : "") + ">" + escapeHtml(text) + "</a>";
