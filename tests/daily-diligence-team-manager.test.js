@@ -433,6 +433,41 @@ test("shared team-picker supports custom labels and destroy detaches document li
     assert.equal($wrap.find(".ujg-st-team-picker").length, 0);
 });
 
+test("shared team-picker multi mode shows chips and count like user picker", function() {
+    var $ = enrichMiniJquery(createMiniJquery());
+    var pickerMod = loadTeamPicker($, { document: createFakeDocument() });
+    var $wrap = $("<div/>");
+    var picker = pickerMod.create({
+        mode: "multi",
+        teams: [
+            { id: "a", name: "Alpha", memberKeys: ["u1"] },
+            { id: "b", name: "Beta", memberKeys: ["u2"] }
+        ],
+        selectedTeamIds: ["a"],
+        $container: $wrap
+    });
+
+    assert.equal($wrap.find(".ujg-st-team-picker-trigger").text(), "Alpha");
+
+    picker.openPanel();
+    assert.equal($wrap.find(".ujg-st-team-picker-chip").length, 1);
+    assert.equal($wrap.find(".ujg-st-team-picker-chip").eq(0)[0].children[0].textContent, "Alpha");
+
+    var $cb1 = $wrap.find(".ujg-st-team-picker-cb").eq(1);
+    $cb1.prop("checked", true);
+    $cb1[0].dispatchEvent({ type: "change", bubbles: true });
+
+    assert.equal(JSON.stringify(picker.getSelectedTeamIds().slice().sort()), JSON.stringify(["a", "b"]));
+    assert.equal($wrap.find(".ujg-st-team-picker-trigger").text(), "2 выбрано");
+    assert.equal($wrap.find(".ujg-st-team-picker-chip").length, 2);
+
+    $wrap.find(".ujg-st-team-picker-chip-remove").eq(0)[0].dispatchEvent({ type: "click", bubbles: true });
+
+    assert.equal(JSON.stringify(picker.getSelectedTeamIds()), JSON.stringify(["b"]));
+    assert.equal($wrap.find(".ujg-st-team-picker-trigger").text(), "Beta");
+    assert.equal($wrap.find(".ujg-st-team-picker-chip").length, 1);
+});
+
 test("detectDashboardId reads selectPageId from URL or AJS.params", function() {
     var ls = makeLocalStorage();
     var jq = createJqueryStub(function() {

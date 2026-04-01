@@ -480,6 +480,32 @@ define(moduleId, ["jquery"], function($) {
     "use strict";
 
     var nextPickerId = 1;
+    var stylesInjected = false;
+    var TEAM_PICKER_STYLES = [
+        ".ujg-st-team-picker { position: relative; display: inline-block; vertical-align: middle; }",
+        ".ujg-st-team-picker-trigger { min-width: 120px; max-width: 220px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+        ".ujg-st-team-picker-panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 1000; background: #fff; border: 1px solid #dfe1e6; border-radius: 6px; box-shadow: 0 8px 24px rgba(9,30,66,.16); min-width: 280px; max-width: 360px; padding: 8px; }",
+        ".ujg-st-team-picker-selected { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; min-height: 20px; }",
+        ".ujg-st-team-picker-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; margin: 1px 0; background: #deebff; color: #0747a6; border-radius: 999px; font-size: 12px; line-height: 1.4; }",
+        ".ujg-st-team-picker-chip-remove { border: none; background: none; cursor: pointer; font-size: 14px; color: #42526e; padding: 0 2px; line-height: 1; }",
+        ".ujg-st-team-picker-chip-remove:hover { color: #de350b; }",
+        ".ujg-st-team-picker-actions { display: flex; justify-content: flex-end; margin-bottom: 6px; }",
+        ".ujg-st-team-picker-list { max-height: 260px; overflow: auto; }",
+        ".ujg-st-team-picker-row { display: flex; align-items: center; gap: 6px; padding: 4px 2px; border-radius: 4px; }",
+        ".ujg-st-team-picker-row:hover { background: #f4f5f7; }"
+    ].join("\n");
+
+    function injectStyles() {
+        if (stylesInjected) return;
+        stylesInjected = true;
+        if (typeof document === "undefined" || !document || !document.createElement || !document.head || !document.head.appendChild) {
+            return;
+        }
+        var styleEl = document.createElement("style");
+        styleEl.type = "text/css";
+        styleEl.appendChild(document.createTextNode(TEAM_PICKER_STYLES));
+        document.head.appendChild(styleEl);
+    }
 
     function teamById(teams, id) {
         for (var i = 0; i < teams.length; i++) {
@@ -488,17 +514,9 @@ define(moduleId, ["jquery"], function($) {
         return null;
     }
 
-    function teamsCountLabel(n) {
-        var z = n % 100;
-        var m = n % 10;
-        if (n === 0) return "0 команд";
-        if (z >= 11 && z <= 14) return n + " команд";
-        if (m === 1) return n === 1 ? "1 команда" : n + " команда";
-        if (m >= 2 && m <= 4) return n + " команды";
-        return n + " команд";
-    }
-
     function create(options) {
+        injectStyles();
+
         function normalizeTeamsInput(list) {
             if (!Array.isArray(list)) return [];
             return list.slice();
@@ -531,13 +549,14 @@ define(moduleId, ["jquery"], function($) {
             .addClass("aui-button ujg-st-team-picker-trigger");
         var $panel = $("<div/>").addClass("ujg-st-team-picker-panel");
         $panel.hide();
+        var $selected = $("<div/>").addClass("ujg-st-team-picker-selected");
         var $actions = $("<div/>").addClass("ujg-st-team-picker-actions");
         var $btnReset = $("<button type=\"button\"/>")
             .addClass("aui-button aui-button-link ujg-st-team-picker-reset")
             .text("Сбросить");
         var $list = $("<div/>").addClass("ujg-st-team-picker-list");
         $actions.append($btnReset);
-        $panel.append($actions, $list);
+        $panel.append($selected, $actions, $list);
         $root.append($trigger, $panel);
 
         if (options.$container && options.$container.length) {
@@ -579,7 +598,7 @@ define(moduleId, ["jquery"], function($) {
                     var one = teamById(teams, selected[0]);
                     $trigger.text(formatTeamLabel(one || { id: selected[0] }, "trigger"));
                 } else {
-                    $trigger.text(teamsCountLabel(n));
+                    $trigger.text(n + " выбрано");
                 }
             }
         }
@@ -588,8 +607,53 @@ define(moduleId, ["jquery"], function($) {
             onChange(selected.slice());
         }
 
+        function readNodeAttr($node, node, name) {
+            var value = $node && typeof $node.attr === "function" ? $node.attr(name) : undefined;
+            if ((value == null || value === "") && node && typeof node.getAttribute === "function") {
+                value = node.getAttribute(name);
+            }
+            if ((value == null || value === "") && node && node._attrs) {
+                value = node._attrs[name];
+            }
+            return value == null ? "" : String(value);
+        }
+
+        function renderSelectedChips() {
+            $selected.empty();
+            if (mode === "single") {
+                $selected.hide();
+                return;
+            }
+            for (var i = 0; i < selected.length; i++) {
+                var id = selected[i];
+                var team = teamById(teams, id) || { id: id };
+                var $chip = $("<span/>").addClass("ujg-st-team-picker-chip");
+                $chip.append($("<span/>").text(formatTeamLabel(team, "selected")));
+                var $remove = $("<button type=\"button\"/>")
+                    .addClass("ujg-st-team-picker-chip-remove")
+                    .attr("data-team-id", id)
+                    .attr("aria-label", "Удалить команду")
+                    .text("\u00d7");
+                (function(teamId) {
+                    $remove.on("click", function(e) {
+                        e.stopPropagation();
+                        var idx = selected.indexOf(teamId);
+                        if (idx < 0) return;
+                        selected.splice(idx, 1);
+                        renderList();
+                        notify();
+                    });
+                }(id));
+                $chip.append($remove);
+                $selected.append($chip);
+            }
+            if (selected.length) $selected.show();
+            else $selected.hide();
+        }
+
         function renderList() {
             $list.empty();
+            renderSelectedChips();
             var name = "ujg-st-tp-" + pickerId;
             for (var i = 0; i < teams.length; i++) {
                 var t = teams[i];
@@ -670,7 +734,7 @@ define(moduleId, ["jquery"], function($) {
         });
 
         $root.on("change", ".ujg-st-team-picker-cb", function() {
-            var tid = $(this).attr("data-team-id");
+            var tid = readNodeAttr($(this), this, "data-team-id");
             var on = $(this).prop("checked");
             var idx = selected.indexOf(tid);
             if (on && idx < 0) {
@@ -678,14 +742,16 @@ define(moduleId, ["jquery"], function($) {
             } else if (!on && idx >= 0) {
                 selected.splice(idx, 1);
             }
+            renderSelectedChips();
             updateTriggerText();
             notify();
         });
 
         $root.on("change", ".ujg-st-team-picker-radio", function() {
-            var tid = $(this).attr("data-team-id");
+            var tid = readNodeAttr($(this), this, "data-team-id");
             if ($(this).prop("checked")) {
                 selected = tid ? [tid] : [];
+                renderSelectedChips();
                 updateTriggerText();
                 notify();
             }
@@ -700,6 +766,7 @@ define(moduleId, ["jquery"], function($) {
 
         if (mode === "single") {
             $btnReset.remove();
+            $selected.remove();
         }
 
         updateTriggerText();
@@ -1300,8 +1367,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
             };
         }
 
-        var workedDayStart = parseDate(workedDayKey + "T00:00:00");
-        var lagDurationHoursRaw = workedDayStart ? Math.max(0, (createdDt.getTime() - workedDayStart.getTime()) / 3600000) : 0;
+        var workedDayBoundary = parseDate(workedDayKey + "T00:00:00");
+        if (workedDayBoundary) workedDayBoundary.setDate(workedDayBoundary.getDate() + 1);
+        var lagDurationHoursRaw = workedDayBoundary ? Math.max(0, (createdDt.getTime() - workedDayBoundary.getTime()) / 3600000) : 0;
         var lagScoreHours = lagDurationHoursRaw * (Number(spentHours || 0) / 24);
 
         return {
@@ -1317,6 +1385,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         var total = Math.max(0, Number(hours || 0));
         var days = Math.floor(total / 24);
         var restHours = Math.floor(total - days * 24);
+        if (days <= 0) return restHours + "ч";
+        if (restHours <= 0) return days + "д";
         return days + "д " + restHours + "ч";
     }
 
