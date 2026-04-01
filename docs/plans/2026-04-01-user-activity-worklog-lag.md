@@ -34,12 +34,12 @@ test("user-activity utils: computes worklog lag score from started and created",
         AJS: { params: { baseURL: "" } }
     });
 
-    var meta = utils.getWorklogLagMeta("2026-04-02T09:00:00.000Z", "2026-04-03T16:06:00.000Z", 4);
+    var meta = utils.getWorklogLagMeta("2026-04-25T09:00:00", "2026-04-26T08:00:00", 4);
 
-    assert.equal(meta.workedDayKey, "2026-04-02");
+    assert.equal(meta.workedDayKey, "2026-04-25");
     assert.equal(meta.isLate, true);
-    assert.equal(Math.round(meta.lagDurationHoursRaw * 10) / 10, 40.1);
-    assert.equal(Math.round(meta.lagScoreHours * 100) / 100, 6.68);
+    assert.equal(Math.round(meta.lagDurationHoursRaw * 10) / 10, 8);
+    assert.equal(Math.round(meta.lagScoreHours * 100) / 100, 1.33);
 });
 ```
 
@@ -53,8 +53,8 @@ test("user activity data processor preserves worklog created timestamp and lag f
         details: {
             "CORE-1": {
                 worklogs: [{
-                    started: "2026-04-02T09:00:00.000Z",
-                    created: "2026-04-03T16:06:00.000Z",
+                    started: "2026-04-25T09:00:00",
+                    created: "2026-04-26T08:00:00",
                     timeSpentSeconds: 14400,
                     comment: "late log",
                     author: { name: "u1", displayName: "Ivan Ivanov" }
@@ -64,14 +64,14 @@ test("user activity data processor preserves worklog created timestamp and lag f
         }
     };
 
-    var single = mod.processData(rawData, "u1", "2026-04-01", "2026-04-07");
-    var wl = single.dayMap["2026-04-02"].worklogs[0];
+    var single = mod.processData(rawData, "u1", "2026-04-24", "2026-04-30");
+    var wl = single.dayMap["2026-04-25"].worklogs[0];
 
-    assert.equal(wl.created, "2026-04-03T16:06:00.000Z");
-    assert.equal(wl.loggedAt, "2026-04-03T16:06:00.000Z");
-    assert.equal(wl.workedDayKey, "2026-04-02");
+    assert.equal(wl.created, "2026-04-26T08:00:00");
+    assert.equal(wl.loggedAt, "2026-04-26T08:00:00");
+    assert.equal(wl.workedDayKey, "2026-04-25");
     assert.equal(wl.isLate, true);
-    assert.equal(Math.round(wl.lagScoreHours * 100) / 100, 6.68);
+    assert.equal(Math.round(wl.lagScoreHours * 100) / 100, 1.33);
 });
 ```
 
@@ -97,12 +97,13 @@ function getWorklogLagMeta(started, created, spentHours) {
     if (createdDayKey === workedDayKey) {
         return { workedDayKey: workedDayKey, loggedAt: created, isLate: false, lagDurationHoursRaw: 0, lagScoreHours: 0 };
     }
-    var workedDayStart = new Date(workedDayKey + "T00:00:00");
-    var lagDurationHoursRaw = Math.max(0, (createdDt.getTime() - workedDayStart.getTime()) / 3600000);
+    var workedDayBoundary = new Date(workedDayKey + "T00:00:00");
+    workedDayBoundary.setDate(workedDayBoundary.getDate() + 1);
+    var lagDurationHoursRaw = Math.max(0, (createdDt.getTime() - workedDayBoundary.getTime()) / 3600000);
     return {
         workedDayKey: workedDayKey,
         loggedAt: created,
-        isLate: true,
+        isLate: lagDurationHoursRaw > 0,
         lagDurationHoursRaw: lagDurationHoursRaw,
         lagScoreHours: lagDurationHoursRaw * (Number(spentHours || 0) / 24)
     };
@@ -113,11 +114,12 @@ function getWorklogLagMeta(started, created, spentHours) {
 
 ```js
 function formatLagDurationHours(hours) {
-    var totalMinutes = Math.max(0, Math.round(Number(hours || 0) * 60));
-    var days = Math.floor(totalMinutes / (24 * 60));
-    var restMinutes = totalMinutes - days * 24 * 60;
-    var wholeHours = Math.floor(restMinutes / 60);
-    return days + "д " + wholeHours + "ч";
+    var total = Math.max(0, Number(hours || 0));
+    var days = Math.floor(total / 24);
+    var restHours = Math.floor(total - days * 24);
+    if (days <= 0) return restHours + "ч";
+    if (restHours <= 0) return days + "д";
+    return days + "д " + restHours + "ч";
 }
 ```
 
@@ -182,14 +184,14 @@ test("day detail worklog shows worked day loggedAt and late marker", function() 
     loadDailyDetail($stub).create().show("2026-04-02", {
         worklogs: [{
             issueKey: "LAG-1",
-            timestamp: "2026-04-02T09:00:00.000Z",
-            started: "2026-04-02T09:00:00.000Z",
-            created: "2026-04-03T16:06:00.000Z",
+            timestamp: "2026-04-02T09:00:00",
+            started: "2026-04-02T09:00:00",
+            created: "2026-04-03T08:00:00",
             workedDayKey: "2026-04-02",
-            loggedAt: "2026-04-03T16:06:00.000Z",
+            loggedAt: "2026-04-03T08:00:00",
             isLate: true,
-            lagDurationHoursRaw: 40.1,
-            lagScoreHours: 6.68,
+            lagDurationHoursRaw: 8,
+            lagScoreHours: 1.33,
             author: { displayName: "Ivan Ivanov" },
             timeSpentHours: 4
         }]
@@ -199,8 +201,8 @@ test("day detail worklog shows worked day loggedAt and late marker", function() 
 
     assert.match(html, /Worklog 4ч/);
     assert.match(html, /за 02\.04/);
-    assert.match(html, /внесено 03\.04 16:06/);
-    assert.match(html, /отставание 1д 16ч/);
+    assert.match(html, /внесено 03\.04 08:00/);
+    assert.match(html, /отставание 8ч/);
 });
 ```
 
@@ -215,14 +217,14 @@ test("unified calendar worklog shows late marker for not same-day logging", func
             users: { u1: { totalHours: 4 } },
             allWorklogs: [{
                 issueKey: "LAG-1",
-                timestamp: "2026-04-02T09:00:00.000Z",
-                started: "2026-04-02T09:00:00.000Z",
-                created: "2026-04-03T16:06:00.000Z",
+                timestamp: "2026-04-02T09:00:00",
+                started: "2026-04-02T09:00:00",
+                created: "2026-04-03T08:00:00",
                 workedDayKey: "2026-04-02",
-                loggedAt: "2026-04-03T16:06:00.000Z",
+                loggedAt: "2026-04-03T08:00:00",
                 isLate: true,
-                lagDurationHoursRaw: 40.1,
-                lagScoreHours: 6.68,
+                lagDurationHoursRaw: 8,
+                lagScoreHours: 1.33,
                 author: { name: "u1", displayName: "Ivan Ivanov" },
                 timeSpentHours: 4
             }],
@@ -236,8 +238,8 @@ test("unified calendar worklog shows late marker for not same-day logging", func
 
     var html = out.$el.html();
     assert.match(html, /за 02\.04/);
-    assert.match(html, /внесено 03\.04 16:06/);
-    assert.match(html, /отставание 1д 16ч/);
+    assert.match(html, /внесено 03\.04 08:00/);
+    assert.match(html, /отставание 8ч/);
     assert.match(html, /ujg-ua-worklog-late/);
 });
 ```
@@ -266,7 +268,7 @@ if (action.isLate) {
 В `utils.js` добавить два маленьких format-helper:
 
 - `formatDayMonth("2026-04-02") -> "02.04"`
-- `formatDayMonthTime("2026-04-03T16:06:00.000Z") -> "03.04 16:06"`
+- `formatDayMonthTime("2026-04-03T08:00:00") -> "03.04 08:00"`
 
 В `config.js` добавить только минимальные стили:
 
@@ -314,8 +316,8 @@ test("user activity multi-user stats sums lagScoreHours per user", function() {
                 details: {
                     "LAG-1": {
                         worklogs: [{
-                            started: "2026-04-02T09:00:00.000Z",
-                            created: "2026-04-03T16:06:00.000Z",
+                            started: "2026-04-25T09:00:00",
+                            created: "2026-04-26T08:00:00",
                             timeSpentSeconds: 14400,
                             author: { name: "u1", displayName: "Ivan Ivanov" }
                         }],
@@ -325,9 +327,9 @@ test("user activity multi-user stats sums lagScoreHours per user", function() {
             },
             comments: {}
         }
-    ], "2026-04-01", "2026-04-07");
+    ], "2026-04-24", "2026-04-30");
 
-    assert.equal(Math.round(data.stats.userStats.u1.lagScoreHours * 100) / 100, 6.68);
+    assert.equal(Math.round(data.stats.userStats.u1.lagScoreHours * 100) / 100, 1.33);
 });
 ```
 
@@ -340,7 +342,7 @@ test("unified calendar weekly lag table shows per-user lag totals", function() {
 
     assert.match(html, /Суммарное отставание/);
     assert.match(html, /Ivan Ivanov/);
-    assert.match(html, /6\.7ч/);
+    assert.match(html, /1\.3ч/);
 });
 ```
 

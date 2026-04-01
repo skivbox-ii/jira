@@ -437,12 +437,38 @@ test("user-activity utils: computes worklog lag score from started and created",
         AJS: { params: { baseURL: "" } }
     });
 
-    var meta = utils.getWorklogLagMeta("2026-04-02T09:00:00", "2026-04-03T16:06:00", 4);
+    var meta = utils.getWorklogLagMeta("2026-04-25T09:00:00", "2026-04-26T08:00:00", 4);
 
-    assert.equal(meta.workedDayKey, "2026-04-02");
+    assert.equal(meta.workedDayKey, "2026-04-25");
     assert.equal(meta.isLate, true);
-    assert.equal(Math.round(meta.lagDurationHoursRaw * 10) / 10, 40.1);
-    assert.equal(Math.round(meta.lagScoreHours * 100) / 100, 6.68);
+    assert.equal(Math.round(meta.lagDurationHoursRaw * 10) / 10, 8);
+    assert.equal(Math.round(meta.lagScoreHours * 100) / 100, 1.33);
+});
+
+test("user-activity utils: next-day midnight keeps zero lag score", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+
+    var meta = utils.getWorklogLagMeta("2026-04-25T09:00:00", "2026-04-26T00:00:00", 4);
+
+    assert.equal(meta.workedDayKey, "2026-04-25");
+    assert.equal(meta.isLate, false);
+    assert.equal(meta.lagDurationHoursRaw, 0);
+    assert.equal(meta.lagScoreHours, 0);
+});
+
+test("user-activity utils: formats lag duration without zero days prefix", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+
+    assert.equal(utils.formatLagDurationHours(0), "0ч");
+    assert.equal(utils.formatLagDurationHours(8), "8ч");
+    assert.equal(utils.formatLagDurationHours(24), "1д");
+    assert.equal(utils.formatLagDurationHours(40.1), "1д 16ч");
 });
 
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
@@ -3698,12 +3724,12 @@ test("unified calendar Jira worklog shows worked day loggedAt and late marker", 
                 issueKey: "LAG-1",
                 timestamp: "2026-04-02T09:00:00",
                 started: "2026-04-02T09:00:00",
-                created: "2026-04-03T16:06:00",
+                created: "2026-04-03T08:00:00",
                 workedDayKey: "2026-04-02",
-                loggedAt: "2026-04-03T16:06:00",
+                loggedAt: "2026-04-03T08:00:00",
                 isLate: true,
-                lagDurationHoursRaw: 40.1,
-                lagScoreHours: 6.68,
+                lagDurationHoursRaw: 8,
+                lagScoreHours: 1.33,
                 author: { name: "u1", displayName: "Ivan Ivanov" },
                 timeSpentHours: 4,
                 comment: ""
@@ -3718,8 +3744,8 @@ test("unified calendar Jira worklog shows worked day loggedAt and late marker", 
     var html = out.$el.html();
 
     assert.match(html, /за 02\.04/);
-    assert.match(html, /внесено 03\.04 16:06/);
-    assert.match(html, /отставание 1д 16ч/);
+    assert.match(html, /внесено 03\.04 08:00/);
+    assert.match(html, /отставание 8ч/);
     assert.match(html, /ujg-ua-worklog-late/);
 });
 
@@ -4800,12 +4826,12 @@ test("daily detail worklog shows worked day loggedAt and late marker", function(
             issueKey: "LAG-1",
             timestamp: "2026-04-02T09:00:00",
             started: "2026-04-02T09:00:00",
-            created: "2026-04-03T16:06:00",
+            created: "2026-04-03T08:00:00",
             workedDayKey: "2026-04-02",
-            loggedAt: "2026-04-03T16:06:00",
+            loggedAt: "2026-04-03T08:00:00",
             isLate: true,
-            lagDurationHoursRaw: 40.1,
-            lagScoreHours: 6.68,
+            lagDurationHoursRaw: 8,
+            lagScoreHours: 1.33,
             author: { displayName: "Ivan Ivanov" },
             timeSpentHours: 4
         }]
@@ -4815,8 +4841,8 @@ test("daily detail worklog shows worked day loggedAt and late marker", function(
 
     assert.match(lastHtml, /Worklog 4ч/);
     assert.match(lastHtml, /за 02\.04/);
-    assert.match(lastHtml, /внесено 03\.04 16:06/);
-    assert.match(lastHtml, /отставание 1д 16ч/);
+    assert.match(lastHtml, /внесено 03\.04 08:00/);
+    assert.match(lastHtml, /отставание 8ч/);
 });
 
 function createDayDetailInteractiveStub() {
@@ -5591,8 +5617,8 @@ test("user activity data processor preserves worklog created timestamp and lag f
         details: {
             "CORE-LAG": {
                 worklogs: [{
-                    started: "2026-04-02T09:00:00",
-                    created: "2026-04-03T16:06:00",
+                    started: "2026-04-25T09:00:00",
+                    created: "2026-04-26T08:00:00",
                     timeSpentSeconds: 14400,
                     comment: "late log",
                     author: { name: "u1", displayName: "Ivan Ivanov" }
@@ -5602,14 +5628,14 @@ test("user activity data processor preserves worklog created timestamp and lag f
         }
     };
 
-    var single = mod.processData(rawData, "u1", "2026-04-01", "2026-04-07");
-    var wl = single.dayMap["2026-04-02"].worklogs[0];
+    var single = mod.processData(rawData, "u1", "2026-04-24", "2026-04-30");
+    var wl = single.dayMap["2026-04-25"].worklogs[0];
 
-    assert.equal(wl.created, "2026-04-03T16:06:00");
-    assert.equal(wl.loggedAt, "2026-04-03T16:06:00");
-    assert.equal(wl.workedDayKey, "2026-04-02");
+    assert.equal(wl.created, "2026-04-26T08:00:00");
+    assert.equal(wl.loggedAt, "2026-04-26T08:00:00");
+    assert.equal(wl.workedDayKey, "2026-04-25");
     assert.equal(wl.isLate, true);
-    assert.equal(Math.round(wl.lagScoreHours * 100) / 100, 6.68);
+    assert.equal(Math.round(wl.lagScoreHours * 100) / 100, 1.33);
 });
 
 test("user activity multi-user stats sums lagScoreHours per user", function() {
@@ -5630,8 +5656,8 @@ test("user activity multi-user stats sums lagScoreHours per user", function() {
             details: {
                 "CORE-LAG": {
                     worklogs: [{
-                        started: "2026-04-02T09:00:00",
-                        created: "2026-04-03T16:06:00",
+                        started: "2026-04-25T09:00:00",
+                        created: "2026-04-26T08:00:00",
                         timeSpentSeconds: 14400,
                         author: { name: "u1", displayName: "Ivan Ivanov" }
                     }],
@@ -5640,9 +5666,9 @@ test("user activity multi-user stats sums lagScoreHours per user", function() {
             }
         },
         comments: {}
-    }], "2026-04-01", "2026-04-07");
+    }], "2026-04-24", "2026-04-30");
 
-    assert.equal(Math.round(data.stats.userStats.u1.lagScoreHours * 100) / 100, 6.68);
+    assert.equal(Math.round(data.stats.userStats.u1.lagScoreHours * 100) / 100, 1.33);
 });
 
 test("summary cards user stats table renders lag column", function() {
@@ -5661,7 +5687,7 @@ test("summary cards user stats table renders lag column", function() {
                 totalHours: 4,
                 activeDays: 1,
                 daysWithoutWorklogs: 0,
-                lagScoreHours: 6.68
+                lagScoreHours: 1.33
             },
             u2: {
                 displayName: "Petr Petrov",
@@ -5676,7 +5702,7 @@ test("summary cards user stats table renders lag column", function() {
     var html = widget.$el.html();
     assert.match(html, /Отставание/);
     assert.match(html, /Ivan Ivanov/);
-    assert.match(html, /6\.7ч/);
+    assert.match(html, /1\.3ч/);
 });
 
 test("unified calendar weekly lag table shows per-user lag totals", function() {
@@ -5689,12 +5715,12 @@ test("unified calendar weekly lag table shows per-user lag totals", function() {
                 issueKey: "LAG-1",
                 timestamp: "2026-04-02T09:00:00",
                 started: "2026-04-02T09:00:00",
-                created: "2026-04-03T16:06:00",
+                created: "2026-04-03T08:00:00",
                 workedDayKey: "2026-04-02",
-                loggedAt: "2026-04-03T16:06:00",
+                loggedAt: "2026-04-03T08:00:00",
                 isLate: true,
-                lagDurationHoursRaw: 40.1,
-                lagScoreHours: 6.68,
+                lagDurationHoursRaw: 8,
+                lagScoreHours: 1.33,
                 author: { name: "u1", displayName: "Ivan Ivanov" },
                 timeSpentHours: 4
             }],
@@ -5711,7 +5737,7 @@ test("unified calendar weekly lag table shows per-user lag totals", function() {
 
     assert.match(html, /Суммарное отставание/);
     assert.match(html, /Ivan Ivanov/);
-    assert.match(html, /6\.7ч/);
+    assert.match(html, /1\.3ч/);
 });
 
 test("repo modules are wired in main module and build order", function() {

@@ -389,8 +389,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
             };
         }
 
-        var workedDayStart = parseDate(workedDayKey + "T00:00:00");
-        var lagDurationHoursRaw = workedDayStart ? Math.max(0, (createdDt.getTime() - workedDayStart.getTime()) / 3600000) : 0;
+        var workedDayBoundary = parseDate(workedDayKey + "T00:00:00");
+        if (workedDayBoundary) workedDayBoundary.setDate(workedDayBoundary.getDate() + 1);
+        var lagDurationHoursRaw = workedDayBoundary ? Math.max(0, (createdDt.getTime() - workedDayBoundary.getTime()) / 3600000) : 0;
         var lagScoreHours = lagDurationHoursRaw * (Number(spentHours || 0) / 24);
 
         return {
@@ -406,6 +407,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         var total = Math.max(0, Number(hours || 0));
         var days = Math.floor(total / 24);
         var restHours = Math.floor(total - days * 24);
+        if (days <= 0) return restHours + "ч";
+        if (restHours <= 0) return days + "д";
         return days + "д " + restHours + "ч";
     }
 
