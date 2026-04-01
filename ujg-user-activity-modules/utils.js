@@ -357,6 +357,36 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return str.substring(0, maxLen) + "…";
     }
 
+    var IDENTITY_FIELDS = ["accountId", "key", "name", "userName", "displayName"];
+
+    function collectIdentityTokens(obj) {
+        if (!obj || typeof obj !== "object") return [];
+        var seen = {};
+        for (var i = 0; i < IDENTITY_FIELDS.length; i++) {
+            var k = IDENTITY_FIELDS[i];
+            var v = obj[k];
+            if (v == null) continue;
+            var s = String(v).trim().toLowerCase();
+            if (s) seen[s] = true;
+        }
+        return Object.keys(seen);
+    }
+
+    function matchesSelectedUsers(userLike, selectedUsers) {
+        if (!selectedUsers || !selectedUsers.length) return false;
+        var a = collectIdentityTokens(userLike);
+        if (!a.length) return false;
+        var set = {};
+        for (var i = 0; i < a.length; i++) set[a[i]] = true;
+        for (var u = 0; u < selectedUsers.length; u++) {
+            var b = collectIdentityTokens(selectedUsers[u]);
+            for (var j = 0; j < b.length; j++) {
+                if (set[b[j]]) return true;
+            }
+        }
+        return false;
+    }
+
     return {
         WEEKDAYS_RU: WEEKDAYS_RU,
         MONTHS_RU: MONTHS_RU,
@@ -392,6 +422,7 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         icon: icon,
         formatTime: formatTime,
         isWeekendDay: isWeekendDay,
-        truncate: truncate
+        truncate: truncate,
+        matchesSelectedUsers: matchesSelectedUsers
     };
 });

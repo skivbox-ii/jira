@@ -87,6 +87,89 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         return String((a.displayName || a.name || a.key || ""));
     }
 
+    function repoItemUserLike(item) {
+        if (item && item.authorMeta && typeof item.authorMeta === "object") return item.authorMeta;
+        if (item && item.author && typeof item.author === "object") return item.author;
+        var s = item && (item.authorName || (typeof item.author === "string" ? item.author : ""));
+        return s ? { displayName: String(s) } : {};
+    }
+
+    function calendarFilterAllActive(flags, numUsers) {
+        if (!numUsers) return true;
+        return flags.length === numUsers && flags.every(Boolean);
+    }
+
+    function sumWorklogHours(list) {
+        var t = 0;
+        for (var i = 0; i < (list || []).length; i++) t += (list[i].timeSpentHours || 0);
+        return t;
+    }
+
+    function buildFilteredDaySlice(dayData, activeUsers, selectedUsers, activeFlags) {
+        var wls = (dayData.allWorklogs || []).filter(function(w) {
+            return utils.matchesSelectedUsers(w.author, activeUsers);
+        });
+        var chg = (dayData.allChanges || []).filter(function(c) {
+            return utils.matchesSelectedUsers(c.author, activeUsers);
+        });
+        var cmt = (dayData.allComments || []).filter(function(c) {
+            return utils.matchesSelectedUsers(c.author, activeUsers);
+        });
+        var repo = (dayData.repoItems || []).filter(function(it) {
+            return utils.matchesSelectedUsers(repoItemUserLike(it), activeUsers);
+        });
+        var users = {};
+        for (var i = 0; i < selectedUsers.length; i++) {
+            var su = selectedUsers[i];
+            if (!activeFlags[i]) {
+                users[su.name] = { totalHours: 0 };
+                continue;
+            }
+            var uh = 0;
+            for (var j = 0; j < wls.length; j++) {
+                if (utils.matchesSelectedUsers(wls[j].author, [su])) uh += (wls[j].timeSpentHours || 0);
+            }
+            users[su.name] = { totalHours: uh };
+        }
+        return {
+            totalHours: sumWorklogHours(wls),
+            users: users,
+            allWorklogs: wls,
+            allChanges: chg,
+            allComments: cmt,
+            repoItems: repo
+        };
+    }
+
+    function visibleCalendarDayMap(rawMap, selectedUsers, activeFlags) {
+        if (calendarFilterAllActive(activeFlags, selectedUsers.length)) return rawMap;
+        var activeUsers = [];
+        for (var i = 0; i < selectedUsers.length; i++) {
+            if (activeFlags[i]) activeUsers.push(selectedUsers[i]);
+        }
+        var out = {};
+        for (var k in rawMap) {
+            if (!rawMap.hasOwnProperty(k)) continue;
+            out[k] = buildFilteredDaySlice(rawMap[k], activeUsers, selectedUsers, activeFlags);
+        }
+        return out;
+    }
+
+    function buildUserFilterBarHtml(selectedUsers, activeFlags) {
+        if (!selectedUsers || !selectedUsers.length) return "";
+        var html = '<div class="ujg-ua-cal-user-filter-bar">';
+        for (var i = 0; i < selectedUsers.length; i++) {
+            var on = !!activeFlags[i];
+            var label = selectedUsers[i].displayName || selectedUsers[i].name || "";
+            html += '<button type="button" class="ujg-ua-cal-user-filter ' + (on ? "ujg-ua-cal-user-filter-on" : "ujg-ua-cal-user-filter-off") +
+                '" data-ua-cal-user-idx="' + i + '" aria-pressed="' + on + '">';
+            html += utils.escapeHtml(label);
+            html += "</button>";
+        }
+        html += "</div>";
+        return html;
+    }
+
     function repoIssueMeta(issueKey, issueMap, item) {
         var issue = issueKey && issueMap && issueMap[issueKey];
         return {
@@ -278,10 +361,12 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         return visibleDays;
     }
 
-    function buildCalendarInnerHtml(dayMap, issueMap, selectedUsers, startDate, endDate) {
-        var data = buildWeeks(dayMap, issueMap, startDate, endDate);
-        var weeks = data.weeks;
-        var visibleDays = buildVisibleDays(data.showSat, data.showSun);
+    function buildCalendarInnerHtml(visibleDayMap, issueMap, selectedUsers, startDate, endDate, rawDayMap) {
+        rawDayMap = rawDayMap || visibleDayMap;
+        var rawWeekMeta = buildWeeks(rawDayMap, issueMap, startDate, endDate);
+        var visWeekMeta = buildWeeks(visibleDayMap, issueMap, startDate, endDate);
+        var weeks = visWeekMeta.weeks;
+        var visibleDays = buildVisibleDays(rawWeekMeta.showSat, rawWeekMeta.showSun);
 
         var columnTotals = {};
         var vi, wi, dateStr, dayData, dayIdx;
@@ -291,7 +376,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             for (wi = 0; wi < weeks.length; wi++) {
                 dateStr = weeks[wi].days[dayIdx];
                 if (dateStr) {
-                    dayData = dayMap[dateStr];
+                    dayData = visibleDayMap[dateStr];
                     if (dayData) sum += (dayData.totalHours || 0);
                 }
             }
@@ -330,7 +415,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                     continue;
                 }
 
-                dayData = dayMap[dateStr] || {};
+                dayData = visibleDayMap[dateStr] || {};
                 var hours = dayData.totalHours || 0;
                 var hoverCls = hours > 0 ? "hover:bg-primary/5" : "hover:bg-muted/20";
 
@@ -380,9 +465,16 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         var currentDayMap = dayMap || {};
         var currentIssueMap = issueMap || {};
         var selectedUsersRef = selectedUsers || [];
+        var calendarUserFilterActive = [];
         var selectedDate = null;
         var selectCallback = null;
         var $el = $('<div class="dashboard-card p-0 overflow-hidden"></div>');
+
+        function syncCalendarFilterFlags() {
+            var n = selectedUsersRef.length;
+            while (calendarUserFilterActive.length < n) calendarUserFilterActive.push(true);
+            calendarUserFilterActive.length = n;
+        }
 
         function updateSelection(newDate) {
             $el.find("td[data-date]").removeClass("ring-2 ring-inset ring-primary bg-primary/5");
@@ -393,7 +485,11 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         }
 
         function repaint() {
-            $el.html(buildCalendarInnerHtml(currentDayMap, currentIssueMap, selectedUsersRef, startDate, endDate));
+            syncCalendarFilterFlags();
+            var visibleMap = visibleCalendarDayMap(currentDayMap, selectedUsersRef, calendarUserFilterActive);
+            var inner = buildCalendarInnerHtml(visibleMap, currentIssueMap, selectedUsersRef, startDate, endDate, currentDayMap);
+            var bar = buildUserFilterBarHtml(selectedUsersRef, calendarUserFilterActive);
+            $el.html('<div class="ujg-ua-calendar-shell">' + bar + inner + "</div>");
             if (selectedDate) updateSelection(selectedDate);
             requestAnimationFrame(function() {
                 alignRowBorders($el.find("table"));
@@ -405,6 +501,15 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             if (nextIssueMap) currentIssueMap = nextIssueMap;
             repaint();
         }
+
+        $el.on("click", "button.ujg-ua-cal-user-filter", function() {
+            var idx = parseInt($(this).attr("data-ua-cal-user-idx"), 10);
+            syncCalendarFilterFlags();
+            if (!isNaN(idx) && idx >= 0 && idx < calendarUserFilterActive.length) {
+                calendarUserFilterActive[idx] = !calendarUserFilterActive[idx];
+                repaint();
+            }
+        });
 
         repaint();
 

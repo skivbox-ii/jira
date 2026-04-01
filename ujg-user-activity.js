@@ -836,6 +836,10 @@ define("_ujgUA_config", [], function() {
         ".ujg-ua-log-tbody td, .ujg-ua-repo-row td { overflow-wrap: anywhere; }",
         ".ujg-ua-time { color: #6b778c; font-size: 10px; font-family: monospace; }",
         ".ujg-ua-author { color: #0052cc; font-size: 11px; }",
+        ".ujg-ua-cal-user-filter-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #dfe1e6; }",
+        ".ujg-ua-cal-user-filter { font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer; border: 1px solid #dfe1e6; background: #fff; }",
+        ".ujg-ua-cal-user-filter-on { background: #deebff; border-color: #4c9aff; }",
+        ".ujg-ua-cal-user-filter-off { opacity: 0.65; }",
         ".ujg-ua-day-cell { vertical-align: top; border: 1px solid #dfe1e6; }",
         ".ujg-ua-day-cell-red-border { border: 2px solid #de350b !important; }",
         "",
@@ -1255,6 +1259,36 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return str.substring(0, maxLen) + "…";
     }
 
+    var IDENTITY_FIELDS = ["accountId", "key", "name", "userName", "displayName"];
+
+    function collectIdentityTokens(obj) {
+        if (!obj || typeof obj !== "object") return [];
+        var seen = {};
+        for (var i = 0; i < IDENTITY_FIELDS.length; i++) {
+            var k = IDENTITY_FIELDS[i];
+            var v = obj[k];
+            if (v == null) continue;
+            var s = String(v).trim().toLowerCase();
+            if (s) seen[s] = true;
+        }
+        return Object.keys(seen);
+    }
+
+    function matchesSelectedUsers(userLike, selectedUsers) {
+        if (!selectedUsers || !selectedUsers.length) return false;
+        var a = collectIdentityTokens(userLike);
+        if (!a.length) return false;
+        var set = {};
+        for (var i = 0; i < a.length; i++) set[a[i]] = true;
+        for (var u = 0; u < selectedUsers.length; u++) {
+            var b = collectIdentityTokens(selectedUsers[u]);
+            for (var j = 0; j < b.length; j++) {
+                if (set[b[j]]) return true;
+            }
+        }
+        return false;
+    }
+
     return {
         WEEKDAYS_RU: WEEKDAYS_RU,
         MONTHS_RU: MONTHS_RU,
@@ -1290,7 +1324,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         icon: icon,
         formatTime: formatTime,
         isWeekendDay: isWeekendDay,
-        truncate: truncate
+        truncate: truncate,
+        matchesSelectedUsers: matchesSelectedUsers
     };
 });
 
@@ -5065,6 +5100,44 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var $el = $('<div class="dashboard-card overflow-hidden" style="display:none"></div>');
         var currentMode = "issue";
         var lastArgs = null;
+        var detailUserFilterOn = [];
+
+        function detailUserFilterAllActive(flags) {
+            if (!flags || !flags.length) return true;
+            for (var i = 0; i < flags.length; i++) {
+                if (!flags[i]) return false;
+            }
+            return true;
+        }
+
+        function filterActionsForRender(actions, selectedUsers, flags) {
+            if (!selectedUsers.length || detailUserFilterAllActive(flags)) {
+                return actions || [];
+            }
+            var activeUsers = [];
+            for (var i = 0; i < selectedUsers.length; i++) {
+                if (flags[i]) activeUsers.push(selectedUsers[i]);
+            }
+            if (!activeUsers.length) return [];
+            return (actions || []).filter(function(a) {
+                return utils.matchesSelectedUsers(a.author, activeUsers);
+            });
+        }
+
+        function buildDetailUserFilterBarHtml(selectedUsers, flags) {
+            if (!selectedUsers || !selectedUsers.length) return "";
+            var html = '<div class="ujg-ua-cal-user-filter-bar">';
+            for (var i = 0; i < selectedUsers.length; i++) {
+                var on = !!flags[i];
+                var label = selectedUsers[i].displayName || selectedUsers[i].name || "";
+                html += '<button type="button" class="ujg-ua-cal-user-filter ' + (on ? "ujg-ua-cal-user-filter-on" : "ujg-ua-cal-user-filter-off") +
+                    '" data-ua-detail-user-idx="' + i + '" aria-pressed="' + on + '">';
+                html += utils.escapeHtml(label);
+                html += "</button>";
+            }
+            html += "</div>";
+            return html;
+        }
 
         function renderModeToggle(mode) {
             var issueAct = mode === "issue" ? " ujg-ua-detail-mode-active" : "";
@@ -5078,6 +5151,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         }
 
         function renderInner(date, dayData, issueMap, selectedUsers, mode) {
+            selectedUsers = selectedUsers || [];
+            var filterBar = buildDetailUserFilterBarHtml(selectedUsers, detailUserFilterOn);
             var html = '<div class="p-5">' +
                 '<div class="flex items-center justify-between gap-2 mb-4 flex-wrap">' +
                 '<h3 class="text-sm font-semibold text-foreground">\uD83D\uDCC5 ' + utils.escapeHtml(formatFullDate(date)) + "</h3>" +
@@ -5086,22 +5161,24 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 '<button class="ujg-ua-detail-close text-muted-foreground hover:text-foreground transition-colors">' +
                 '<span class="w-4 h-4">' + ICONS.x + "</span>" +
                 "</button></div></div>" +
+                filterBar +
                 '<div class="space-y-2">';
 
             var normalized = normalizeDayActions(dayData, issueMap);
-            var jiraActions = normalized.filter(function(action) {
+            var visible = filterActionsForRender(normalized, selectedUsers, detailUserFilterOn);
+            var jiraActions = visible.filter(function(action) {
                 return action.type !== "repo";
             });
-            var repoActions = normalized.filter(function(action) {
+            var repoActions = visible.filter(function(action) {
                 return action.type === "repo";
             });
             var filteredJiraActions = jiraActions;
             var filteredRepoActions = repoActions;
 
-            if (normalized.length === 0) {
+            if (visible.length === 0) {
                 html += '<div class="text-sm text-muted-foreground text-center py-4">Нет активности за этот день</div>';
             } else if (mode === "team") {
-                var model = buildTimelineModel(normalized, [], date);
+                var model = buildTimelineModel(visible, [], date);
                 html += renderTeamTimeline(model);
                 if (model.undated.length > 0) {
                     var undTeam = groupActionsByIssue(model.undated);
@@ -5155,14 +5232,25 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 currentMode = "team";
                 rerender();
             });
+            $el.find("button.ujg-ua-cal-user-filter").on("click", function(ev) {
+                var t = ev.currentTarget || ev.target;
+                var idx = parseInt(t.getAttribute("data-ua-detail-user-idx"), 10);
+                if (isNaN(idx) || idx < 0 || idx >= detailUserFilterOn.length) return;
+                detailUserFilterOn[idx] = !detailUserFilterOn[idx];
+                rerender();
+            });
         }
 
         function show(date, dayData, issueMap, selectedUsers) {
+            selectedUsers = selectedUsers || [];
+            detailUserFilterOn = selectedUsers.map(function() {
+                return true;
+            });
             lastArgs = {
                 date: date,
                 dayData: dayData,
                 issueMap: issueMap,
-                selectedUsers: selectedUsers || []
+                selectedUsers: selectedUsers
             };
             $el.html(renderInner(date, dayData, issueMap, lastArgs.selectedUsers, currentMode)).slideDown(200);
             bindChrome();
@@ -5275,6 +5363,89 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         if (!a) return "";
         if (typeof a === "string") return a;
         return String((a.displayName || a.name || a.key || ""));
+    }
+
+    function repoItemUserLike(item) {
+        if (item && item.authorMeta && typeof item.authorMeta === "object") return item.authorMeta;
+        if (item && item.author && typeof item.author === "object") return item.author;
+        var s = item && (item.authorName || (typeof item.author === "string" ? item.author : ""));
+        return s ? { displayName: String(s) } : {};
+    }
+
+    function calendarFilterAllActive(flags, numUsers) {
+        if (!numUsers) return true;
+        return flags.length === numUsers && flags.every(Boolean);
+    }
+
+    function sumWorklogHours(list) {
+        var t = 0;
+        for (var i = 0; i < (list || []).length; i++) t += (list[i].timeSpentHours || 0);
+        return t;
+    }
+
+    function buildFilteredDaySlice(dayData, activeUsers, selectedUsers, activeFlags) {
+        var wls = (dayData.allWorklogs || []).filter(function(w) {
+            return utils.matchesSelectedUsers(w.author, activeUsers);
+        });
+        var chg = (dayData.allChanges || []).filter(function(c) {
+            return utils.matchesSelectedUsers(c.author, activeUsers);
+        });
+        var cmt = (dayData.allComments || []).filter(function(c) {
+            return utils.matchesSelectedUsers(c.author, activeUsers);
+        });
+        var repo = (dayData.repoItems || []).filter(function(it) {
+            return utils.matchesSelectedUsers(repoItemUserLike(it), activeUsers);
+        });
+        var users = {};
+        for (var i = 0; i < selectedUsers.length; i++) {
+            var su = selectedUsers[i];
+            if (!activeFlags[i]) {
+                users[su.name] = { totalHours: 0 };
+                continue;
+            }
+            var uh = 0;
+            for (var j = 0; j < wls.length; j++) {
+                if (utils.matchesSelectedUsers(wls[j].author, [su])) uh += (wls[j].timeSpentHours || 0);
+            }
+            users[su.name] = { totalHours: uh };
+        }
+        return {
+            totalHours: sumWorklogHours(wls),
+            users: users,
+            allWorklogs: wls,
+            allChanges: chg,
+            allComments: cmt,
+            repoItems: repo
+        };
+    }
+
+    function visibleCalendarDayMap(rawMap, selectedUsers, activeFlags) {
+        if (calendarFilterAllActive(activeFlags, selectedUsers.length)) return rawMap;
+        var activeUsers = [];
+        for (var i = 0; i < selectedUsers.length; i++) {
+            if (activeFlags[i]) activeUsers.push(selectedUsers[i]);
+        }
+        var out = {};
+        for (var k in rawMap) {
+            if (!rawMap.hasOwnProperty(k)) continue;
+            out[k] = buildFilteredDaySlice(rawMap[k], activeUsers, selectedUsers, activeFlags);
+        }
+        return out;
+    }
+
+    function buildUserFilterBarHtml(selectedUsers, activeFlags) {
+        if (!selectedUsers || !selectedUsers.length) return "";
+        var html = '<div class="ujg-ua-cal-user-filter-bar">';
+        for (var i = 0; i < selectedUsers.length; i++) {
+            var on = !!activeFlags[i];
+            var label = selectedUsers[i].displayName || selectedUsers[i].name || "";
+            html += '<button type="button" class="ujg-ua-cal-user-filter ' + (on ? "ujg-ua-cal-user-filter-on" : "ujg-ua-cal-user-filter-off") +
+                '" data-ua-cal-user-idx="' + i + '" aria-pressed="' + on + '">';
+            html += utils.escapeHtml(label);
+            html += "</button>";
+        }
+        html += "</div>";
+        return html;
     }
 
     function repoIssueMeta(issueKey, issueMap, item) {
@@ -5468,10 +5639,12 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         return visibleDays;
     }
 
-    function buildCalendarInnerHtml(dayMap, issueMap, selectedUsers, startDate, endDate) {
-        var data = buildWeeks(dayMap, issueMap, startDate, endDate);
-        var weeks = data.weeks;
-        var visibleDays = buildVisibleDays(data.showSat, data.showSun);
+    function buildCalendarInnerHtml(visibleDayMap, issueMap, selectedUsers, startDate, endDate, rawDayMap) {
+        rawDayMap = rawDayMap || visibleDayMap;
+        var rawWeekMeta = buildWeeks(rawDayMap, issueMap, startDate, endDate);
+        var visWeekMeta = buildWeeks(visibleDayMap, issueMap, startDate, endDate);
+        var weeks = visWeekMeta.weeks;
+        var visibleDays = buildVisibleDays(rawWeekMeta.showSat, rawWeekMeta.showSun);
 
         var columnTotals = {};
         var vi, wi, dateStr, dayData, dayIdx;
@@ -5481,7 +5654,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             for (wi = 0; wi < weeks.length; wi++) {
                 dateStr = weeks[wi].days[dayIdx];
                 if (dateStr) {
-                    dayData = dayMap[dateStr];
+                    dayData = visibleDayMap[dateStr];
                     if (dayData) sum += (dayData.totalHours || 0);
                 }
             }
@@ -5520,7 +5693,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                     continue;
                 }
 
-                dayData = dayMap[dateStr] || {};
+                dayData = visibleDayMap[dateStr] || {};
                 var hours = dayData.totalHours || 0;
                 var hoverCls = hours > 0 ? "hover:bg-primary/5" : "hover:bg-muted/20";
 
@@ -5570,9 +5743,16 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         var currentDayMap = dayMap || {};
         var currentIssueMap = issueMap || {};
         var selectedUsersRef = selectedUsers || [];
+        var calendarUserFilterActive = [];
         var selectedDate = null;
         var selectCallback = null;
         var $el = $('<div class="dashboard-card p-0 overflow-hidden"></div>');
+
+        function syncCalendarFilterFlags() {
+            var n = selectedUsersRef.length;
+            while (calendarUserFilterActive.length < n) calendarUserFilterActive.push(true);
+            calendarUserFilterActive.length = n;
+        }
 
         function updateSelection(newDate) {
             $el.find("td[data-date]").removeClass("ring-2 ring-inset ring-primary bg-primary/5");
@@ -5583,7 +5763,11 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         }
 
         function repaint() {
-            $el.html(buildCalendarInnerHtml(currentDayMap, currentIssueMap, selectedUsersRef, startDate, endDate));
+            syncCalendarFilterFlags();
+            var visibleMap = visibleCalendarDayMap(currentDayMap, selectedUsersRef, calendarUserFilterActive);
+            var inner = buildCalendarInnerHtml(visibleMap, currentIssueMap, selectedUsersRef, startDate, endDate, currentDayMap);
+            var bar = buildUserFilterBarHtml(selectedUsersRef, calendarUserFilterActive);
+            $el.html('<div class="ujg-ua-calendar-shell">' + bar + inner + "</div>");
             if (selectedDate) updateSelection(selectedDate);
             requestAnimationFrame(function() {
                 alignRowBorders($el.find("table"));
@@ -5595,6 +5779,15 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             if (nextIssueMap) currentIssueMap = nextIssueMap;
             repaint();
         }
+
+        $el.on("click", "button.ujg-ua-cal-user-filter", function() {
+            var idx = parseInt($(this).attr("data-ua-cal-user-idx"), 10);
+            syncCalendarFilterFlags();
+            if (!isNaN(idx) && idx >= 0 && idx < calendarUserFilterActive.length) {
+                calendarUserFilterActive[idx] = !calendarUserFilterActive[idx];
+                repaint();
+            }
+        });
 
         repaint();
 

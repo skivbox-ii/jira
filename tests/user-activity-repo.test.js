@@ -337,6 +337,22 @@ test("user-activity utils: done issue ref adds strike class and status tooltip",
     assert.match(html, /Closed task/);
 });
 
+test("user-activity utils: matches author against selected users by identity tokens", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+    var selected = [{ accountId: "acc-other", displayName: "Someone" }, { accountId: "  ACC-42 ", userName: "ivan" }];
+    assert.equal(
+        utils.matchesSelectedUsers({ accountId: "acc-42", displayName: "Local Label" }, selected),
+        true
+    );
+    assert.equal(
+        utils.matchesSelectedUsers({ displayName: "Bob Smith" }, [{ displayName: "Bob Jones" }]),
+        false
+    );
+});
+
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
     var captured = [];
     var $ = createJqueryStub(function(options) {
@@ -1235,7 +1251,8 @@ function loadUnifiedCalendar(jquery, utilsOverrides) {
             getStatusName: u.getStatusName,
             isDoneStatus: u.isDoneStatus,
             getIssueStatusTitle: u.getIssueStatusTitle,
-            shortHash: u.shortHash
+            shortHash: u.shortHash,
+            matchesSelectedUsers: u.matchesSelectedUsers
         }, utilsOverrides)
     }, { requestAnimationFrame: function(fn) { if (fn) fn(); } });
 }
@@ -3572,6 +3589,161 @@ test("unified calendar repo line keeps status without issue key and no dangling 
     assert.doesNotMatch(html, /Alice Dev<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
 });
 
+test("unified calendar weekend column stays after filter narrows away weekend hours", function() {
+    var $ = createHtmlJqueryStub();
+    var mod = loadUnifiedCalendar($);
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var users = [
+        { name: "alice", displayName: "Alice Wonder", accountId: "acc-alice" },
+        { name: "bob", displayName: "Bob Smith", accountId: "acc-bob" }
+    ];
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 2,
+            users: { alice: { totalHours: 2 }, bob: { totalHours: 0 } },
+            allWorklogs: [{
+                timestamp: "2026-03-04T09:00:00.000Z",
+                issueKey: "CORE-W",
+                author: { displayName: "Alice Wonder", accountId: "acc-alice" },
+                timeSpentHours: 2,
+                comment: "WEEKDAY_ALICE"
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        },
+        "2026-03-07": {
+            totalHours: 1,
+            users: { alice: { totalHours: 0 }, bob: { totalHours: 1 } },
+            allWorklogs: [{
+                timestamp: "2026-03-07T10:00:00.000Z",
+                issueKey: "CORE-SAT",
+                author: { displayName: "Bob Smith", accountId: "acc-bob" },
+                timeSpentHours: 1,
+                comment: "SAT_BOB_ONLY"
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        }
+    };
+    var out = mod.render(dayMap, {
+        "CORE-W": { key: "CORE-W", summary: "W", project: "CORE" },
+        "CORE-SAT": { key: "CORE-SAT", summary: "S", project: "CORE" }
+    }, users, start, end);
+    assert.match(out.$el.html(), /<span>Сб<\/span>/);
+    assert.match(out.$el.html(), /SAT_BOB_ONLY/);
+
+    out.$el.find('button[data-ua-cal-user-idx="1"]').trigger("click");
+    var html1 = out.$el.html();
+    assert.match(html1, /<span>Сб<\/span>/, "Saturday column must stay from raw dataset layout");
+    assert.doesNotMatch(html1, /SAT_BOB_ONLY/);
+    assert.match(html1, /WEEKDAY_ALICE/);
+});
+
+test("unified calendar render-time user filter toggles subset recomputes hours", function() {
+    var $ = createHtmlJqueryStub();
+    var mod = loadUnifiedCalendar($);
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var users = [
+        { name: "alice", displayName: "Alice Wonder", accountId: "acc-alice" },
+        { name: "bob", displayName: "Bob Smith", accountId: "acc-bob" }
+    ];
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 5,
+            users: {
+                alice: { totalHours: 2 },
+                bob: { totalHours: 3 }
+            },
+            allWorklogs: [
+                {
+                    timestamp: "2026-03-04T09:00:00.000Z",
+                    issueKey: "CORE-A",
+                    author: { displayName: "Alice Wonder", accountId: "acc-alice" },
+                    timeSpentHours: 2,
+                    comment: "ALICE_TASK"
+                },
+                {
+                    timestamp: "2026-03-04T10:00:00.000Z",
+                    issueKey: "CORE-B",
+                    author: { displayName: "Bob Smith", accountId: "acc-bob" },
+                    timeSpentHours: 3,
+                    comment: "BOB_TASK"
+                }
+            ],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T11:00:00.000Z",
+                authorName: "Bob Smith",
+                message: "BOB_REPO_ONLY"
+            }]
+        }
+    };
+    var out = mod.render(dayMap, { "CORE-A": { key: "CORE-A", summary: "A" }, "CORE-B": { key: "CORE-B", summary: "B" } }, users, start, end);
+    var html0 = out.$el.html();
+    assert.match(html0, /ALICE_TASK/);
+    assert.match(html0, /BOB_TASK/);
+    assert.match(html0, /BOB_REPO_ONLY/);
+    assert.match(html0, />5ч</);
+    assert.match(html0, /Alice Wonder/);
+    assert.match(html0, /Bob Smith/);
+
+    out.$el.find('button[data-ua-cal-user-idx="1"]').trigger("click");
+    var html1 = out.$el.html();
+    assert.match(html1, /ALICE_TASK/);
+    assert.doesNotMatch(html1, /BOB_TASK/);
+    assert.doesNotMatch(html1, /BOB_REPO_ONLY/);
+    assert.match(html1, />2ч</);
+    assert.doesNotMatch(html1, />5ч</);
+});
+
+test("unified calendar hard-open while all users active stranger visible until narrowed", function() {
+    var $ = createHtmlJqueryStub();
+    var mod = loadUnifiedCalendar($);
+    var start = new Date("2026-03-02T00:00:00.000Z");
+    var end = new Date("2026-03-08T23:59:59.000Z");
+    var users = [
+        { name: "alice", displayName: "Alice Wonder", accountId: "acc-alice" },
+        { name: "bob", displayName: "Bob Smith", accountId: "acc-bob" }
+    ];
+    var dayMap = {
+        "2026-03-04": {
+            totalHours: 1,
+            users: { alice: { totalHours: 1 }, bob: { totalHours: 0 } },
+            allWorklogs: [{
+                timestamp: "2026-03-04T09:00:00.000Z",
+                issueKey: "CORE-A",
+                author: { displayName: "Alice Wonder", accountId: "acc-alice" },
+                timeSpentHours: 1,
+                comment: ""
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: [{
+                type: "commit",
+                timestamp: "2026-03-04T12:00:00.000Z",
+                authorName: "Outsider Not In Dashboard",
+                message: "STRANGER_COMMIT"
+            }]
+        }
+    };
+    var out = mod.render(dayMap, { "CORE-A": { key: "CORE-A", summary: "S" } }, users, start, end);
+    var h0 = out.$el.html();
+    assert.match(h0, /STRANGER_COMMIT/);
+    assert.match(h0, /Outsider Not In Dashboard/);
+
+    out.$el.find('button[data-ua-cal-user-idx="1"]').trigger("click");
+    var h1 = out.$el.html();
+    assert.doesNotMatch(h1, /STRANGER_COMMIT/);
+    assert.doesNotMatch(h1, /Outsider Not In Dashboard/);
+    assert.match(h1, /CORE-A/);
+});
+
 test("unified calendar updateDayCell rerenders updated day content", function() {
     var mod = loadUnifiedCalendar(createHtmlJqueryStub());
     var start = new Date("2026-03-02T00:00:00.000Z");
@@ -4440,7 +4612,7 @@ test("day detail toggle switches to team view", function() {
     assert.ok(html.indexOf("ujg-ua-detail-timeline-grid") !== -1, "team mode should render timeline grid");
 });
 
-test("day detail hard-open renders all actions without selected-user filter UI", function() {
+test("day detail hard-open shows filter bar and keeps extra authors when all dashboard users enabled", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4474,10 +4646,11 @@ test("day detail hard-open renders all actions without selected-user filter UI",
     assert.match(html, /Bob task/);
     assert.match(html, /Alice Dev/);
     assert.match(html, /Bob Dev/);
-    assert.equal(html.indexOf("ujg-ua-detail-user-filter"), -1);
+    assert.ok(html.indexOf("ujg-ua-cal-user-filter-bar") !== -1, "expected day-detail user filter bar");
+    assert.ok(html.indexOf("data-ua-detail-user-idx") !== -1);
 });
 
-test("day detail hard-open issue view keeps all actions after user-filter change attempt", function() {
+test("day detail hard-open issue view narrows when a dashboard user is toggled off", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4507,20 +4680,22 @@ test("day detail hard-open issue view keeps all actions after user-filter change
     }, users);
 
     var html = stub.getHtml();
-    assert.equal(html.indexOf("ujg-ua-detail-user-filter"), -1);
+    assert.ok(html.indexOf("ujg-ua-cal-user-filter-bar") !== -1);
     assert.match(html, /Alice task/);
     assert.match(html, /Bob task/);
 
-    stub.triggerChange(".ujg-ua-detail-user-filter", {
-        value: "sel-1"
+    stub.triggerClick("button.ujg-ua-cal-user-filter", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-user-idx" ? "1" : null;
+        }
     });
 
     html = stub.getHtml();
     assert.match(html, /Alice task/);
-    assert.match(html, /Bob task/);
+    assert.equal(html.indexOf("Bob task"), -1);
 });
 
-test("day detail hard-open team view keeps actual author columns after user-filter change attempt", function() {
+test("day detail hard-open team view shows one column when other dashboard user toggled off", function() {
     var stub = createDayDetailInteractiveStub();
     var mod = loadDailyDetail(function(s) {
         return stub.$(s);
@@ -4549,8 +4724,10 @@ test("day detail hard-open team view keeps actual author columns after user-filt
         "X-2": { key: "X-2", summary: "Bob task", status: "Open" }
     }, users);
 
-    stub.triggerChange(".ujg-ua-detail-user-filter", {
-        value: "sel-1"
+    stub.triggerClick("button.ujg-ua-cal-user-filter", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-user-idx" ? "1" : null;
+        }
     });
     stub.triggerClick(".ujg-ua-detail-mode-team", {
         getAttribute: function() {
@@ -4560,8 +4737,7 @@ test("day detail hard-open team view keeps actual author columns after user-filt
 
     var html = stub.getHtml();
     var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
-    assert.equal(cols ? cols.length : 0, 2, "expected two user columns for two active authors");
-    assert.equal(html.indexOf("ujg-ua-detail-user-filter"), -1);
+    assert.equal(cols ? cols.length : 0, 1, "expected one user column when Bob filtered out");
 });
 
 test("day detail hard-open keeps repo activity visible by authorMeta", function() {
@@ -4592,14 +4768,177 @@ test("day detail hard-open keeps repo activity visible by authorMeta", function(
         "REP-1": { key: "REP-1", summary: "Repo task", status: "In Progress" }
     }, users);
 
-    stub.triggerChange(".ujg-ua-detail-user-filter", {
-        value: "sel-0"
-    });
-
     var html = stub.getHtml();
     assert.match(html, /Bitbucket за день/);
     assert.match(html, /Repo change visible for Alice/);
     assert.match(html, /core-api/);
+
+    stub.triggerClick("button.ujg-ua-cal-user-filter", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-user-idx" ? "0" : null;
+        }
+    });
+
+    html = stub.getHtml();
+    assert.equal(html.indexOf("Bitbucket за день"), -1, "repo day section hidden when Alice toggled off");
+});
+
+test("day detail render-time user filter issue view narrows jira and repo rows", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-04-01", {
+        worklogs: [{
+            issueKey: "J-1",
+            timestamp: "2026-04-01T08:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: "alice wl"
+        }],
+        repoItems: [{
+            type: "commit",
+            timestamp: "2026-04-01T09:00:00.000Z",
+            issueKey: "J-2",
+            author: { name: "u2", displayName: "Bob" },
+            repoName: "svc-bob",
+            message: "bob commit msg",
+            hash: "deadbeef",
+            commitUrl: "https://git/c/deadbeef"
+        }]
+    }, {
+        "J-1": { key: "J-1", summary: "Alice issue", status: "Open" },
+        "J-2": { key: "J-2", summary: "Bob issue", status: "Open" }
+    }, users);
+
+    var html = stub.getHtml();
+    assert.match(html, /Alice issue/);
+    assert.match(html, /bob commit msg/);
+    assert.match(html, /svc-bob/);
+
+    stub.triggerClick("button.ujg-ua-cal-user-filter", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-user-idx" ? "1" : null;
+        }
+    });
+    html = stub.getHtml();
+    assert.match(html, /Alice issue/);
+    assert.equal(html.indexOf("bob commit msg"), -1);
+    assert.equal(html.indexOf("svc-bob"), -1);
+});
+
+test("day detail team view render-time user filter keeps columns for visible authors only", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-04-02", {
+        worklogs: [{
+            issueKey: "TV-1",
+            timestamp: "2026-04-02T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }, {
+            issueKey: "TV-2",
+            timestamp: "2026-04-02T11:00:00.000Z",
+            author: { name: "u2", displayName: "Bob" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, {
+        "TV-1": { key: "TV-1", summary: "A", status: "Open" },
+        "TV-2": { key: "TV-2", summary: "B", status: "Open" }
+    }, users);
+
+    stub.triggerClick(".ujg-ua-detail-mode-team", {
+        getAttribute: function() {
+            return "team";
+        }
+    });
+    var html = stub.getHtml();
+    var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
+    assert.equal(cols ? cols.length : 0, 2);
+
+    stub.triggerClick("button.ujg-ua-cal-user-filter", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-user-idx" ? "0" : null;
+        }
+    });
+    html = stub.getHtml();
+    cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
+    assert.equal(cols ? cols.length : 0, 1, "only visible authors get timeline columns");
+    assert.match(html, /TV-2/);
+});
+
+test("day detail render-time user filter resets to all enabled when opening another day", function() {
+    var stub = createDayDetailInteractiveStub();
+    var mod = loadDailyDetail(function(s) {
+        return stub.$(s);
+    });
+    var panel = mod.create();
+    var users = [
+        { name: "u1", key: "u1", displayName: "Alice" },
+        { name: "u2", key: "u2", displayName: "Bob" }
+    ];
+    panel.show("2026-04-03", {
+        worklogs: [{
+            issueKey: "R1-1",
+            timestamp: "2026-04-03T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }, {
+            issueKey: "R1-2",
+            timestamp: "2026-04-03T11:00:00.000Z",
+            author: { name: "u2", displayName: "Bob" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, {
+        "R1-1": { key: "R1-1", summary: "Day1 A", status: "Open" },
+        "R1-2": { key: "R1-2", summary: "Day1 B", status: "Open" }
+    }, users);
+
+    stub.triggerClick("button.ujg-ua-cal-user-filter", {
+        getAttribute: function(n) {
+            return n === "data-ua-detail-user-idx" ? "1" : null;
+        }
+    });
+    assert.equal(stub.getHtml().indexOf("Day1 B"), -1);
+
+    panel.show("2026-04-04", {
+        worklogs: [{
+            issueKey: "R2-1",
+            timestamp: "2026-04-04T10:00:00.000Z",
+            author: { name: "u1", displayName: "Alice" },
+            timeSpentHours: 1,
+            comment: ""
+        }, {
+            issueKey: "R2-2",
+            timestamp: "2026-04-04T11:00:00.000Z",
+            author: { name: "u2", displayName: "Bob" },
+            timeSpentHours: 1,
+            comment: ""
+        }]
+    }, {
+        "R2-1": { key: "R2-1", summary: "Day2 A", status: "Open" },
+        "R2-2": { key: "R2-2", summary: "Day2 B", status: "Open" }
+    }, users);
+
+    var html = stub.getHtml();
+    assert.match(html, /Day2 A/);
+    assert.match(html, /Day2 B/);
 });
 
 test("day detail team view builds one column per active author", function() {
@@ -4642,9 +4981,12 @@ test("day detail team view builds one column per active author", function() {
     });
 
     var html = stub.getHtml();
+    assert.ok(html.indexOf("data-ua-detail-user-idx=\"2\"") !== -1, "Carol listed in day-detail filter bar");
+    var iCols = html.indexOf("ujg-ua-detail-user-cols");
+    assert.ok(iCols !== -1);
+    assert.doesNotMatch(html.slice(iCols), /Carol/, "timeline columns only for authors with visible actions");
     var cols = html.match(/<div class="ujg-ua-detail-user-col">/g);
     assert.equal(cols ? cols.length : 0, 2, "expected two user columns for two active authors");
-    assert.doesNotMatch(html, /Carol/);
 });
 
 test("day detail team view keeps separate columns for duplicate visible identifiers", function() {
