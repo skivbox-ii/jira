@@ -279,7 +279,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
     function getDefaultPeriod() {
         var end = new Date();
         var start = new Date();
-        start.setDate(start.getDate() - CONFIG.defaultPeriodDays);
+        var dow = start.getDay();
+        var diff = dow === 0 ? 6 : dow - 1;
+        start.setDate(start.getDate() - diff);
         return { start: getDayKey(start), end: getDayKey(end) };
     }
 

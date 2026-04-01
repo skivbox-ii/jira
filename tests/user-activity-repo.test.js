@@ -98,6 +98,30 @@ function createDeferred() {
     return deferred;
 }
 
+function resolvedAlways(value) {
+    var d = createDeferred();
+    d.always = function(handler) {
+        d.done(handler);
+        d.fail(handler);
+        return d;
+    };
+    d.resolve(value);
+    return d.promise();
+}
+
+function createWindowStub(search) {
+    return {
+        location: {
+            search: search || "",
+            pathname: "/plugins/servlet/ujg-user-activity",
+            hash: ""
+        },
+        history: {
+            replaceState: function() {}
+        }
+    };
+}
+
 function createJqueryStub(handler) {
     var calls = [];
 
@@ -231,6 +255,29 @@ function loadProgressLoader(jqStub) {
     });
 }
 
+function loadUserActivityUtilsWithDate(isoNow, windowStub) {
+    var config = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var RealDate = Date;
+
+    function FakeDate() {
+        var args = arguments.length ? Array.prototype.slice.call(arguments) : [isoNow];
+        return new (Function.prototype.bind.apply(RealDate, [null].concat(args)))();
+    }
+
+    FakeDate.now = function() {
+        return RealDate.parse(isoNow);
+    };
+    FakeDate.parse = RealDate.parse;
+    FakeDate.UTC = RealDate.UTC;
+    FakeDate.prototype = RealDate.prototype;
+
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "utils.js"), {
+        _ujgUA_config: config
+    }, Object.assign({
+        Date: FakeDate
+    }, windowStub ? { window: windowStub } : {}));
+}
+
 test("progress-loader: day phase sets bar from completedDays over totalDays", function() {
     var stub = createProgressLoaderJqueryStub();
     var loader = loadProgressLoader(stub).create();
@@ -335,6 +382,18 @@ test("user-activity utils: done issue ref adds strike class and status tooltip",
     assert.doesNotMatch(html, /class="[^"]*ujg-ua-issue-summary[^"]*ujg-ua-issue-done/);
     assert.match(html, /title="Текущий статус: Done"/);
     assert.match(html, /Closed task/);
+});
+
+test("user-activity utils: default period is current week from monday to today", function() {
+    var utils = loadUserActivityUtilsWithDate("2026-04-01T12:00:00", {
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+
+    assert.deepEqual(normalize(utils.getDefaultPeriod()), {
+        start: "2026-03-30",
+        end: "2026-04-01"
+    });
 });
 
 test("user-activity utils: matches author against selected users by identity tokens", function() {
@@ -1404,7 +1463,7 @@ function countMatches(value, pattern) {
     return matches ? matches.length : 0;
 }
 
-function loadRendering(jquery, utilsOverrides, documentStub) {
+function loadRendering(jquery, utilsOverrides, documentStub, windowStub) {
     var filePath = path.join(__dirname, "..", "ujg-user-activity-modules", "rendering.js");
     var code = fs.readFileSync(filePath, "utf8");
     var exported;
@@ -1419,11 +1478,13 @@ function loadRendering(jquery, utilsOverrides, documentStub) {
         parseFloat: parseFloat,
         isNaN: isNaN,
         isFinite: isFinite,
+        URLSearchParams: URLSearchParams,
         encodeURIComponent: encodeURIComponent,
         decodeURIComponent: decodeURIComponent,
         setTimeout: setTimeout,
         clearTimeout: clearTimeout,
         document: documentStub,
+        window: windowStub,
         define: function(name, names, factory) {
             if (typeof name !== "string") {
                 factory = names;
@@ -2014,6 +2075,11 @@ function createRenderingHarness(options) {
     var selectedUser = options.selectedUser || { name: "dtorzok", displayName: "Dima Torzok" };
     var selectedUsers = options.selectedUsers || null;
     var useMultiUserPicker = !!(options.useMultiUserPicker || (selectedUsers && selectedUsers.length));
+    var useTeamSync = !!options.useTeamSync;
+    var teams = options.teams || [];
+    var displayNameByKey = options.displayNameByKey || {};
+    var queryNameByKey = options.queryNameByKey || {};
+    var windowStub = options.window || null;
     var rawData = options.rawData || {
         issues: [{ id: "1001", key: "CORE-1" }]
     };
@@ -2128,6 +2194,10 @@ function createRenderingHarness(options) {
                     setFromUrl: function() {},
                     getSelectedUsers: function() {
                         return selectedUsers || [];
+                    },
+                    setSelectedUsers: function(nextUsers, meta) {
+                        selectedUsers = normalize(nextUsers || []);
+                        onChange(normalize(selectedUsers), normalize(meta || {}));
                     }
                 };
             }
@@ -2323,14 +2393,43 @@ function createRenderingHarness(options) {
                     }
                 };
             }
-        }
+        },
+        teamStore: useTeamSync ? {
+            loadTeams: function() {
+                return resolvedAlways(teams);
+            },
+            getTeams: function() {
+                return teams;
+            },
+            getDisplayNameByKey: function() {
+                return displayNameByKey;
+            },
+            getQueryNameByKey: function() {
+                return queryNameByKey;
+            }
+        } : null,
+        teamPicker: useTeamSync ? {
+            create: function() {
+                return {
+                    $el: jquery.createNode("TeamPicker"),
+                    setSelectedTeamIds: function() {},
+                    destroy: function() {}
+                };
+            }
+        } : null
     };
-    var rendering = loadRendering(jquery.$, {}, documentStub);
+    var rendering = loadRendering(jquery.$, {}, documentStub, windowStub);
     var root = jquery.createNode("root");
 
     function initInto(targetRoot) {
         rendering.init(targetRoot, modules);
         root = targetRoot;
+    }
+
+    function triggerClick(node) {
+        (node && node.handlers && node.handlers.click || []).forEach(function(binding) {
+            binding.handler.call(node, { target: node, type: "click" });
+        });
     }
 
     initInto(root);
@@ -2354,6 +2453,10 @@ function createRenderingHarness(options) {
         },
         triggerUserChange: function(user) {
             if (events.userChange) events.userChange(user);
+        },
+        clickLoad: function() {
+            var header = root.__el.children[0];
+            triggerClick(header && header.slots[".ujg-ua-btn-load"]);
         },
         reinit: function() {
             initInto(jquery.createNode("root"));
@@ -5537,6 +5640,72 @@ test("rendering updates unified calendar day-by-day during sequential load", fun
     }), ["2026-03-02", "2026-03-01"]);
 });
 
+test("rendering does not auto load on init without URL filters", function() {
+    var harness = createRenderingHarness({
+        window: createWindowStub(""),
+        selectedUser: { name: "first-user", displayName: "First User" },
+        period: { start: "2026-03-08", end: "2026-03-08" }
+    });
+
+    assert.equal(harness.events.fetchAllDataCalls.length, 0);
+    assert.equal(harness.events.fetchRepoArgsHistory.length, 0);
+    assert.match(harness.root.__el.children[1].html, /Выберите пользователя и период/);
+});
+
+test("rendering auto loads on init when user filter is prefilled in URL", function() {
+    var harness = createRenderingHarness({
+        window: createWindowStub("?user=first-user"),
+        selectedUser: { name: "first-user", displayName: "First User" },
+        period: { start: "2026-03-08", end: "2026-03-08" },
+        rawData: { issues: [] }
+    });
+
+    assert.deepEqual(normalize(harness.events.fetchAllDataCalls), [{
+        username: "first-user",
+        startDate: "2026-03-08",
+        endDate: "2026-03-08",
+        hasOnProgress: true
+    }]);
+});
+
+test("rendering auto loads on init when users filter is prefilled in URL", function() {
+    var harness = createRenderingHarness({
+        useMultiUserPicker: true,
+        selectedUsers: [{ name: "u1", displayName: "User One" }],
+        window: createWindowStub("?users=u1"),
+        period: { start: "2026-03-08", end: "2026-03-08" },
+        rawData: { issues: [] }
+    });
+
+    assert.deepEqual(normalize(harness.events.fetchAllDataCalls), [{
+        username: "u1",
+        startDate: "2026-03-08",
+        endDate: "2026-03-08",
+        hasOnProgress: true
+    }]);
+});
+
+test("rendering auto loads on init when team filter is prefilled in URL", function() {
+    var harness = createRenderingHarness({
+        useMultiUserPicker: true,
+        useTeamSync: true,
+        selectedUsers: [],
+        teams: [{ id: "team-1", memberKeys: ["u1"] }],
+        displayNameByKey: { u1: "User One" },
+        queryNameByKey: { u1: "u1" },
+        window: createWindowStub("?teams=team-1"),
+        period: { start: "2026-03-08", end: "2026-03-08" },
+        rawData: { issues: [] }
+    });
+
+    assert.deepEqual(normalize(harness.events.fetchAllDataCalls), [{
+        username: "u1",
+        startDate: "2026-03-08",
+        endDate: "2026-03-08",
+        hasOnProgress: true
+    }]);
+});
+
 test("rendering keeps Jira blocks visible when repo loading fails", function() {
     var harness = createRenderingHarness({
         repoShouldFail: true
@@ -5556,7 +5725,7 @@ test("rendering keeps Jira blocks visible when repo loading fails", function() {
     assert.deepEqual(harness.events.repoLogCalls, []);
 });
 
-test("rendering ignores stale older request responses and keeps newer dashboard", function() {
+test("rendering ignores stale older request responses and keeps newer dashboard after manual reload", function() {
     var firstApi = createDeferred();
     var secondApi = createDeferred();
     var activeRepo = createDeferred();
@@ -5586,6 +5755,7 @@ test("rendering ignores stale older request responses and keeps newer dashboard"
     });
 
     harness.triggerUserChange({ name: "second-user", displayName: "Second User" });
+    harness.clickLoad();
 
     secondApi.resolve({
         issues: [{ id: "2002", key: "SECOND-2" }],

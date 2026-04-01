@@ -142,6 +142,14 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         window.history.replaceState(null, "", url);
     }
 
+    function hasPrefilledUrlSelection() {
+        // Keep non-browser/test-harness contexts eager so existing embedded flows
+        // without a readable location do not silently stop loading.
+        if (typeof window === "undefined" || !window || !window.location) return true;
+        var params = new URLSearchParams(window.location.search || "");
+        return !!String(params.get("user") || params.get("users") || params.get("teams") || "").trim();
+    }
+
     function injectStyles() {
         if (stylesInjected) return;
         stylesInjected = true;
@@ -212,9 +220,6 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             renderEmptyState();
             return;
         }
-        if (!mods.multiUserPicker) {
-            loadData(currentUsers, currentPeriod || utils.getDefaultPeriod());
-        }
     }
 
     function finishInitialLoad() {
@@ -225,7 +230,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             currentUsers = sel ? [sel] : [];
         }
 
-        if (currentUsers.length > 0) {
+        if (currentUsers.length > 0 && hasPrefilledUrlSelection()) {
             var period = currentPeriod || utils.getDefaultPeriod();
             loadData(currentUsers, period);
         } else {
