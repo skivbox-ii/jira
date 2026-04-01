@@ -458,7 +458,7 @@ define("_ujgDD_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgDD_config",
             render();
         });
 
-        render();
+        loadTeams().always(render);
 
         return ctrl;
     }

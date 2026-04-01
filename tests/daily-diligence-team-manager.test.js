@@ -1034,6 +1034,34 @@ test("create appends overlay and new team triggers onChange", async function() {
     assert.equal($parent.find(".ujg-dd-teams-overlay").length, 0);
 });
 
+test("create loads persisted teams before first render", async function() {
+    var ls = makeLocalStorage();
+    ls.setItem(
+        "ujg-dd-teams",
+        JSON.stringify({
+            teams: [{ id: "persisted", name: "Persisted Team", memberKeys: [] }]
+        })
+    );
+    var jq = createJqueryStub(function() {
+        return resolvedAjax({});
+    });
+    var $ = createMiniJquery();
+    $.ajax = jq.ajax;
+    $.Deferred = jq.Deferred;
+
+    var tm = loadTeamManager($, { location: { search: "" } }, ls);
+    var $parent = $("<div/>");
+    tm.create($parent, function() {});
+
+    await new Promise(function(resolve) {
+        setImmediate(resolve);
+    });
+
+    assert.equal(tm.getTeams().length, 1);
+    assert.equal(tm.getTeams()[0].name, "Persisted Team");
+    assert.equal($parent.find(".ujg-dd-teams-row").length, 1);
+});
+
 test("loadTeams restores memberLabel from persisted displayNameByKey (localStorage)", async function() {
     var ls = makeLocalStorage();
     ls.setItem(

@@ -7164,7 +7164,7 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
             render();
         });
 
-        render();
+        loadTeams().always(render);
 
         return ctrl;
     }
