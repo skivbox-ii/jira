@@ -384,6 +384,25 @@ test("user-activity utils: done issue ref adds strike class and status tooltip",
     assert.match(html, /Closed task/);
 });
 
+test("user-activity utils: status badge uses grouped colors and title can include status set time", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+
+    var openBadge = utils.renderIssueStatusBadge ? utils.renderIssueStatusBadge("Backlog") : "";
+    var activeBadge = utils.renderIssueStatusBadge ? utils.renderIssueStatusBadge("QA") : "";
+    var doneBadge = utils.renderIssueStatusBadge ? utils.renderIssueStatusBadge("Resolved") : "";
+    var html = utils.renderIssueRef("ABC-123", "Timed status", "QA", {
+        statusChangedAt: "2026-04-02T15:45:00"
+    });
+
+    assert.match(openBadge, /ujg-ua-status-open/);
+    assert.match(activeBadge, /ujg-ua-status-active/);
+    assert.match(doneBadge, /ujg-ua-status-done/);
+    assert.match(html, /title="Текущий статус: QA \| Установлен: 02\.04\.2026 15:45"/);
+});
+
 test("user-activity utils: default period is current week from monday to today", function() {
     var utils = loadUserActivityUtilsWithDate("2026-04-01T12:00:00", {
         location: { origin: "https://jira.example.com" },
@@ -410,6 +429,20 @@ test("user-activity utils: matches author against selected users by identity tok
         utils.matchesSelectedUsers({ displayName: "Bob Smith" }, [{ displayName: "Bob Jones" }]),
         false
     );
+});
+
+test("user-activity utils: computes worklog lag score from started and created", function() {
+    var utils = loadUserActivityUtils({
+        location: { origin: "https://jira.example.com" },
+        AJS: { params: { baseURL: "" } }
+    });
+
+    var meta = utils.getWorklogLagMeta("2026-04-02T09:00:00", "2026-04-03T16:06:00", 4);
+
+    assert.equal(meta.workedDayKey, "2026-04-02");
+    assert.equal(meta.isLate, true);
+    assert.equal(Math.round(meta.lagDurationHoursRaw * 10) / 10, 40.1);
+    assert.equal(Math.round(meta.lagScoreHours * 100) / 100, 6.68);
 });
 
 test("user-activity API: activity JQL exclusive upper bound includes end date", async function() {
@@ -556,6 +589,7 @@ function loadRepoDataProcessor() {
 }
 
 function loadUserActivityDataProcessor() {
+    var u = uaUtilsForLinks();
     return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "data-processor.js"), {
         _ujgUA_config: {},
         _ujgUA_utils: {
@@ -572,6 +606,67 @@ function loadUserActivityDataProcessor() {
             },
             getProjectKey: function(issueKey) {
                 return String(issueKey || "").split("-")[0] || "";
+            },
+            getWorklogLagMeta: u.getWorklogLagMeta
+        }
+    });
+}
+
+function createSummaryCardsJqueryStub() {
+    function renderNode(node) {
+        return "<" + node.tag + node.attrs + ">" + node.inner + "</" + node.tag + ">";
+    }
+
+    function removeByClass(node, className) {
+        var pattern = new RegExp(
+            '<([a-zA-Z0-9]+)([^>]*)class="[^"]*' + escapeRegExp(className) + '[^"]*"[^>]*>[\\s\\S]*?<\\/\\1>',
+            "g"
+        );
+        node.inner = node.inner.replace(pattern, "");
+    }
+
+    function wrap(node) {
+        return {
+            __node: node,
+            append: function(child) {
+                if (child && child.__node) node.inner += renderNode(child.__node);
+                else node.inner += String(child || "");
+                return this;
+            },
+            html: function(value) {
+                if (value === undefined) return node.inner;
+                node.inner = String(value);
+                return this;
+            },
+            find: function(selector) {
+                var classMatch = /^\.([a-zA-Z0-9_-]+)$/.exec(selector);
+                return {
+                    remove: function() {
+                        if (classMatch) removeByClass(node, classMatch[1]);
+                        return this;
+                    }
+                };
+            }
+        };
+    }
+
+    return function(input) {
+        var match = /^<([a-zA-Z0-9]+)([^>]*)><\/\1>$/.exec(String(input || "").trim());
+        if (!match) throw new Error("summary cards jquery stub: unsupported input");
+        return wrap({ tag: match[1], attrs: match[2], inner: "" });
+    };
+}
+
+function loadSummaryCards(jquery) {
+    var configMod = loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "config.js"), {});
+    var u = uaUtilsForLinks();
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "summary-cards.js"), {
+        jquery: jquery,
+        _ujgUA_config: configMod,
+        _ujgUA_utils: {
+            escapeHtml: u.escapeHtml,
+            icon: function() {
+                return "";
             }
         }
     });
@@ -1294,6 +1389,9 @@ function loadUnifiedCalendar(jquery, utilsOverrides) {
                 s = String(s || "");
                 return s.length <= n ? s : s.slice(0, n) + "…";
             },
+            formatDayMonth: u.formatDayMonth,
+            formatDayMonthTime: u.formatDayMonthTime,
+            formatLagDurationHours: u.formatLagDurationHours,
             isWeekendDay: function(dateStr) {
                 var dt = new Date(dateStr + "T00:00:00");
                 var dow = dt.getDay();
@@ -1305,10 +1403,12 @@ function loadUnifiedCalendar(jquery, utilsOverrides) {
             renderIssueRef: u.renderIssueRef,
             renderIssueLinkWithStatus: u.renderIssueLinkWithStatus,
             renderIssueSummaryText: u.renderIssueSummaryText,
+            renderIssueStatusBadge: u.renderIssueStatusBadge,
             buildIssueUrl: u.buildIssueUrl,
             getJiraBaseUrl: u.getJiraBaseUrl,
             getStatusName: u.getStatusName,
             isDoneStatus: u.isDoneStatus,
+            getIssueStatusChangedAt: u.getIssueStatusChangedAt,
             getIssueStatusTitle: u.getIssueStatusTitle,
             shortHash: u.shortHash,
             matchesSelectedUsers: u.matchesSelectedUsers
@@ -1498,6 +1598,12 @@ function loadRendering(jquery, utilsOverrides, documentStub, windowStub) {
                         icon: function(name) { return "[" + name + "]"; },
                         getDefaultPeriod: function() {
                             return { start: "2026-03-01", end: "2026-03-31" };
+                        },
+                        getIssueStatusChangedAt: function() {
+                            return "";
+                        },
+                        renderIssueStatusBadge: function(status) {
+                            return '<span class="ujg-ua-inline-status">' + String(status || "") + "</span>";
                         },
                         escapeHtml: function(value) { return String(value || ""); },
                         getDayKey: function(date) {
@@ -3580,6 +3686,43 @@ test("unified calendar Jira line shows summary and done-state tooltip", function
     assert.match(html, /title="Текущий статус: Done"/);
 });
 
+test("unified calendar Jira worklog shows worked day loggedAt and late marker", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var start = new Date("2026-03-30T00:00:00");
+    var end = new Date("2026-04-05T23:59:59");
+    var out = mod.render({
+        "2026-04-02": {
+            totalHours: 4,
+            users: { u1: { totalHours: 4 } },
+            allWorklogs: [{
+                issueKey: "LAG-1",
+                timestamp: "2026-04-02T09:00:00",
+                started: "2026-04-02T09:00:00",
+                created: "2026-04-03T16:06:00",
+                workedDayKey: "2026-04-02",
+                loggedAt: "2026-04-03T16:06:00",
+                isLate: true,
+                lagDurationHoursRaw: 40.1,
+                lagScoreHours: 6.68,
+                author: { name: "u1", displayName: "Ivan Ivanov" },
+                timeSpentHours: 4,
+                comment: ""
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        }
+    }, {
+        "LAG-1": { key: "LAG-1", summary: "Lag task", status: "In Progress" }
+    }, [{ name: "u1", displayName: "Ivan Ivanov" }], start, end);
+    var html = out.$el.html();
+
+    assert.match(html, /за 02\.04/);
+    assert.match(html, /внесено 03\.04 16:06/);
+    assert.match(html, /отставание 1д 16ч/);
+    assert.match(html, /ujg-ua-worklog-late/);
+});
+
 test("unified calendar repo line shows issue link status badge and summary meta", function() {
     var mod = loadUnifiedCalendar(createHtmlJqueryStub());
     var start = new Date("2026-03-02T00:00:00.000Z");
@@ -3602,11 +3745,25 @@ test("unified calendar repo line shows issue link status badge and summary meta"
         }
     };
     var users = [{ name: "u1", displayName: "User One" }];
-    var out = mod.render(dayMap, {}, users, start, end);
+    var issueMap = {
+        "CORE-9": {
+            key: "CORE-9",
+            summary: "Different summary text for task",
+            status: "In Progress",
+            changelogs: [{
+                field: "status",
+                toString: "In Progress",
+                timestamp: "2026-03-04T10:15:00"
+            }]
+        }
+    };
+    var out = mod.render(dayMap, issueMap, users, start, end);
     var html = out.$el.html();
     assert.match(html, /<a href="https:\/\/jira\.example\.com\/browse\/CORE-9"[^>]*target="_blank"/);
     assert.match(html, /ujg-ua-inline-status/);
+    assert.match(html, /ujg-ua-status-active/);
     assert.match(html, /In Progress/);
+    assert.match(html, /title="Текущий статус: In Progress \| Установлен: 04\.03\.2026 10:15"/);
     assert.match(html, /Different summary text for task/);
 });
 
@@ -3686,8 +3843,8 @@ test("unified calendar repo line keeps status without issue key and no dangling 
     var out = mod.render(dayMap, {}, users, start, end);
     var html = out.$el.html();
 
-    assert.match(html, /<span class="ujg-ua-inline-status">Blocked<\/span>/);
-    assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice Dev<\/span> <span class="ujg-ua-inline-status">Blocked<\/span>/);
+    assert.match(html, /<span class="ujg-ua-inline-status[^"]*ujg-ua-status-active[^"]*"[^>]*>Blocked<\/span>/);
+    assert.match(html, /<span class="text-\[9px\] text-muted-foreground">Коммит<\/span> <span class="ujg-ua-author">Alice Dev<\/span> <span class="ujg-ua-inline-status[^"]*ujg-ua-status-active[^"]*"[^>]*>Blocked<\/span>/);
     assert.match(html, /<span class="[^"]*ujg-ua-repo-msg[^"]*">Refactor escape path<\/span>/);
     assert.doesNotMatch(html, /Alice Dev<\/span>\s{2,}<span class="ujg-ua-inline-status"/);
 });
@@ -3910,7 +4067,16 @@ test("presentation consistency: repo author links and issue status align across 
     var dayMap = {};
     dayMap[dateStr] = daySlice;
     var issueMap = {};
-    issueMap[issueKey] = { key: issueKey, summary: longSummary, status: "In Progress" };
+    issueMap[issueKey] = {
+        key: issueKey,
+        summary: longSummary,
+        status: "In Progress",
+        changelogs: [{
+            field: "status",
+            toString: "In Progress",
+            timestamp: "2026-03-04T10:15:00"
+        }]
+    };
 
     var users = [{ name: "u1", displayName: "User One" }];
     var modCal = loadUnifiedCalendar(createHtmlJqueryStub());
@@ -3943,8 +4109,10 @@ test("presentation consistency: repo author links and issue status align across 
     assert.match(detailHtml, /class="ujg-ua-author">Ivanov Ivan Petrovich<\/span>/);
     assert.match(calHtml, /jira\.example\.com\/browse\/PRES-9/);
     assert.match(detailHtml, /jira\.example\.com\/browse\/PRES-9/);
-    assert.match(calHtml, /ujg-ua-inline-status">In Progress</);
-    assert.match(detailHtml, /ujg-ua-inline-status">In Progress</);
+    assert.match(calHtml, /ujg-ua-inline-status[^"]*ujg-ua-status-active[^"]*"[^>]*>In Progress</);
+    assert.match(detailHtml, /ujg-ua-inline-status[^"]*ujg-ua-status-active[^"]*"[^>]*>In Progress</);
+    assert.match(calHtml, /title="Текущий статус: In Progress \| Установлен: 04\.03\.2026 10:15"/);
+    assert.match(detailHtml, /title="Текущий статус: In Progress \| Установлен: 04\.03\.2026 10:15"/);
     assert.match(calHtml, calendarSummaryPattern);
     assert.doesNotMatch(calHtml, /ujg-ua-repo-summary[^>]*>fallback only<\/span>/);
     assert.match(detailHtml, summaryPattern);
@@ -4603,6 +4771,52 @@ test("daily detail action line includes full author issue key and summary before
         lastHtml,
         /<span class="ujg-ua-time">\d{2}:\d{2}<\/span>\s*<span class="ujg-ua-author">Alice Reviewer<\/span>\s*<a [^>]*>ORD-1<\/a>\s*<span [^>]*class="[^"]*ujg-ua-issue-summary[^"]*"[^>]*>Ordered task summary<\/span>\s*— Комментарий/
     );
+});
+
+test("daily detail worklog shows worked day loggedAt and late marker", function() {
+    var lastHtml = "";
+    var $stub = function() {
+        return {
+            html: function(h) {
+                if (arguments.length) {
+                    lastHtml = h;
+                    return this;
+                }
+                return lastHtml;
+            },
+            slideDown: function() {
+                return this;
+            },
+            slideUp: function() {
+                return this;
+            },
+            find: function() {
+                return { on: function() {} };
+            }
+        };
+    };
+    loadDailyDetail($stub).create().show("2026-04-02", {
+        worklogs: [{
+            issueKey: "LAG-1",
+            timestamp: "2026-04-02T09:00:00",
+            started: "2026-04-02T09:00:00",
+            created: "2026-04-03T16:06:00",
+            workedDayKey: "2026-04-02",
+            loggedAt: "2026-04-03T16:06:00",
+            isLate: true,
+            lagDurationHoursRaw: 40.1,
+            lagScoreHours: 6.68,
+            author: { displayName: "Ivan Ivanov" },
+            timeSpentHours: 4
+        }]
+    }, {
+        "LAG-1": { key: "LAG-1", summary: "Lag task", status: "In Progress" }
+    }, []);
+
+    assert.match(lastHtml, /Worklog 4ч/);
+    assert.match(lastHtml, /за 02\.04/);
+    assert.match(lastHtml, /внесено 03\.04 16:06/);
+    assert.match(lastHtml, /отставание 1д 16ч/);
 });
 
 function createDayDetailInteractiveStub() {
@@ -5360,6 +5574,144 @@ test("user activity data processor preserves Jira timestamps and authors for wor
     assert.equal(multi.dayMap["2026-03-30"].allWorklogs[0].timestamp, "2026-03-30T08:15:00.000Z");
     assert.equal(multi.dayMap["2026-03-30"].allChanges[0].timestamp, "2026-03-30T10:45:00.000Z");
     assert.equal(multi.issueMap["CORE-1"].worklogs[0].author.displayName, "Ivan Ivanov");
+});
+
+test("user activity data processor preserves worklog created timestamp and lag fields", function() {
+    var mod = loadUserActivityDataProcessor();
+    var rawData = {
+        issues: [{
+            key: "CORE-LAG",
+            fields: {
+                summary: "Lag task",
+                issuetype: { name: "Task" },
+                status: { name: "In Progress" },
+                project: { key: "CORE", name: "Core" }
+            }
+        }],
+        details: {
+            "CORE-LAG": {
+                worklogs: [{
+                    started: "2026-04-02T09:00:00",
+                    created: "2026-04-03T16:06:00",
+                    timeSpentSeconds: 14400,
+                    comment: "late log",
+                    author: { name: "u1", displayName: "Ivan Ivanov" }
+                }],
+                changelog: []
+            }
+        }
+    };
+
+    var single = mod.processData(rawData, "u1", "2026-04-01", "2026-04-07");
+    var wl = single.dayMap["2026-04-02"].worklogs[0];
+
+    assert.equal(wl.created, "2026-04-03T16:06:00");
+    assert.equal(wl.loggedAt, "2026-04-03T16:06:00");
+    assert.equal(wl.workedDayKey, "2026-04-02");
+    assert.equal(wl.isLate, true);
+    assert.equal(Math.round(wl.lagScoreHours * 100) / 100, 6.68);
+});
+
+test("user activity multi-user stats sums lagScoreHours per user", function() {
+    var mod = loadUserActivityDataProcessor();
+    var data = mod.processMultiUserData([{
+        username: "u1",
+        displayName: "Ivan Ivanov",
+        rawData: {
+            issues: [{
+                key: "CORE-LAG",
+                fields: {
+                    summary: "Lag task",
+                    issuetype: { name: "Task" },
+                    status: { name: "In Progress" },
+                    project: { key: "CORE", name: "Core" }
+                }
+            }],
+            details: {
+                "CORE-LAG": {
+                    worklogs: [{
+                        started: "2026-04-02T09:00:00",
+                        created: "2026-04-03T16:06:00",
+                        timeSpentSeconds: 14400,
+                        author: { name: "u1", displayName: "Ivan Ivanov" }
+                    }],
+                    changelog: []
+                }
+            }
+        },
+        comments: {}
+    }], "2026-04-01", "2026-04-07");
+
+    assert.equal(Math.round(data.stats.userStats.u1.lagScoreHours * 100) / 100, 6.68);
+});
+
+test("summary cards user stats table renders lag column", function() {
+    var mod = loadSummaryCards(createSummaryCardsJqueryStub());
+    var widget = mod.create();
+
+    widget.render({
+        totalHours: 8,
+        totalIssues: 1,
+        totalProjects: 1,
+        activeDays: 1,
+        avgHoursPerDay: 8,
+        userStats: {
+            u1: {
+                displayName: "Ivan Ivanov",
+                totalHours: 4,
+                activeDays: 1,
+                daysWithoutWorklogs: 0,
+                lagScoreHours: 6.68
+            },
+            u2: {
+                displayName: "Petr Petrov",
+                totalHours: 4,
+                activeDays: 1,
+                daysWithoutWorklogs: 0,
+                lagScoreHours: 0
+            }
+        }
+    });
+
+    var html = widget.$el.html();
+    assert.match(html, /Отставание/);
+    assert.match(html, /Ivan Ivanov/);
+    assert.match(html, /6\.7ч/);
+});
+
+test("unified calendar weekly lag table shows per-user lag totals", function() {
+    var mod = loadUnifiedCalendar(createHtmlJqueryStub());
+    var html = mod.render({
+        "2026-04-02": {
+            totalHours: 4,
+            users: { u1: { totalHours: 4 }, u2: { totalHours: 0 } },
+            allWorklogs: [{
+                issueKey: "LAG-1",
+                timestamp: "2026-04-02T09:00:00",
+                started: "2026-04-02T09:00:00",
+                created: "2026-04-03T16:06:00",
+                workedDayKey: "2026-04-02",
+                loggedAt: "2026-04-03T16:06:00",
+                isLate: true,
+                lagDurationHoursRaw: 40.1,
+                lagScoreHours: 6.68,
+                author: { name: "u1", displayName: "Ivan Ivanov" },
+                timeSpentHours: 4
+            }],
+            allChanges: [],
+            allComments: [],
+            repoItems: []
+        }
+    }, {
+        "LAG-1": { key: "LAG-1", summary: "Lag task", status: "In Progress", project: "CORE" }
+    }, [
+        { name: "u1", displayName: "Ivan Ivanov" },
+        { name: "u2", displayName: "Petr Petrov" }
+    ], new Date("2026-03-30T00:00:00"), new Date("2026-04-05T23:59:59")).$el.html();
+
+    assert.match(html, /Суммарное отставание/);
+    assert.match(html, /Ivan Ivanov/);
+    assert.match(html, /6\.7ч/);
 });
 
 test("repo modules are wired in main module and build order", function() {

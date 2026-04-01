@@ -79,7 +79,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var issue = issueKey && issueMap && issueMap[issueKey];
         return {
             issueSummary: (issue && issue.summary) || (repoItem && repoItem.issueSummary) || "",
-            issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || ""
+            issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || "",
+            issueStatusChangedAt: (issue && utils.getIssueStatusChangedAt(issue, issue.status)) || (repoItem && repoItem.issueStatusChangedAt) || ""
         };
     }
 
@@ -87,7 +88,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         if (!action || (!action.issueKey && !action.issueSummary)) return "";
         return utils.renderIssueRef(action.issueKey, action.issueSummary, action.issueStatus, {
             keyClass: keyClass || "font-mono text-xs font-semibold text-primary shrink-0",
-            summaryClass: summaryClass || "text-foreground font-medium min-w-0"
+            summaryClass: summaryClass || "text-foreground font-medium min-w-0",
+            statusChangedAt: action.issueStatusChangedAt
         });
     }
 
@@ -102,6 +104,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: wl.issueKey,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
+                created: wl.created || "",
+                loggedAt: wl.loggedAt || wl.created || "",
+                workedDayKey: wl.workedDayKey || wl.date || "",
+                isLate: !!wl.isLate,
+                lagDurationHoursRaw: wl.lagDurationHoursRaw || 0,
+                lagScoreHours: wl.lagScoreHours || 0,
                 timestamp: timestampFor(wl),
                 author: normalizeAuthor(wl.author),
                 type: "worklog",
@@ -117,6 +126,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: ch.issueKey,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
                 timestamp: timestampFor(ch),
                 author: normalizeAuthor(ch.author),
                 type: "change",
@@ -131,6 +141,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: cm.issueKey,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
                 timestamp: timestampFor(cm),
                 author: normalizeAuthor(cm.author),
                 type: "comment",
@@ -153,6 +164,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: ik,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
                 timestamp: r.timestamp || r.authorTimestamp || "",
                 author: repoAuthor,
                 type: "repo",
@@ -305,6 +317,15 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             case "worklog": {
                 var h = Math.round((action.timeSpentHours || 0) * 10) / 10;
                 html += "Worklog " + h + "ч";
+                if (action.workedDayKey) {
+                    html += ' <span class="ujg-ua-worklog-day">за ' + utils.escapeHtml(utils.formatDayMonth(action.workedDayKey)) + "</span>";
+                }
+                if (action.isLate) {
+                    if (action.loggedAt) {
+                        html += ' <span class="ujg-ua-worklog-late">внесено ' + utils.escapeHtml(utils.formatDayMonthTime(action.loggedAt)) + "</span>";
+                    }
+                    html += ' <span class="ujg-ua-worklog-late">отставание ' + utils.escapeHtml(utils.formatLagDurationHours(action.lagDurationHoursRaw)) + "</span>";
+                }
                 var c = action.comment && String(action.comment).trim();
                 if (c) {
                     html += '<div class="ujg-ua-detail-comment">"' + utils.escapeHtml(utils.truncate(c, 200)) + '"</div>';
@@ -334,7 +355,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 }
                 var st = action.issueStatus && String(action.issueStatus).trim();
                 if (st) {
-                    html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(st) + "</span>";
+                    html += " " + utils.renderIssueStatusBadge(st, action.issueStatusChangedAt);
                 }
                 var msg = action.message && String(action.message).trim();
                 if (msg) {
@@ -376,10 +397,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             html += renderActionIssueRef({
                 issueKey: key,
                 issueSummary: summary,
-                issueStatus: status
+                issueStatus: status,
+                issueStatusChangedAt: (entry[0] && entry[0].issueStatusChangedAt) || ""
             }, "font-mono text-xs font-semibold text-primary shrink-0", "text-foreground font-medium min-w-0 ujg-ua-detail-issue-summary");
             if (status) {
-                html += '<span class="ujg-ua-inline-status shrink-0">' + utils.escapeHtml(status) + "</span>";
+                html += utils.renderIssueStatusBadge(status, (entry[0] && entry[0].issueStatusChangedAt) || "", {
+                    class: "shrink-0"
+                });
             }
             html += "</div>";
             for (var gi = 0; gi < entry.length; gi++) {
@@ -436,10 +460,11 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         }
         var html = utils.renderIssueRef(action.issueKey, action.issueSummary, action.issueStatus, {
             keyClass: "font-mono text-primary text-[11px]",
-            summaryClass: "block text-[10px] text-foreground/80 ujg-ua-detail-issue-summary"
+            summaryClass: "block text-[10px] text-foreground/80 ujg-ua-detail-issue-summary",
+            statusChangedAt: action.issueStatusChangedAt
         });
         if (action.issueStatus) {
-            html += '<div><span class="ujg-ua-inline-status">' + utils.escapeHtml(action.issueStatus) + "</span></div>";
+            html += "<div>" + utils.renderIssueStatusBadge(action.issueStatus, action.issueStatusChangedAt) + "</div>";
         }
         return html;
     }

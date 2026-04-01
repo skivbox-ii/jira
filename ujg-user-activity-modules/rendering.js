@@ -978,6 +978,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         summary: iss.summary,
                         type: iss.type,
                         status: iss.status,
+                        statusChangedAt: utils.getIssueStatusChangedAt(iss, iss.status),
                         hours: iss.totalTimeHours
                     };
                 })

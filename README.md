@@ -47,7 +47,9 @@
 │       ├── 2026-04-01-user-activity-hard-open-diagnostics-design.md
 │       ├── 2026-04-01-user-activity-hard-open-diagnostics.md
 │       ├── 2026-04-01-user-activity-render-time-user-filter-design.md
-│       └── 2026-04-01-user-activity-render-time-user-filter.md
+│       ├── 2026-04-01-user-activity-render-time-user-filter.md
+│       ├── 2026-04-01-user-activity-worklog-lag-design.md
+│       └── 2026-04-01-user-activity-worklog-lag.md
 ├── jira_attach_latest_assets.py
 ├── standalone/
 │   └── public/
@@ -130,7 +132,8 @@
 - дизайн и план отображения `Dashboard v<hash> • <commit date time>` в bootstrap UI: `docs/plans/2026-03-29-dashboard-version-display-design.md`, `docs/plans/2026-03-29-dashboard-version-display.md`;
 - исторический дизайн/план только про bootstrap/runtime без property: `docs/plans/2026-03-29-widget-bootstrap-design.md`, `docs/plans/2026-03-29-widget-bootstrap.md`;
 - актуальный дизайн и план по Story Browser epic-first иерархии: `docs/plans/2026-03-10-story-browser-epic-hierarchy-design.md`, `docs/plans/2026-03-10-story-browser-epic-hierarchy.md`;
-- актуальный дизайн и план по render-time user filter для User Activity: `docs/plans/2026-04-01-user-activity-render-time-user-filter-design.md`, `docs/plans/2026-04-01-user-activity-render-time-user-filter.md`.
+- актуальный дизайн и план по render-time user filter для User Activity: `docs/plans/2026-04-01-user-activity-render-time-user-filter-design.md`, `docs/plans/2026-04-01-user-activity-render-time-user-filter.md`;
+- актуальный дизайн и план по отставанию внесения worklog в User Activity: `docs/plans/2026-04-01-user-activity-worklog-lag-design.md`, `docs/plans/2026-04-01-user-activity-worklog-lag.md`.
 
 ## Стабильные URL гаджетов и версия на дашборде (`releaseRef`)
 

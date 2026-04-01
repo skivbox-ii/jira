@@ -23,6 +23,7 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
             var name = u && u.displayName != null ? String(u.displayName) : keys[i];
             var activeDays = u && u.activeDays != null ? Number(u.activeDays) : 0;
             var daysWithoutWorklogs = u && u.daysWithoutWorklogs != null ? Number(u.daysWithoutWorklogs) : 0;
+            var lagScoreHours = u && u.lagScoreHours != null ? Number(u.lagScoreHours) : 0;
             var rowClass = daysWithoutWorklogs > 0 ? ' class="ujg-ua-stat-warn"' : "";
             rows +=
                 "<tr" + rowClass + ">" +
@@ -30,12 +31,13 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
                 "<td>" + formatHoursCell(u && u.totalHours) + "</td>" +
                 "<td>" + (isNaN(activeDays) ? 0 : activeDays) + "</td>" +
                 "<td>" + (isNaN(daysWithoutWorklogs) ? 0 : daysWithoutWorklogs) + "</td>" +
+                "<td>" + formatHoursCell(isNaN(lagScoreHours) ? 0 : lagScoreHours) + "</td>" +
                 "</tr>";
         }
         return (
             '<div class="ujg-ua-user-stats-table">' +
             "<table>" +
-            "<tr><th>Пользователь</th><th>Часы</th><th>Активных дней</th><th>Без трудозатрат</th></tr>" +
+            "<tr><th>Пользователь</th><th>Часы</th><th>Активных дней</th><th>Без трудозатрат</th><th>Отставание</th></tr>" +
             rows +
             "</table>" +
             "</div>"

@@ -83,6 +83,7 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 var hours = (wl.timeSpentSeconds || 0) / 3600;
                 var dateStr = utils.getDayKey(started);
                 var comment = wl.comment || "";
+                var lagMeta = utils.getWorklogLagMeta(wl.started, wl.created, hours);
 
                 var wlAuthor = {
                     name: author,
@@ -92,6 +93,12 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     issueKey: key,
                     date: dateStr,
                     started: wl.started,
+                    created: wl.created || "",
+                    loggedAt: lagMeta.loggedAt,
+                    workedDayKey: lagMeta.workedDayKey,
+                    isLate: lagMeta.isLate,
+                    lagDurationHoursRaw: lagMeta.lagDurationHoursRaw,
+                    lagScoreHours: lagMeta.lagScoreHours,
                     timestamp: started.toISOString(),
                     timeSpentHours: Math.round(hours * 100) / 100,
                     comment: comment,
@@ -298,7 +305,8 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 displayName: displayName,
                 totalHours: processed.stats.totalHours,
                 activeDays: processed.stats.activeDays,
-                daysWithoutWorklogs: 0
+                daysWithoutWorklogs: 0,
+                lagScoreHours: 0
             };
 
             var userDayMap = processed.dayMap;
@@ -312,6 +320,12 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                         issueKey: w.issueKey,
                         date: w.date,
                         started: w.started,
+                        created: w.created || "",
+                        loggedAt: w.loggedAt || "",
+                        workedDayKey: w.workedDayKey || "",
+                        isLate: !!w.isLate,
+                        lagDurationHoursRaw: w.lagDurationHoursRaw || 0,
+                        lagScoreHours: w.lagScoreHours || 0,
                         timeSpentHours: w.timeSpentHours,
                         comment: w.comment,
                         author: w.author || author,
@@ -319,6 +333,7 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     };
                     userSlice.worklogs.push(wlCopy);
                     multiDay.allWorklogs.push(wlCopy);
+                    userStats[username].lagScoreHours += (w.lagScoreHours || 0);
                 });
 
                 (srcDay.changes || []).forEach(function(c) {
@@ -407,6 +422,7 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 if (h === 0) missing++;
             });
             userStats[un].daysWithoutWorklogs = missing;
+            userStats[un].lagScoreHours = Math.round((userStats[un].lagScoreHours || 0) * 100) / 100;
         });
 
         return {

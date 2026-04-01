@@ -20,6 +20,22 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         "завершена",
         "выполнено"
     ];
+    var OPEN_IDLE_STATUS_HINTS = [
+        "open",
+        "to do",
+        "todo",
+        "backlog",
+        "selected",
+        "new",
+        "reopen",
+        "planned",
+        "ready",
+        "todo",
+        "открыт",
+        "открыта",
+        "нов",
+        "бэклог"
+    ];
 
     function log() {
         if (CONFIG.debug && window.console) {
@@ -67,6 +83,23 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         var dow = dt.getDay();
         var dayIdx = dow === 0 ? 6 : dow - 1;
         return WEEKDAYS_RU[dayIdx] + ", " + dt.getDate() + " " + MONTHS_RU[dt.getMonth()];
+    }
+
+    function formatDayMonth(value) {
+        var dt;
+        if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            dt = parseDate(value + "T00:00:00");
+        } else {
+            dt = parseDate(value);
+        }
+        if (!dt) return "";
+        return pad2(dt.getDate()) + "." + pad2(dt.getMonth() + 1);
+    }
+
+    function formatDayMonthTime(value) {
+        var dt = parseDate(value);
+        if (!dt) return "";
+        return formatDayMonth(dt) + " " + pad2(dt.getHours()) + ":" + pad2(dt.getMinutes());
     }
 
     function escapeHtml(t) {
@@ -150,9 +183,58 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return DONE_STATUSES.indexOf(String(name).toLowerCase()) >= 0;
     }
 
-    function getIssueStatusTitle(status) {
+    function getIssueStatusGroup(status) {
+        var name = String(getStatusName(status) || "").toLowerCase();
+        if (!name) return "open";
+        if (isDoneStatus(name)) return "done";
+        for (var i = 0; i < OPEN_IDLE_STATUS_HINTS.length; i++) {
+            if (name.indexOf(OPEN_IDLE_STATUS_HINTS[i]) >= 0) return "open";
+        }
+        return "active";
+    }
+
+    function getIssueStatusBadgeClass(status) {
+        return "ujg-ua-status-" + getIssueStatusGroup(status);
+    }
+
+    function formatStatusChangedAt(changedAt) {
+        var dt = parseDate(changedAt);
+        if (!dt) return "";
+        return pad2(dt.getDate()) + "." + pad2(dt.getMonth() + 1) + "." + dt.getFullYear() + " " +
+            pad2(dt.getHours()) + ":" + pad2(dt.getMinutes());
+    }
+
+    function getIssueStatusChangedAt(issue, status) {
+        var changelogs = issue && issue.changelogs;
+        var target = String(getStatusName(status) || "").toLowerCase();
+        var best = "";
+        if (!changelogs || !changelogs.length) return "";
+        for (var i = 0; i < changelogs.length; i++) {
+            var ch = changelogs[i];
+            if (String(ch && ch.field || "").toLowerCase() !== "status") continue;
+            var toStatus = String(getStatusName(ch && ch.toString) || ch && ch.toString || "").trim().toLowerCase();
+            if (target && toStatus !== target) continue;
+            var ts = String(ch && (ch.timestamp || ch.created || ch.date) || "");
+            if (ts && (!best || ts > best)) best = ts;
+        }
+        return best;
+    }
+
+    function getIssueStatusTitle(status, changedAt) {
         var name = getStatusName(status);
-        return name ? "Текущий статус: " + name : "";
+        var when = formatStatusChangedAt(changedAt);
+        if (!name) return "";
+        return when ? "Текущий статус: " + name + " | Установлен: " + when : "Текущий статус: " + name;
+    }
+
+    function renderIssueStatusBadge(status, changedAt, extraAttrs) {
+        var name = getStatusName(status);
+        if (!name) return "";
+        var attrs = extraAttrs != null && typeof extraAttrs === "object" ? Object.assign({}, extraAttrs) : {};
+        attrs.class = joinClassNames("ujg-ua-inline-status", getIssueStatusBadgeClass(name), attrs.class);
+        if (!attrs.title) attrs.title = getIssueStatusTitle(name, changedAt);
+        var attrString = normalizeLinkAttrs(attrs);
+        return '<span' + (attrString ? " " + attrString : "") + ">" + escapeHtml(name) + "</span>";
     }
 
     function renderIssueLinkWithStatus(issueKey, label, status, extraAttrs) {
@@ -160,7 +242,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
             return renderIssueLink(issueKey, label, extraAttrs);
         }
         var attrs = Object.assign({}, extraAttrs || {});
-        var title = attrs.title || getIssueStatusTitle(status);
+        var statusChangedAt = attrs.statusChangedAt;
+        delete attrs.statusChangedAt;
+        var title = attrs.title || getIssueStatusTitle(status, statusChangedAt);
         attrs.class = joinClassNames(attrs.class, isDoneStatus(status) ? "ujg-ua-issue-done" : "");
         if (title) attrs.title = title;
         else delete attrs.title;
@@ -175,7 +259,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
             return '<span' + (rawAttrs ? " " + rawAttrs : "") + ">" + escapeHtml(text) + "</span>";
         }
         var attrs = Object.assign({}, extraAttrs || {});
-        var title = attrs.title || getIssueStatusTitle(status);
+        var statusChangedAt = attrs.statusChangedAt;
+        delete attrs.statusChangedAt;
+        var title = attrs.title || getIssueStatusTitle(status, statusChangedAt);
         if (title) attrs.title = title;
         else delete attrs.title;
         var attrString = normalizeLinkAttrs(attrs);
@@ -184,18 +270,20 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
 
     function renderIssueRef(issueKey, summary, status, options) {
         options = options || {};
-        var title = options.title || getIssueStatusTitle(status);
+        var title = options.title || getIssueStatusTitle(status, options.statusChangedAt);
         var parts = [];
         if (issueKey) {
             parts.push(renderIssueLinkWithStatus(issueKey, options.keyLabel || issueKey, status, {
                 class: joinClassNames("ujg-ua-issue-key", options.keyClass),
-                title: title
+                title: title,
+                statusChangedAt: options.statusChangedAt
             }));
         }
         if (summary) {
             parts.push(renderIssueSummaryText(summary, status, {
                 class: joinClassNames("ujg-ua-issue-summary", options.summaryClass),
-                title: title
+                title: title,
+                statusChangedAt: options.statusChangedAt
             }));
         }
         if (!parts.length && options.emptyLabel) {
@@ -274,6 +362,51 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         var idx = Object.keys(colorMap).length % PROJECT_COLORS.length;
         colorMap[projectKey] = PROJECT_COLORS[idx];
         return colorMap[projectKey];
+    }
+
+    function getWorklogLagMeta(started, created, spentHours) {
+        var startedDt = parseDate(started);
+        var createdDt = parseDate(created);
+        var workedDayKey = startedDt ? getDayKey(startedDt) : "";
+        var loggedAt = created ? String(created) : "";
+        if (!startedDt || !createdDt || !workedDayKey) {
+            return {
+                workedDayKey: workedDayKey,
+                loggedAt: loggedAt,
+                isLate: false,
+                lagDurationHoursRaw: 0,
+                lagScoreHours: 0
+            };
+        }
+
+        if (getDayKey(createdDt) === workedDayKey) {
+            return {
+                workedDayKey: workedDayKey,
+                loggedAt: loggedAt,
+                isLate: false,
+                lagDurationHoursRaw: 0,
+                lagScoreHours: 0
+            };
+        }
+
+        var workedDayStart = parseDate(workedDayKey + "T00:00:00");
+        var lagDurationHoursRaw = workedDayStart ? Math.max(0, (createdDt.getTime() - workedDayStart.getTime()) / 3600000) : 0;
+        var lagScoreHours = lagDurationHoursRaw * (Number(spentHours || 0) / 24);
+
+        return {
+            workedDayKey: workedDayKey,
+            loggedAt: loggedAt,
+            isLate: lagDurationHoursRaw > 0,
+            lagDurationHoursRaw: lagDurationHoursRaw,
+            lagScoreHours: lagScoreHours
+        };
+    }
+
+    function formatLagDurationHours(hours) {
+        var total = Math.max(0, Number(hours || 0));
+        var days = Math.floor(total / 24);
+        var restHours = Math.floor(total - days * 24);
+        return days + "д " + restHours + "ч";
     }
 
     function getDefaultPeriod() {
@@ -402,6 +535,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         formatHoursFromHours: formatHoursFromHours,
         formatDateTime: formatDateTime,
         formatDateShort: formatDateShort,
+        formatDayMonth: formatDayMonth,
+        formatDayMonthTime: formatDayMonthTime,
         escapeHtml: escapeHtml,
         getJiraBaseUrl: getJiraBaseUrl,
         buildIssueUrl: buildIssueUrl,
@@ -409,7 +544,11 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         renderExternalLink: renderExternalLink,
         getStatusName: getStatusName,
         isDoneStatus: isDoneStatus,
+        getIssueStatusGroup: getIssueStatusGroup,
+        getIssueStatusBadgeClass: getIssueStatusBadgeClass,
+        getIssueStatusChangedAt: getIssueStatusChangedAt,
         getIssueStatusTitle: getIssueStatusTitle,
+        renderIssueStatusBadge: renderIssueStatusBadge,
         renderIssueLinkWithStatus: renderIssueLinkWithStatus,
         renderIssueSummaryText: renderIssueSummaryText,
         renderIssueRef: renderIssueRef,
@@ -418,6 +557,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         shortHash: shortHash,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
+        getWorklogLagMeta: getWorklogLagMeta,
+        formatLagDurationHours: formatLagDurationHours,
         getDefaultPeriod: getDefaultPeriod,
         computePresetDates: computePresetDates,
         getHeatBg: getHeatBg,

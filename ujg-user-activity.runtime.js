@@ -824,7 +824,10 @@ define("_ujgUA_config", [], function() {
         ".ujg-ua-repo-block { padding: 4px; background: #f4f5f7; min-height: 16px; }",
         ".ujg-ua-jira-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
         ".ujg-ua-repo-line { font-size: 11px; line-height: 1.4; padding: 1px 0; }",
-        ".ujg-ua-inline-status { font-size: 9px; padding: 0 4px; border-radius: 4px; background: #ebecf0; color: #42526e; }",
+        ".ujg-ua-inline-status { display: inline-block; font-size: 9px; padding: 0 4px; border-radius: 4px; background: #ebecf0; color: #42526e; }",
+        ".ujg-ua-status-open { background: #ebecf0; color: #42526e; }",
+        ".ujg-ua-status-active { background: #deebff; color: #0747a6; }",
+        ".ujg-ua-status-done { background: #e3fcef; color: #006644; }",
         ".ujg-ua-issue-key { text-decoration: none; }",
         ".ujg-ua-issue-key:hover { text-decoration: underline; }",
         ".ujg-ua-commit-link { text-decoration: none; }",
@@ -836,6 +839,12 @@ define("_ujgUA_config", [], function() {
         ".ujg-ua-log-tbody td, .ujg-ua-repo-row td { overflow-wrap: anywhere; }",
         ".ujg-ua-time { color: #6b778c; font-size: 10px; font-family: monospace; }",
         ".ujg-ua-author { color: #0052cc; font-size: 11px; }",
+        ".ujg-ua-worklog-day { font-size: 9px; color: #6b778c; }",
+        ".ujg-ua-worklog-late { display: inline-block; font-size: 9px; color: #bf2600; background: #ffebe6; border-radius: 4px; padding: 0 4px; }",
+        ".ujg-ua-week-lag-table { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #dfe1e6; }",
+        ".ujg-ua-week-lag-title { font-size: 9px; color: #6b778c; text-align: left; }",
+        ".ujg-ua-week-lag-row { display: flex; justify-content: space-between; gap: 6px; font-size: 9px; color: #42526e; white-space: nowrap; }",
+        ".ujg-ua-week-lag-hours { color: #bf2600; font-weight: 600; }",
         ".ujg-ua-cal-user-filter-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #dfe1e6; }",
         ".ujg-ua-cal-user-filter { font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer; border: 1px solid #dfe1e6; background: #fff; }",
         ".ujg-ua-cal-user-filter-on { background: #deebff; border-color: #4c9aff; }",
@@ -922,6 +931,22 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         "завершена",
         "выполнено"
     ];
+    var OPEN_IDLE_STATUS_HINTS = [
+        "open",
+        "to do",
+        "todo",
+        "backlog",
+        "selected",
+        "new",
+        "reopen",
+        "planned",
+        "ready",
+        "todo",
+        "открыт",
+        "открыта",
+        "нов",
+        "бэклог"
+    ];
 
     function log() {
         if (CONFIG.debug && window.console) {
@@ -969,6 +994,23 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         var dow = dt.getDay();
         var dayIdx = dow === 0 ? 6 : dow - 1;
         return WEEKDAYS_RU[dayIdx] + ", " + dt.getDate() + " " + MONTHS_RU[dt.getMonth()];
+    }
+
+    function formatDayMonth(value) {
+        var dt;
+        if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            dt = parseDate(value + "T00:00:00");
+        } else {
+            dt = parseDate(value);
+        }
+        if (!dt) return "";
+        return pad2(dt.getDate()) + "." + pad2(dt.getMonth() + 1);
+    }
+
+    function formatDayMonthTime(value) {
+        var dt = parseDate(value);
+        if (!dt) return "";
+        return formatDayMonth(dt) + " " + pad2(dt.getHours()) + ":" + pad2(dt.getMinutes());
     }
 
     function escapeHtml(t) {
@@ -1052,9 +1094,58 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         return DONE_STATUSES.indexOf(String(name).toLowerCase()) >= 0;
     }
 
-    function getIssueStatusTitle(status) {
+    function getIssueStatusGroup(status) {
+        var name = String(getStatusName(status) || "").toLowerCase();
+        if (!name) return "open";
+        if (isDoneStatus(name)) return "done";
+        for (var i = 0; i < OPEN_IDLE_STATUS_HINTS.length; i++) {
+            if (name.indexOf(OPEN_IDLE_STATUS_HINTS[i]) >= 0) return "open";
+        }
+        return "active";
+    }
+
+    function getIssueStatusBadgeClass(status) {
+        return "ujg-ua-status-" + getIssueStatusGroup(status);
+    }
+
+    function formatStatusChangedAt(changedAt) {
+        var dt = parseDate(changedAt);
+        if (!dt) return "";
+        return pad2(dt.getDate()) + "." + pad2(dt.getMonth() + 1) + "." + dt.getFullYear() + " " +
+            pad2(dt.getHours()) + ":" + pad2(dt.getMinutes());
+    }
+
+    function getIssueStatusChangedAt(issue, status) {
+        var changelogs = issue && issue.changelogs;
+        var target = String(getStatusName(status) || "").toLowerCase();
+        var best = "";
+        if (!changelogs || !changelogs.length) return "";
+        for (var i = 0; i < changelogs.length; i++) {
+            var ch = changelogs[i];
+            if (String(ch && ch.field || "").toLowerCase() !== "status") continue;
+            var toStatus = String(getStatusName(ch && ch.toString) || ch && ch.toString || "").trim().toLowerCase();
+            if (target && toStatus !== target) continue;
+            var ts = String(ch && (ch.timestamp || ch.created || ch.date) || "");
+            if (ts && (!best || ts > best)) best = ts;
+        }
+        return best;
+    }
+
+    function getIssueStatusTitle(status, changedAt) {
         var name = getStatusName(status);
-        return name ? "Текущий статус: " + name : "";
+        var when = formatStatusChangedAt(changedAt);
+        if (!name) return "";
+        return when ? "Текущий статус: " + name + " | Установлен: " + when : "Текущий статус: " + name;
+    }
+
+    function renderIssueStatusBadge(status, changedAt, extraAttrs) {
+        var name = getStatusName(status);
+        if (!name) return "";
+        var attrs = extraAttrs != null && typeof extraAttrs === "object" ? Object.assign({}, extraAttrs) : {};
+        attrs.class = joinClassNames("ujg-ua-inline-status", getIssueStatusBadgeClass(name), attrs.class);
+        if (!attrs.title) attrs.title = getIssueStatusTitle(name, changedAt);
+        var attrString = normalizeLinkAttrs(attrs);
+        return '<span' + (attrString ? " " + attrString : "") + ">" + escapeHtml(name) + "</span>";
     }
 
     function renderIssueLinkWithStatus(issueKey, label, status, extraAttrs) {
@@ -1062,7 +1153,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
             return renderIssueLink(issueKey, label, extraAttrs);
         }
         var attrs = Object.assign({}, extraAttrs || {});
-        var title = attrs.title || getIssueStatusTitle(status);
+        var statusChangedAt = attrs.statusChangedAt;
+        delete attrs.statusChangedAt;
+        var title = attrs.title || getIssueStatusTitle(status, statusChangedAt);
         attrs.class = joinClassNames(attrs.class, isDoneStatus(status) ? "ujg-ua-issue-done" : "");
         if (title) attrs.title = title;
         else delete attrs.title;
@@ -1077,7 +1170,9 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
             return '<span' + (rawAttrs ? " " + rawAttrs : "") + ">" + escapeHtml(text) + "</span>";
         }
         var attrs = Object.assign({}, extraAttrs || {});
-        var title = attrs.title || getIssueStatusTitle(status);
+        var statusChangedAt = attrs.statusChangedAt;
+        delete attrs.statusChangedAt;
+        var title = attrs.title || getIssueStatusTitle(status, statusChangedAt);
         if (title) attrs.title = title;
         else delete attrs.title;
         var attrString = normalizeLinkAttrs(attrs);
@@ -1086,18 +1181,20 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
 
     function renderIssueRef(issueKey, summary, status, options) {
         options = options || {};
-        var title = options.title || getIssueStatusTitle(status);
+        var title = options.title || getIssueStatusTitle(status, options.statusChangedAt);
         var parts = [];
         if (issueKey) {
             parts.push(renderIssueLinkWithStatus(issueKey, options.keyLabel || issueKey, status, {
                 class: joinClassNames("ujg-ua-issue-key", options.keyClass),
-                title: title
+                title: title,
+                statusChangedAt: options.statusChangedAt
             }));
         }
         if (summary) {
             parts.push(renderIssueSummaryText(summary, status, {
                 class: joinClassNames("ujg-ua-issue-summary", options.summaryClass),
-                title: title
+                title: title,
+                statusChangedAt: options.statusChangedAt
             }));
         }
         if (!parts.length && options.emptyLabel) {
@@ -1176,6 +1273,51 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         var idx = Object.keys(colorMap).length % PROJECT_COLORS.length;
         colorMap[projectKey] = PROJECT_COLORS[idx];
         return colorMap[projectKey];
+    }
+
+    function getWorklogLagMeta(started, created, spentHours) {
+        var startedDt = parseDate(started);
+        var createdDt = parseDate(created);
+        var workedDayKey = startedDt ? getDayKey(startedDt) : "";
+        var loggedAt = created ? String(created) : "";
+        if (!startedDt || !createdDt || !workedDayKey) {
+            return {
+                workedDayKey: workedDayKey,
+                loggedAt: loggedAt,
+                isLate: false,
+                lagDurationHoursRaw: 0,
+                lagScoreHours: 0
+            };
+        }
+
+        if (getDayKey(createdDt) === workedDayKey) {
+            return {
+                workedDayKey: workedDayKey,
+                loggedAt: loggedAt,
+                isLate: false,
+                lagDurationHoursRaw: 0,
+                lagScoreHours: 0
+            };
+        }
+
+        var workedDayStart = parseDate(workedDayKey + "T00:00:00");
+        var lagDurationHoursRaw = workedDayStart ? Math.max(0, (createdDt.getTime() - workedDayStart.getTime()) / 3600000) : 0;
+        var lagScoreHours = lagDurationHoursRaw * (Number(spentHours || 0) / 24);
+
+        return {
+            workedDayKey: workedDayKey,
+            loggedAt: loggedAt,
+            isLate: lagDurationHoursRaw > 0,
+            lagDurationHoursRaw: lagDurationHoursRaw,
+            lagScoreHours: lagScoreHours
+        };
+    }
+
+    function formatLagDurationHours(hours) {
+        var total = Math.max(0, Number(hours || 0));
+        var days = Math.floor(total / 24);
+        var restHours = Math.floor(total - days * 24);
+        return days + "д " + restHours + "ч";
     }
 
     function getDefaultPeriod() {
@@ -1304,6 +1446,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         formatHoursFromHours: formatHoursFromHours,
         formatDateTime: formatDateTime,
         formatDateShort: formatDateShort,
+        formatDayMonth: formatDayMonth,
+        formatDayMonthTime: formatDayMonthTime,
         escapeHtml: escapeHtml,
         getJiraBaseUrl: getJiraBaseUrl,
         buildIssueUrl: buildIssueUrl,
@@ -1311,7 +1455,11 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         renderExternalLink: renderExternalLink,
         getStatusName: getStatusName,
         isDoneStatus: isDoneStatus,
+        getIssueStatusGroup: getIssueStatusGroup,
+        getIssueStatusBadgeClass: getIssueStatusBadgeClass,
+        getIssueStatusChangedAt: getIssueStatusChangedAt,
         getIssueStatusTitle: getIssueStatusTitle,
+        renderIssueStatusBadge: renderIssueStatusBadge,
         renderIssueLinkWithStatus: renderIssueLinkWithStatus,
         renderIssueSummaryText: renderIssueSummaryText,
         renderIssueRef: renderIssueRef,
@@ -1320,6 +1468,8 @@ define("_ujgUA_utils", ["_ujgUA_config"], function(config) {
         shortHash: shortHash,
         getProjectKey: getProjectKey,
         getProjectColor: getProjectColor,
+        getWorklogLagMeta: getWorklogLagMeta,
+        formatLagDurationHours: formatLagDurationHours,
         getDefaultPeriod: getDefaultPeriod,
         computePresetDates: computePresetDates,
         getHeatBg: getHeatBg,
@@ -2075,6 +2225,7 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 var hours = (wl.timeSpentSeconds || 0) / 3600;
                 var dateStr = utils.getDayKey(started);
                 var comment = wl.comment || "";
+                var lagMeta = utils.getWorklogLagMeta(wl.started, wl.created, hours);
 
                 var wlAuthor = {
                     name: author,
@@ -2084,6 +2235,12 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     issueKey: key,
                     date: dateStr,
                     started: wl.started,
+                    created: wl.created || "",
+                    loggedAt: lagMeta.loggedAt,
+                    workedDayKey: lagMeta.workedDayKey,
+                    isLate: lagMeta.isLate,
+                    lagDurationHoursRaw: lagMeta.lagDurationHoursRaw,
+                    lagScoreHours: lagMeta.lagScoreHours,
                     timestamp: started.toISOString(),
                     timeSpentHours: Math.round(hours * 100) / 100,
                     comment: comment,
@@ -2290,7 +2447,8 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 displayName: displayName,
                 totalHours: processed.stats.totalHours,
                 activeDays: processed.stats.activeDays,
-                daysWithoutWorklogs: 0
+                daysWithoutWorklogs: 0,
+                lagScoreHours: 0
             };
 
             var userDayMap = processed.dayMap;
@@ -2304,6 +2462,12 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                         issueKey: w.issueKey,
                         date: w.date,
                         started: w.started,
+                        created: w.created || "",
+                        loggedAt: w.loggedAt || "",
+                        workedDayKey: w.workedDayKey || "",
+                        isLate: !!w.isLate,
+                        lagDurationHoursRaw: w.lagDurationHoursRaw || 0,
+                        lagScoreHours: w.lagScoreHours || 0,
                         timeSpentHours: w.timeSpentHours,
                         comment: w.comment,
                         author: w.author || author,
@@ -2311,6 +2475,7 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                     };
                     userSlice.worklogs.push(wlCopy);
                     multiDay.allWorklogs.push(wlCopy);
+                    userStats[username].lagScoreHours += (w.lagScoreHours || 0);
                 });
 
                 (srcDay.changes || []).forEach(function(c) {
@@ -2399,6 +2564,7 @@ define("_ujgUA_dataProcessor", ["_ujgUA_config", "_ujgUA_utils"], function(confi
                 if (h === 0) missing++;
             });
             userStats[un].daysWithoutWorklogs = missing;
+            userStats[un].lagScoreHours = Math.round((userStats[un].lagScoreHours || 0) * 100) / 100;
         });
 
         return {
@@ -3751,6 +3917,7 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
             var name = u && u.displayName != null ? String(u.displayName) : keys[i];
             var activeDays = u && u.activeDays != null ? Number(u.activeDays) : 0;
             var daysWithoutWorklogs = u && u.daysWithoutWorklogs != null ? Number(u.daysWithoutWorklogs) : 0;
+            var lagScoreHours = u && u.lagScoreHours != null ? Number(u.lagScoreHours) : 0;
             var rowClass = daysWithoutWorklogs > 0 ? ' class="ujg-ua-stat-warn"' : "";
             rows +=
                 "<tr" + rowClass + ">" +
@@ -3758,12 +3925,13 @@ define("_ujgUA_summaryCards", ["jquery", "_ujgUA_config", "_ujgUA_utils"], funct
                 "<td>" + formatHoursCell(u && u.totalHours) + "</td>" +
                 "<td>" + (isNaN(activeDays) ? 0 : activeDays) + "</td>" +
                 "<td>" + (isNaN(daysWithoutWorklogs) ? 0 : daysWithoutWorklogs) + "</td>" +
+                "<td>" + formatHoursCell(isNaN(lagScoreHours) ? 0 : lagScoreHours) + "</td>" +
                 "</tr>";
         }
         return (
             '<div class="ujg-ua-user-stats-table">' +
             "<table>" +
-            "<tr><th>Пользователь</th><th>Часы</th><th>Активных дней</th><th>Без трудозатрат</th></tr>" +
+            "<tr><th>Пользователь</th><th>Часы</th><th>Активных дней</th><th>Без трудозатрат</th><th>Отставание</th></tr>" +
             rows +
             "</table>" +
             "</div>"
@@ -4339,7 +4507,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         var issue = issueKey && issueMap && issueMap[issueKey];
         return {
             issueSummary: (issue && issue.summary) || (repoItem && repoItem.issueSummary) || "",
-            issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || ""
+            issueStatus: (issue && issue.status) || (repoItem && repoItem.issueStatus) || "",
+            issueStatusChangedAt: (issue && utils.getIssueStatusChangedAt(issue, issue.status)) || (repoItem && repoItem.issueStatusChangedAt) || ""
         };
     }
 
@@ -4347,7 +4516,8 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         if (!action || (!action.issueKey && !action.issueSummary)) return "";
         return utils.renderIssueRef(action.issueKey, action.issueSummary, action.issueStatus, {
             keyClass: keyClass || "font-mono text-xs font-semibold text-primary shrink-0",
-            summaryClass: summaryClass || "text-foreground font-medium min-w-0"
+            summaryClass: summaryClass || "text-foreground font-medium min-w-0",
+            statusChangedAt: action.issueStatusChangedAt
         });
     }
 
@@ -4362,6 +4532,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: wl.issueKey,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
+                created: wl.created || "",
+                loggedAt: wl.loggedAt || wl.created || "",
+                workedDayKey: wl.workedDayKey || wl.date || "",
+                isLate: !!wl.isLate,
+                lagDurationHoursRaw: wl.lagDurationHoursRaw || 0,
+                lagScoreHours: wl.lagScoreHours || 0,
                 timestamp: timestampFor(wl),
                 author: normalizeAuthor(wl.author),
                 type: "worklog",
@@ -4377,6 +4554,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: ch.issueKey,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
                 timestamp: timestampFor(ch),
                 author: normalizeAuthor(ch.author),
                 type: "change",
@@ -4391,6 +4569,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: cm.issueKey,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
                 timestamp: timestampFor(cm),
                 author: normalizeAuthor(cm.author),
                 type: "comment",
@@ -4413,6 +4592,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 issueKey: ik,
                 issueSummary: m.issueSummary,
                 issueStatus: m.issueStatus,
+                issueStatusChangedAt: m.issueStatusChangedAt,
                 timestamp: r.timestamp || r.authorTimestamp || "",
                 author: repoAuthor,
                 type: "repo",
@@ -4565,6 +4745,15 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             case "worklog": {
                 var h = Math.round((action.timeSpentHours || 0) * 10) / 10;
                 html += "Worklog " + h + "ч";
+                if (action.workedDayKey) {
+                    html += ' <span class="ujg-ua-worklog-day">за ' + utils.escapeHtml(utils.formatDayMonth(action.workedDayKey)) + "</span>";
+                }
+                if (action.isLate) {
+                    if (action.loggedAt) {
+                        html += ' <span class="ujg-ua-worklog-late">внесено ' + utils.escapeHtml(utils.formatDayMonthTime(action.loggedAt)) + "</span>";
+                    }
+                    html += ' <span class="ujg-ua-worklog-late">отставание ' + utils.escapeHtml(utils.formatLagDurationHours(action.lagDurationHoursRaw)) + "</span>";
+                }
                 var c = action.comment && String(action.comment).trim();
                 if (c) {
                     html += '<div class="ujg-ua-detail-comment">"' + utils.escapeHtml(utils.truncate(c, 200)) + '"</div>';
@@ -4594,7 +4783,7 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
                 }
                 var st = action.issueStatus && String(action.issueStatus).trim();
                 if (st) {
-                    html += ' <span class="ujg-ua-inline-status">' + utils.escapeHtml(st) + "</span>";
+                    html += " " + utils.renderIssueStatusBadge(st, action.issueStatusChangedAt);
                 }
                 var msg = action.message && String(action.message).trim();
                 if (msg) {
@@ -4636,10 +4825,13 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
             html += renderActionIssueRef({
                 issueKey: key,
                 issueSummary: summary,
-                issueStatus: status
+                issueStatus: status,
+                issueStatusChangedAt: (entry[0] && entry[0].issueStatusChangedAt) || ""
             }, "font-mono text-xs font-semibold text-primary shrink-0", "text-foreground font-medium min-w-0 ujg-ua-detail-issue-summary");
             if (status) {
-                html += '<span class="ujg-ua-inline-status shrink-0">' + utils.escapeHtml(status) + "</span>";
+                html += utils.renderIssueStatusBadge(status, (entry[0] && entry[0].issueStatusChangedAt) || "", {
+                    class: "shrink-0"
+                });
             }
             html += "</div>";
             for (var gi = 0; gi < entry.length; gi++) {
@@ -4696,10 +4888,11 @@ define("_ujgUA_dailyDetail", ["jquery", "_ujgUA_config", "_ujgUA_utils"], functi
         }
         var html = utils.renderIssueRef(action.issueKey, action.issueSummary, action.issueStatus, {
             keyClass: "font-mono text-primary text-[11px]",
-            summaryClass: "block text-[10px] text-foreground/80 ujg-ua-detail-issue-summary"
+            summaryClass: "block text-[10px] text-foreground/80 ujg-ua-detail-issue-summary",
+            statusChangedAt: action.issueStatusChangedAt
         });
         if (action.issueStatus) {
-            html += '<div><span class="ujg-ua-inline-status">' + utils.escapeHtml(action.issueStatus) + "</span></div>";
+            html += "<div>" + utils.renderIssueStatusBadge(action.issueStatus, action.issueStatusChangedAt) + "</div>";
         }
         return html;
     }
@@ -5454,14 +5647,16 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         var issue = issueKey && issueMap && issueMap[issueKey];
         return {
             issueSummary: (issue && issue.summary) || (item && item.issueSummary) || "",
-            issueStatus: (issue && issue.status) || (item && item.issueStatus) || ""
+            issueStatus: (issue && issue.status) || (item && item.issueStatus) || "",
+            issueStatusChangedAt: (issue && utils.getIssueStatusChangedAt(issue, issue.status)) || (item && item.issueStatusChangedAt) || ""
         };
     }
 
-    function renderIssueInlineRef(issueKey, issueSummary, issueStatus, summaryClass) {
+    function renderIssueInlineRef(issueKey, issueSummary, issueStatus, issueStatusChangedAt, summaryClass) {
         return utils.renderIssueRef(issueKey, issueSummary, issueStatus, {
             keyClass: "text-[10px] font-semibold text-primary",
-            summaryClass: summaryClass || "text-[9px] font-medium text-foreground/90"
+            summaryClass: summaryClass || "text-[9px] font-medium text-foreground/90",
+            statusChangedAt: issueStatusChangedAt
         });
     }
 
@@ -5513,13 +5708,24 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
         (dayData.allWorklogs || []).forEach(function(w) {
             var worklogMeta = repoIssueMeta(w.issueKey, issueMap, null);
+            var worklogLagHtml = "";
+            if (w.workedDayKey) {
+                worklogLagHtml += ' <span class="ujg-ua-worklog-day">за ' + utils.escapeHtml(utils.formatDayMonth(w.workedDayKey)) + '</span>';
+            }
+            if (w.isLate) {
+                if (w.loggedAt) {
+                    worklogLagHtml += ' <span class="ujg-ua-worklog-late">внесено ' + utils.escapeHtml(utils.formatDayMonthTime(w.loggedAt)) + '</span>';
+                }
+                worklogLagHtml += ' <span class="ujg-ua-worklog-late">отставание ' + utils.escapeHtml(utils.formatLagDurationHours(w.lagDurationHoursRaw)) + '</span>';
+            }
             items.push({
                 ts: w.timestamp || "",
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    renderIssueInlineRef(w.issueKey, worklogMeta.issueSummary, worklogMeta.issueStatus) + " " +
+                    renderIssueInlineRef(w.issueKey, worklogMeta.issueSummary, worklogMeta.issueStatus, worklogMeta.issueStatusChangedAt) + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
+                    worklogLagHtml +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
             });
@@ -5533,7 +5739,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    renderIssueInlineRef(c.issueKey, changeMeta.issueSummary, changeMeta.issueStatus) + " " +
+                    renderIssueInlineRef(c.issueKey, changeMeta.issueSummary, changeMeta.issueStatus, changeMeta.issueStatusChangedAt) + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
@@ -5546,7 +5752,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    renderIssueInlineRef(c.issueKey, commentMeta.issueSummary, commentMeta.issueStatus) + " " +
+                    renderIssueInlineRef(c.issueKey, commentMeta.issueSummary, commentMeta.issueStatus, commentMeta.issueStatusChangedAt) + " " +
                     '<span class="text-[9px]">Комментарий</span>' +
                     (c.body ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(c.body, 60)) + '</span>' : '') +
                     '</div>'
@@ -5599,11 +5805,12 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                     item.issueKey,
                     meta.issueSummary,
                     meta.issueStatus,
+                    meta.issueStatusChangedAt,
                     "ujg-ua-repo-summary text-[9px] font-medium text-foreground/90"
                 ));
             }
             if (meta.issueStatus) {
-                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(meta.issueStatus) + "</span>");
+                parts.push(utils.renderIssueStatusBadge(meta.issueStatus, meta.issueStatusChangedAt));
             }
             var repoMsg = item.message || item.title || item.name || "";
             parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg whitespace-normal break-words min-w-0">' +
@@ -5639,6 +5846,46 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         if (showSat) visibleDays.push(5);
         if (showSun) visibleDays.push(6);
         return visibleDays;
+    }
+
+    function buildWeeklyLagTableHtml(week, visibleDayMap, selectedUsers) {
+        var totals = [];
+        for (var i = 0; i < (selectedUsers || []).length; i++) {
+            var user = selectedUsers[i];
+            var total = 0;
+            for (var d = 0; d < (week.days || []).length; d++) {
+                var dateStr = week.days[d];
+                if (!dateStr) continue;
+                var dayData = visibleDayMap[dateStr];
+                var worklogs = dayData && dayData.allWorklogs || [];
+                for (var w = 0; w < worklogs.length; w++) {
+                    var wl = worklogs[w];
+                    if (!wl || !wl.isLate || !wl.lagScoreHours) continue;
+                    if (utils.matchesSelectedUsers(wl.author, [user])) {
+                        total += (wl.lagScoreHours || 0);
+                    }
+                }
+            }
+            total = Math.round(total * 10) / 10;
+            if (total > 0) {
+                totals.push({
+                    label: user.displayName || user.name || "",
+                    value: total
+                });
+            }
+        }
+        if (!totals.length) return "";
+
+        var html = '<div class="ujg-ua-week-lag-table">';
+        html += '<div class="ujg-ua-week-lag-title">Суммарное отставание</div>';
+        for (var j = 0; j < totals.length; j++) {
+            html += '<div class="ujg-ua-week-lag-row">';
+            html += '<span>' + utils.escapeHtml(totals[j].label) + '</span>';
+            html += '<span class="ujg-ua-week-lag-hours">' + totals[j].value + 'ч</span>';
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
     }
 
     function buildCalendarInnerHtml(visibleDayMap, issueMap, selectedUsers, startDate, endDate, rawDayMap) {
@@ -5734,6 +5981,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 }
                 html += '</div>';
             }
+            html += buildWeeklyLagTableHtml(week, visibleDayMap, selectedUsers);
             html += '</td></tr>';
         }
 
@@ -5891,7 +6139,6 @@ define("_ujgUA_projectBreakdown", ["jquery", "_ujgUA_config", "_ujgUA_utils"], f
 define("_ujgUA_issueList", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($, config, utils) {
     "use strict";
 
-    var STATUS_COLORS = config.STATUS_COLORS;
     var TYPE_ICONS = config.TYPE_ICONS;
 
     function create() {
@@ -5905,29 +6152,28 @@ define("_ujgUA_issueList", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         );
         var $body = $el.find(".ujg-ua-issue-body");
 
-        function getStatusClasses(status) {
-            return STATUS_COLORS[status] || 'bg-muted text-muted-foreground';
-        }
-
         function getTypeIconName(type) {
             return TYPE_ICONS[type] || 'checkCircle2';
         }
 
         function renderIssue(issue) {
             var iconName = getTypeIconName(issue.type);
-            var statusCls = getStatusClasses(issue.status);
             var hours = issue.hours != null ? (Math.round(issue.hours * 10) / 10) : 0;
             return '<div class="flex items-center gap-1.5 py-px px-1 rounded hover:bg-secondary/30 transition-colors text-[11px]">' +
                 utils.icon(iconName, "w-3 h-3 text-muted-foreground shrink-0") +
                 '<div class="min-w-0 flex-1 flex items-center gap-1.5">' +
                     utils.renderIssueLinkWithStatus(issue.key, issue.key, issue.status, {
-                        class: "font-mono text-[10px] text-primary font-semibold shrink-0 ujg-ua-issue-key"
+                        class: "font-mono text-[10px] text-primary font-semibold shrink-0 ujg-ua-issue-key",
+                        statusChangedAt: issue.statusChangedAt
                     }) +
                     utils.renderIssueSummaryText(issue.summary, issue.status, {
-                        class: "block text-foreground min-w-0 flex-1"
+                        class: "block text-foreground min-w-0 flex-1",
+                        statusChangedAt: issue.statusChangedAt
                     }) +
                 '</div>' +
-                '<span class="text-[9px] font-medium px-1 py-0 rounded ' + statusCls + '">' + utils.escapeHtml(issue.status) + '</span>' +
+                utils.renderIssueStatusBadge(issue.status, issue.statusChangedAt, {
+                    class: "font-medium"
+                }) +
                 '<span class="flex items-center gap-0.5 text-[10px] text-muted-foreground font-mono shrink-0">' +
                     utils.icon("clock", "w-2.5 h-2.5") + ' ' + hours + 'ч' +
                 '</span>' +
@@ -8161,6 +8407,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         summary: iss.summary,
                         type: iss.type,
                         status: iss.status,
+                        statusChangedAt: utils.getIssueStatusChangedAt(iss, iss.status),
                         hours: iss.totalTimeHours
                     };
                 })

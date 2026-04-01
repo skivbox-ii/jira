@@ -174,14 +174,16 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         var issue = issueKey && issueMap && issueMap[issueKey];
         return {
             issueSummary: (issue && issue.summary) || (item && item.issueSummary) || "",
-            issueStatus: (issue && issue.status) || (item && item.issueStatus) || ""
+            issueStatus: (issue && issue.status) || (item && item.issueStatus) || "",
+            issueStatusChangedAt: (issue && utils.getIssueStatusChangedAt(issue, issue.status)) || (item && item.issueStatusChangedAt) || ""
         };
     }
 
-    function renderIssueInlineRef(issueKey, issueSummary, issueStatus, summaryClass) {
+    function renderIssueInlineRef(issueKey, issueSummary, issueStatus, issueStatusChangedAt, summaryClass) {
         return utils.renderIssueRef(issueKey, issueSummary, issueStatus, {
             keyClass: "text-[10px] font-semibold text-primary",
-            summaryClass: summaryClass || "text-[9px] font-medium text-foreground/90"
+            summaryClass: summaryClass || "text-[9px] font-medium text-foreground/90",
+            statusChangedAt: issueStatusChangedAt
         });
     }
 
@@ -233,13 +235,24 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
 
         (dayData.allWorklogs || []).forEach(function(w) {
             var worklogMeta = repoIssueMeta(w.issueKey, issueMap, null);
+            var worklogLagHtml = "";
+            if (w.workedDayKey) {
+                worklogLagHtml += ' <span class="ujg-ua-worklog-day">за ' + utils.escapeHtml(utils.formatDayMonth(w.workedDayKey)) + '</span>';
+            }
+            if (w.isLate) {
+                if (w.loggedAt) {
+                    worklogLagHtml += ' <span class="ujg-ua-worklog-late">внесено ' + utils.escapeHtml(utils.formatDayMonthTime(w.loggedAt)) + '</span>';
+                }
+                worklogLagHtml += ' <span class="ujg-ua-worklog-late">отставание ' + utils.escapeHtml(utils.formatLagDurationHours(w.lagDurationHoursRaw)) + '</span>';
+            }
             items.push({
                 ts: w.timestamp || "",
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(w.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(w.author && w.author.displayName)) + '</span> ' +
-                    renderIssueInlineRef(w.issueKey, worklogMeta.issueSummary, worklogMeta.issueStatus) + " " +
+                    renderIssueInlineRef(w.issueKey, worklogMeta.issueSummary, worklogMeta.issueStatus, worklogMeta.issueStatusChangedAt) + " " +
                     '<span class="text-[9px] font-bold">' + (Math.round((w.timeSpentHours || 0) * 10) / 10) + 'ч</span>' +
+                    worklogLagHtml +
                     (w.comment ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(w.comment, 60)) + '</span>' : '') +
                     '</div>'
             });
@@ -253,7 +266,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    renderIssueInlineRef(c.issueKey, changeMeta.issueSummary, changeMeta.issueStatus) + " " +
+                    renderIssueInlineRef(c.issueKey, changeMeta.issueSummary, changeMeta.issueStatus, changeMeta.issueStatusChangedAt) + " " +
                     '<span class="text-[9px]">→ ' + utils.escapeHtml(c.toString || "") + '</span>' +
                     '</div>'
             });
@@ -266,7 +279,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 html: '<div class="ujg-ua-jira-line">' +
                     '<span class="ujg-ua-time">' + utils.formatTime(c.timestamp) + '</span> ' +
                     '<span class="ujg-ua-author">' + utils.escapeHtml(surname(c.author && c.author.displayName)) + '</span> ' +
-                    renderIssueInlineRef(c.issueKey, commentMeta.issueSummary, commentMeta.issueStatus) + " " +
+                    renderIssueInlineRef(c.issueKey, commentMeta.issueSummary, commentMeta.issueStatus, commentMeta.issueStatusChangedAt) + " " +
                     '<span class="text-[9px]">Комментарий</span>' +
                     (c.body ? ' <span class="text-[9px] text-muted-foreground/80">— ' + utils.escapeHtml(utils.truncate(c.body, 60)) + '</span>' : '') +
                     '</div>'
@@ -319,11 +332,12 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                     item.issueKey,
                     meta.issueSummary,
                     meta.issueStatus,
+                    meta.issueStatusChangedAt,
                     "ujg-ua-repo-summary text-[9px] font-medium text-foreground/90"
                 ));
             }
             if (meta.issueStatus) {
-                parts.push('<span class="ujg-ua-inline-status">' + utils.escapeHtml(meta.issueStatus) + "</span>");
+                parts.push(utils.renderIssueStatusBadge(meta.issueStatus, meta.issueStatusChangedAt));
             }
             var repoMsg = item.message || item.title || item.name || "";
             parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg whitespace-normal break-words min-w-0">' +
@@ -359,6 +373,46 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
         if (showSat) visibleDays.push(5);
         if (showSun) visibleDays.push(6);
         return visibleDays;
+    }
+
+    function buildWeeklyLagTableHtml(week, visibleDayMap, selectedUsers) {
+        var totals = [];
+        for (var i = 0; i < (selectedUsers || []).length; i++) {
+            var user = selectedUsers[i];
+            var total = 0;
+            for (var d = 0; d < (week.days || []).length; d++) {
+                var dateStr = week.days[d];
+                if (!dateStr) continue;
+                var dayData = visibleDayMap[dateStr];
+                var worklogs = dayData && dayData.allWorklogs || [];
+                for (var w = 0; w < worklogs.length; w++) {
+                    var wl = worklogs[w];
+                    if (!wl || !wl.isLate || !wl.lagScoreHours) continue;
+                    if (utils.matchesSelectedUsers(wl.author, [user])) {
+                        total += (wl.lagScoreHours || 0);
+                    }
+                }
+            }
+            total = Math.round(total * 10) / 10;
+            if (total > 0) {
+                totals.push({
+                    label: user.displayName || user.name || "",
+                    value: total
+                });
+            }
+        }
+        if (!totals.length) return "";
+
+        var html = '<div class="ujg-ua-week-lag-table">';
+        html += '<div class="ujg-ua-week-lag-title">Суммарное отставание</div>';
+        for (var j = 0; j < totals.length; j++) {
+            html += '<div class="ujg-ua-week-lag-row">';
+            html += '<span>' + utils.escapeHtml(totals[j].label) + '</span>';
+            html += '<span class="ujg-ua-week-lag-hours">' + totals[j].value + 'ч</span>';
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
     }
 
     function buildCalendarInnerHtml(visibleDayMap, issueMap, selectedUsers, startDate, endDate, rawDayMap) {
@@ -454,6 +508,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 }
                 html += '</div>';
             }
+            html += buildWeeklyLagTableHtml(week, visibleDayMap, selectedUsers);
             html += '</td></tr>';
         }
 
