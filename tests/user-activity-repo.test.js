@@ -5872,6 +5872,8 @@ test("user-activity ai-report exposes prompt presets and default prompt", functi
 
     assert.ok(presets.length >= 3);
     assert.equal(mod.getInitialBasePrompt(null), presets[0].prompt);
+    assert.match(presets[0].prompt, /Ты аналитик Jira-виджета User Activity\./);
+    assert.match(presets[0].prompt, /Не придумывай данные, сотрудников, цифры и события/);
     assert.equal(mod.matchPromptPresetId(presets[1].prompt), presets[1].id);
     assert.equal(mod.matchPromptPresetId("custom prompt"), "");
     assert.equal(mod.getPromptPresetById(presets[2].id).label, presets[2].label);
