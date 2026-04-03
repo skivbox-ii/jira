@@ -8233,8 +8233,8 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
 
         var canManageTeams = teamManagerEnabled();
         var aiButtonHtml = aiReportEnabled()
-            ? '<button class="ujg-ua-btn-ai h-6 px-2.5 rounded border border-border text-[11px] font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-1">' +
-                  utils.icon("sparkles", "w-3 h-3 text-primary") +
+            ? '<button class="ujg-ua-btn-ai h-5 px-2 rounded border border-border text-[10px] font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-0.5">' +
+                  utils.icon("sparkles", "w-2.5 h-2.5 text-primary") +
                   " ИИ отчет" +
               "</button>"
             : "";
