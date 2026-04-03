@@ -26,6 +26,28 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         "5. Риски и аномалии",
         "6. Что проверить дальше"
     ].join("\n");
+    var PROMPT_PRESETS = [
+        {
+            id: "summary",
+            label: "Стандартный отчет",
+            prompt: "Сделай структурированный markdown-отчет. Кратко опиши, что видно по каждому сотруднику, затем сравни сотрудников между собой и отдельно выдели риски."
+        },
+        {
+            id: "comparison",
+            label: "Сравнение сотрудников",
+            prompt: "Сфокусируйся на сравнении сотрудников. Покажи различия по активности, коммуникации, объему изменений, стабильности и влиянию на результат."
+        },
+        {
+            id: "risks",
+            label: "Риски и аномалии",
+            prompt: "Сфокусируйся на рисках, аномалиях, блокерах, перекосах нагрузки и подозрительных паттернах активности. Ответ сделай коротким и практичным."
+        },
+        {
+            id: "manager",
+            label: "Кратко для руководителя",
+            prompt: "Сделай короткий управленческий markdown-отчет: сначала 5-7 ключевых bullets, затем сотрудники, затем риски и что проверить дальше."
+        }
+    ];
 
     function trimString(value) {
         return String(value == null ? "" : value).trim();
@@ -222,15 +244,52 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         if (model == null) return null;
         var apiKey = promptFn("API key", current.apiKey || "");
         if (apiKey == null) return null;
-        var basePrompt = promptFn("Базовый prompt для отчета (опционально)", current.basePrompt || "");
-        if (basePrompt == null) return null;
         return normalizeConfig({
             apiBase: apiBase,
             model: model,
             apiKey: apiKey,
-            basePrompt: basePrompt,
+            basePrompt: current.basePrompt,
             useLegacyCompletionsEndpoint: current.useLegacyCompletionsEndpoint
         });
+    }
+
+    function getPromptPresets() {
+        return PROMPT_PRESETS.map(function(preset) {
+            return {
+                id: preset.id,
+                label: preset.label,
+                prompt: preset.prompt
+            };
+        });
+    }
+
+    function getPromptPresetById(id) {
+        var normalizedId = trimString(id);
+        var i;
+        for (i = 0; i < PROMPT_PRESETS.length; i++) {
+            if (PROMPT_PRESETS[i].id === normalizedId) {
+                return {
+                    id: PROMPT_PRESETS[i].id,
+                    label: PROMPT_PRESETS[i].label,
+                    prompt: PROMPT_PRESETS[i].prompt
+                };
+            }
+        }
+        return null;
+    }
+
+    function matchPromptPresetId(value) {
+        var normalized = sanitizeBasePrompt(value);
+        var i;
+        for (i = 0; i < PROMPT_PRESETS.length; i++) {
+            if (PROMPT_PRESETS[i].prompt === normalized) return PROMPT_PRESETS[i].id;
+        }
+        return "";
+    }
+
+    function getInitialBasePrompt(config) {
+        var current = sanitizeBasePrompt(config && config.basePrompt);
+        return current || PROMPT_PRESETS[0].prompt;
     }
 
     function buildSystemPrompt(config) {
@@ -733,39 +792,89 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         var context = options.context || {};
         var title = trimString(options.title || "ИИ отчет");
         var onClose = typeof options.onClose === "function" ? options.onClose : null;
+        var storage = getStorageRef();
+        var currentConfig = readStoredConfig(storage) || null;
 
         var $overlay = $('<div class="fixed inset-0 z-50 overflow-auto bg-black/80 backdrop-blur-sm p-4"></div>');
         var $dialog = $('<div class="dashboard-card bg-card text-card-foreground shadow-xl" style="max-width:1100px;margin:24px auto;"></div>');
         var $header = $('<div class="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-card px-4 py-3"></div>');
         var $title = $('<div class="flex items-center gap-2 text-sm font-semibold text-foreground"></div>');
         var $actions = $('<div class="ml-auto flex items-center gap-2"></div>');
-        var $btnRetry = $('<button type="button" class="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors">Повторить</button>');
+        var $btnSend = $('<button type="button" class="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors">Отправить</button>');
         var $btnConfig = $('<button type="button" class="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors">Настроить API</button>');
         var $btnClose = $('<button type="button" class="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"></button>');
-        var $body = $('<div class="p-4"></div>');
+        var $body = $('<div class="p-4 space-y-4"></div>');
+        var $composer = $('<div class="rounded-md border border-border bg-muted/10 p-3 space-y-3"></div>');
+        var $composerHeader = $('<div class="flex items-start justify-between gap-3"></div>');
+        var $composerTitle = $('<div class="text-sm font-semibold text-foreground">Prompt</div>');
+        var $composerHint = $('<div class="text-xs leading-relaxed text-muted-foreground">Выбери предустановку или отредактируй prompt вручную, затем нажми "Отправить".</div>');
+        var $controls = $('<div class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]"></div>');
+        var $presetWrap = $('<label class="block space-y-1"></label>');
+        var $presetLabel = $('<div class="text-xs font-medium text-muted-foreground">Предустановленный prompt</div>');
+        var $presetSelect = $('<select class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none"></select>');
+        var $promptWrap = $('<label class="block space-y-1"></label>');
+        var $promptLabel = $('<div class="text-xs font-medium text-muted-foreground">Текущий prompt</div>');
+        var $promptInput = $('<textarea rows="8" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-relaxed text-foreground outline-none"></textarea>');
+        var $result = $('<div class="rounded-md border border-border bg-card/40 p-4"></div>');
+        var requestSeq = 0;
 
         $title.html(utils.icon("sparkles", "w-4 h-4 text-primary") + "<span>" + utils.escapeHtml(title) + "</span>");
         $btnClose.html(utils.icon("x", "w-4 h-4"));
-        $actions.append($btnRetry, $btnConfig, $btnClose);
+        $actions.append($btnSend, $btnConfig, $btnClose);
         $header.append($title, $actions);
+        $presetSelect.append('<option value="">Свой prompt</option>');
+        getPromptPresets().forEach(function(preset) {
+            $presetSelect.append(
+                $("<option></option>")
+                    .attr("value", preset.id)
+                    .text(preset.label)
+            );
+        });
+        $presetWrap.append($presetLabel, $presetSelect);
+        $promptWrap.append($promptLabel, $promptInput);
+        $composerHeader.append($composerTitle, $composerHint);
+        $controls.append($presetWrap, $promptWrap);
+        $composer.append($composerHeader, $controls);
         $dialog.append($header, $body);
         $overlay.append($dialog);
         $host.append($overlay);
+        renderContextMeta($body, context);
+        $body.append($composer, $result);
 
         function close() {
             $overlay.remove();
             if (onClose) onClose();
         }
 
-        function renderMessage(titleText, bodyText, toneClass) {
-            $body.empty();
-            renderContextMeta($body, context);
-            $body.append(
+        function setBusy(isBusy) {
+            $btnSend.prop("disabled", !!isBusy);
+            $btnConfig.prop("disabled", !!isBusy);
+            $presetSelect.prop("disabled", !!isBusy);
+            $promptInput.prop("disabled", !!isBusy);
+        }
+
+        function setPromptValue(value, useDefaultIfEmpty) {
+            var nextValue = sanitizeBasePrompt(value);
+            if (!nextValue && useDefaultIfEmpty) nextValue = getInitialBasePrompt(currentConfig);
+            $promptInput.val(nextValue);
+            $presetSelect.val(matchPromptPresetId(nextValue) || "");
+        }
+
+        function getPromptValue() {
+            var nextValue = sanitizeBasePrompt($promptInput.val());
+            if ($promptInput.val() !== nextValue) $promptInput.val(nextValue);
+            $presetSelect.val(matchPromptPresetId(nextValue) || "");
+            return nextValue;
+        }
+
+        function renderResultMessage(titleText, bodyText, toneClass) {
+            $result.empty();
+            $result.append(
                 $('<div class="mb-2 text-sm font-semibold"></div>')
                     .addClass(toneClass || "text-foreground")
                     .text(titleText)
             );
-            $body.append(
+            $result.append(
                 $('<div class="text-sm whitespace-pre-wrap break-words"></div>')
                     .addClass(toneClass === "text-destructive" ? "text-destructive" : "text-muted-foreground")
                     .text(bodyText)
@@ -773,42 +882,93 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         }
 
         function renderReport(text) {
-            $body.empty();
-            renderContextMeta($body, context);
-            $body.append(
+            $result.empty();
+            $result.append(
                 $('<div class="space-y-3 break-words"></div>').html(renderMarkdownToHtml(text))
             );
         }
 
-        function run(forcePrompt) {
-            var config = ensureConfig(forcePrompt);
+        function saveCurrentPrompt(config, promptValue) {
+            var nextConfig = normalizeConfig({
+                apiBase: config.apiBase,
+                model: config.model,
+                apiKey: config.apiKey,
+                basePrompt: promptValue,
+                useLegacyCompletionsEndpoint: config.useLegacyCompletionsEndpoint
+            });
+            if (!nextConfig) return null;
+            return writeStoredConfig(storage, nextConfig) || nextConfig;
+        }
+
+        function configureApi() {
+            var config = ensureConfig(true);
             if (!config) {
-                renderMessage(
+                renderResultMessage(
                     "Настройки AI не заданы",
-                    "Введите API Base URL, например https://llm/v1, модель, API key и при необходимости базовый prompt.",
+                    "Введите API Base URL, например https://llm/v1, модель и API key.",
                     "text-destructive"
                 );
                 return;
             }
+            currentConfig = config;
+            renderResultMessage(
+                "Настройки AI сохранены",
+                "Теперь при необходимости отредактируй prompt и нажми \"Отправить\".",
+                "text-foreground"
+            );
+        }
 
-            renderMessage("Готовлю отчет", "Собираю контекст виджета и жду ответ AI...", "text-foreground");
+        function run() {
+            var requestId;
+            var promptValue;
+            var requestConfig = currentConfig || ensureConfig(false);
+            if (!requestConfig) {
+                renderResultMessage(
+                    "Настройки AI не заданы",
+                    "Сначала укажи API Base URL, модель и API key через кнопку \"Настроить API\".",
+                    "text-destructive"
+                );
+                return;
+            }
+            promptValue = getPromptValue();
+            requestConfig = saveCurrentPrompt(requestConfig, promptValue) || requestConfig;
+            currentConfig = requestConfig;
+            requestId = ++requestSeq;
+            renderResultMessage("Готовлю отчет", "Собираю контекст виджета и жду ответ AI...", "text-foreground");
+            setBusy(true);
 
-            requestReport(config, context).then(function(result) {
+            requestReport(requestConfig, context).then(function(result) {
+                if (requestId !== requestSeq) return;
                 renderReport(result.text);
             }, function(err) {
-                renderMessage("Не удалось получить AI-отчет", err && err.message ? err.message : String(err), "text-destructive");
+                if (requestId !== requestSeq) return;
+                renderResultMessage("Не удалось получить AI-отчет", err && err.message ? err.message : String(err), "text-destructive");
+            }).then(function() {
+                if (requestId === requestSeq) setBusy(false);
             });
         }
 
         $btnClose.on("click", close);
-        $btnRetry.on("click", function() {
-            run(false);
+        $btnSend.on("click", function() {
+            run();
         });
         $btnConfig.on("click", function() {
-            run(true);
+            configureApi();
+        });
+        $presetSelect.on("change", function() {
+            var preset = getPromptPresetById($presetSelect.val());
+            if (preset) setPromptValue(preset.prompt, false);
+        });
+        $promptInput.on("input", function() {
+            $presetSelect.val(matchPromptPresetId($promptInput.val()) || "");
         });
 
-        run(false);
+        setPromptValue(getInitialBasePrompt(currentConfig), true);
+        renderResultMessage(
+            "Готово к отправке",
+            "Проверь prompt, при необходимости выбери предустановку и нажми \"Отправить\".",
+            "text-foreground"
+        );
 
         return {
             close: close
@@ -824,6 +984,10 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         readStoredConfig: readStoredConfig,
         writeStoredConfig: writeStoredConfig,
         promptForConfig: promptForConfig,
+        getPromptPresets: getPromptPresets,
+        getPromptPresetById: getPromptPresetById,
+        matchPromptPresetId: matchPromptPresetId,
+        getInitialBasePrompt: getInitialBasePrompt,
         utf8ByteLength: utf8ByteLength,
         sanitizeTextForPrompt: sanitizeTextForPrompt,
         sanitizeHtmlForPrompt: sanitizeHtmlForPrompt,

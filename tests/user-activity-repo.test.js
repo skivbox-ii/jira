@@ -5844,13 +5844,12 @@ test("user-activity ai-report treats configured value as apiBase and calls chat 
     assert.match(body.messages[1].content, /2026-03-01 \.\. 2026-03-07/);
 });
 
-test("user-activity ai-report promptForConfig reads optional base prompt", function() {
+test("user-activity ai-report promptForConfig keeps saved base prompt without extra prompt", function() {
     var mod = loadAiReport();
     var answers = [
         "https://llm.example/v1",
         "qwen-coder-30b",
-        "sk-test",
-        "Сфокусируйся на блокерах.\n\nОтвет дай markdown."
+        "sk-test"
     ];
     var prompts = [];
     var config = mod.promptForConfig(function(message, value) {
@@ -5863,10 +5862,19 @@ test("user-activity ai-report promptForConfig reads optional base prompt", funct
         basePrompt: "old prompt"
     });
 
-    assert.equal(prompts.length, 4);
-    assert.equal(prompts[3].message, "Базовый prompt для отчета (опционально)");
-    assert.equal(prompts[3].value, "old prompt");
-    assert.equal(config.basePrompt, "Сфокусируйся на блокерах.\n\nОтвет дай markdown.");
+    assert.equal(prompts.length, 3);
+    assert.equal(config.basePrompt, "old prompt");
+});
+
+test("user-activity ai-report exposes prompt presets and default prompt", function() {
+    var mod = loadAiReport();
+    var presets = mod.getPromptPresets();
+
+    assert.ok(presets.length >= 3);
+    assert.equal(mod.getInitialBasePrompt(null), presets[0].prompt);
+    assert.equal(mod.matchPromptPresetId(presets[1].prompt), presets[1].id);
+    assert.equal(mod.matchPromptPresetId("custom prompt"), "");
+    assert.equal(mod.getPromptPresetById(presets[2].id).label, presets[2].label);
 });
 
 test("user-activity ai-report falls back to legacy completions on chat 404", async function() {
