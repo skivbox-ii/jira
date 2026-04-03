@@ -5784,7 +5784,7 @@ test("unified calendar weekly lag table shows per-user lag totals", function() {
     assert.match(html, /1\.3ч/);
 });
 
-test("user-activity ai-report persists config and calls stored endpoint", async function() {
+test("user-activity ai-report treats configured value as apiBase and calls chat completions", async function() {
     var storageData = {};
     var storage = {
         getItem: function(key) {
@@ -5796,13 +5796,15 @@ test("user-activity ai-report persists config and calls stored endpoint", async 
     };
     var mod = loadAiReport();
     var config = mod.writeStoredConfig(storage, {
-        url: "https://llm.example/v1/chat/completions",
+        apiBase: "https://llm.example/v1",
         model: "qwen-coder-30b",
         apiKey: "sk-test"
     });
     var calls = [];
 
     assert.deepEqual(normalize(mod.readStoredConfig(storage)), normalize(config));
+    assert.equal(config.apiBase, "https://llm.example/v1");
+    assert.equal(config.useLegacyCompletionsEndpoint, false);
 
     var result = await mod.requestReport(config, {
         widgetTitle: "User Activity",
@@ -5833,8 +5835,55 @@ test("user-activity ai-report persists config and calls stored endpoint", async 
 
     var body = JSON.parse(calls[0].options.body);
     assert.equal(body.model, "qwen-coder-30b");
+    assert.equal(mod.buildRequestUrl(config), "https://llm.example/v1/chat/completions");
     assert.match(body.messages[1].content, /Ivan Ivanov/);
     assert.match(body.messages[1].content, /2026-03-01 \.\. 2026-03-07/);
+});
+
+test("user-activity ai-report falls back to legacy completions on chat 404", async function() {
+    var mod = loadAiReport();
+    var calls = [];
+
+    var result = await mod.requestReport({
+        apiBase: "https://llm.example/v1",
+        model: "qwen-coder-30b",
+        apiKey: "sk-test"
+    }, {
+        widgetTitle: "User Activity",
+        widgetId: "user-activity",
+        selectedUsers: [{ name: "u1", displayName: "Ivan Ivanov" }],
+        period: { start: "2026-03-01", end: "2026-03-07" },
+        widgetHtml: "<div>dashboard</div>"
+    }, function(url, options) {
+        calls.push({ url: url, options: normalize(options) });
+        if (calls.length === 1) {
+            return Promise.resolve({
+                ok: false,
+                status: 404,
+                text: function() {
+                    return Promise.resolve('{"detail":"Not Found"}');
+                }
+            });
+        }
+        return Promise.resolve({
+            ok: true,
+            status: 200,
+            text: function() {
+                return Promise.resolve(JSON.stringify({
+                    choices: [{
+                        text: "Legacy AI-отчет"
+                    }]
+                }));
+            }
+        });
+    });
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, "https://llm.example/v1/chat/completions");
+    assert.equal(calls[1].url, "https://llm.example/v1/completions");
+    assert.ok(JSON.parse(calls[0].options.body).messages, "chat request should use messages");
+    assert.ok(JSON.parse(calls[1].options.body).prompt, "legacy fallback should use prompt");
+    assert.equal(result.text, "Legacy AI-отчет");
 });
 
 test("rendering AI report button forwards context to isolated ai module", function() {

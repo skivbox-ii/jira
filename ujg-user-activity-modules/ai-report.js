@@ -3,6 +3,8 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
 
     var STORAGE_KEY = "ujg-ua-ai-report-config";
     var MAX_HTML_CHARS = 120000;
+    var CHAT_COMPLETIONS_PATH = "/chat/completions";
+    var LEGACY_COMPLETIONS_PATH = "/completions";
     var SYSTEM_PROMPT = [
         "Ты аналитик Jira-виджета User Activity.",
         "Сначала кратко объясни, что именно показывает переданный виджет и какие данные в нем доступны.",
@@ -22,16 +24,51 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         return String(value == null ? "" : value).trim();
     }
 
+    function toBool(value, fallback) {
+        if (value == null || value === "") return !!fallback;
+        if (typeof value === "boolean") return value;
+        var normalized = trimString(value).toLowerCase();
+        if (!normalized) return !!fallback;
+        return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "y";
+    }
+
+    function normalizeApiBaseParts(rawValue) {
+        var value = trimString(rawValue).replace(/\/+$/, "");
+        if (!value) {
+            return { apiBase: "", useLegacyCompletionsEndpoint: false };
+        }
+        if (/\/chat\/completions$/i.test(value)) {
+            return {
+                apiBase: value.replace(/\/chat\/completions$/i, ""),
+                useLegacyCompletionsEndpoint: false
+            };
+        }
+        if (/\/completions$/i.test(value)) {
+            return {
+                apiBase: value.replace(/\/completions$/i, ""),
+                useLegacyCompletionsEndpoint: true
+            };
+        }
+        return {
+            apiBase: value,
+            useLegacyCompletionsEndpoint: false
+        };
+    }
+
     function normalizeConfig(input) {
         if (!input || typeof input !== "object") return null;
-        var url = trimString(input.url || input.endpoint || input.apiBase);
+        var apiBaseParts = normalizeApiBaseParts(input.apiBase || input.url || input.endpoint);
         var model = trimString(input.model);
         var apiKey = trimString(input.apiKey || input.key || input.token);
-        if (!url || !model || !apiKey) return null;
+        if (!apiBaseParts.apiBase || !model || !apiKey) return null;
         return {
-            url: url,
+            apiBase: apiBaseParts.apiBase,
             model: model,
-            apiKey: apiKey
+            apiKey: apiKey,
+            useLegacyCompletionsEndpoint: toBool(
+                input.useLegacyCompletionsEndpoint,
+                apiBaseParts.useLegacyCompletionsEndpoint
+            )
         };
     }
 
@@ -56,16 +93,20 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     function promptForConfig(promptFn, existing) {
         if (typeof promptFn !== "function") return null;
         var current = existing || {};
-        var url = promptFn("URL AI API", current.url || "");
-        if (url == null) return null;
+        var apiBase = promptFn(
+            "API Base URL (например https://llm/v1, можно вставить и полный endpoint)",
+            current.apiBase || ""
+        );
+        if (apiBase == null) return null;
         var model = promptFn("Модель AI", current.model || "");
         if (model == null) return null;
         var apiKey = promptFn("API key", current.apiKey || "");
         if (apiKey == null) return null;
         return normalizeConfig({
-            url: url,
+            apiBase: apiBase,
             model: model,
-            apiKey: apiKey
+            apiKey: apiKey,
+            useLegacyCompletionsEndpoint: current.useLegacyCompletionsEndpoint
         });
     }
 
@@ -111,15 +152,35 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         ].filter(Boolean).join("\n\n");
     }
 
-    function buildRequestBody(config, context) {
+    function buildRequestUrl(config, forceLegacy) {
         var normalized = normalizeConfig(config);
         if (!normalized) throw new Error("AI config is invalid");
+        var useLegacy = forceLegacy == null
+            ? !!normalized.useLegacyCompletionsEndpoint
+            : !!forceLegacy;
+        return normalized.apiBase + (useLegacy ? LEGACY_COMPLETIONS_PATH : CHAT_COMPLETIONS_PATH);
+    }
+
+    function buildRequestBody(config, context, forceLegacy) {
+        var normalized = normalizeConfig(config);
+        if (!normalized) throw new Error("AI config is invalid");
+        var useLegacy = forceLegacy == null
+            ? !!normalized.useLegacyCompletionsEndpoint
+            : !!forceLegacy;
+        var userPrompt = buildUserPrompt(context);
+        if (useLegacy) {
+            return {
+                model: normalized.model,
+                temperature: 0.2,
+                prompt: SYSTEM_PROMPT + "\n\n" + userPrompt
+            };
+        }
         return {
             model: normalized.model,
             temperature: 0.2,
             messages: [
                 { role: "system", content: SYSTEM_PROMPT },
-                { role: "user", content: buildUserPrompt(context) }
+                { role: "user", content: userPrompt }
             ]
         };
     }
@@ -150,36 +211,50 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         var callFetch = typeof fetchImpl === "function" ? fetchImpl : (typeof fetch === "function" ? fetch : null);
         if (!callFetch) return Promise.reject(new Error("fetch is unavailable"));
 
-        return Promise.resolve(callFetch(normalized.url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: "Bearer " + normalized.apiKey
-            },
-            body: JSON.stringify(buildRequestBody(normalized, context))
-        })).then(function(resp) {
-            return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
-                if (!resp || !resp.ok) {
-                    throw new Error("AI API " + (resp && resp.status != null ? resp.status : "error") + ": " + trimString(text));
-                }
-                var payload = {};
-                if (trimString(text)) {
-                    try {
-                        payload = JSON.parse(text);
-                    } catch (err) {
-                        throw new Error("AI API вернул не-JSON ответ");
+        function performRequest(forceLegacy, allowFallback) {
+            var requestUrl = buildRequestUrl(normalized, forceLegacy);
+            return Promise.resolve(callFetch(requestUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: "Bearer " + normalized.apiKey
+                },
+                body: JSON.stringify(buildRequestBody(normalized, context, forceLegacy))
+            })).then(function(resp) {
+                return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
+                    if ((!resp || !resp.ok) && allowFallback && !forceLegacy && resp && (resp.status === 404 || resp.status === 405)) {
+                        return performRequest(true, false);
                     }
-                }
-                var reportText = extractResponseText(payload);
-                if (!reportText) {
-                    throw new Error("AI API вернул пустой ответ");
-                }
-                return {
-                    text: reportText,
-                    payload: payload
-                };
+                    if (!resp || !resp.ok) {
+                        throw new Error(
+                            "AI API " +
+                            (resp && resp.status != null ? resp.status : "error") +
+                            " (" + requestUrl + "): " +
+                            trimString(text)
+                        );
+                    }
+                    var payload = {};
+                    if (trimString(text)) {
+                        try {
+                            payload = JSON.parse(text);
+                        } catch (err) {
+                            throw new Error("AI API вернул не-JSON ответ");
+                        }
+                    }
+                    var reportText = extractResponseText(payload);
+                    if (!reportText) {
+                        throw new Error("AI API вернул пустой ответ");
+                    }
+                    return {
+                        text: reportText,
+                        payload: payload,
+                        url: requestUrl
+                    };
+                });
             });
-        });
+        }
+
+        return performRequest(!!normalized.useLegacyCompletionsEndpoint, !normalized.useLegacyCompletionsEndpoint);
     }
 
     function getWindowRef() {
@@ -281,7 +356,11 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         function run(forcePrompt) {
             var config = ensureConfig(forcePrompt);
             if (!config) {
-                renderMessage("Настройки AI не заданы", "Введите URL AI API, модель и API key.", "text-destructive");
+                renderMessage(
+                    "Настройки AI не заданы",
+                    "Введите API Base URL, например https://llm/v1, а также модель и API key.",
+                    "text-destructive"
+                );
                 return;
             }
 
@@ -315,6 +394,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         readStoredConfig: readStoredConfig,
         writeStoredConfig: writeStoredConfig,
         promptForConfig: promptForConfig,
+        buildRequestUrl: buildRequestUrl,
         buildUserPrompt: buildUserPrompt,
         buildRequestBody: buildRequestBody,
         extractResponseText: extractResponseText,
