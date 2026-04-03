@@ -2,9 +2,15 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     "use strict";
 
     var STORAGE_KEY = "ujg-ua-ai-report-config";
-    var MAX_HTML_CHARS = 120000;
+    var MAX_PROMPT_TOKENS = 50000;
+    // Use UTF-8 bytes as a conservative upper bound for tokens and leave headroom
+    // for system prompt + chat wrapper metadata.
+    var MAX_USER_PROMPT_BYTES = 42000;
+    var MAX_WIDGET_TEXT_BYTES = 30000;
+    var MAX_WIDGET_HTML_BYTES = 12000;
     var CHAT_COMPLETIONS_PATH = "/chat/completions";
     var LEGACY_COMPLETIONS_PATH = "/completions";
+    var TRIM_SUFFIX = "\n...[trimmed]";
     var SYSTEM_PROMPT = [
         "Ты аналитик Jira-виджета User Activity.",
         "Сначала кратко объясни, что именно показывает переданный виджет и какие данные в нем доступны.",
@@ -22,6 +28,113 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
 
     function trimString(value) {
         return String(value == null ? "" : value).trim();
+    }
+
+    function utf8ByteLength(value) {
+        var text = String(value == null ? "" : value);
+        var total = 0;
+        var i;
+        var ch;
+        if (typeof TextEncoder !== "undefined") {
+            return new TextEncoder().encode(text).length;
+        }
+        for (i = 0; i < text.length; i++) {
+            ch = text.charCodeAt(i);
+            if (ch < 128) total += 1;
+            else if (ch < 2048) total += 2;
+            else if ((ch & 0xFC00) === 0xD800 && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
+                total += 4;
+                i += 1;
+            } else {
+                total += 3;
+            }
+        }
+        return total;
+    }
+
+    function sliceByBytes(value, maxBytes) {
+        var text = String(value == null ? "" : value);
+        var out = "";
+        var total = 0;
+        var i;
+        var ch;
+        var charText;
+        var charBytes;
+        if (!text || maxBytes <= 0) return "";
+        for (i = 0; i < text.length; i++) {
+            ch = text.charCodeAt(i);
+            charText = text.charAt(i);
+            if ((ch & 0xFC00) === 0xD800 && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
+                charText = text.substring(i, i + 2);
+                charBytes = 4;
+                i += 1;
+            } else if (ch < 128) {
+                charBytes = 1;
+            } else if (ch < 2048) {
+                charBytes = 2;
+            } else {
+                charBytes = 3;
+            }
+            if (total + charBytes > maxBytes) break;
+            out += charText;
+            total += charBytes;
+        }
+        return out;
+    }
+
+    function truncateByBytes(value, maxBytes, suffix) {
+        var text = String(value == null ? "" : value);
+        var tail = suffix == null ? "" : String(suffix);
+        var suffixBytes = utf8ByteLength(tail);
+        if (utf8ByteLength(text) <= maxBytes) return text;
+        if (maxBytes <= suffixBytes) return sliceByBytes(tail, maxBytes);
+        return sliceByBytes(text, maxBytes - suffixBytes) + tail;
+    }
+
+    function normalizePromptWhitespace(value) {
+        return trimString(String(value == null ? "" : value)
+            .replace(/\r/g, "\n")
+            .replace(/\u00A0/g, " ")
+            .replace(/[ \t\f\v]+/g, " ")
+            .replace(/ *\n */g, "\n")
+            .replace(/\n{3,}/g, "\n\n"));
+    }
+
+    function sanitizeTextForPrompt(value) {
+        return normalizePromptWhitespace(
+            String(value == null ? "" : value)
+                .replace(/[|]{3,}/g, " | ")
+                .replace(/[-=]{4,}/g, " ")
+        );
+    }
+
+    function sanitizeHtmlForPrompt(value) {
+        return normalizePromptWhitespace(
+            String(value == null ? "" : value)
+                .replace(/<!--[\s\S]*?-->/g, " ")
+                .replace(/<(script|style|svg|noscript|canvas)\b[\s\S]*?<\/\1>/gi, " ")
+                .replace(/<(path|circle|rect|line|polyline|polygon|ellipse|defs|symbol|use|meta|link)\b[^>]*\/?>/gi, " ")
+                .replace(/\s+(class|style|id|role|tabindex|xmlns|width|height|viewbox|fill|stroke|d|x|y|cx|cy|r|rx|ry|points|transform|aria-[\w:-]+|data-[\w:-]+)="[^"]*"/gi, "")
+                .replace(/\s+(class|style|id|role|tabindex|xmlns|width|height|viewbox|fill|stroke|d|x|y|cx|cy|r|rx|ry|points|transform|aria-[\w:-]+|data-[\w:-]+)='[^']*'/gi, "")
+                .replace(/<([a-z][\w:-]*)(\s[^>]*?)?>/gi, function(match, tagName) {
+                    return "<" + String(tagName || "").toLowerCase() + ">";
+                })
+                .replace(/<\/([a-z][\w:-]*)\s*>/gi, function(match, tagName) {
+                    return "</" + String(tagName || "").toLowerCase() + ">";
+                })
+                .replace(/>\s*</g, ">\n<")
+        );
+    }
+
+    function buildPromptSection(label, value, maxBytes) {
+        var title = trimString(label);
+        var content = trimString(value);
+        var titleBytes;
+        if (!title || !content || maxBytes <= 0) return "";
+        title = title + ":\n";
+        titleBytes = utf8ByteLength(title);
+        if (titleBytes >= maxBytes) return "";
+        return title + truncateByBytes(content, maxBytes - titleBytes, TRIM_SUFFIX);
     }
 
     function toBool(value, fallback) {
@@ -134,22 +247,41 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         var period = context.period && context.period.start && context.period.end
             ? context.period.start + " .. " + context.period.end
             : "";
-        var widgetText = trimString(context.widgetText);
-        var widgetHtml = trimString(context.widgetHtml);
-
-        if (widgetHtml.length > MAX_HTML_CHARS) {
-            widgetHtml = widgetHtml.slice(0, MAX_HTML_CHARS) + "\n<!-- trimmed -->";
-        }
-
-        return [
+        var widgetText = sanitizeTextForPrompt(context.widgetText);
+        var widgetHtml = sanitizeHtmlForPrompt(context.widgetHtml);
+        var parts = [
             context.widgetTitle ? "Название виджета: " + context.widgetTitle : "",
             context.widgetId ? "Код виджета: " + context.widgetId : "",
             users.length ? "Выбранные сотрудники: " + users.join(", ") : "",
             period ? "Период: " + period : "",
-            context.summary ? "Задача: " + trimString(context.summary) : "",
-            widgetText ? "Видимый текст виджета:\n" + widgetText : "",
-            "HTML виджета:\n```html\n" + widgetHtml + "\n```"
-        ].filter(Boolean).join("\n\n");
+            context.summary ? "Задача: " + sanitizeTextForPrompt(context.summary) : ""
+        ].filter(Boolean);
+        var prompt = parts.join("\n\n");
+        var remaining = MAX_USER_PROMPT_BYTES - utf8ByteLength(prompt);
+        var textBudget;
+        var htmlBudget;
+        var textSection;
+        var htmlSection;
+
+        if (remaining > 0 && widgetText) {
+            textBudget = Math.min(MAX_WIDGET_TEXT_BYTES, Math.max(0, remaining - Math.min(MAX_WIDGET_HTML_BYTES, Math.floor(remaining / 3))));
+            textSection = buildPromptSection("Видимый текст виджета", widgetText, textBudget);
+            if (textSection) {
+                parts.push(textSection);
+                prompt = parts.join("\n\n");
+                remaining = MAX_USER_PROMPT_BYTES - utf8ByteLength(prompt);
+            }
+        }
+
+        if (remaining > 0 && widgetHtml) {
+            htmlBudget = Math.min(MAX_WIDGET_HTML_BYTES, remaining);
+            htmlSection = buildPromptSection("Упрощенный HTML виджета", widgetHtml, htmlBudget);
+            if (htmlSection) {
+                parts.push(htmlSection);
+            }
+        }
+
+        return truncateByBytes(parts.filter(Boolean).join("\n\n"), MAX_USER_PROMPT_BYTES, TRIM_SUFFIX);
     }
 
     function buildRequestUrl(config, forceLegacy) {
@@ -390,10 +522,15 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
 
     return {
         STORAGE_KEY: STORAGE_KEY,
+        MAX_PROMPT_TOKENS: MAX_PROMPT_TOKENS,
+        MAX_USER_PROMPT_BYTES: MAX_USER_PROMPT_BYTES,
         normalizeConfig: normalizeConfig,
         readStoredConfig: readStoredConfig,
         writeStoredConfig: writeStoredConfig,
         promptForConfig: promptForConfig,
+        utf8ByteLength: utf8ByteLength,
+        sanitizeTextForPrompt: sanitizeTextForPrompt,
+        sanitizeHtmlForPrompt: sanitizeHtmlForPrompt,
         buildRequestUrl: buildRequestUrl,
         buildUserPrompt: buildUserPrompt,
         buildRequestBody: buildRequestBody,

@@ -5886,6 +5886,40 @@ test("user-activity ai-report falls back to legacy completions on chat 404", asy
     assert.equal(result.text, "Legacy AI-отчет");
 });
 
+test("user-activity ai-report strips noisy html symbols and keeps prompt under safe byte cap", function() {
+    var mod = loadAiReport();
+    var noisyHtml = [
+        '<div class="flex gap-2 text-xs" data-node-id="abc" style="display:flex">',
+        '<svg width="24" height="24"><path d="M0 0L1 1"/></svg>',
+        '<section class="dashboard-card" aria-label="Stats">',
+        '<button class="btn btn-primary" data-role="action">Загрузить</button>',
+        '<div class="text-muted">Повторяемый блок</div>',
+        '</section>',
+        '</div>'
+    ].join("");
+    var repeatedHtml = new Array(6000).join(noisyHtml);
+    var repeatedText = new Array(12000).join("Иван Иванов сделал обзор задач и комментариев.   ");
+
+    var prompt = mod.buildUserPrompt({
+        widgetTitle: "User Activity",
+        widgetId: "user-activity",
+        selectedUsers: [{ name: "u1", displayName: "Ivan Ivanov" }],
+        period: { start: "2026-03-01", end: "2026-03-07" },
+        summary: "Сделай выводы по каждому сотруднику и сравнение сотрудников.",
+        widgetText: repeatedText,
+        widgetHtml: repeatedHtml
+    });
+
+    assert.ok(mod.utf8ByteLength(prompt) <= mod.MAX_USER_PROMPT_BYTES);
+    assert.ok(mod.utf8ByteLength(prompt) < mod.MAX_PROMPT_TOKENS);
+    assert.equal(prompt.indexOf("```"), -1, "prompt should avoid fenced code noise");
+    assert.equal(prompt.indexOf("class="), -1, "prompt should strip CSS utility classes");
+    assert.equal(prompt.indexOf("data-node-id"), -1, "prompt should strip data attrs");
+    assert.equal(prompt.indexOf("<svg"), -1, "prompt should strip svg markup");
+    assert.match(prompt, /Упрощенный HTML виджета:/);
+    assert.match(prompt, /\.\.\.\[trimmed\]/);
+});
+
 test("rendering AI report button forwards context to isolated ai module", function() {
     var harness = createRenderingHarness({
         selectedUsers: [
