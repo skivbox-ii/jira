@@ -51,7 +51,9 @@
 │       ├── 2026-04-01-user-activity-render-time-user-filter-design.md
 │       ├── 2026-04-01-user-activity-render-time-user-filter.md
 │       ├── 2026-04-01-user-activity-worklog-lag-design.md
-│       └── 2026-04-01-user-activity-worklog-lag.md
+│       ├── 2026-04-01-user-activity-worklog-lag.md
+│       ├── 2026-04-03-calendar-grouping-design.md
+│       └── 2026-04-03-calendar-grouping-plan.md
 ├── jira_attach_latest_assets.py
 ├── standalone/
 │   └── public/
