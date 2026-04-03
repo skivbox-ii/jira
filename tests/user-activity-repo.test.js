@@ -278,6 +278,27 @@ function loadUserActivityUtilsWithDate(isoNow, windowStub) {
     }, windowStub ? { window: windowStub } : {}));
 }
 
+function loadAiReport(extraGlobals) {
+    return loadAmdModule(path.join(__dirname, "..", "ujg-user-activity-modules", "ai-report.js"), {
+        jquery: function() {
+            throw new Error("jquery UI stub not available in this test");
+        },
+        _ujgUA_utils: {
+            escapeHtml: function(value) {
+                return String(value == null ? "" : value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            },
+            icon: function(name) {
+                return "[" + name + "]";
+            }
+        }
+    }, extraGlobals || {});
+}
+
 test("progress-loader: day phase sets bar from completedDays over totalDays", function() {
     var stub = createProgressLoaderJqueryStub();
     var loader = loadProgressLoader(stub).create();
@@ -2276,6 +2297,8 @@ function createRenderingHarness(options) {
         unifiedCalendarRenderArgsHistory: [],
         unifiedCalendarDayUpdates: [],
         repoLogCalls: [],
+        aiReportCalls: [],
+        aiReportCloses: 0,
         dailyShows: [],
         dailyHides: 0,
         jiraSelect: null,
@@ -2526,6 +2549,23 @@ function createRenderingHarness(options) {
                 };
             }
         },
+        aiReport: {
+            open: function(parent, openOptions) {
+                events.aiReportCalls.push({
+                    parentLabel: parent && parent.__el ? parent.__el.label : "",
+                    title: openOptions && openOptions.title || "",
+                    context: normalize(openOptions && openOptions.context || {})
+                });
+                if (typeof options.aiReportOpenImpl === "function") {
+                    return options.aiReportOpenImpl(parent, openOptions, events);
+                }
+                return {
+                    close: function() {
+                        events.aiReportCloses += 1;
+                    }
+                };
+            }
+        },
         teamStore: useTeamSync ? {
             loadTeams: function() {
                 return resolvedAlways(teams);
@@ -2589,6 +2629,10 @@ function createRenderingHarness(options) {
         clickLoad: function() {
             var header = root.__el.children[0];
             triggerClick(header && header.slots[".ujg-ua-btn-load"]);
+        },
+        clickAiReport: function() {
+            var header = root.__el.children[0];
+            triggerClick(header && header.slots[".ujg-ua-btn-ai"]);
         },
         reinit: function() {
             initInto(jquery.createNode("root"));
@@ -5740,15 +5784,93 @@ test("unified calendar weekly lag table shows per-user lag totals", function() {
     assert.match(html, /1\.3ч/);
 });
 
+test("user-activity ai-report persists config and calls stored endpoint", async function() {
+    var storageData = {};
+    var storage = {
+        getItem: function(key) {
+            return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null;
+        },
+        setItem: function(key, value) {
+            storageData[key] = String(value);
+        }
+    };
+    var mod = loadAiReport();
+    var config = mod.writeStoredConfig(storage, {
+        url: "https://llm.example/v1/chat/completions",
+        model: "qwen-coder-30b",
+        apiKey: "sk-test"
+    });
+    var calls = [];
+
+    assert.deepEqual(normalize(mod.readStoredConfig(storage)), normalize(config));
+
+    var result = await mod.requestReport(config, {
+        widgetTitle: "User Activity",
+        widgetId: "user-activity",
+        selectedUsers: [{ name: "u1", displayName: "Ivan Ivanov" }],
+        period: { start: "2026-03-01", end: "2026-03-07" },
+        widgetHtml: "<div>dashboard</div>"
+    }, function(url, options) {
+        calls.push({ url: url, options: normalize(options) });
+        return Promise.resolve({
+            ok: true,
+            status: 200,
+            text: function() {
+                return Promise.resolve(JSON.stringify({
+                    choices: [{
+                        message: {
+                            content: "Готовый AI-отчет"
+                        }
+                    }]
+                }));
+            }
+        });
+    });
+
+    assert.equal(result.text, "Готовый AI-отчет");
+    assert.equal(calls[0].url, "https://llm.example/v1/chat/completions");
+    assert.equal(calls[0].options.headers.Authorization, "Bearer sk-test");
+
+    var body = JSON.parse(calls[0].options.body);
+    assert.equal(body.model, "qwen-coder-30b");
+    assert.match(body.messages[1].content, /Ivan Ivanov/);
+    assert.match(body.messages[1].content, /2026-03-01 \.\. 2026-03-07/);
+});
+
+test("rendering AI report button forwards context to isolated ai module", function() {
+    var harness = createRenderingHarness({
+        selectedUsers: [
+            { name: "u1", displayName: "Ivan Ivanov" },
+            { name: "u2", displayName: "Petr Petrov" }
+        ],
+        useMultiUserPicker: true
+    });
+
+    harness.clickAiReport();
+    harness.clickAiReport();
+
+    assert.equal(harness.events.aiReportCalls.length, 2);
+    assert.equal(harness.events.aiReportCloses, 1);
+    assert.equal(harness.events.aiReportCalls[0].title, "ИИ отчет по активности");
+    assert.equal(harness.events.aiReportCalls[0].context.widgetId, "user-activity");
+    assert.deepEqual(harness.events.aiReportCalls[0].context.period, normalize(harness.period));
+    assert.deepEqual(harness.events.aiReportCalls[0].context.selectedUsers, normalize([
+        { name: "u1", displayName: "Ivan Ivanov" },
+        { name: "u2", displayName: "Petr Petrov" }
+    ]));
+    assert.match(harness.events.aiReportCalls[0].context.summary, /сравнение сотрудников/i);
+});
+
 test("repo modules are wired in main module and build order", function() {
     var mainSource = fs.readFileSync(path.join(__dirname, "..", "ujg-user-activity-modules", "main.js"), "utf8");
     var buildSource = fs.readFileSync(path.join(__dirname, "..", "build-user-activity.js"), "utf8");
 
-    assert.match(mainSource, /"_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager"/);
+    assert.match(mainSource, /"_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager", "_ujgUA_aiReport"/);
+    assert.match(mainSource, /repoLog: repoLog, aiReport: aiReport,/);
     assert.match(mainSource, /teamStore: uaTeamStore, teamPicker: teamPicker, teamManager: teamManager/);
     assert.match(mainSource, /"_ujgUA_api", "_ujgUA_repoApi", "_ujgUA_dataProcessor", "_ujgUA_repoDataProcessor"/);
     assert.match(mainSource, /"_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail"/);
-    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog",\s*\n\s*"_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager",\s*\n\s*"_ujgUA_rendering"/);
+    assert.match(mainSource, /"_ujgUA_activityLog", "_ujgUA_repoLog",\s*\n\s*"_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager", "_ujgUA_aiReport",\s*\n\s*"_ujgUA_rendering"/);
     assert.match(mainSource, /repoApi: repoApi, dataProcessor: dataProcessor, repoDataProcessor: repoDataProcessor/);
     assert.match(mainSource, /summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar/);
     assert.match(mainSource, /issueList: issueList, activityLog: activityLog, repoLog: repoLog/);
@@ -5770,8 +5892,9 @@ test("repo modules are wired in main module and build order", function() {
     var iAct = buildSource.indexOf('file: "activity-log.js"');
     var iRepoLog = buildSource.indexOf('file: "repo-log.js"');
     var iTeamManager = buildSource.indexOf('file: "team-manager.js"');
+    var iAiReport = buildSource.indexOf('file: "ai-report.js"');
     var iRender = buildSource.indexOf('file: "rendering.js"');
-    assert.ok(iAct < iRepoLog && iRepoLog < iTeamManager && iTeamManager < iRender);
+    assert.ok(iAct < iRepoLog && iRepoLog < iTeamManager && iTeamManager < iAiReport && iAiReport < iRender);
 });
 
 test("public user activity bundle includes repo modules", function() {
@@ -5784,6 +5907,7 @@ test("public user activity bundle includes repo modules", function() {
     assert.match(bundleSource, /_ujgUA_repoCalendar/);
     assert.match(bundleSource, /_ujgUA_repoLog/);
     assert.match(bundleSource, /_ujgUA_teamManager/);
+    assert.match(bundleSource, /_ujgUA_aiReport/);
     assert.match(bundleSource, /_ujgUA_requestCache/);
 });
 

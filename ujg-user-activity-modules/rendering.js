@@ -23,6 +23,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var teamManagerCtrl = null;
     var pendingUrlTeamIds = null;
     var $popupHost = null;
+    var aiReportCtrl = null;
 
     var stylesInjected = false;
 
@@ -338,12 +339,66 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
     }
 
+    function aiReportEnabled() {
+        return !!(mods && mods.aiReport && typeof mods.aiReport.open === "function");
+    }
+
+    function closeAiReport() {
+        if (aiReportCtrl && typeof aiReportCtrl.close === "function") {
+            aiReportCtrl.close();
+        }
+        aiReportCtrl = null;
+    }
+
+    function readWidgetHtml() {
+        if (!$container) return "";
+        try {
+            if (typeof $container.html === "function") return String($container.html() || "");
+        } catch (err) {}
+        if ($container[0] && typeof $container[0].outerHTML === "string") return String($container[0].outerHTML);
+        if ($container.__el && typeof $container.__el.html === "string") return String($container.__el.html || "");
+        return "";
+    }
+
+    function readWidgetText() {
+        if (!$container) return "";
+        try {
+            if (typeof $container.text === "function") return String($container.text() || "");
+        } catch (err) {}
+        return "";
+    }
+
+    function buildAiReportContext() {
+        return {
+            widgetId: "user-activity",
+            widgetTitle: "User Activity",
+            selectedUsers: cloneUsers(currentUsers),
+            period: currentPeriod ? { start: currentPeriod.start, end: currentPeriod.end } : null,
+            summary: "Проанализируй текущий гаджет. Сначала кратко опиши, что именно показывает виджет и какие данные в нем есть. Потом сделай ключевые выводы, выводы по каждому сотруднику и сравнение сотрудников.",
+            widgetHtml: readWidgetHtml(),
+            widgetText: readWidgetText()
+        };
+    }
+
+    function openAiReport() {
+        if (!aiReportEnabled() || !$popupHost) return;
+        closeAiReport();
+        aiReportCtrl = mods.aiReport.open($popupHost, {
+            title: "ИИ отчет по активности",
+            context: buildAiReportContext(),
+            onClose: function() {
+                aiReportCtrl = null;
+            }
+        });
+    }
+
     function renderShell() {
         if (teamPickerInst && teamPickerInst.destroy) {
             teamPickerInst.destroy();
             teamPickerInst = null;
         }
         closeTeamManager();
+        closeAiReport();
         pendingUrlTeamIds = null;
         teamStoreRef = null;
         $popupHost = null;
@@ -351,6 +406,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $container.empty().addClass("bg-background");
 
         var canManageTeams = teamManagerEnabled();
+        var aiButtonHtml = aiReportEnabled()
+            ? '<button class="ujg-ua-btn-ai h-6 px-2.5 rounded border border-border text-[11px] font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-1">' +
+                  utils.icon("sparkles", "w-3 h-3 text-primary") +
+                  " ИИ отчет" +
+              "</button>"
+            : "";
         var teamsButtonHtml = canManageTeams
             ? '<button class="ujg-ua-teams-btn ml-auto h-5 px-1.5 rounded border border-border text-[9px] font-medium text-foreground hover:bg-muted flex items-center gap-0.5">' +
                   utils.icon("settings", "w-2.5 h-2.5") +
@@ -376,6 +437,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         utils.icon("download", "w-3 h-3") +
                         " Загрузить" +
                     "</button>" +
+                    aiButtonHtml +
                     teamsButtonHtml +
                     '<button class="' + fullscreenBtnClasses + '">' +
                         utils.icon("maximize2", "w-3.5 h-3.5") +
@@ -400,6 +462,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var period = currentPeriod || utils.getDefaultPeriod();
             loadData(currentUsers, period);
         });
+
+        if (aiReportEnabled()) {
+            $header.find(".ujg-ua-btn-ai").on("click", function() {
+                openAiReport();
+            });
+        }
 
         if (canManageTeams) {
             $header.find(".ujg-ua-teams-btn").on("click", function() {

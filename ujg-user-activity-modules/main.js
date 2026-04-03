@@ -5,11 +5,11 @@ define("_ujgUA_main", [
     "_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail", "_ujgUA_unifiedCalendar",
     "_ujgUA_projectBreakdown", "_ujgUA_issueList",
     "_ujgUA_activityLog", "_ujgUA_repoLog",
-    "_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager",
+    "_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager", "_ujgUA_aiReport",
     "_ujgUA_rendering"
 ], function($, Common, config, utils, api, repoApi, dataProcessor, repoDataProcessor, progressLoader,
             userPicker, multiUserPicker, dateRangePicker, summaryCards, calendarHeatmap, repoCalendar, dailyDetail, unifiedCalendar,
-            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, teamManager, rendering) {
+            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, teamManager, aiReport, rendering) {
     "use strict";
 
     function MyGadget(API) {
@@ -32,7 +32,7 @@ define("_ujgUA_main", [
             userPicker: userPicker, multiUserPicker: multiUserPicker, dateRangePicker: dateRangePicker,
             summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar, unifiedCalendar: unifiedCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
-            issueList: issueList, activityLog: activityLog, repoLog: repoLog,
+            issueList: issueList, activityLog: activityLog, repoLog: repoLog, aiReport: aiReport,
             teamStore: uaTeamStore, teamPicker: teamPicker, teamManager: teamManager,
             resize: function() { if (typeof API.resize === "function") API.resize(); }
         });

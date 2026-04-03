@@ -832,7 +832,8 @@ define("_ujgUA_config", [], function() {
         bug: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>',
         bookOpen: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
         checkCircle2: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
-        layers: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22.54 12.43-1.96-.89-8.58 3.91a2 2 0 0 1-1.66 0l-8.58-3.91-1.96.89a1 1 0 0 0 0 1.83l8.58 3.9a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/></svg>'
+        layers: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22.54 12.43-1.96-.89-8.58 3.91a2 2 0 0 1-1.66 0l-8.58-3.91-1.96.89a1 1 0 0 0 0 1.83l8.58 3.9a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/></svg>',
+        sparkles: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>'
     };
 
     var STATUS_COLORS = {
@@ -7496,6 +7497,332 @@ define("_ujgUA_teamManager", ["jquery", "_ujgShared_teamStore", "_ujgUA_utils"],
     };
 });
 
+/* === Module: ai-report.js === */
+define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
+    "use strict";
+
+    var STORAGE_KEY = "ujg-ua-ai-report-config";
+    var MAX_HTML_CHARS = 120000;
+    var SYSTEM_PROMPT = [
+        "Ты аналитик Jira-виджета User Activity.",
+        "Сначала кратко объясни, что именно показывает переданный виджет и какие данные в нем доступны.",
+        "Потом сделай выводы только по фактам из контекста.",
+        "Не придумывай данные, сотрудников, цифры и события, которых нет в переданном HTML или тексте.",
+        "Пиши по-русски.",
+        "Структура ответа:",
+        "1. Что показывает виджет",
+        "2. Ключевые наблюдения",
+        "3. Выводы по каждому сотруднику",
+        "4. Сравнение сотрудников",
+        "5. Риски и аномалии",
+        "6. Что проверить дальше"
+    ].join("\n");
+
+    function trimString(value) {
+        return String(value == null ? "" : value).trim();
+    }
+
+    function normalizeConfig(input) {
+        if (!input || typeof input !== "object") return null;
+        var url = trimString(input.url || input.endpoint || input.apiBase);
+        var model = trimString(input.model);
+        var apiKey = trimString(input.apiKey || input.key || input.token);
+        if (!url || !model || !apiKey) return null;
+        return {
+            url: url,
+            model: model,
+            apiKey: apiKey
+        };
+    }
+
+    function readStoredConfig(storage) {
+        if (!storage || typeof storage.getItem !== "function") return null;
+        try {
+            return normalizeConfig(JSON.parse(storage.getItem(STORAGE_KEY) || "null"));
+        } catch (err) {
+            return null;
+        }
+    }
+
+    function writeStoredConfig(storage, config) {
+        var normalized = normalizeConfig(config);
+        if (!normalized) return null;
+        if (storage && typeof storage.setItem === "function") {
+            storage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    }
+
+    function promptForConfig(promptFn, existing) {
+        if (typeof promptFn !== "function") return null;
+        var current = existing || {};
+        var url = promptFn("URL AI API", current.url || "");
+        if (url == null) return null;
+        var model = promptFn("Модель AI", current.model || "");
+        if (model == null) return null;
+        var apiKey = promptFn("API key", current.apiKey || "");
+        if (apiKey == null) return null;
+        return normalizeConfig({
+            url: url,
+            model: model,
+            apiKey: apiKey
+        });
+    }
+
+    function getPromptParts(content) {
+        if (typeof content === "string") return [content];
+        if (!content) return [];
+        if (Array.isArray(content)) {
+            return content.map(function(part) {
+                if (typeof part === "string") return part;
+                if (part && typeof part.text === "string") return part.text;
+                if (part && typeof part.content === "string") return part.content;
+                return "";
+            }).filter(Boolean);
+        }
+        if (typeof content.text === "string") return [content.text];
+        if (typeof content.content === "string") return [content.content];
+        return [];
+    }
+
+    function buildUserPrompt(context) {
+        context = context || {};
+        var users = (context.selectedUsers || []).map(function(user) {
+            return trimString(user && (user.displayName || user.name || user.key));
+        }).filter(Boolean);
+        var period = context.period && context.period.start && context.period.end
+            ? context.period.start + " .. " + context.period.end
+            : "";
+        var widgetText = trimString(context.widgetText);
+        var widgetHtml = trimString(context.widgetHtml);
+
+        if (widgetHtml.length > MAX_HTML_CHARS) {
+            widgetHtml = widgetHtml.slice(0, MAX_HTML_CHARS) + "\n<!-- trimmed -->";
+        }
+
+        return [
+            context.widgetTitle ? "Название виджета: " + context.widgetTitle : "",
+            context.widgetId ? "Код виджета: " + context.widgetId : "",
+            users.length ? "Выбранные сотрудники: " + users.join(", ") : "",
+            period ? "Период: " + period : "",
+            context.summary ? "Задача: " + trimString(context.summary) : "",
+            widgetText ? "Видимый текст виджета:\n" + widgetText : "",
+            "HTML виджета:\n```html\n" + widgetHtml + "\n```"
+        ].filter(Boolean).join("\n\n");
+    }
+
+    function buildRequestBody(config, context) {
+        var normalized = normalizeConfig(config);
+        if (!normalized) throw new Error("AI config is invalid");
+        return {
+            model: normalized.model,
+            temperature: 0.2,
+            messages: [
+                { role: "system", content: SYSTEM_PROMPT },
+                { role: "user", content: buildUserPrompt(context) }
+            ]
+        };
+    }
+
+    function extractResponseText(payload) {
+        if (!payload) return "";
+        if (typeof payload === "string") return trimString(payload);
+        if (typeof payload.output_text === "string") return trimString(payload.output_text);
+        if (Array.isArray(payload.output)) {
+            var outputText = payload.output.map(function(item) {
+                return getPromptParts(item && item.content).join("\n");
+            }).filter(Boolean).join("\n");
+            if (outputText) return trimString(outputText);
+        }
+        var choice = payload.choices && payload.choices[0];
+        if (!choice) return "";
+        if (choice.message) {
+            var messageText = getPromptParts(choice.message.content).join("\n");
+            if (messageText) return trimString(messageText);
+        }
+        if (typeof choice.text === "string") return trimString(choice.text);
+        return "";
+    }
+
+    function requestReport(config, context, fetchImpl) {
+        var normalized = normalizeConfig(config);
+        if (!normalized) return Promise.reject(new Error("AI config is invalid"));
+        var callFetch = typeof fetchImpl === "function" ? fetchImpl : (typeof fetch === "function" ? fetch : null);
+        if (!callFetch) return Promise.reject(new Error("fetch is unavailable"));
+
+        return Promise.resolve(callFetch(normalized.url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: "Bearer " + normalized.apiKey
+            },
+            body: JSON.stringify(buildRequestBody(normalized, context))
+        })).then(function(resp) {
+            return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
+                if (!resp || !resp.ok) {
+                    throw new Error("AI API " + (resp && resp.status != null ? resp.status : "error") + ": " + trimString(text));
+                }
+                var payload = {};
+                if (trimString(text)) {
+                    try {
+                        payload = JSON.parse(text);
+                    } catch (err) {
+                        throw new Error("AI API вернул не-JSON ответ");
+                    }
+                }
+                var reportText = extractResponseText(payload);
+                if (!reportText) {
+                    throw new Error("AI API вернул пустой ответ");
+                }
+                return {
+                    text: reportText,
+                    payload: payload
+                };
+            });
+        });
+    }
+
+    function getWindowRef() {
+        return typeof window !== "undefined" && window ? window : null;
+    }
+
+    function getStorageRef() {
+        var win = getWindowRef();
+        return win && win.localStorage ? win.localStorage : null;
+    }
+
+    function getPromptRef() {
+        var win = getWindowRef();
+        if (win && typeof win.prompt === "function") {
+            return function(message, value) {
+                return win.prompt(message, value);
+            };
+        }
+        if (typeof prompt === "function") return prompt;
+        return null;
+    }
+
+    function ensureConfig(forcePrompt) {
+        var storage = getStorageRef();
+        var stored = readStoredConfig(storage);
+        if (!forcePrompt && stored) return stored;
+        var prompted = promptForConfig(getPromptRef(), stored || {});
+        if (!prompted) return null;
+        return writeStoredConfig(storage, prompted);
+    }
+
+    function renderContextMeta($body, context) {
+        var users = (context.selectedUsers || []).map(function(user) {
+            return trimString(user && (user.displayName || user.name || user.key));
+        }).filter(Boolean);
+        var lines = [];
+        if (users.length) lines.push("Сотрудники: " + users.join(", "));
+        if (context.period && context.period.start && context.period.end) {
+            lines.push("Период: " + context.period.start + " .. " + context.period.end);
+        }
+        if (!lines.length) return;
+        $body.append(
+            $('<div class="mb-3 rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground"></div>').text(lines.join(" | "))
+        );
+    }
+
+    function open($host, options) {
+        options = options || {};
+        var context = options.context || {};
+        var title = trimString(options.title || "ИИ отчет");
+        var onClose = typeof options.onClose === "function" ? options.onClose : null;
+
+        var $overlay = $('<div class="fixed inset-0 z-50 overflow-auto bg-black/80 backdrop-blur-sm p-4"></div>');
+        var $dialog = $('<div class="dashboard-card bg-card text-card-foreground shadow-xl" style="max-width:1100px;margin:24px auto;"></div>');
+        var $header = $('<div class="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-card px-4 py-3"></div>');
+        var $title = $('<div class="flex items-center gap-2 text-sm font-semibold text-foreground"></div>');
+        var $actions = $('<div class="ml-auto flex items-center gap-2"></div>');
+        var $btnRetry = $('<button type="button" class="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors">Повторить</button>');
+        var $btnConfig = $('<button type="button" class="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors">Настроить API</button>');
+        var $btnClose = $('<button type="button" class="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"></button>');
+        var $body = $('<div class="p-4"></div>');
+
+        $title.html(utils.icon("sparkles", "w-4 h-4 text-primary") + "<span>" + utils.escapeHtml(title) + "</span>");
+        $btnClose.html(utils.icon("x", "w-4 h-4"));
+        $actions.append($btnRetry, $btnConfig, $btnClose);
+        $header.append($title, $actions);
+        $dialog.append($header, $body);
+        $overlay.append($dialog);
+        $host.append($overlay);
+
+        function close() {
+            $overlay.remove();
+            if (onClose) onClose();
+        }
+
+        function renderMessage(titleText, bodyText, toneClass) {
+            $body.empty();
+            renderContextMeta($body, context);
+            $body.append(
+                $('<div class="mb-2 text-sm font-semibold"></div>')
+                    .addClass(toneClass || "text-foreground")
+                    .text(titleText)
+            );
+            $body.append(
+                $('<div class="text-sm whitespace-pre-wrap break-words"></div>')
+                    .addClass(toneClass === "text-destructive" ? "text-destructive" : "text-muted-foreground")
+                    .text(bodyText)
+            );
+        }
+
+        function renderReport(text) {
+            $body.empty();
+            renderContextMeta($body, context);
+            $body.append(
+                $('<div class="text-sm whitespace-pre-wrap break-words leading-snug text-foreground"></div>').text(text)
+            );
+        }
+
+        function run(forcePrompt) {
+            var config = ensureConfig(forcePrompt);
+            if (!config) {
+                renderMessage("Настройки AI не заданы", "Введите URL AI API, модель и API key.", "text-destructive");
+                return;
+            }
+
+            renderMessage("Готовлю отчет", "Собираю контекст виджета и жду ответ AI...", "text-foreground");
+
+            requestReport(config, context).then(function(result) {
+                renderReport(result.text);
+            }, function(err) {
+                renderMessage("Не удалось получить AI-отчет", err && err.message ? err.message : String(err), "text-destructive");
+            });
+        }
+
+        $btnClose.on("click", close);
+        $btnRetry.on("click", function() {
+            run(false);
+        });
+        $btnConfig.on("click", function() {
+            run(true);
+        });
+
+        run(false);
+
+        return {
+            close: close
+        };
+    }
+
+    return {
+        STORAGE_KEY: STORAGE_KEY,
+        normalizeConfig: normalizeConfig,
+        readStoredConfig: readStoredConfig,
+        writeStoredConfig: writeStoredConfig,
+        promptForConfig: promptForConfig,
+        buildUserPrompt: buildUserPrompt,
+        buildRequestBody: buildRequestBody,
+        extractResponseText: extractResponseText,
+        requestReport: requestReport,
+        open: open
+    };
+});
+
 /* === Module: rendering.js === */
 define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function($, config, utils) {
     "use strict";
@@ -7522,6 +7849,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
     var teamManagerCtrl = null;
     var pendingUrlTeamIds = null;
     var $popupHost = null;
+    var aiReportCtrl = null;
 
     var stylesInjected = false;
 
@@ -7837,12 +8165,66 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         });
     }
 
+    function aiReportEnabled() {
+        return !!(mods && mods.aiReport && typeof mods.aiReport.open === "function");
+    }
+
+    function closeAiReport() {
+        if (aiReportCtrl && typeof aiReportCtrl.close === "function") {
+            aiReportCtrl.close();
+        }
+        aiReportCtrl = null;
+    }
+
+    function readWidgetHtml() {
+        if (!$container) return "";
+        try {
+            if (typeof $container.html === "function") return String($container.html() || "");
+        } catch (err) {}
+        if ($container[0] && typeof $container[0].outerHTML === "string") return String($container[0].outerHTML);
+        if ($container.__el && typeof $container.__el.html === "string") return String($container.__el.html || "");
+        return "";
+    }
+
+    function readWidgetText() {
+        if (!$container) return "";
+        try {
+            if (typeof $container.text === "function") return String($container.text() || "");
+        } catch (err) {}
+        return "";
+    }
+
+    function buildAiReportContext() {
+        return {
+            widgetId: "user-activity",
+            widgetTitle: "User Activity",
+            selectedUsers: cloneUsers(currentUsers),
+            period: currentPeriod ? { start: currentPeriod.start, end: currentPeriod.end } : null,
+            summary: "Проанализируй текущий гаджет. Сначала кратко опиши, что именно показывает виджет и какие данные в нем есть. Потом сделай ключевые выводы, выводы по каждому сотруднику и сравнение сотрудников.",
+            widgetHtml: readWidgetHtml(),
+            widgetText: readWidgetText()
+        };
+    }
+
+    function openAiReport() {
+        if (!aiReportEnabled() || !$popupHost) return;
+        closeAiReport();
+        aiReportCtrl = mods.aiReport.open($popupHost, {
+            title: "ИИ отчет по активности",
+            context: buildAiReportContext(),
+            onClose: function() {
+                aiReportCtrl = null;
+            }
+        });
+    }
+
     function renderShell() {
         if (teamPickerInst && teamPickerInst.destroy) {
             teamPickerInst.destroy();
             teamPickerInst = null;
         }
         closeTeamManager();
+        closeAiReport();
         pendingUrlTeamIds = null;
         teamStoreRef = null;
         $popupHost = null;
@@ -7850,6 +8232,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
         $container.empty().addClass("bg-background");
 
         var canManageTeams = teamManagerEnabled();
+        var aiButtonHtml = aiReportEnabled()
+            ? '<button class="ujg-ua-btn-ai h-6 px-2.5 rounded border border-border text-[11px] font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-1">' +
+                  utils.icon("sparkles", "w-3 h-3 text-primary") +
+                  " ИИ отчет" +
+              "</button>"
+            : "";
         var teamsButtonHtml = canManageTeams
             ? '<button class="ujg-ua-teams-btn ml-auto h-5 px-1.5 rounded border border-border text-[9px] font-medium text-foreground hover:bg-muted flex items-center gap-0.5">' +
                   utils.icon("settings", "w-2.5 h-2.5") +
@@ -7875,6 +8263,7 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
                         utils.icon("download", "w-3 h-3") +
                         " Загрузить" +
                     "</button>" +
+                    aiButtonHtml +
                     teamsButtonHtml +
                     '<button class="' + fullscreenBtnClasses + '">' +
                         utils.icon("maximize2", "w-3.5 h-3.5") +
@@ -7899,6 +8288,12 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             var period = currentPeriod || utils.getDefaultPeriod();
             loadData(currentUsers, period);
         });
+
+        if (aiReportEnabled()) {
+            $header.find(".ujg-ua-btn-ai").on("click", function() {
+                openAiReport();
+            });
+        }
 
         if (canManageTeams) {
             $header.find(".ujg-ua-teams-btn").on("click", function() {
@@ -8534,11 +8929,11 @@ define("_ujgUA_main", [
     "_ujgUA_calendarHeatmap", "_ujgUA_repoCalendar", "_ujgUA_dailyDetail", "_ujgUA_unifiedCalendar",
     "_ujgUA_projectBreakdown", "_ujgUA_issueList",
     "_ujgUA_activityLog", "_ujgUA_repoLog",
-    "_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager",
+    "_ujgShared_teamStore", "_ujgShared_teamPicker", "_ujgUA_teamManager", "_ujgUA_aiReport",
     "_ujgUA_rendering"
 ], function($, Common, config, utils, api, repoApi, dataProcessor, repoDataProcessor, progressLoader,
             userPicker, multiUserPicker, dateRangePicker, summaryCards, calendarHeatmap, repoCalendar, dailyDetail, unifiedCalendar,
-            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, teamManager, rendering) {
+            projectBreakdown, issueList, activityLog, repoLog, teamStore, teamPicker, teamManager, aiReport, rendering) {
     "use strict";
 
     function MyGadget(API) {
@@ -8561,7 +8956,7 @@ define("_ujgUA_main", [
             userPicker: userPicker, multiUserPicker: multiUserPicker, dateRangePicker: dateRangePicker,
             summaryCards: summaryCards, calendarHeatmap: calendarHeatmap, repoCalendar: repoCalendar, unifiedCalendar: unifiedCalendar,
             dailyDetail: dailyDetail, projectBreakdown: projectBreakdown,
-            issueList: issueList, activityLog: activityLog, repoLog: repoLog,
+            issueList: issueList, activityLog: activityLog, repoLog: repoLog, aiReport: aiReport,
             teamStore: uaTeamStore, teamPicker: teamPicker, teamManager: teamManager,
             resize: function() { if (typeof API.resize === "function") API.resize(); }
         });

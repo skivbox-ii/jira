@@ -119,6 +119,7 @@
 ├── ujg-timesheet.v0.js
 ├── ujg-timesheet.v0.runtime.js
 ├── ujg-user-activity-modules/
+│   └── ai-report.js
 ├── ujg-user-activity.bootstrap.js
 ├── ujg-user-activity.css
 ├── ujg-user-activity.js
