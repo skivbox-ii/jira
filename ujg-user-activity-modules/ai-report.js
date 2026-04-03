@@ -4,7 +4,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     var STORAGE_KEY = "ujg-ua-ai-report-config";
     var MAX_PROMPT_TOKENS = 50000;
     // Use UTF-8 bytes as a conservative upper bound for tokens and leave headroom
-    // for system prompt + chat wrapper metadata.
+    // for wrapper metadata.
     var MAX_USER_PROMPT_BYTES = 42000;
     var MAX_BASE_PROMPT_BYTES = 6000;
     var MAX_WIDGET_TEXT_BYTES = 30000;
@@ -12,20 +12,6 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     var CHAT_COMPLETIONS_PATH = "/chat/completions";
     var LEGACY_COMPLETIONS_PATH = "/completions";
     var TRIM_SUFFIX = "\n...[trimmed]";
-    var SYSTEM_PROMPT = [
-        "Ты аналитик Jira-виджета User Activity.",
-        "Сначала кратко объясни, что именно показывает переданный виджет и какие данные в нем доступны.",
-        "Потом сделай выводы только по фактам из контекста.",
-        "Не придумывай данные, сотрудников, цифры и события, которых нет в переданном HTML или тексте.",
-        "Пиши по-русски.",
-        "Структура ответа:",
-        "1. Что показывает виджет",
-        "2. Ключевые наблюдения",
-        "3. Выводы по каждому сотруднику",
-        "4. Сравнение сотрудников",
-        "5. Риски и аномалии",
-        "6. Что проверить дальше"
-    ].join("\n");
     var PROMPT_PRESETS = [
         {
             id: "summary",
@@ -292,12 +278,6 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         return current || PROMPT_PRESETS[0].prompt;
     }
 
-    function buildSystemPrompt(config) {
-        var basePrompt = trimString(config && config.basePrompt);
-        if (!basePrompt) return SYSTEM_PROMPT;
-        return SYSTEM_PROMPT + "\n\nДополнительные инструкции пользователя:\n" + basePrompt;
-    }
-
     function getPromptParts(content) {
         if (typeof content === "string") return [content];
         if (!content) return [];
@@ -328,8 +308,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
             context.widgetTitle ? "Название виджета: " + context.widgetTitle : "",
             context.widgetId ? "Код виджета: " + context.widgetId : "",
             users.length ? "Выбранные сотрудники: " + users.join(", ") : "",
-            period ? "Период: " + period : "",
-            context.summary ? "Задача: " + sanitizeTextForPrompt(context.summary) : ""
+            period ? "Период: " + period : ""
         ].filter(Boolean);
         var prompt = parts.join("\n\n");
         var remaining = MAX_USER_PROMPT_BYTES - utf8ByteLength(prompt);
@@ -370,24 +349,26 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
 
     function buildRequestBody(config, context, forceLegacy) {
         var normalized = normalizeConfig(config);
+        var visiblePrompt;
         if (!normalized) throw new Error("AI config is invalid");
         var useLegacy = forceLegacy == null
             ? !!normalized.useLegacyCompletionsEndpoint
             : !!forceLegacy;
-        var systemPrompt = buildSystemPrompt(normalized);
+        visiblePrompt = trimString(normalized.basePrompt);
+        if (!visiblePrompt) throw new Error("AI prompt is empty");
         var userPrompt = buildUserPrompt(context);
         if (useLegacy) {
             return {
                 model: normalized.model,
                 temperature: 0.2,
-                prompt: systemPrompt + "\n\n" + userPrompt
+                prompt: visiblePrompt + "\n\n" + userPrompt
             };
         }
         return {
             model: normalized.model,
             temperature: 0.2,
             messages: [
-                { role: "system", content: systemPrompt },
+                { role: "user", content: visiblePrompt },
                 { role: "user", content: userPrompt }
             ]
         };
@@ -807,7 +788,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         var $composer = $('<div class="rounded-md border border-border bg-muted/10 p-3 space-y-3"></div>');
         var $composerHeader = $('<div class="flex items-start justify-between gap-3"></div>');
         var $composerTitle = $('<div class="text-sm font-semibold text-foreground">Prompt</div>');
-        var $composerHint = $('<div class="text-xs leading-relaxed text-muted-foreground">Выбери предустановку или отредактируй prompt вручную, затем нажми "Отправить".</div>');
+        var $composerHint = $('<div class="text-xs leading-relaxed text-muted-foreground">В модель уйдет ровно тот prompt, который виден в этом поле. Выбери шаблон или отредактируй текст вручную.</div>');
         var $controls = $('<div class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]"></div>');
         var $presetWrap = $('<label class="block space-y-1"></label>');
         var $presetLabel = $('<div class="text-xs font-medium text-muted-foreground">Предустановленный prompt</div>');
@@ -931,6 +912,14 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
                 return;
             }
             promptValue = getPromptValue();
+            if (!promptValue) {
+                renderResultMessage(
+                    "Prompt пустой",
+                    "Введи prompt вручную или выбери один из шаблонов.",
+                    "text-destructive"
+                );
+                return;
+            }
             requestConfig = saveCurrentPrompt(requestConfig, promptValue) || requestConfig;
             currentConfig = requestConfig;
             requestId = ++requestSeq;

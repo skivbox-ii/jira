@@ -374,7 +374,6 @@ define("_ujgUA_rendering", ["jquery", "_ujgUA_config", "_ujgUA_utils"], function
             widgetTitle: "User Activity",
             selectedUsers: cloneUsers(currentUsers),
             period: currentPeriod ? { start: currentPeriod.start, end: currentPeriod.end } : null,
-            summary: "Проанализируй текущий гаджет. Сначала кратко опиши, что именно показывает виджет и какие данные в нем есть. Потом сделай ключевые выводы, выводы по каждому сотруднику и сравнение сотрудников.",
             widgetHtml: readWidgetHtml(),
             widgetText: readWidgetText()
         };

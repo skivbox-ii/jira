@@ -5838,10 +5838,10 @@ test("user-activity ai-report treats configured value as apiBase and calls chat 
     var body = JSON.parse(calls[0].options.body);
     assert.equal(body.model, "qwen-coder-30b");
     assert.equal(mod.buildRequestUrl(config), "https://llm.example/v1/chat/completions");
-    assert.match(body.messages[0].content, /Дополнительные инструкции пользователя:/);
-    assert.match(body.messages[0].content, /Сделай акцент на блокерах и рисках\./);
+    assert.equal(body.messages[0].content, "Сделай акцент на блокерах и рисках.");
     assert.match(body.messages[1].content, /Ivan Ivanov/);
     assert.match(body.messages[1].content, /2026-03-01 \.\. 2026-03-07/);
+    assert.equal(body.messages[1].content.indexOf("Задача:"), -1);
 });
 
 test("user-activity ai-report promptForConfig keeps saved base prompt without extra prompt", function() {
@@ -5884,7 +5884,8 @@ test("user-activity ai-report falls back to legacy completions on chat 404", asy
     var result = await mod.requestReport({
         apiBase: "https://llm.example/v1",
         model: "qwen-coder-30b",
-        apiKey: "sk-test"
+        apiKey: "sk-test",
+        basePrompt: "Сравни сотрудников по активности."
     }, {
         widgetTitle: "User Activity",
         widgetId: "user-activity",
@@ -5920,7 +5921,23 @@ test("user-activity ai-report falls back to legacy completions on chat 404", asy
     assert.equal(calls[1].url, "https://llm.example/v1/completions");
     assert.ok(JSON.parse(calls[0].options.body).messages, "chat request should use messages");
     assert.ok(JSON.parse(calls[1].options.body).prompt, "legacy fallback should use prompt");
+    assert.match(JSON.parse(calls[1].options.body).prompt, /^Сравни сотрудников по активности\./);
     assert.equal(result.text, "Legacy AI-отчет");
+});
+
+test("user-activity ai-report requires visible prompt", function() {
+    var mod = loadAiReport();
+
+    assert.throws(function() {
+        mod.buildRequestBody({
+            apiBase: "https://llm.example/v1",
+            model: "qwen-coder-30b",
+            apiKey: "sk-test",
+            basePrompt: ""
+        }, {
+            widgetTitle: "User Activity"
+        });
+    }, /AI prompt is empty/);
 });
 
 test("user-activity ai-report strips noisy html symbols and keeps prompt under safe byte cap", function() {
@@ -5953,6 +5970,7 @@ test("user-activity ai-report strips noisy html symbols and keeps prompt under s
     assert.equal(prompt.indexOf("class="), -1, "prompt should strip CSS utility classes");
     assert.equal(prompt.indexOf("data-node-id"), -1, "prompt should strip data attrs");
     assert.equal(prompt.indexOf("<svg"), -1, "prompt should strip svg markup");
+    assert.equal(prompt.indexOf("Задача:"), -1, "visible prompt must not be duplicated into widget context");
     assert.match(prompt, /Упрощенный HTML виджета:/);
     assert.match(prompt, /\.\.\.\[trimmed\]/);
 });
@@ -6014,7 +6032,7 @@ test("rendering AI report button forwards context to isolated ai module", functi
         { name: "u1", displayName: "Ivan Ivanov" },
         { name: "u2", displayName: "Petr Petrov" }
     ]));
-    assert.match(harness.events.aiReportCalls[0].context.summary, /сравнение сотрудников/i);
+    assert.equal(harness.events.aiReportCalls[0].context.summary, undefined);
 });
 
 test("repo modules are wired in main module and build order", function() {
