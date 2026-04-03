@@ -5798,13 +5798,15 @@ test("user-activity ai-report treats configured value as apiBase and calls chat 
     var config = mod.writeStoredConfig(storage, {
         apiBase: "https://llm.example/v1",
         model: "qwen-coder-30b",
-        apiKey: "sk-test"
+        apiKey: "sk-test",
+        basePrompt: "Сделай акцент на блокерах и рисках."
     });
     var calls = [];
 
     assert.deepEqual(normalize(mod.readStoredConfig(storage)), normalize(config));
     assert.equal(config.apiBase, "https://llm.example/v1");
     assert.equal(config.useLegacyCompletionsEndpoint, false);
+    assert.equal(config.basePrompt, "Сделай акцент на блокерах и рисках.");
 
     var result = await mod.requestReport(config, {
         widgetTitle: "User Activity",
@@ -5836,8 +5838,35 @@ test("user-activity ai-report treats configured value as apiBase and calls chat 
     var body = JSON.parse(calls[0].options.body);
     assert.equal(body.model, "qwen-coder-30b");
     assert.equal(mod.buildRequestUrl(config), "https://llm.example/v1/chat/completions");
+    assert.match(body.messages[0].content, /Дополнительные инструкции пользователя:/);
+    assert.match(body.messages[0].content, /Сделай акцент на блокерах и рисках\./);
     assert.match(body.messages[1].content, /Ivan Ivanov/);
     assert.match(body.messages[1].content, /2026-03-01 \.\. 2026-03-07/);
+});
+
+test("user-activity ai-report promptForConfig reads optional base prompt", function() {
+    var mod = loadAiReport();
+    var answers = [
+        "https://llm.example/v1",
+        "qwen-coder-30b",
+        "sk-test",
+        "Сфокусируйся на блокерах.\n\nОтвет дай markdown."
+    ];
+    var prompts = [];
+    var config = mod.promptForConfig(function(message, value) {
+        prompts.push({ message: message, value: value });
+        return answers.shift();
+    }, {
+        apiBase: "https://old.example/v1",
+        model: "old-model",
+        apiKey: "old-key",
+        basePrompt: "old prompt"
+    });
+
+    assert.equal(prompts.length, 4);
+    assert.equal(prompts[3].message, "Базовый prompt для отчета (опционально)");
+    assert.equal(prompts[3].value, "old prompt");
+    assert.equal(config.basePrompt, "Сфокусируйся на блокерах.\n\nОтвет дай markdown.");
 });
 
 test("user-activity ai-report falls back to legacy completions on chat 404", async function() {
@@ -5918,6 +5947,42 @@ test("user-activity ai-report strips noisy html symbols and keeps prompt under s
     assert.equal(prompt.indexOf("<svg"), -1, "prompt should strip svg markup");
     assert.match(prompt, /Упрощенный HTML виджета:/);
     assert.match(prompt, /\.\.\.\[trimmed\]/);
+});
+
+test("user-activity ai-report renders markdown to safe html", function() {
+    var mod = loadAiReport();
+    var html = mod.renderMarkdownToHtml([
+        "# Отчет",
+        "",
+        "- **Сильная сторона**",
+        "- `npm test`",
+        "",
+        "> Нужна проверка на регрессии",
+        "",
+        "| Сотрудник | Оценка |",
+        "| --- | --- |",
+        "| Ivan | High |",
+        "",
+        "[Документация](https://example.com/docs)",
+        "[bad](javascript:alert(1))",
+        "<script>alert(1)</script>",
+        "",
+        "```js",
+        "console.log('ok');",
+        "```"
+    ].join("\n"));
+
+    assert.match(html, /<h1[^>]*>Отчет<\/h1>/);
+    assert.match(html, /<ul[^>]*>/);
+    assert.match(html, /<strong>Сильная сторона<\/strong>/);
+    assert.match(html, /<code[^>]*>npm test<\/code>/);
+    assert.match(html, /<blockquote[^>]*>Нужна проверка на регрессии<\/blockquote>/);
+    assert.match(html, /<table[^>]*>/);
+    assert.match(html, /href="https:\/\/example\.com\/docs"/);
+    assert.equal(html.indexOf("javascript:alert(1)"), -1);
+    assert.equal(html.indexOf("<script>"), -1);
+    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    assert.match(html, /console\.log\(&#39;ok&#39;\);/);
 });
 
 test("rendering AI report button forwards context to isolated ai module", function() {

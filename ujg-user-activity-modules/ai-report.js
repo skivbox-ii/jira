@@ -6,6 +6,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     // Use UTF-8 bytes as a conservative upper bound for tokens and leave headroom
     // for system prompt + chat wrapper metadata.
     var MAX_USER_PROMPT_BYTES = 42000;
+    var MAX_BASE_PROMPT_BYTES = 6000;
     var MAX_WIDGET_TEXT_BYTES = 30000;
     var MAX_WIDGET_HTML_BYTES = 12000;
     var CHAT_COMPLETIONS_PATH = "/chat/completions";
@@ -108,6 +109,10 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         );
     }
 
+    function sanitizeBasePrompt(value) {
+        return truncateByBytes(normalizePromptWhitespace(value), MAX_BASE_PROMPT_BYTES, TRIM_SUFFIX);
+    }
+
     function sanitizeHtmlForPrompt(value) {
         return normalizePromptWhitespace(
             String(value == null ? "" : value)
@@ -173,11 +178,13 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         var apiBaseParts = normalizeApiBaseParts(input.apiBase || input.url || input.endpoint);
         var model = trimString(input.model);
         var apiKey = trimString(input.apiKey || input.key || input.token);
+        var basePrompt = sanitizeBasePrompt(input.basePrompt || input.base_prompt || input.systemPrompt || input.prompt);
         if (!apiBaseParts.apiBase || !model || !apiKey) return null;
         return {
             apiBase: apiBaseParts.apiBase,
             model: model,
             apiKey: apiKey,
+            basePrompt: basePrompt,
             useLegacyCompletionsEndpoint: toBool(
                 input.useLegacyCompletionsEndpoint,
                 apiBaseParts.useLegacyCompletionsEndpoint
@@ -215,12 +222,21 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         if (model == null) return null;
         var apiKey = promptFn("API key", current.apiKey || "");
         if (apiKey == null) return null;
+        var basePrompt = promptFn("Базовый prompt для отчета (опционально)", current.basePrompt || "");
+        if (basePrompt == null) return null;
         return normalizeConfig({
             apiBase: apiBase,
             model: model,
             apiKey: apiKey,
+            basePrompt: basePrompt,
             useLegacyCompletionsEndpoint: current.useLegacyCompletionsEndpoint
         });
+    }
+
+    function buildSystemPrompt(config) {
+        var basePrompt = trimString(config && config.basePrompt);
+        if (!basePrompt) return SYSTEM_PROMPT;
+        return SYSTEM_PROMPT + "\n\nДополнительные инструкции пользователя:\n" + basePrompt;
     }
 
     function getPromptParts(content) {
@@ -299,19 +315,20 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         var useLegacy = forceLegacy == null
             ? !!normalized.useLegacyCompletionsEndpoint
             : !!forceLegacy;
+        var systemPrompt = buildSystemPrompt(normalized);
         var userPrompt = buildUserPrompt(context);
         if (useLegacy) {
             return {
                 model: normalized.model,
                 temperature: 0.2,
-                prompt: SYSTEM_PROMPT + "\n\n" + userPrompt
+                prompt: systemPrompt + "\n\n" + userPrompt
             };
         }
         return {
             model: normalized.model,
             temperature: 0.2,
             messages: [
-                { role: "system", content: SYSTEM_PROMPT },
+                { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
             ]
         };
@@ -335,6 +352,284 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         }
         if (typeof choice.text === "string") return trimString(choice.text);
         return "";
+    }
+
+    function escapeHtmlSafe(value) {
+        if (utils && typeof utils.escapeHtml === "function") {
+            return utils.escapeHtml(value);
+        }
+        return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function storeMarkdownPlaceholder(placeholders, html) {
+        var token = "@@MDPH" + placeholders.length + "@@";
+        placeholders.push(html);
+        return token;
+    }
+
+    function restoreMarkdownPlaceholders(value, placeholders) {
+        return String(value || "").replace(/@@MDPH(\d+)@@/g, function(match, idx) {
+            var n = Number(idx);
+            return isFinite(n) && placeholders[n] != null ? placeholders[n] : "";
+        });
+    }
+
+    function sanitizeLinkHref(value) {
+        var href = trimString(value).replace(/&amp;/g, "&");
+        if (!href) return "";
+        if (/^https?:\/\//i.test(href)) return href;
+        if (/^mailto:/i.test(href)) return href;
+        return "";
+    }
+
+    function renderInlineMarkdown(value) {
+        var placeholders = [];
+        var text = escapeHtmlSafe(value);
+
+        text = text.replace(/`([^`\n]+)`/g, function(match, code) {
+            return storeMarkdownPlaceholder(
+                placeholders,
+                '<code class="rounded bg-muted px-1 py-0.5 font-mono text-[12px] text-foreground">' + code + "</code>"
+            );
+        });
+
+        text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, function(match, label, href) {
+            var safeHref = sanitizeLinkHref(href);
+            if (!safeHref) return label;
+            return storeMarkdownPlaceholder(
+                placeholders,
+                '<a class="text-primary underline underline-offset-4 hover:text-primary/90" href="' +
+                    escapeHtmlSafe(safeHref) +
+                    '" target="_blank" rel="noopener noreferrer">' +
+                    label +
+                    "</a>"
+            );
+        });
+
+        text = text.replace(/\*\*([\s\S]+?)\*\*/g, "<strong>$1</strong>");
+        text = text.replace(/__([\s\S]+?)__/g, "<strong>$1</strong>");
+        text = text.replace(/~~([\s\S]+?)~~/g, "<del>$1</del>");
+        text = text.replace(/(^|[^\*])\*([^*\n][\s\S]*?[^*\n])\*(?!\*)/g, "$1<em>$2</em>");
+        text = text.replace(/(^|[^_])_([^_\n][\s\S]*?[^_\n])_(?!_)/g, "$1<em>$2</em>");
+
+        return restoreMarkdownPlaceholders(text, placeholders);
+    }
+
+    function getListLineMeta(line) {
+        var ordered = /^\s*(\d+)\.\s+(.+)$/.exec(line);
+        if (ordered) return { type: "ol", text: ordered[2] };
+        var unordered = /^\s*[-*+]\s+(.+)$/.exec(line);
+        if (unordered) return { type: "ul", text: unordered[1] };
+        return null;
+    }
+
+    function isTableSeparatorLine(line) {
+        return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line);
+    }
+
+    function parseTableRow(line) {
+        return String(line || "")
+            .trim()
+            .replace(/^\|/, "")
+            .replace(/\|$/, "")
+            .split("|")
+            .map(function(cell) {
+                return trimString(cell);
+            });
+    }
+
+    function renderMarkdownTable(headers, rows) {
+        var cols = headers.length;
+        if (!cols) return "";
+        return (
+            '<div class="overflow-auto">' +
+                '<table class="w-full border-collapse text-sm">' +
+                    '<thead><tr>' +
+                        headers.map(function(cell) {
+                            return '<th class="border border-border bg-muted/40 px-2 py-1.5 text-left font-semibold text-foreground">' +
+                                renderInlineMarkdown(cell) +
+                                "</th>";
+                        }).join("") +
+                    "</tr></thead>" +
+                    "<tbody>" +
+                        rows.map(function(row) {
+                            var cells = [];
+                            var i;
+                            for (i = 0; i < cols; i++) {
+                                cells.push(
+                                    '<td class="border border-border px-2 py-1.5 align-top text-foreground">' +
+                                        renderInlineMarkdown(row[i] || "") +
+                                        "</td>"
+                                );
+                            }
+                            return "<tr>" + cells.join("") + "</tr>";
+                        }).join("") +
+                    "</tbody>" +
+                "</table>" +
+            "</div>"
+        );
+    }
+
+    function renderMarkdownToHtml(value) {
+        var text = String(value == null ? "" : value).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        var lines = trimString(text).split("\n");
+        var out = [];
+        var paragraph = [];
+        var quote = [];
+        var listType = "";
+        var listItems = [];
+        var codeFence = false;
+        var codeLines = [];
+        var i;
+
+        function flushParagraph() {
+            if (!paragraph.length) return;
+            out.push(
+                '<p class="text-sm leading-relaxed text-foreground">' +
+                    renderInlineMarkdown(paragraph.join("\n")).replace(/\n/g, "<br>") +
+                    "</p>"
+            );
+            paragraph = [];
+        }
+
+        function flushQuote() {
+            if (!quote.length) return;
+            out.push(
+                '<blockquote class="border-l-2 border-border pl-3 text-sm italic leading-relaxed text-muted-foreground">' +
+                    renderInlineMarkdown(quote.join("\n")).replace(/\n/g, "<br>") +
+                    "</blockquote>"
+            );
+            quote = [];
+        }
+
+        function flushList() {
+            var listClass;
+            if (!listItems.length || !listType) return;
+            listClass = listType === "ol" ? "list-decimal" : "list-disc";
+            out.push(
+                "<" + listType + ' class="pl-5 ' + listClass + ' space-y-1 text-sm text-foreground">' +
+                    listItems.map(function(item) {
+                        return "<li>" + renderInlineMarkdown(item) + "</li>";
+                    }).join("") +
+                "</" + listType + ">"
+            );
+            listType = "";
+            listItems = [];
+        }
+
+        function flushAll() {
+            flushParagraph();
+            flushQuote();
+            flushList();
+        }
+
+        if (!trimString(text)) return "";
+
+        for (i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            var headingMatch;
+            var listMeta;
+
+            if (/^\s*```/.test(line)) {
+                flushAll();
+                if (codeFence) {
+                    out.push(
+                        '<pre class="overflow-auto rounded-md bg-muted px-3 py-2 text-[12px] leading-relaxed text-foreground">' +
+                            '<code class="font-mono">' + escapeHtmlSafe(codeLines.join("\n")) + "</code>" +
+                        "</pre>"
+                    );
+                    codeLines = [];
+                    codeFence = false;
+                } else {
+                    codeFence = true;
+                    codeLines = [];
+                }
+                continue;
+            }
+
+            if (codeFence) {
+                codeLines.push(line);
+                continue;
+            }
+
+            if (!trimString(line)) {
+                flushAll();
+                continue;
+            }
+
+            if (line.indexOf("|") >= 0 && i + 1 < lines.length && isTableSeparatorLine(lines[i + 1])) {
+                var headers = parseTableRow(line);
+                var rows = [];
+                flushAll();
+                i += 2;
+                while (i < lines.length && trimString(lines[i]) && lines[i].indexOf("|") >= 0) {
+                    rows.push(parseTableRow(lines[i]));
+                    i += 1;
+                }
+                i -= 1;
+                out.push(renderMarkdownTable(headers, rows));
+                continue;
+            }
+
+            headingMatch = /^\s*(#{1,6})\s+(.+)$/.exec(line);
+            if (headingMatch) {
+                var level = Math.min(6, headingMatch[1].length);
+                var headingClass = level === 1
+                    ? "text-xl font-bold"
+                    : level === 2
+                        ? "text-lg font-semibold"
+                        : "text-base font-semibold";
+                flushAll();
+                out.push(
+                    "<h" + level + ' class="' + headingClass + ' text-foreground">' +
+                        renderInlineMarkdown(headingMatch[2]) +
+                    "</h" + level + ">"
+                );
+                continue;
+            }
+
+            if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) {
+                flushAll();
+                out.push('<hr class="border-border">');
+                continue;
+            }
+
+            if (/^\s*>\s?/.test(line)) {
+                flushParagraph();
+                flushList();
+                quote.push(line.replace(/^\s*>\s?/, ""));
+                continue;
+            }
+            flushQuote();
+
+            listMeta = getListLineMeta(line);
+            if (listMeta) {
+                flushParagraph();
+                if (listType && listType !== listMeta.type) flushList();
+                listType = listMeta.type;
+                listItems.push(listMeta.text);
+                continue;
+            }
+            flushList();
+
+            paragraph.push(line);
+        }
+
+        if (codeFence) {
+            out.push(
+                '<pre class="overflow-auto rounded-md bg-muted px-3 py-2 text-[12px] leading-relaxed text-foreground">' +
+                    '<code class="font-mono">' + escapeHtmlSafe(codeLines.join("\n")) + "</code>" +
+                "</pre>"
+            );
+        }
+
+        flushAll();
+        return out.join("");
     }
 
     function requestReport(config, context, fetchImpl) {
@@ -481,7 +776,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
             $body.empty();
             renderContextMeta($body, context);
             $body.append(
-                $('<div class="text-sm whitespace-pre-wrap break-words leading-snug text-foreground"></div>').text(text)
+                $('<div class="space-y-3 break-words"></div>').html(renderMarkdownToHtml(text))
             );
         }
 
@@ -490,7 +785,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
             if (!config) {
                 renderMessage(
                     "Настройки AI не заданы",
-                    "Введите API Base URL, например https://llm/v1, а также модель и API key.",
+                    "Введите API Base URL, например https://llm/v1, модель, API key и при необходимости базовый prompt.",
                     "text-destructive"
                 );
                 return;
@@ -524,6 +819,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         STORAGE_KEY: STORAGE_KEY,
         MAX_PROMPT_TOKENS: MAX_PROMPT_TOKENS,
         MAX_USER_PROMPT_BYTES: MAX_USER_PROMPT_BYTES,
+        MAX_BASE_PROMPT_BYTES: MAX_BASE_PROMPT_BYTES,
         normalizeConfig: normalizeConfig,
         readStoredConfig: readStoredConfig,
         writeStoredConfig: writeStoredConfig,
@@ -531,6 +827,9 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
         utf8ByteLength: utf8ByteLength,
         sanitizeTextForPrompt: sanitizeTextForPrompt,
         sanitizeHtmlForPrompt: sanitizeHtmlForPrompt,
+        sanitizeBasePrompt: sanitizeBasePrompt,
+        renderInlineMarkdown: renderInlineMarkdown,
+        renderMarkdownToHtml: renderMarkdownToHtml,
         buildRequestUrl: buildRequestUrl,
         buildUserPrompt: buildUserPrompt,
         buildRequestBody: buildRequestBody,
