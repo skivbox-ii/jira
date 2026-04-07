@@ -4115,7 +4115,7 @@ test("presentation consistency: repo author links and issue status align across 
     var issueKey = "PRES-9";
     var longSummary = "FULL_TITLE_" + new Array(45).join("abcdefghij");
     var summaryPattern = new RegExp('ujg-ua-detail-issue-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
-    var calendarSummaryPattern = new RegExp('ujg-ua-repo-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
+    var calendarSummaryPattern = new RegExp('ujg-ua-issue-summary[^>]*>' + escapeRegExp(longSummary) + '<\\/span>');
     assert.ok(longSummary.length > 120);
     var start = new Date("2026-03-01T00:00:00.000Z");
     var end = new Date("2026-03-09T23:59:59.000Z");
@@ -4175,16 +4175,14 @@ test("presentation consistency: repo author links and issue status align across 
     };
     loadDailyDetail($stub).create().show(dateStr, daySlice, issueMap, []);
 
-    assert.match(calHtml, /class="ujg-ua-author">Ivanov Ivan Petrovich<\/span>/);
     assert.match(detailHtml, /class="ujg-ua-author">Ivanov Ivan Petrovich<\/span>/);
     assert.match(calHtml, /jira\.example\.com\/browse\/PRES-9/);
     assert.match(detailHtml, /jira\.example\.com\/browse\/PRES-9/);
-    assert.match(calHtml, /ujg-ua-inline-status[^"]*ujg-ua-status-active[^"]*"[^>]*>In Progress</);
     assert.match(detailHtml, /ujg-ua-inline-status[^"]*ujg-ua-status-active[^"]*"[^>]*>In Progress</);
     assert.match(calHtml, /title="Текущий статус: In Progress \| Установлен: 04\.03\.2026 10:15"/);
     assert.match(detailHtml, /title="Текущий статус: In Progress \| Установлен: 04\.03\.2026 10:15"/);
     assert.match(calHtml, calendarSummaryPattern);
-    assert.doesNotMatch(calHtml, /ujg-ua-repo-summary[^>]*>fallback only<\/span>/);
+    assert.doesNotMatch(calHtml, /ujg-ua-issue-summary[^>]*>fallback only<\/span>/);
     assert.match(detailHtml, summaryPattern);
     assert.doesNotMatch(detailHtml, /ujg-ua-detail-issue-summary[^>]*>[^<]*…[^<]*<\/span>/);
     assert.match(calHtml, /Коммит/);

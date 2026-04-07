@@ -334,6 +334,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             var rt = String(type).toLowerCase();
             var typeLabel = REPO_LABELS[rt] || REPO_LABELS[type] || type;
             var objectLink = renderRepoObjectLink(item);
+            var meta = repoIssueMeta(item.issueKey, issueMap, item);
             var repoMsg = item.message || item.title || item.name || "";
             var parts = [
                 '<span class="ujg-ua-time">' + utils.formatTime(item.timestamp) + "</span>",
@@ -341,6 +342,8 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 '<span class="text-[9px] text-muted-foreground">' + utils.escapeHtml(typeLabel) + "</span>"
             ];
             if (objectLink) parts.push(objectLink);
+            if (aDisp) parts.push('<span class="ujg-ua-author">' + utils.escapeHtml(aDisp) + "</span>");
+            if (!item.issueKey && meta.issueStatus) parts.push(utils.renderIssueStatusBadge(meta.issueStatus, meta.issueStatusChangedAt));
             parts.push('<span class="text-[9px] text-muted-foreground ujg-ua-repo-msg whitespace-normal break-words min-w-0">' + utils.escapeHtml(repoMsg) + "</span>");
             ig.items.push({
                 ts: item.timestamp || "",
@@ -375,7 +378,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
             html += '<div class="ujg-ua-user-group">';
             if (group.showHeader) {
                 html += '<div class="ujg-ua-user-group-header">' +
-                    '<span>' + utils.escapeHtml(surname(group.displayName)) + '</span>' +
+                    '<span>' + utils.escapeHtml(group.displayName) + '</span>' +
                     '<span class="text-[9px] font-bold">' + group.totalHours + 'ч</span>' +
                     '</div>';
             }
@@ -385,6 +388,7 @@ define("_ujgUA_unifiedCalendar", ["jquery", "_ujgUA_config", "_ujgUA_utils"], fu
                 if (issue.issueKey) {
                     html += '<div class="ujg-ua-issue-group-header">' +
                         renderIssueInlineRef(issue.issueKey, issue.issueSummary, issue.issueStatus, issue.issueStatusChangedAt) +
+                        (issue.issueStatus ? ' ' + utils.renderIssueStatusBadge(issue.issueStatus, issue.issueStatusChangedAt) : '') +
                         (issue.totalHours > 0 ? ' <span class="ujg-ua-issue-group-hours">' + issue.totalHours + 'ч</span>' : '') +
                         '</div>';
                 }
