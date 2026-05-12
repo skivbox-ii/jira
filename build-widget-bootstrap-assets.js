@@ -12,7 +12,8 @@ var WIDGETS = {
   timesheet: "ujg-timesheet",
   timesheetV0: "ujg-timesheet.v0",
   userActivity: "ujg-user-activity",
-  dailyDiligence: "ujg-daily-diligence"
+  dailyDiligence: "ujg-daily-diligence",
+  storyBrowser: "ujg-story-browser"
 };
 
 var WIDGET_SPECS = {
@@ -45,6 +46,11 @@ var WIDGET_SPECS = {
     fileKey: "ujg-daily-diligence",
     publicAmd: "_ujgDailyDiligence",
     runtimeAmd: "_ujgDailyDiligenceRuntime"
+  },
+  "ujg-story-browser": {
+    fileKey: "ujg-story-browser",
+    publicAmd: "_ujgStoryBrowser",
+    runtimeAmd: "_ujgStoryBrowserRuntime"
   }
 };
 

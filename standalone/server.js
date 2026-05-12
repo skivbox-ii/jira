@@ -16,6 +16,7 @@ const WIDGET_FILES = [
   "ujg-timesheet.js", "ujg-timesheet.css",
   "ujg-timesheet.v0.js", "ujg-timesheet.v0.css",
   "ujg-user-activity.js", "ujg-user-activity.css",
+  "ujg-story-browser.js", "ujg-story-browser.css",
 ];
 
 app.use(
@@ -199,6 +200,10 @@ app.get("/timesheet-v0", (_req, res) => {
 
 app.get("/user-activity", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "user-activity.html"));
+});
+
+app.get("/stories", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "stories.html"));
 });
 
 // --- Proxy helper ---
