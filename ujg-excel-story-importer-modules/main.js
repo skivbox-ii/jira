@@ -118,14 +118,13 @@ define("_ujgESI_main", [
       state.loading = true;
       state.error = "";
       render();
-      promiseOf(excelLoader.readWorkbook(file)).then(
-        function(workbook) {
-          var parsed = parser.parseWorkbook(workbook);
-          state.rows = (parsed.rows || []).map(copyRow);
-          state.parseMeta = { sheetName: parsed.sheetName, headerRowNumber: parsed.headerRowNumber };
-          state.loading = false;
-          render();
-        },
+      promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
+        var parsed = parser.parseWorkbook(workbook);
+        state.rows = (parsed.rows || []).map(copyRow);
+        state.parseMeta = { sheetName: parsed.sheetName, headerRowNumber: parsed.headerRowNumber };
+        state.loading = false;
+        render();
+      }).then(null,
         function(err) {
           setError("Не удалось прочитать Excel: " + (err && err.message ? err.message : "unknown error"));
         }

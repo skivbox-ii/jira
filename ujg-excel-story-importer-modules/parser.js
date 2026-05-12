@@ -41,6 +41,25 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     });
   }
 
+  function fallbackHeaderName(index) {
+    if (index === 0) return "№";
+    if (index === 1) return config.SUMMARY_COLUMN;
+    if (index === 2) return config.JIRA_COLUMN;
+    return "Колонка " + String(index + 1);
+  }
+
+  function rowHasKnownHeader(row) {
+    return (row || []).some(function(value) {
+      var text = cellText(value);
+      return text && config.KNOWN_COLUMNS.indexOf(text) !== -1;
+    });
+  }
+
+  function isLikelySummary(value) {
+    var text = cellText(value);
+    return text.length >= 3 && /[A-Za-zА-Яа-яЁё]/.test(text);
+  }
+
   function parseRows(sheetName, rows, header) {
     var headers = headerNames(rows[header.rowIndex]);
     var out = [];
@@ -73,9 +92,42 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return out;
   }
 
+  function parseSimpleRows(sheetName, rows) {
+    if (rows.some(rowHasKnownHeader)) return [];
+    var out = [];
+    var i;
+    var j;
+    for (i = 0; i < rows.length; i += 1) {
+      var row = rows[i] || [];
+      var summary = cellText(row[1]);
+      if (!isLikelySummary(summary)) continue;
+      var sourceColumns = {};
+      for (j = 0; j < row.length; j += 1) {
+        var name = fallbackHeaderName(j);
+        var value = cellText(row[j]);
+        if (value) sourceColumns[name] = value;
+      }
+      var jiraKey = extractJiraKey(sourceColumns[config.JIRA_COLUMN]);
+      out.push({
+        id: sheetName + ":" + String(i + 1),
+        sheetName: sheetName,
+        excelRowNumber: i + 1,
+        summary: summary,
+        sourceColumns: sourceColumns,
+        jiraKey: jiraKey,
+        alreadyLinked: !!jiraKey,
+        status: jiraKey ? "linked" : "ready",
+        createdKey: "",
+        errors: [],
+      });
+    }
+    return out;
+  }
+
   function parseWorkbook(workbook) {
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
     var i;
+    var fallback = null;
     for (i = 0; i < sheetNames.length; i += 1) {
       var sheetName = String(sheetNames[i]);
       var rows = sheetRows(workbook.Sheets && workbook.Sheets[sheetName]);
@@ -87,7 +139,18 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
           rows: parseRows(sheetName, rows, header),
         };
       }
+      if (!fallback) {
+        var simpleRows = parseSimpleRows(sheetName, rows);
+        if (simpleRows.length) {
+          fallback = {
+            sheetName: sheetName,
+            headerRowNumber: 0,
+            rows: simpleRows,
+          };
+        }
+      }
     }
+    if (fallback) return fallback;
     throw new Error('Колонка "Замечание" не найдена');
   }
 

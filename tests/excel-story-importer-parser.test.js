@@ -71,6 +71,34 @@ test("parseWorkbook scans sheets in order and skips sheets without remarks heade
   assert.equal(result.rows[0].jiraKey, "EVOSCADA-14447");
 });
 
+test("parseWorkbook falls back to two-column story rows without a header", function () {
+  const parser = loadParser();
+  const workbook = {
+    SheetNames: ["Лист1"],
+    Sheets: {
+      "Лист1": {
+        __rows: [
+          [],
+          [],
+          [],
+          [],
+          [1, "Test jira task"],
+        ],
+      },
+    },
+  };
+
+  const result = parser.parseWorkbook(workbook);
+
+  assert.equal(result.sheetName, "Лист1");
+  assert.equal(result.headerRowNumber, 0);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].excelRowNumber, 5);
+  assert.equal(result.rows[0].summary, "Test jira task");
+  assert.equal(result.rows[0].sourceColumns["№"], "1");
+  assert.equal(result.rows[0].sourceColumns["Замечание"], "Test jira task");
+});
+
 test("parseWorkbook reports missing remarks header", function () {
   const parser = loadParser();
   const workbook = {
