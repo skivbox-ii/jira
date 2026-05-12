@@ -17,6 +17,7 @@ const WIDGET_FILES = [
   "ujg-timesheet.v0.js", "ujg-timesheet.v0.css",
   "ujg-user-activity.js", "ujg-user-activity.css",
   "ujg-story-browser.js", "ujg-story-browser.css",
+  "ujg-excel-story-importer.js", "ujg-excel-story-importer.css",
 ];
 
 app.use(
@@ -242,6 +243,10 @@ app.get("/user-activity", (_req, res) => {
 
 app.get("/stories", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "stories.html"));
+});
+
+app.get("/excel-import", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "excel-import.html"));
 });
 
 // --- Proxy helper ---

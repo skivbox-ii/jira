@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sprint Health — UJG</title>
+  <title>Excel Import — UJG</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/widgets/ujg-sprint-health.css">
+  <link rel="stylesheet" href="/widgets/ujg-excel-story-importer.css">
 </head>
 <body>
   <nav class="navbar">
     <ul class="navbar-links">
-      <li><a href="/sprint" class="nav-active">Sprint Health</a></li>
+      <li><a href="/sprint">Sprint Health</a></li>
       <li><a href="/analytics">Project Analytics</a></li>
       <li><a href="/timesheet">Timesheet</a></li>
       <li><a href="/timesheet-v0">Timesheet v0</a></li>
       <li><a href="/user-activity">User Activity</a></li>
       <li><a href="/daily-diligence">Daily Diligence</a></li>
       <li><a href="/stories">Stories</a></li>
-      <li><a href="/excel-import">Excel Import</a></li>
+      <li><a href="/excel-import" class="nav-active">Excel Import</a></li>
     </ul>
     <div class="navbar-right">
       <span class="navbar-user" id="navUser"></span>
@@ -32,7 +32,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.7/require.min.js"></script>
   <script>define("jquery", [], function() { return jQuery; });</script>
   <script src="/widgets/_ujgCommon.js"></script>
-  <script src="/widgets/ujg-sprint-health.js"></script>
+  <script src="/widgets/ujg-excel-story-importer.js"></script>
   <script>
     fetch("/api/session")
       .then(function(r) { return r.ok ? r.json() : null; })
@@ -42,7 +42,7 @@
         navUser.textContent = data.displayName || data.username || "";
       })
       .catch(function() {});
-    require(["_ujgSprintHealth"], function(Gadget) {
+    require(["_ujgExcelStoryImporter"], function(Gadget) {
       var API = {
         getGadgetContentEl: function() { return jQuery("#widget-container"); },
         resize: function() {}

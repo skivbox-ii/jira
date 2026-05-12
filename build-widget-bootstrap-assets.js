@@ -24,7 +24,8 @@ var WIDGETS = {
   timesheetV0: "ujg-timesheet.v0",
   userActivity: "ujg-user-activity",
   dailyDiligence: "ujg-daily-diligence",
-  storyBrowser: "ujg-story-browser"
+  storyBrowser: "ujg-story-browser",
+  excelStoryImporter: "ujg-excel-story-importer"
 };
 
 var WIDGET_SPECS = {
@@ -62,6 +63,11 @@ var WIDGET_SPECS = {
     fileKey: "ujg-story-browser",
     publicAmd: "_ujgStoryBrowser",
     runtimeAmd: "_ujgStoryBrowserRuntime"
+  },
+  "ujg-excel-story-importer": {
+    fileKey: "ujg-excel-story-importer",
+    publicAmd: "_ujgExcelStoryImporter",
+    runtimeAmd: "_ujgExcelStoryImporterRuntime"
   }
 };
 

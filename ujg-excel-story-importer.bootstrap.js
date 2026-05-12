@@ -1,9 +1,9 @@
-define("_ujgProjectAnalytics", [], function() {
+define("_ujgExcelStoryImporter", [], function() {
   "use strict";
   var assetBaseUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira";
-  var widgetCssFile = "ujg-project-analytics.css";
-  var widgetRuntimeFile = "ujg-project-analytics.runtime.js";
-  var runtimeAmd = "_ujgProjectAnalyticsRuntime";
+  var widgetCssFile = "ujg-excel-story-importer.css";
+  var widgetRuntimeFile = "ujg-excel-story-importer.runtime.js";
+  var runtimeAmd = "_ujgExcelStoryImporterRuntime";
   var releaseRef = "d532fab";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
