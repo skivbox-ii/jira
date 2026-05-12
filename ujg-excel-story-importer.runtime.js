@@ -551,6 +551,27 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return "Готово";
   }
 
+  function canCreateRow(row, state) {
+    return !!(
+      state.projectKey &&
+      state.epicKey &&
+      row &&
+      !row.alreadyLinked &&
+      !row.jiraKey &&
+      row.status !== "creating" &&
+      row.status !== "created"
+    );
+  }
+
+  function rowActionStatusText(row, state) {
+    var status = rowStatusText(row);
+    if (status !== "Готово") return status;
+    if (!state.projectKey && !state.epicKey) return "Выберите проект и Epic";
+    if (!state.projectKey) return "Выберите проект";
+    if (!state.epicKey) return "Выберите Epic";
+    return status;
+  }
+
   function appendProjectSelect($toolbar, state) {
     var $field = $("<label/>").addClass("ujg-esi-field");
     var $select = $("<select/>").addClass("ujg-esi-project-select");
@@ -665,22 +686,18 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendActionCell($tr, row, state, index) {
     var $td = $("<td/>").addClass("ujg-esi-action-cell");
-    var canCreate =
-      state.projectKey &&
-      state.epicKey &&
-      !row.alreadyLinked &&
-      !row.jiraKey &&
-      row.status !== "creating" &&
-      row.status !== "created";
+    var canCreate = canCreateRow(row, state);
+    var actionStatus = rowActionStatusText(row, state);
     var $button = $("<button/>")
       .attr("type", "button")
+      .attr("title", actionStatus)
       .addClass("ujg-esi-create-row")
       .text(row.alreadyLinked || row.jiraKey ? "Уже создано" : row.status === "created" ? "Создано" : "Создать");
     if (!canCreate) $button.prop("disabled", true);
     $button.on("click", function() {
       if (services && services.onCreateRow) services.onCreateRow(index);
     });
-    $td.append($button, $("<div/>").addClass("ujg-esi-row-status").text(rowStatusText(row)));
+    $td.append($button, $("<div/>").addClass("ujg-esi-row-status").text(actionStatus));
     if (row.errors && row.errors.length) {
       $td.append($("<div/>").addClass("ujg-esi-row-errors").text(row.errors.join(" · ")));
     }
