@@ -1,0 +1,45 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const ROOT = path.join(__dirname, "..");
+
+function read(relPath) {
+  return fs.readFileSync(path.join(ROOT, relPath), "utf8");
+}
+
+test("rendering module exposes import controls and row create action classes", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /ujg-esi-project-select/);
+  assert.match(source, /ujg-esi-epic-select/);
+  assert.match(source, /ujg-esi-file/);
+  assert.match(source, /ujg-esi-subtasks/);
+  assert.match(source, /ujg-esi-create-row/);
+});
+
+test("main module wires renderer callbacks for project, epic, file, subtasks, and row create", function () {
+  const source = read("ujg-excel-story-importer-modules/main.js");
+
+  assert.match(source, /onProjectChange/);
+  assert.match(source, /onEpicChange/);
+  assert.match(source, /onFileChange/);
+  assert.match(source, /onSubtasksChange/);
+  assert.match(source, /onCreateRow/);
+});
+
+test("api module quotes project keys before embedding them in JQL", function () {
+  const source = read("ujg-excel-story-importer-modules/api.js");
+
+  assert.match(source, /function quoteJqlString/);
+  assert.match(source, /function toJqlToken/);
+  assert.match(source, /project = " \+ toJqlToken\(projectKey\)/);
+});
+
+test("importer CSS is scoped to widget root", function () {
+  const source = read("ujg-excel-story-importer.css");
+
+  assert.match(source, /\.ujg-excel-story-importer/);
+  assert.match(source, /\.ujg-esi-preview-table/);
+});

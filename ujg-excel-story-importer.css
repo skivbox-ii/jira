@@ -1,0 +1,214 @@
+.ujg-excel-story-importer {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 12px;
+  color: #172b4d;
+  background: #f7f8fa;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ujg-excel-story-importer *,
+.ujg-excel-story-importer *::before,
+.ujg-excel-story-importer *::after {
+  box-sizing: inherit;
+}
+
+.ujg-esi-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ujg-esi-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.ujg-esi-meta {
+  color: #5e6c84;
+  font-size: 12px;
+}
+
+.ujg-esi-toolbar {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(240px, 1.4fr) minmax(220px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.ujg-esi-field,
+.ujg-esi-check {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #5e6c84;
+}
+
+.ujg-esi-check {
+  flex-direction: row;
+  align-items: center;
+  align-self: center;
+  color: #172b4d;
+  white-space: nowrap;
+}
+
+.ujg-esi-field select,
+.ujg-esi-field input[type="file"] {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #c1c7d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #172b4d;
+  font-size: 13px;
+}
+
+.ujg-esi-counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ujg-esi-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  background: #fff;
+  color: #5e6c84;
+  font-size: 12px;
+}
+
+.ujg-esi-counter b {
+  color: #172b4d;
+  font-size: 14px;
+}
+
+.ujg-esi-error,
+.ujg-esi-loading,
+.ujg-esi-empty {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.ujg-esi-error {
+  border: 1px solid #ffbdad;
+  background: #ffebe6;
+  color: #bf2600;
+}
+
+.ujg-esi-loading,
+.ujg-esi-empty {
+  border: 1px solid #dfe1e6;
+  background: #fff;
+  color: #5e6c84;
+}
+
+.ujg-esi-preview {
+  overflow: auto;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.ujg-esi-preview-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ujg-esi-preview-table th,
+.ujg-esi-preview-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid #ebecf0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.ujg-esi-preview-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f4f5f7;
+  color: #5e6c84;
+  font-weight: 650;
+}
+
+.ujg-esi-summary {
+  max-width: 360px;
+  color: #172b4d;
+}
+
+.ujg-esi-row-num {
+  width: 64px;
+  color: #5e6c84;
+}
+
+.ujg-esi-action-cell {
+  width: 150px;
+}
+
+.ujg-esi-create-row {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid #0052cc;
+  border-radius: 4px;
+  background: #0052cc;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ujg-esi-create-row:disabled {
+  border-color: #dfe1e6;
+  background: #f4f5f7;
+  color: #6b778c;
+  cursor: default;
+}
+
+.ujg-esi-row-status {
+  margin-top: 4px;
+  color: #5e6c84;
+  font-size: 11px;
+}
+
+.ujg-esi-row-errors {
+  margin-top: 4px;
+  color: #bf2600;
+  font-size: 11px;
+}
+
+.ujg-esi-row-created td {
+  background: #e3fcef;
+}
+
+.ujg-esi-row-partial td {
+  background: #fff7d6;
+}
+
+.ujg-esi-row-failed td {
+  background: #ffebe6;
+}
+
+@media (max-width: 900px) {
+  .ujg-esi-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .ujg-esi-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

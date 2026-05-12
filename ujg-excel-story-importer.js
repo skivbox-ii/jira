@@ -416,15 +416,227 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     services = svc || {};
   }
 
+  function projectLabel(project) {
+    var key = project && project.key != null ? String(project.key) : "";
+    var name = project && project.name != null ? String(project.name) : "";
+    return key && name && name !== key ? key + " - " + name : key || name;
+  }
+
+  function epicLabel(epic) {
+    var key = epic && epic.key != null ? String(epic.key) : "";
+    var fields = epic && epic.fields ? epic.fields : {};
+    var summary = fields.summary != null ? String(fields.summary) : epic && epic.summary != null ? String(epic.summary) : "";
+    return key && summary && summary !== key ? key + " - " + summary : key || summary;
+  }
+
+  function rowStatusText(row) {
+    if (!row) return "";
+    if (row.status === "creating") return "Создается";
+    if (row.status === "created") return "Создано";
+    if (row.status === "partial") return "Частично создано";
+    if (row.alreadyLinked || row.status === "linked") return "Уже создано";
+    if (row.status === "failed") return "Ошибка";
+    return "Готово";
+  }
+
+  function appendProjectSelect($toolbar, state) {
+    var $field = $("<label/>").addClass("ujg-esi-field");
+    var $select = $("<select/>").addClass("ujg-esi-project-select");
+    $field.append($("<span/>").text("Проект"));
+    $select.append($("<option/>").attr("value", "").text("Выберите проект"));
+    (state.projects || []).forEach(function(project) {
+      var key = project && project.key != null ? String(project.key) : "";
+      if (!key) return;
+      $select.append($("<option/>").attr("value", key).text(projectLabel(project)));
+    });
+    $select.val(state.projectKey || "");
+    $select.on("change", function() {
+      if (services && services.onProjectChange) services.onProjectChange($(this).val());
+    });
+    $field.append($select);
+    $toolbar.append($field);
+  }
+
+  function appendEpicSelect($toolbar, state) {
+    var $field = $("<label/>").addClass("ujg-esi-field");
+    var $select = $("<select/>").addClass("ujg-esi-epic-select");
+    $field.append($("<span/>").text("Epic"));
+    $select.append($("<option/>").attr("value", "").text(state.projectKey ? "Выберите Epic" : "Сначала проект"));
+    (state.epics || []).forEach(function(epic) {
+      var key = epic && epic.key != null ? String(epic.key) : "";
+      if (!key) return;
+      $select.append($("<option/>").attr("value", key).text(epicLabel(epic)));
+    });
+    $select.val(state.epicKey || "");
+    if (!state.projectKey) $select.prop("disabled", true);
+    $select.on("change", function() {
+      if (services && services.onEpicChange) services.onEpicChange($(this).val());
+    });
+    $field.append($select);
+    $toolbar.append($field);
+  }
+
+  function appendFileInput($toolbar) {
+    var $field = $("<label/>").addClass("ujg-esi-field ujg-esi-file-field");
+    var $file = $("<input/>")
+      .addClass("ujg-esi-file")
+      .attr("type", "file")
+      .attr("accept", ".xlsx,.xls");
+    $field.append($("<span/>").text("Excel"));
+    $file.on("change", function() {
+      var file = this.files && this.files.length ? this.files[0] : null;
+      if (services && services.onFileChange) services.onFileChange(file);
+    });
+    $field.append($file);
+    $toolbar.append($field);
+  }
+
+  function appendSubtasksToggle($toolbar, state) {
+    var $label = $("<label/>").addClass("ujg-esi-check");
+    var $input = $("<input/>").addClass("ujg-esi-subtasks").attr("type", "checkbox");
+    $input.prop("checked", state.createSubtasks !== false);
+    $input.on("change", function() {
+      if (services && services.onSubtasksChange) services.onSubtasksChange(!!$(this).prop("checked"));
+    });
+    $label.append($input, $("<span/>").text("Создавать подзадачи"));
+    $toolbar.append($label);
+  }
+
+  function appendCounters($parent, state) {
+    var rows = state.rows || [];
+    var linked = rows.filter(function(row) {
+      return row.alreadyLinked || row.status === "linked";
+    }).length;
+    var created = rows.filter(function(row) {
+      return row.status === "created" || row.status === "partial";
+    }).length;
+    var failed = rows.filter(function(row) {
+      return row.status === "failed" || row.status === "partial";
+    }).length;
+    var $counters = $("<div/>").addClass("ujg-esi-counters");
+    [
+      ["Строк", rows.length],
+      ["Уже в Jira", linked],
+      ["Создано", created],
+      ["Ошибок", failed],
+    ].forEach(function(item) {
+      $counters.append(
+        $("<span/>")
+          .addClass("ujg-esi-counter")
+          .append($("<b/>").text(String(item[1])), $("<span/>").text(item[0]))
+      );
+    });
+    $parent.append($counters);
+  }
+
+  function appendValue($tr, value, className) {
+    $tr.append($("<td/>").addClass(className || "").text(value != null ? String(value) : ""));
+  }
+
+  function appendJiraCell($tr, row, state) {
+    var key = row.createdKey || row.jiraKey || "";
+    var $td = $("<td/>");
+    var base = state.baseUrl || "";
+    if (key && base) {
+      $td.append(
+        $("<a/>")
+          .attr("href", String(base).replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key))
+          .attr("target", "_blank")
+          .attr("rel", "noreferrer noopener")
+          .text(key)
+      );
+    } else {
+      $td.text(key || "—");
+    }
+    $tr.append($td);
+  }
+
+  function appendActionCell($tr, row, state, index) {
+    var $td = $("<td/>").addClass("ujg-esi-action-cell");
+    var canCreate =
+      state.projectKey &&
+      state.epicKey &&
+      !row.alreadyLinked &&
+      !row.jiraKey &&
+      row.status !== "creating" &&
+      row.status !== "created";
+    var $button = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-create-row")
+      .text(row.alreadyLinked || row.jiraKey ? "Уже создано" : row.status === "created" ? "Создано" : "Создать");
+    if (!canCreate) $button.prop("disabled", true);
+    $button.on("click", function() {
+      if (services && services.onCreateRow) services.onCreateRow(index);
+    });
+    $td.append($button, $("<div/>").addClass("ujg-esi-row-status").text(rowStatusText(row)));
+    if (row.errors && row.errors.length) {
+      $td.append($("<div/>").addClass("ujg-esi-row-errors").text(row.errors.join(" · ")));
+    }
+    $tr.append($td);
+  }
+
+  function appendPreview($parent, state) {
+    var rows = state.rows || [];
+    var $wrap = $("<div/>").addClass("ujg-esi-preview");
+    if (!rows.length) {
+      $wrap.append($("<div/>").addClass("ujg-esi-empty").text("Загрузите Excel с журналом замечаний."));
+      $parent.append($wrap);
+      return;
+    }
+    var $table = $("<table/>").addClass("ujg-esi-preview-table");
+    $table.append(
+      $("<thead/>").append(
+        $("<tr/>")
+          .append($("<th/>").text("Строка"))
+          .append($("<th/>").text("Замечание"))
+          .append($("<th/>").text("Модуль"))
+          .append($("<th/>").text("Статус"))
+          .append($("<th/>").text("Приоритет"))
+          .append($("<th/>").text("Jira"))
+          .append($("<th/>").text("Действие"))
+      )
+    );
+    var $tbody = $("<tbody/>");
+    rows.forEach(function(row, index) {
+      var cols = row.sourceColumns || {};
+      var $tr = $("<tr/>").addClass("ujg-esi-row-" + String(row.status || "ready"));
+      appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
+      appendValue($tr, row.summary || "", "ujg-esi-summary");
+      appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
+      appendValue($tr, cols["Статус"] || "", "ujg-esi-status");
+      appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
+      appendJiraCell($tr, row, state);
+      appendActionCell($tr, row, state, index);
+      $tbody.append($tr);
+    });
+    $table.append($tbody);
+    $wrap.append($table);
+    $parent.append($wrap);
+  }
+
   function render(state) {
     if (!$root || !$root.length) return;
     $root.empty();
     var s = state || {};
-    var $wrap = $("<div/>").addClass("ujg-excel-story-importer");
-    $wrap.append($("<h2/>").text("Импорт замечаний из Excel"));
-    if (s.error) $wrap.append($("<div/>").addClass("ujg-esi-error").text(s.error));
-    $wrap.append($("<div/>").addClass("ujg-esi-toolbar"));
-    $root.append($wrap);
+    var $header = $("<div/>").addClass("ujg-esi-header");
+    var $toolbar = $("<div/>").addClass("ujg-esi-toolbar");
+    $header.append($("<h2/>").text("Импорт замечаний из Excel"));
+    if (s.parseMeta) {
+      $header.append(
+        $("<div/>")
+          .addClass("ujg-esi-meta")
+          .text("Лист: " + s.parseMeta.sheetName + " · заголовок строка " + s.parseMeta.headerRowNumber)
+      );
+    }
+    appendProjectSelect($toolbar, s);
+    appendEpicSelect($toolbar, s);
+    appendFileInput($toolbar, s);
+    appendSubtasksToggle($toolbar, s);
+    $root.append($header, $toolbar);
+    appendCounters($root, s);
+    if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
+    if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
+    appendPreview($root, s);
   }
 
   return {
@@ -444,16 +656,177 @@ define("_ujgESI_main", [
 ], function($, api, excelLoader, parser, creator, rendering) {
   "use strict";
 
+  function copyRow(row) {
+    var out = {};
+    Object.keys(row || {}).forEach(function(key) {
+      out[key] = row[key];
+    });
+    out.errors = Array.isArray(out.errors) ? out.errors.slice() : [];
+    return out;
+  }
+
+  function normalizeProjects(projects) {
+    return Array.isArray(projects) ? projects : [];
+  }
+
+  function normalizeEpics(data) {
+    if (data && Array.isArray(data.issues)) return data.issues;
+    return Array.isArray(data) ? data : [];
+  }
+
+  function promiseOf(value) {
+    return value && typeof value.then === "function" ? Promise.resolve(value) : Promise.resolve(value);
+  }
+
+  function ensureContainer($content) {
+    var $container = $content && $content.find ? $content.find(".ujg-excel-story-importer") : $();
+    if ($container && $container.length) return $container;
+    if ($content && $content.hasClass && $content.hasClass("ujg-excel-story-importer")) return $content;
+    $container = $('<div class="ujg-excel-story-importer"></div>');
+    if ($content && $content.append) $content.append($container);
+    return $container;
+  }
+
   function ExcelStoryImporterGadget(API) {
     var $content = API && API.getGadgetContentEl ? API.getGadgetContentEl() : $();
-    var state = { rows: [], error: "" };
-    rendering.init($content, {
-      api: api,
-      excelLoader: excelLoader,
-      parser: parser,
-      creator: creator,
+    var $container = ensureContainer($content);
+    var state = {
+      projects: [],
+      projectKey: "",
+      epics: [],
+      epicKey: "",
+      rows: [],
+      createSubtasks: true,
+      loading: false,
+      error: "",
+      parseMeta: null,
+      baseUrl: api && api.baseUrl ? api.baseUrl : "",
+    };
+
+    function render() {
+      rendering.render(state);
+      if (API && typeof API.resize === "function") API.resize();
+    }
+
+    function setError(message) {
+      state.error = message ? String(message) : "";
+      state.loading = false;
+      render();
+    }
+
+    function loadProjects() {
+      state.loading = true;
+      render();
+      return promiseOf(api.getProjects()).then(
+        function(projects) {
+          state.projects = normalizeProjects(projects);
+          state.loading = false;
+          render();
+        },
+        function(err) {
+          setError("Не удалось загрузить проекты: " + (err && err.statusText ? err.statusText : "request failed"));
+        }
+      );
+    }
+
+    function loadEpics(projectKey) {
+      state.epicKey = "";
+      state.epics = [];
+      if (!projectKey) {
+        render();
+        return Promise.resolve();
+      }
+      state.loading = true;
+      render();
+      return promiseOf(api.getProjectEpics(projectKey)).then(
+        function(data) {
+          state.epics = normalizeEpics(data);
+          state.loading = false;
+          render();
+        },
+        function(err) {
+          setError("Не удалось загрузить Epic: " + (err && err.statusText ? err.statusText : "request failed"));
+        }
+      );
+    }
+
+    function onProjectChange(projectKey) {
+      state.projectKey = projectKey != null ? String(projectKey) : "";
+      state.error = "";
+      loadEpics(state.projectKey);
+    }
+
+    function onEpicChange(epicKey) {
+      state.epicKey = epicKey != null ? String(epicKey) : "";
+      render();
+    }
+
+    function onFileChange(file) {
+      if (!file) return;
+      state.loading = true;
+      state.error = "";
+      render();
+      promiseOf(excelLoader.readWorkbook(file)).then(
+        function(workbook) {
+          var parsed = parser.parseWorkbook(workbook);
+          state.rows = (parsed.rows || []).map(copyRow);
+          state.parseMeta = { sheetName: parsed.sheetName, headerRowNumber: parsed.headerRowNumber };
+          state.loading = false;
+          render();
+        },
+        function(err) {
+          setError("Не удалось прочитать Excel: " + (err && err.message ? err.message : "unknown error"));
+        }
+      );
+    }
+
+    function onSubtasksChange(enabled) {
+      state.createSubtasks = !!enabled;
+      render();
+    }
+
+    function onCreateRow(index) {
+      var i = Number(index);
+      var row = state.rows[i];
+      if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      if (!state.projectKey || !state.epicKey) {
+        state.error = "Выберите проект и Epic перед созданием.";
+        render();
+        return;
+      }
+      row.status = "creating";
+      row.errors = [];
+      render();
+      promiseOf(
+        creator.createRow(api, row, {
+          projectKey: state.projectKey,
+          epicKey: state.epicKey,
+          createSubtasks: state.createSubtasks,
+        })
+      ).then(function(result) {
+        row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
+        row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
+        if (result && result.partial) {
+          row.status = "partial";
+        } else if (result && result.ok) {
+          row.status = "created";
+        } else {
+          row.status = "failed";
+        }
+        render();
+      });
+    }
+
+    rendering.init($container, {
+      onProjectChange: onProjectChange,
+      onEpicChange: onEpicChange,
+      onFileChange: onFileChange,
+      onSubtasksChange: onSubtasksChange,
+      onCreateRow: onCreateRow,
     });
+
     rendering.render(state);
+    loadProjects();
   }
 
   return ExcelStoryImporterGadget;
