@@ -35,7 +35,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   function canCreateRow(row, state) {
     return !!(
       state.projectKey &&
-      state.epicKey &&
       row &&
       !row.alreadyLinked &&
       !row.jiraKey &&
@@ -47,9 +46,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   function rowActionStatusText(row, state) {
     var status = rowStatusText(row);
     if (status !== "Готово") return status;
-    if (!state.projectKey && !state.epicKey) return "Выберите проект и Epic";
     if (!state.projectKey) return "Выберите проект";
-    if (!state.epicKey) return "Выберите Epic";
     return status;
   }
 
@@ -75,7 +72,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $field = $("<label/>").addClass("ujg-esi-field");
     var $select = $("<select/>").addClass("ujg-esi-epic-select");
     $field.append($("<span/>").text("Epic"));
-    $select.append($("<option/>").attr("value", "").text(state.projectKey ? "Выберите Epic" : "Сначала проект"));
+    $select.append($("<option/>").attr("value", "").text(state.projectKey ? "Без Epic" : "Сначала проект"));
     (state.epics || []).forEach(function(epic) {
       var key = epic && epic.key != null ? String(epic.key) : "";
       if (!key) return;

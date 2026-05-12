@@ -140,8 +140,8 @@ define("_ujgESI_main", [
       var i = Number(index);
       var row = state.rows[i];
       if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
-      if (!state.projectKey || !state.epicKey) {
-        state.error = "Выберите проект и Epic перед созданием.";
+      if (!state.projectKey) {
+        state.error = "Выберите проект перед созданием.";
         render();
         return;
       }

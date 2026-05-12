@@ -19,11 +19,14 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-create-row/);
 });
 
-test("row create action explains missing project and epic selection", function () {
+test("row create action only requires project selection", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
 
   assert.match(source, /function rowActionStatusText/);
-  assert.match(source, /Выберите проект и Epic/);
+  assert.match(source, /Без Epic/);
+  assert.match(source, /Выберите проект/);
+  assert.doesNotMatch(source, /if \(!state\.epicKey\)/);
+  assert.doesNotMatch(source, /state\.epicKey &&/);
 });
 
 test("main module wires renderer callbacks for project, epic, file, subtasks, and row create", function () {
