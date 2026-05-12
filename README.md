@@ -1,6 +1,6 @@
 # jira
 
-Набор скриптов/виджетов для Jira (Sprint Health, Timesheet, Timesheet v0, Project Analytics, User Activity, Daily Diligence, Story Browser) и вспомогательных утилит.
+Набор скриптов/виджетов для Jira (Sprint Health, Timesheet, Timesheet v0, Project Analytics, User Activity, Daily Diligence, Story Browser, Excel Story Importer) и вспомогательных утилит.
 
 ## Структура проекта
 
@@ -112,6 +112,11 @@
 ├── ujg-story-browser.css
 ├── ujg-story-browser.js
 ├── ujg-story-browser.runtime.js
+├── ujg-excel-story-importer-modules/
+├── ujg-excel-story-importer.bootstrap.js
+├── ujg-excel-story-importer.css
+├── ujg-excel-story-importer.js
+├── ujg-excel-story-importer.runtime.js
 ├── ujg-timesheet.bootstrap.js
 ├── ujg-timesheet.css
 ├── ujg-timesheet.js
@@ -129,7 +134,7 @@
 └── vba/
 ```
 
-`tests/timesheet-logic.test.js` содержит минимальные unit-тесты на чистую логику Timesheet через `node --test`, без внешних зависимостей. Точечные тесты Daily Diligence: `daily-diligence-api-jira.test.js`, `daily-diligence-api-bitbucket.test.js`, `daily-diligence-api-confluence.test.js`, `daily-diligence-data-processor.test.js`, `daily-diligence-main.test.js`, `daily-diligence-rendering.test.js`, `daily-diligence-team-manager.test.js`, `daily-diligence-utils.test.js`. Story Browser покрыт наборами `story-browser-build.test.js`, `story-browser-core.test.js`, `story-browser-api-data.test.js`, `story-browser-main.test.js`, `story-browser-rendering.test.js`, `story-browser-css.test.js`. Репозиторный слой User Activity покрыт `user-activity-repo.test.js`. Standalone smoke-тесты: `standalone-daily-diligence.test.js`, `standalone-server-login.test.js`, `standalone-story-browser.test.js`, `standalone-timesheet-v0.test.js`. Генератор и поведение stable bootstrap: `widget-bootstrap.test.js` (`node --test tests/widget-bootstrap.test.js`).
+`tests/timesheet-logic.test.js` содержит минимальные unit-тесты на чистую логику Timesheet через `node --test`, без внешних зависимостей. Точечные тесты Daily Diligence: `daily-diligence-api-jira.test.js`, `daily-diligence-api-bitbucket.test.js`, `daily-diligence-api-confluence.test.js`, `daily-diligence-data-processor.test.js`, `daily-diligence-main.test.js`, `daily-diligence-rendering.test.js`, `daily-diligence-team-manager.test.js`, `daily-diligence-utils.test.js`. Story Browser покрыт наборами `story-browser-build.test.js`, `story-browser-core.test.js`, `story-browser-api-data.test.js`, `story-browser-main.test.js`, `story-browser-rendering.test.js`, `story-browser-css.test.js`. Excel Story Importer покрыт наборами `excel-story-importer-parser.test.js`, `excel-story-importer-description.test.js`, `excel-story-importer-creator.test.js`, `excel-story-importer-build.test.js`, `excel-story-importer-ui-source.test.js`. Репозиторный слой User Activity покрыт `user-activity-repo.test.js`. Standalone smoke-тесты: `standalone-daily-diligence.test.js`, `standalone-server-login.test.js`, `standalone-story-browser.test.js`, `standalone-excel-import.test.js`, `standalone-timesheet-v0.test.js`. Генератор и поведение stable bootstrap: `widget-bootstrap.test.js` (`node --test tests/widget-bootstrap.test.js`).
 
 Документация по bootstrap и версионированию на дашборде:
 
@@ -211,6 +216,32 @@ https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-story-browser.bootstrap.js
 
 ```text
 _ujgStoryBrowser
+```
+
+### Excel Story Importer
+
+`JavaScript URLs`
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-excel-story-importer.bootstrap.js
+```
+
+`CSS URLs`
+
+```text
+
+```
+
+`AMD module`
+
+```text
+_ujgExcelStoryImporter
+```
+
+`HTML to append`
+
+```html
+<div class="ujg-excel-story-importer" style="height: 5000px;"></div>
 ```
 
 ### Timesheet
@@ -338,4 +369,3 @@ python3 jira_attach_latest_assets.py
 ```bash
 python3 jira_attach_latest_assets.py --dry-run
 ```
-
