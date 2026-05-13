@@ -4,7 +4,7 @@ define("_ujgUserActivity", [], function() {
   var widgetCssFile = "ujg-user-activity.css";
   var widgetRuntimeFile = "ujg-user-activity.runtime.js";
   var runtimeAmd = "_ujgUserActivityRuntime";
-  var releaseRef = "bb8e94c";
+  var releaseRef = "29cae74";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
