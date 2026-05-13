@@ -30,6 +30,17 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         }),
       });
     },
+    getProjectCreateMeta: function(projectKey) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/createmeta",
+        type: "GET",
+        dataType: "json",
+        data: {
+          projectKeys: String(projectKey || ""),
+          expand: "projects.issuetypes.fields",
+        },
+      });
+    },
     createIssue: function(payload) {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/issue",

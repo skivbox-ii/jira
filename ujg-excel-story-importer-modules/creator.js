@@ -6,6 +6,13 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages.length) {
       return err.responseJSON.errorMessages.join(" ");
     }
+    if (err.responseJSON && err.responseJSON.errors) {
+      var parts = [];
+      Object.keys(err.responseJSON.errors).forEach(function(name) {
+        if (err.responseJSON.errors[name]) parts.push(String(err.responseJSON.errors[name]));
+      });
+      if (parts.length) return parts.join(" ");
+    }
     if (err.statusText) return String(err.statusText);
     if (err.message) return String(err.message);
     return "Request failed";
@@ -56,7 +63,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
       description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
-    if (opts.epicKey && config.EPIC_LINK_FIELD) {
+    if (opts.epicKey && config.EPIC_LINK_FIELD && opts.omitEpicLink !== true && opts.epicLinkAllowed !== false) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
     appendComponent(fields, row);
@@ -64,6 +71,25 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;
+  }
+
+  function epicLinkRejected(err) {
+    var field = config.EPIC_LINK_FIELD;
+    var errors = err && err.responseJSON && err.responseJSON.errors ? err.responseJSON.errors : {};
+    return !!(field && errors && Object.prototype.hasOwnProperty.call(errors, field));
+  }
+
+  function withoutEpicLinkOptions(opts) {
+    var out = {};
+    Object.keys(opts || {}).forEach(function(key) {
+      out[key] = opts[key];
+    });
+    out.omitEpicLink = true;
+    return out;
+  }
+
+  function epicSkippedWarning(epicKey) {
+    return "Epic " + String(epicKey || "") + " не установлен: Jira не разрешила поле " + String(config.EPIC_LINK_FIELD || "Epic Link") + " для этого типа задачи.";
   }
 
   function appendAssignee(fields, assignee) {
@@ -155,35 +181,51 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
     }
+    function finishStory(res, warnings, epicLinkSkipped) {
+      var key = createdKey(res);
+      warnings = warnings || [];
+      if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
+      if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
+      var storySummary = opts.summary != null ? opts.summary : row && row.summary;
+      var roles = Array.isArray(opts.childTasks)
+        ? opts.childTasks
+        : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
+            var out = {};
+            Object.keys(role || {}).forEach(function(name) {
+              out[name] = role[name];
+            });
+            out.summary = childSummary(role, storySummary);
+            return out;
+          });
+      roles = roles.filter(function(role) {
+        return !role || role.enabled !== false;
+      });
+      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
+        return {
+          ok: sub.errors.length === 0,
+          partial: sub.errors.length > 0,
+          createdKey: key,
+          errors: warnings.concat(sub.errors),
+          epicLinkSkipped: !!epicLinkSkipped,
+        };
+      });
+    }
+
     return Promise.resolve(api.createIssue({ fields: storyFields(row, opts) })).then(
       function(res) {
-        var key = createdKey(res);
-        if (!key) return { ok: false, errors: ["Story response missing issue key"] };
-        if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: [] };
-        var storySummary = opts.summary != null ? opts.summary : row && row.summary;
-        var roles = Array.isArray(opts.childTasks)
-          ? opts.childTasks
-          : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
-              var out = {};
-              Object.keys(role || {}).forEach(function(name) {
-                out[name] = role[name];
-              });
-              out.summary = childSummary(role, storySummary);
-              return out;
-            });
-        roles = roles.filter(function(role) {
-          return !role || role.enabled !== false;
-        });
-        return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
-          return {
-            ok: sub.errors.length === 0,
-            partial: sub.errors.length > 0,
-            createdKey: key,
-            errors: sub.errors,
-          };
-        });
+        return finishStory(res, [], false);
       },
       function(err) {
+        if (opts.epicKey && opts.omitEpicLink !== true && epicLinkRejected(err)) {
+          return Promise.resolve(api.createIssue({ fields: storyFields(row, withoutEpicLinkOptions(opts)) })).then(
+            function(res) {
+              return finishStory(res, [epicSkippedWarning(opts.epicKey)], true);
+            },
+            function(retryErr) {
+              return { ok: false, errors: [ajaxErrorText(retryErr)] };
+            }
+          );
+        }
         return { ok: false, errors: [ajaxErrorText(err)] };
       }
     );

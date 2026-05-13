@@ -60,6 +60,8 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /onDialogAssigneeSelect/);
   assert.match(source, /ujg-esi-confirm-child-enabled/);
   assert.match(source, /onDialogChildToggle/);
+  assert.match(source, /ujg-esi-confirm-epic-warning/);
+  assert.match(source, /задача будет создана без Epic/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {
@@ -72,6 +74,8 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /\/rest\/api\/2\/issueLink/);
   assert.match(source, /searchUsers/);
   assert.match(source, /\/rest\/api\/2\/user\/picker/);
+  assert.match(source, /getProjectCreateMeta/);
+  assert.match(source, /\/rest\/api\/2\/issue\/createmeta/);
 });
 
 test("importer CSS is scoped to widget root", function () {

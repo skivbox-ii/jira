@@ -117,6 +117,7 @@ test("row create opens confirmation before creating without Epic", async functio
                 : null,
               originalEstimate: state.createDialog.originalEstimate || "",
               remainingEstimate: state.createDialog.remainingEstimate || "",
+              epicLinkAllowed: state.createDialog.epicLinkAllowed,
               sourceRows: state.createDialog.sourceRows.map(function (row) {
                 return row.name + ":" + row.value;
               }),
@@ -143,6 +144,23 @@ test("row create opens confirmation before creating without Epic", async functio
     },
     getProjectEpics: function () {
       return Promise.resolve([]);
+    },
+    getProjectCreateMeta: function () {
+      return Promise.resolve({
+        projects: [
+          {
+            key: "EVOSCADA",
+            issuetypes: [
+              {
+                name: "Story",
+                fields: {
+                  summary: {},
+                },
+              },
+            ],
+          },
+        ],
+      });
     },
     searchUsers: function (query) {
       userSearchCalls.push(query);
@@ -217,6 +235,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.rowIndex, 0);
   assert.equal(last.createDialog.summary, "Test jira task");
   assert.equal(last.createDialog.epicText, "Без Epic");
+  assert.equal(last.createDialog.epicLinkAllowed, false);
   assert.deepEqual(last.createDialog.childTasks, [
     "SE:System Engineer:[SE] Test jira task:true::",
     "FE:Frontend Task:[FE] Test jira task:true::",
@@ -255,6 +274,7 @@ test("row create opens confirmation before creating without Epic", async functio
 
   assert.equal(creatorOptions.projectKey, "EVOSCADA");
   assert.equal(creatorOptions.epicKey, "");
+  assert.equal(creatorOptions.epicLinkAllowed, false);
   assert.equal(creatorOptions.createSubtasks, true);
   assert.equal(creatorOptions.summary, "Edited story");
   assert.equal(creatorOptions.assignee.accountId, "story-acc");

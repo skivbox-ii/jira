@@ -104,6 +104,9 @@ define("_ujgESI_main", [
       users: [],
       usersLoading: false,
       usersError: "",
+      createMetaByProject: {},
+      createMetaLoading: false,
+      createMetaError: "",
       userPicker: {
         target: "",
         query: "",
@@ -114,6 +117,10 @@ define("_ujgESI_main", [
       },
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
+
+    function hasOwn(obj, key) {
+      return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
+    }
 
     function selectedProjectText() {
       var key = state.projectKey || "";
@@ -225,17 +232,49 @@ define("_ujgESI_main", [
       return (total || 1) + "h";
     }
 
+    function issueTypeFieldsFromCreateMeta(data, issueTypeName) {
+      var projects = data && Array.isArray(data.projects) ? data.projects : [];
+      var wanted = String(issueTypeName || "").toLowerCase();
+      var type = null;
+      projects.some(function(project) {
+        var types = project && Array.isArray(project.issuetypes) ? project.issuetypes : [];
+        return types.some(function(issueType) {
+          var name = issueType && issueType.name != null ? String(issueType.name).toLowerCase() : "";
+          if (name === wanted) {
+            type = issueType;
+            return true;
+          }
+          return false;
+        });
+      });
+      return type && type.fields ? type.fields : null;
+    }
+
+    function epicLinkAllowedFromCreateMeta(data, issueTypeName) {
+      var fields = issueTypeFieldsFromCreateMeta(data, issueTypeName);
+      if (!fields) return true;
+      return !!(config && config.EPIC_LINK_FIELD && hasOwn(fields, config.EPIC_LINK_FIELD));
+    }
+
+    function projectEpicLinkAllowed(projectKey, issueTypeName) {
+      var key = projectKey != null ? String(projectKey) : "";
+      if (!key || !hasOwn(state.createMetaByProject, key)) return true;
+      return epicLinkAllowedFromCreateMeta(state.createMetaByProject[key], issueTypeName);
+    }
+
     function buildCreateDialog(row, index) {
       var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
       var summary = row && row.summary != null ? String(row.summary) : "";
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
+      var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
         rowIndex: index,
-        issueType: config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story",
+        issueType: issueType,
         projectKey: state.projectKey,
         projectText: selectedProjectText(),
         epicKey: state.epicKey,
         epicText: selectedEpicText(),
+        epicLinkAllowed: projectEpicLinkAllowed(state.projectKey, issueType),
         summary: summary,
         assigneeId: "",
         assigneeLabel: "",
@@ -307,6 +346,31 @@ define("_ujgESI_main", [
       );
     }
 
+    function loadCreateMeta(projectKey) {
+      var key = projectKey != null ? String(projectKey) : "";
+      if (!key || !api || typeof api.getProjectCreateMeta !== "function") return Promise.resolve();
+      state.createMetaLoading = true;
+      state.createMetaError = "";
+      render();
+      return promiseOf(api.getProjectCreateMeta(key)).then(
+        function(data) {
+          state.createMetaByProject[key] = data;
+          state.createMetaLoading = false;
+          state.createMetaError = "";
+          if (state.createDialog && state.createDialog.projectKey === key) {
+            state.createDialog.epicLinkAllowed = projectEpicLinkAllowed(key, state.createDialog.issueType);
+          }
+          render();
+        },
+        function(err) {
+          state.createMetaByProject[key] = null;
+          state.createMetaLoading = false;
+          state.createMetaError = "Не удалось загрузить create metadata: " + (err && err.statusText ? err.statusText : "request failed");
+          render();
+        }
+      );
+    }
+
     function loadUsers() {
       if (!api || typeof api.searchUsers !== "function") return Promise.resolve();
       state.usersLoading = true;
@@ -373,6 +437,7 @@ define("_ujgESI_main", [
       state.createDialog = null;
       closeUserPicker();
       loadEpics(state.projectKey);
+      loadCreateMeta(state.projectKey);
     }
 
     function onEpicChange(epicKey) {
@@ -434,6 +499,7 @@ define("_ujgESI_main", [
         creator.createRow(api, row, {
           projectKey: dialog.projectKey,
           epicKey: dialog.epicKey,
+          epicLinkAllowed: dialog.epicLinkAllowed,
           issueType: dialog.issueType,
           summary: dialog.summary,
           assignee: dialog.assignee,
@@ -476,9 +542,12 @@ define("_ujgESI_main", [
         dialog.projectText = selectedProjectTextFor(dialog.projectKey);
         dialog.epicKey = "";
         dialog.epicText = "Без Epic";
+        dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
         loadEpics(dialog.projectKey);
+        loadCreateMeta(dialog.projectKey);
       } else if (key === "issueType") {
         dialog.issueType = value != null ? String(value) : "";
+        dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
       } else if (key === "epicKey") {
         dialog.epicKey = value != null ? String(value) : "";
         dialog.epicText = selectedEpicTextFor(dialog.epicKey);

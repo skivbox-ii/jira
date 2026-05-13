@@ -392,6 +392,13 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           }))
     );
     $modal.append($fields);
+    if (dialog.epicKey && dialog.epicLinkAllowed === false) {
+      $modal.append(
+        $("<div/>")
+          .addClass("ujg-esi-confirm-epic-warning")
+          .text("Epic выбран, но поле Epic Link недоступно для этого типа задачи; задача будет создана без Epic.")
+      );
+    }
     if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     $modal.append($("<h4/>").text("Описание"));
     appendConfirmSourceRows($modal, dialog.sourceRows);

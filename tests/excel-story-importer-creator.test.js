@@ -101,6 +101,50 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(links[0].inwardIssue.key, "EVOSCADA-2001");
 });
 
+test("createRow retries without Epic Link when Jira rejects the epic field", async function () {
+  const creator = loadCreator();
+  const calls = [];
+  const api = {
+    createIssue: function (payload) {
+      calls.push(payload);
+      if (calls.length === 1) {
+        return Promise.reject({
+          responseJSON: {
+            errorMessages: [],
+            errors: {
+              customfield_10014: "Field 'customfield_10014' cannot be set. It is not on the appropriate screen, or unknown.",
+            },
+          },
+        });
+      }
+      return Promise.resolve({ key: "EVOSCADA-5000" });
+    },
+  };
+
+  const result = await creator.createRow(
+    api,
+    {
+      summary: "Epic field rejected",
+      sourceColumns: { "Замечание": "Epic field rejected" },
+      alreadyLinked: false,
+    },
+    {
+      projectKey: "EVOSCADA",
+      epicKey: "EVOSCADA-18333",
+      issueType: "Story",
+      createSubtasks: false,
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.createdKey, "EVOSCADA-5000");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].fields.customfield_10014, "EVOSCADA-18333");
+  assert.equal(calls[1].fields.customfield_10014, undefined);
+  assert.equal(result.epicLinkSkipped, true);
+  assert.match(result.errors.join(" "), /Epic EVOSCADA-18333 не установлен/);
+});
+
 test("createRow uses edited dialog fields, assignees, and selected child tasks", async function () {
   const creator = loadCreator();
   const calls = [];
@@ -183,6 +227,24 @@ test("createRow uses edited dialog fields, assignees, and selected child tasks",
   assert.equal(calls[2].fields.assignee.accountId, "qa-acc");
   assert.equal(calls[2].fields.timetracking.remainingEstimate, "2h");
   assert.equal(links.length, 2);
+});
+
+test("storyFields omits Epic Link when create metadata marks it unavailable", function () {
+  const creator = loadCreator();
+
+  const fields = creator.storyFields(
+    {
+      summary: "No epic field",
+      sourceColumns: { "Замечание": "No epic field" },
+    },
+    {
+      projectKey: "EVOSCADA",
+      epicKey: "EVOSCADA-18333",
+      epicLinkAllowed: false,
+    }
+  );
+
+  assert.equal(fields.customfield_10014, undefined);
 });
 
 test("storyFields maps unknown module as component and omits unknown priority", function () {
