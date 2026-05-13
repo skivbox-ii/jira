@@ -104,13 +104,24 @@ test("row create opens confirmation before creating without Epic", async functio
               summary: state.createDialog.summary,
               epicText: state.createDialog.epicText,
               assigneeId: state.createDialog.assigneeId || "",
+              assigneeLabel: state.createDialog.assigneeLabel || "",
+              userPicker: state.userPicker
+                ? {
+                    target: state.userPicker.target || "",
+                    query: state.userPicker.query || "",
+                    loading: !!state.userPicker.loading,
+                    rows: (state.userPicker.rows || []).map(function (user) {
+                      return user.id + ":" + user.label;
+                    }),
+                  }
+                : null,
               originalEstimate: state.createDialog.originalEstimate || "",
               remainingEstimate: state.createDialog.remainingEstimate || "",
               sourceRows: state.createDialog.sourceRows.map(function (row) {
                 return row.name + ":" + row.value;
               }),
               childTasks: state.createDialog.childTasks.map(function (task) {
-                return task.role + ":" + task.issueType + ":" + task.summary + ":" + task.enabled + ":" + (task.assigneeId || "");
+                return task.role + ":" + task.issueType + ":" + task.summary + ":" + task.enabled + ":" + (task.assigneeId || "") + ":" + (task.assigneeLabel || "");
               }),
             }
           : null,
@@ -120,6 +131,11 @@ test("row create opens confirmation before creating without Epic", async functio
       });
     },
   };
+  const userResponses = {
+    story: [{ name: "story-user", displayName: "Story User", accountId: "story-acc" }],
+    se: [{ name: "se-user", displayName: "SE User" }],
+  };
+  const userSearchCalls = [];
   const api = {
     baseUrl: "https://jira.example.com",
     getProjects: function () {
@@ -128,12 +144,10 @@ test("row create opens confirmation before creating without Epic", async functio
     getProjectEpics: function () {
       return Promise.resolve([]);
     },
-    searchUsers: function () {
+    searchUsers: function (query) {
+      userSearchCalls.push(query);
       return Promise.resolve({
-        users: [
-          { name: "story-user", displayName: "Story User", accountId: "story-acc" },
-          { name: "se-user", displayName: "SE User" },
-        ],
+        users: userResponses[query] || [],
       });
     },
   };
@@ -204,22 +218,33 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.summary, "Test jira task");
   assert.equal(last.createDialog.epicText, "Без Epic");
   assert.deepEqual(last.createDialog.childTasks, [
-    "SE:System Engineer:[SE] Test jira task:true:",
-    "FE:Frontend Task:[FE] Test jira task:true:",
-    "BE:Backend Task:[BE] Test jira task:true:",
-    "QA:QA:[QA] Test jira task:true:",
-    "DevOps:DevOps:[DevOps] Test jira task:true:",
+    "SE:System Engineer:[SE] Test jira task:true::",
+    "FE:Frontend Task:[FE] Test jira task:true::",
+    "BE:Backend Task:[BE] Test jira task:true::",
+    "QA:QA:[QA] Test jira task:true::",
+    "DevOps:DevOps:[DevOps] Test jira task:true::",
   ]);
   assert.equal(last.rows[0].status, "ready");
 
   callbacks.onDialogFieldChange("summary", "Edited story");
-  callbacks.onDialogFieldChange("assigneeId", "story-acc");
+  callbacks.onDialogAssigneeSearch("story", "story");
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.deepEqual(userSearchCalls, ["story"]);
+  assert.equal(last.createDialog.userPicker.target, "story");
+  assert.equal(last.createDialog.userPicker.query, "story");
+  assert.deepEqual(last.createDialog.userPicker.rows, ["story-acc:Story User"]);
+  callbacks.onDialogAssigneeSelect("story", "story-acc");
   callbacks.onDialogFieldChange("originalEstimate", "2h");
   callbacks.onDialogFieldChange("remainingEstimate", "1h");
   callbacks.onDialogSourceChange(0, "Edited story from modal");
   callbacks.onDialogChildToggle(1, false);
   callbacks.onDialogChildChange(0, "summary", "[SE] Edited story");
-  callbacks.onDialogChildChange(0, "assigneeId", "se-user");
+  callbacks.onDialogAssigneeSearch("child-0", "se");
+  await flush();
+  await flush();
+  callbacks.onDialogAssigneeSelect("child-0", "se-user");
   callbacks.onDialogChildChange(0, "originalEstimate", "4h");
   callbacks.onDialogChildChange(0, "remainingEstimate", "4h");
   await flush();

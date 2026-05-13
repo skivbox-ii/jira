@@ -210,18 +210,70 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $select;
   }
 
-  function userOptions(state) {
-    var out = [{ value: "", label: state && state.usersLoading ? "Загрузка..." : "Не назначать" }];
-    (state.users || []).forEach(function(user) {
-      out.push({ value: String(user.id || ""), label: String(user.label || user.id || "") });
+  function appendAssigneePicker(className, target, selectedId, selectedLabel, state, disabled) {
+    var picker = state && state.userPicker ? state.userPicker : {};
+    var active = !disabled && picker.target === target;
+    var value = active ? picker.query || "" : selectedLabel || "";
+    var $wrap = $("<div/>")
+      .addClass("ujg-esi-assignee-picker")
+      .addClass(className || "")
+      .toggleClass("ujg-esi-assignee-picker-active", active);
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .attr("autocomplete", "off")
+      .attr("placeholder", "Введите имя или логин")
+      .addClass("ujg-esi-assignee-search")
+      .val(value);
+    if (disabled) $input.prop("disabled", true);
+    $input.on("focus click", function() {
+      if (!disabled && services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus(target);
     });
-    return out;
-  }
-
-  function appendAssigneeSelect(className, value, state, onChange) {
-    var $select = appendSelect(className, value, userOptions(state), onChange);
-    if (state && state.usersLoading) $select.prop("disabled", true);
-    return $select;
+    $input.on("input", function() {
+      if (!disabled && services && services.onDialogAssigneeSearch) services.onDialogAssigneeSearch(target, $(this).val());
+    });
+    $wrap.append($input);
+    if (!disabled && selectedId) {
+      $wrap.append(
+        $("<button/>")
+          .attr("type", "button")
+          .attr("title", "Очистить исполнителя")
+          .addClass("ujg-esi-assignee-clear")
+          .text("×")
+          .on("click", function() {
+            if (services && services.onDialogAssigneeClear) services.onDialogAssigneeClear(target);
+          })
+      );
+    }
+    if (active) {
+      var $options = $("<div/>").addClass("ujg-esi-assignee-options");
+      if (picker.loading) $options.append($("<div/>").addClass("ujg-esi-assignee-loading").text("Поиск..."));
+      if (picker.error) $options.append($("<div/>").addClass("ujg-esi-assignee-error").text(String(picker.error)));
+      (picker.rows || []).forEach(function(user) {
+        var id = user && user.id != null ? String(user.id) : "";
+        if (!id) return;
+        $options.append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-assignee-option")
+            .text(user.label || id)
+            .on("click", function() {
+              if (services && services.onDialogAssigneeSelect) services.onDialogAssigneeSelect(target, id);
+            })
+        );
+      });
+      if (!picker.loading && !picker.error && !(picker.rows || []).length) {
+        $options.append($("<div/>").addClass("ujg-esi-assignee-empty").text("Ничего не найдено"));
+      }
+      $wrap.append($options);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          var node = $input[0];
+          $input.trigger("focus");
+          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
+        }, 0);
+      }
+    }
+    return $wrap;
   }
 
   function appendConfirmSourceRows($parent, rows) {
@@ -279,9 +331,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled)))
-          .append($("<td/>").append(appendAssigneeSelect("ujg-esi-confirm-child-assignee", task.assigneeId || "", state, function(value) {
-            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "assigneeId", value);
-          }).prop("disabled", !enabled || state.usersLoading)))
+          .append($("<td/>").append(appendAssigneePicker("ujg-esi-confirm-child-assignee", "child-" + index, task.assigneeId || "", task.assigneeLabel || "", state, !enabled)))
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
           }).prop("disabled", !enabled)))
@@ -320,9 +370,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendConfirmControl($fields, "Название", appendTextInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
     }));
-    appendConfirmControl($fields, "Исполнитель", appendAssigneeSelect("ujg-esi-confirm-assignee", dialog.assigneeId || "", state, function(value) {
-      if (services && services.onDialogFieldChange) services.onDialogFieldChange("assigneeId", value);
-    }));
+    appendConfirmControl($fields, "Исполнитель", appendAssigneePicker("ujg-esi-confirm-assignee", "story", dialog.assigneeId || "", dialog.assigneeLabel || "", state, false));
     appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);
     }));

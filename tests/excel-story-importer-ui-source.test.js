@@ -53,7 +53,11 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /Тип Jira/);
   assert.match(source, /child of Story/);
   assert.match(source, /ujg-esi-confirm-summary/);
-  assert.match(source, /ujg-esi-confirm-assignee/);
+  assert.match(source, /ujg-esi-assignee-picker/);
+  assert.match(source, /ujg-esi-assignee-search/);
+  assert.match(source, /ujg-esi-assignee-options/);
+  assert.match(source, /onDialogAssigneeSearch/);
+  assert.match(source, /onDialogAssigneeSelect/);
   assert.match(source, /ujg-esi-confirm-child-enabled/);
   assert.match(source, /onDialogChildToggle/);
 });
@@ -77,4 +81,6 @@ test("importer CSS is scoped to widget root", function () {
   assert.match(source, /\.ujg-esi-preview-table/);
   assert.match(source, /\.ujg-esi-jira-link/);
   assert.match(source, /\.ujg-esi-row-linked/);
+  assert.match(source, /\.ujg-esi-assignee-picker/);
+  assert.match(source, /\.ujg-esi-assignee-options/);
 });

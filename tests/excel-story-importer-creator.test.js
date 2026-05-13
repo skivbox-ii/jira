@@ -72,7 +72,11 @@ test("createRow creates Story with selected Epic Link and then template subtasks
     api,
     {
       summary: "Нет настроек полей сообщений",
-      sourceColumns: { "Замечание": "Нет настроек полей сообщений", "Модуль": "Алармы" },
+      sourceColumns: {
+        "Замечание": "Нет настроек полей сообщений",
+        "Модуль": "Алармы",
+        "Приоритет": "Высокий",
+      },
       alreadyLinked: false,
     },
     { projectKey: "EVOSCADA", epicKey: "EVOSCADA-100", createSubtasks: true }
@@ -84,6 +88,9 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(calls[0].fields.project.key, "EVOSCADA");
   assert.equal(calls[0].fields.summary, "Нет настроек полей сообщений");
   assert.equal(calls[0].fields.customfield_10014, "EVOSCADA-100");
+  assert.equal(calls[0].fields.components.length, 1);
+  assert.equal(calls[0].fields.components[0].name, "Алармы");
+  assert.equal(calls[0].fields.priority.name, "High");
   assert.equal(calls[1].fields.issuetype.name, "System Engineer");
   assert.equal(calls[1].fields.summary, "[SE] Нет настроек полей сообщений");
   assert.equal(calls[5].fields.summary, "[DevOps] Нет настроек полей сообщений");
@@ -176,4 +183,24 @@ test("createRow uses edited dialog fields, assignees, and selected child tasks",
   assert.equal(calls[2].fields.assignee.accountId, "qa-acc");
   assert.equal(calls[2].fields.timetracking.remainingEstimate, "2h");
   assert.equal(links.length, 2);
+});
+
+test("storyFields maps unknown module as component and omits unknown priority", function () {
+  const creator = loadCreator();
+
+  const fields = creator.storyFields(
+    {
+      summary: "Unknown values",
+      sourceColumns: {
+        "Замечание": "Unknown values",
+        "Модуль": "Новый модуль",
+        "Приоритет": "Срочно когда-нибудь",
+      },
+    },
+    { projectKey: "EVOSCADA" }
+  );
+
+  assert.equal(fields.components.length, 1);
+  assert.equal(fields.components[0].name, "Новый модуль");
+  assert.equal(fields.priority, undefined);
 });

@@ -15,6 +15,39 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return res && res.key != null ? String(res.key).trim() : "";
   }
 
+  function sourceValue(row, name) {
+    var cols = row && row.sourceColumns ? row.sourceColumns : {};
+    return cols && cols[name] != null ? String(cols[name]).trim() : "";
+  }
+
+  function normalizedKey(value) {
+    return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  function lookupMappedValue(map, value, fallbackToInput) {
+    var raw = String(value || "").trim();
+    var key = normalizedKey(raw);
+    var name;
+    if (!key) return "";
+    map = map || {};
+    for (name in map) {
+      if (Object.prototype.hasOwnProperty.call(map, name) && normalizedKey(name) === key) {
+        return String(map[name]).trim();
+      }
+    }
+    return fallbackToInput ? raw : "";
+  }
+
+  function appendComponent(fields, row) {
+    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), true);
+    if (component) fields.components = [{ name: component }];
+  }
+
+  function appendPriority(fields, row) {
+    var priority = lookupMappedValue(config.PRIORITY_MAP, sourceValue(row, "Приоритет"), false);
+    if (priority) fields.priority = { name: priority };
+  }
+
   function storyFields(row, options) {
     var opts = options || {};
     var fields = {
@@ -26,6 +59,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (opts.epicKey && config.EPIC_LINK_FIELD) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
+    appendComponent(fields, row);
+    appendPriority(fields, row);
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;
@@ -160,5 +195,6 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     subtaskFields: subtaskFields,
     childSummary: childSummary,
     childLinkPayload: childLinkPayload,
+    lookupMappedValue: lookupMappedValue,
   };
 });

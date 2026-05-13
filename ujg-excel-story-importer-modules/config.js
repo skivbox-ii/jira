@@ -37,6 +37,33 @@ define("_ujgESI_config", [], function() {
     { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
   ];
 
+  var MODULE_COMPONENT_MAP = {
+    "Алармы": "Алармы",
+    "АСУТП": "АСУТП",
+    "Отдел АСУТП": "АСУТП",
+    "PARA": "PARA",
+    "PNGI": "PNGI",
+    "Multimedia2": "Multimedia2",
+    "Мультимедиа": "Multimedia2",
+    "Эвоскада замечания": "Эвоскада замечания",
+  };
+
+  var PRIORITY_MAP = {
+    "Критичный": "Highest",
+    "Критический": "Highest",
+    "Блокер": "Highest",
+    "Высокий": "High",
+    "Средний": "Medium",
+    "Обычный": "Medium",
+    "Низкий": "Low",
+    "Самый низкий": "Lowest",
+    "Highest": "Highest",
+    "High": "High",
+    "Medium": "Medium",
+    "Low": "Low",
+    "Lowest": "Lowest",
+  };
+
   function trimSlash(s) {
     return String(s || "").replace(/\/+$/, "");
   }
@@ -70,5 +97,7 @@ define("_ujgESI_config", [], function() {
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
+    MODULE_COMPONENT_MAP: MODULE_COMPONENT_MAP,
+    PRIORITY_MAP: PRIORITY_MAP,
   };
 });
