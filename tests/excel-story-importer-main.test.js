@@ -62,6 +62,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
     "_ujgESI_parser": parser,
     "_ujgESI_creator": {},
     "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": null,
     "_ujgESI_rendering": rendering,
   });
 
@@ -99,6 +100,10 @@ test("row create opens confirmation before creating without Epic", async functio
         projectKey: state.projectKey || "",
         epicKey: state.epicKey || "",
         error: state.error || "",
+        syncLoading: !!state.syncLoading,
+        syncError: state.syncError || "",
+        syncSummary: state.syncSummary || "",
+        exportReady: !!state.exportBuffer,
         createDialog: state.createDialog
           ? {
               rowIndex: state.createDialog.rowIndex,
@@ -169,6 +174,9 @@ test("row create opens confirmation before creating without Epic", async functio
         users: userResponses[query] || [],
       });
     },
+    getIssuesByKeys: function () {
+      return Promise.resolve({ issues: [] });
+    },
   };
   const excelLoader = {
     readWorkbook: function () {
@@ -197,6 +205,11 @@ test("row create opens confirmation before creating without Epic", async functio
       return Promise.resolve({ ok: true, createdKey: "EVOSCADA-1", errors: [] });
     },
   };
+  const xlsxPatcher = {
+    patchWorkbook: function () {
+      return Promise.resolve(new ArrayBuffer(1));
+    },
+  };
   const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
     jquery: function () {
       return { length: 0 };
@@ -207,6 +220,7 @@ test("row create opens confirmation before creating without Epic", async functio
     "_ujgESI_parser": parser,
     "_ujgESI_creator": creator,
     "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
   });
 
@@ -295,11 +309,153 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.rows[0].createdKey, "EVOSCADA-1");
 });
 
+test("sync from Jira updates parsed rows and prepares patched Excel for download", async function () {
+  const states = [];
+  let callbacks = null;
+  let issueKeys = null;
+  let patchArgs = null;
+  const sourceBuffer = new ArrayBuffer(12);
+  const patchedBuffer = new ArrayBuffer(8);
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        syncLoading: !!state.syncLoading,
+        syncError: state.syncError || "",
+        syncSummary: state.syncSummary || "",
+        exportReady: !!state.exportBuffer,
+        exportFileName: state.exportFileName || "",
+        rows: (state.rows || []).map(function (row) {
+          return {
+            jiraKey: row.jiraKey || "",
+            createdKey: row.createdKey || "",
+            statusInJira: row.sourceColumns && row.sourceColumns["Статус в Jira"] || "",
+            assigneeInJira: row.sourceColumns && row.sourceColumns["Исполнитель в Jira"] || "",
+          };
+        }),
+      });
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([]);
+    },
+    getIssuesByKeys: function (keys) {
+      issueKeys = keys.slice();
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-10",
+            fields: {
+              status: { name: "In Review" },
+              assignee: { displayName: "Иван Иванов" },
+            },
+          },
+        ],
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(sourceBuffer);
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Журнал"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Журнал",
+        headerRowNumber: 9,
+        headerColumns: {
+          Jira: 11,
+          "Статус в Jira": 15,
+          "Исполнитель в Jira": 16,
+        },
+        rows: [
+          {
+            excelRowNumber: 12,
+            summary: "Existing",
+            jiraKey: "EVOSCADA-10",
+            sourceColumns: { Замечание: "Existing", Jira: "EVOSCADA-10" },
+            sourceColumnIndexes: { Jira: 11 },
+            alreadyLinked: true,
+            status: "linked",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (buffer, patch) {
+      patchArgs = { buffer, patch };
+      return Promise.resolve(patchedBuffer);
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+
+  callbacks.onFileChange({ name: "test.xlsx" });
+  await flush();
+  await flush();
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+
+  assert.deepEqual(issueKeys, ["EVOSCADA-10"]);
+  assert.equal(patchArgs.buffer, sourceBuffer);
+  assert.equal(patchArgs.patch.sheetName, "Журнал");
+  assert.equal(patchArgs.patch.headerRowNumber, 9);
+  assert.equal(patchArgs.patch.rows[0].excelRowNumber, 12);
+  assert.deepEqual(patchArgs.patch.headerColumns, {
+    Jira: 11,
+    "Статус в Jira": 15,
+    "Исполнитель в Jira": 16,
+  });
+
+  const last = states[states.length - 1];
+  assert.equal(last.syncError, "");
+  assert.equal(last.syncSummary, "Синхронизировано 1 тикет");
+  assert.equal(last.exportReady, true);
+  assert.equal(last.exportFileName, "test.synced.xlsx");
+  assert.equal(last.rows[0].statusInJira, "In Review");
+  assert.equal(last.rows[0].assigneeInJira, "Иван Иванов");
+});
+
 test("mapping editor opens from renderer callbacks and mappings are passed into creation", async function () {
   const states = [];
   let callbacks = null;
   let creatorOptions = null;
   let savedMappings = null;
+  let parserOptions = null;
   const rendering = {
     init: function (_container, services) {
       callbacks = services;
@@ -338,6 +494,13 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
             priorityMap: {
               "Срочно": "Highest",
             },
+            columnMap: {
+              summary: "Тема",
+              jira: "Тикет",
+            },
+            tableStart: {
+              headerMarker: "Тема",
+            },
             roles: [
               { role: "SE", issueType: "System Engineer", originalEstimate: "2h", remainingEstimate: "2h", enabled: true },
               { role: "QA", issueType: "QA", originalEstimate: "3h", remainingEstimate: "3h", enabled: false },
@@ -372,7 +535,8 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
     },
   };
   const parser = {
-    parseWorkbook: function () {
+    parseWorkbook: function (_workbook, options) {
+      parserOptions = options;
       return {
         sheetName: "Лист1",
         headerRowNumber: 1,
@@ -408,6 +572,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
     "_ujgESI_creator": creator,
     "_ujgESI_rendering": rendering,
     "_ujgESI_mappingStore": mappingStore,
+    "_ujgESI_xlsxPatcher": null,
   });
 
   new Gadget({
@@ -442,6 +607,8 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   callbacks.onFileChange({ name: "rows.xlsx" });
   await flush();
   await flush();
+  assert.equal(parserOptions.columnMap.summary, "Тема");
+  assert.equal(parserOptions.tableStart.headerMarker, "Тема");
   callbacks.onCreateRow(0);
   await flush();
   last = states[states.length - 1];

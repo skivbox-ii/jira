@@ -60,10 +60,38 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     });
   }
 
+  function copyColumnMap(map) {
+    var defaults = config.COLUMN_MAP || {};
+    var source = map && typeof map === "object" ? map : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) {
+        out[key] = source[key] != null ? String(source[key]).trim() : "";
+      }
+    });
+    return out;
+  }
+
+  function copyTableStart(input) {
+    var defaults = config.TABLE_START || {};
+    var source = input && typeof input === "object" ? input : {};
+    return {
+      headerMarker: source.headerMarker != null && String(source.headerMarker).trim()
+        ? String(source.headerMarker).trim()
+        : String(defaults.headerMarker || config.SUMMARY_COLUMN || "Замечание").trim(),
+    };
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
+      columnMap: copyColumnMap(config.COLUMN_MAP),
+      tableStart: copyTableStart(config.TABLE_START),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -78,6 +106,12 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       priorityMap: hasInput && input.priorityMap && typeof input.priorityMap === "object"
         ? copyMap(input.priorityMap)
         : defaults.priorityMap,
+      columnMap: hasInput && input.columnMap && typeof input.columnMap === "object"
+        ? copyColumnMap(input.columnMap)
+        : defaults.columnMap,
+      tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
+        ? copyTableStart(input.tableStart)
+        : defaults.tableStart,
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,

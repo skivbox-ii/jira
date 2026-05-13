@@ -21,12 +21,57 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return match ? match[1] : "";
   }
 
-  function findHeader(rows) {
+  function defaultColumnMap() {
+    return {
+      summary: config.SUMMARY_COLUMN,
+      jira: config.JIRA_COLUMN,
+      module: "Модуль",
+      priority: "Приоритет",
+      statusInJira: "Статус в Jira",
+      assigneeInJira: "Исполнитель в Jira",
+    };
+  }
+
+  function parserSettings(options) {
+    var source = options && typeof options === "object" ? options : {};
+    var columnMap = {};
+    var defaults = config.COLUMN_MAP || defaultColumnMap();
+    Object.keys(defaults).forEach(function(key) {
+      columnMap[key] = source.columnMap && source.columnMap[key] != null && String(source.columnMap[key]).trim()
+        ? String(source.columnMap[key]).trim()
+        : String(defaults[key] || "").trim();
+    });
+    return {
+      columnMap: columnMap,
+      tableStart: {
+        headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
+          ? String(source.tableStart.headerMarker).trim()
+          : config.TABLE_START && config.TABLE_START.headerMarker
+            ? String(config.TABLE_START.headerMarker)
+            : config.SUMMARY_COLUMN,
+      },
+    };
+  }
+
+  function canonicalColumnName(excelName, settings) {
+    var text = cellText(excelName);
+    var map = settings && settings.columnMap ? settings.columnMap : {};
+    if (text && cellText(map.summary) === text) return config.SUMMARY_COLUMN;
+    if (text && cellText(map.jira) === text) return config.JIRA_COLUMN;
+    if (text && cellText(map.module) === text) return "Модуль";
+    if (text && cellText(map.priority) === text) return "Приоритет";
+    if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
+    if (text && cellText(map.assigneeInJira) === text) return "Исполнитель в Jira";
+    return text;
+  }
+
+  function findHeader(rows, settings) {
     var i;
     var j;
+    var marker = settings && settings.tableStart ? cellText(settings.tableStart.headerMarker) : config.SUMMARY_COLUMN;
     for (i = 0; i < rows.length; i += 1) {
       for (j = 0; j < (rows[i] || []).length; j += 1) {
-        if (cellText(rows[i][j]) === config.SUMMARY_COLUMN) {
+        if (cellText(rows[i][j]) === marker) {
           return { rowIndex: i, summaryIndex: j };
         }
       }
@@ -34,11 +79,28 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return null;
   }
 
-  function headerNames(row) {
+  function headerNames(row, settings) {
     return (row || []).map(function(value, index) {
-      var text = cellText(value);
+      var text = canonicalColumnName(value, settings);
       return text || "Колонка " + String(index + 1);
     });
+  }
+
+  function columnIndexes(names) {
+    var out = {};
+    (names || []).forEach(function(name, index) {
+      var text = name != null ? String(name).trim() : "";
+      if (text && !Object.prototype.hasOwnProperty.call(out, text)) out[text] = index + 1;
+    });
+    return out;
+  }
+
+  function fallbackHeaderColumns() {
+    return {
+      "№": 1,
+      "Замечание": 2,
+      "Jira": 3,
+    };
   }
 
   function fallbackHeaderName(index) {
@@ -60,14 +122,16 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return text.length >= 3 && /[A-Za-zА-Яа-яЁё]/.test(text);
   }
 
-  function parseRows(sheetName, rows, header) {
-    var headers = headerNames(rows[header.rowIndex]);
+  function parseRows(sheetName, rows, header, settings) {
+    var headers = headerNames(rows[header.rowIndex], settings);
+    var indexes = columnIndexes(headers);
+    var summaryIndex = Object.prototype.hasOwnProperty.call(indexes, config.SUMMARY_COLUMN) ? indexes[config.SUMMARY_COLUMN] - 1 : header.summaryIndex;
     var out = [];
     var i;
     var j;
     for (i = header.rowIndex + 1; i < rows.length; i += 1) {
       var row = rows[i] || [];
-      var summary = cellText(row[header.summaryIndex]);
+      var summary = cellText(row[summaryIndex]);
       if (!summary) continue;
       var sourceColumns = {};
       for (j = 0; j < headers.length; j += 1) {
@@ -82,6 +146,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         excelRowNumber: i + 1,
         summary: summary,
         sourceColumns: sourceColumns,
+        sourceColumnIndexes: indexes,
         jiraKey: jiraKey,
         alreadyLinked: !!jiraKey,
         status: jiraKey ? "linked" : "ready",
@@ -93,7 +158,8 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   }
 
   function parseSimpleRows(sheetName, rows) {
-    if (rows.some(rowHasKnownHeader)) return [];
+    var indexes = fallbackHeaderColumns();
+    if (rows.some(rowHasKnownHeader)) return { rows: [], headerColumns: indexes };
     var out = [];
     var i;
     var j;
@@ -114,6 +180,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         excelRowNumber: i + 1,
         summary: summary,
         sourceColumns: sourceColumns,
+        sourceColumnIndexes: indexes,
         jiraKey: jiraKey,
         alreadyLinked: !!jiraKey,
         status: jiraKey ? "linked" : "ready",
@@ -121,42 +188,47 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         errors: [],
       });
     }
-    return out;
+    return { rows: out, headerColumns: indexes };
   }
 
-  function parseWorkbook(workbook) {
+  function parseWorkbook(workbook, options) {
+    var settings = parserSettings(options);
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
     var i;
     var fallback = null;
     for (i = 0; i < sheetNames.length; i += 1) {
       var sheetName = String(sheetNames[i]);
       var rows = sheetRows(workbook.Sheets && workbook.Sheets[sheetName]);
-      var header = findHeader(rows);
+      var header = findHeader(rows, settings);
       if (header) {
+        var headers = headerNames(rows[header.rowIndex], settings);
         return {
           sheetName: sheetName,
           headerRowNumber: header.rowIndex + 1,
-          rows: parseRows(sheetName, rows, header),
+          headerColumns: columnIndexes(headers),
+          rows: parseRows(sheetName, rows, header, settings),
         };
       }
       if (!fallback) {
-        var simpleRows = parseSimpleRows(sheetName, rows);
-        if (simpleRows.length) {
+        var simple = parseSimpleRows(sheetName, rows);
+        if (simple.rows.length) {
           fallback = {
             sheetName: sheetName,
             headerRowNumber: 0,
-            rows: simpleRows,
+            headerColumns: simple.headerColumns,
+            rows: simple.rows,
           };
         }
       }
     }
     if (fallback) return fallback;
-    throw new Error('Колонка "Замечание" не найдена');
+    throw new Error('Колонка "' + String(settings.tableStart.headerMarker || config.SUMMARY_COLUMN) + '" не найдена');
   }
 
   return {
     parseWorkbook: parseWorkbook,
     extractJiraKey: extractJiraKey,
     cellText: cellText,
+    columnIndexes: columnIndexes,
   };
 });

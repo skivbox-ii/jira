@@ -14,6 +14,7 @@ var MODULE_ORDER = [
   "creator.js",
   "api.js",
   "excel-loader.js",
+  "xlsx-patcher.js",
   "rendering.js",
   "main.js",
 ];

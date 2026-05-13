@@ -17,7 +17,11 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-file/);
   assert.match(source, /ujg-esi-subtasks/);
   assert.match(source, /ujg-esi-mapping-button/);
+  assert.match(source, /ujg-esi-sync-jira/);
+  assert.match(source, /ujg-esi-download-excel/);
   assert.match(source, /Мапинг/);
+  assert.match(source, /Синхронизировать из Jira/);
+  assert.match(source, /Скачать Excel/);
   assert.match(source, /Создавать дочерние задачи/);
   assert.match(source, /ujg-esi-create-row/);
 });
@@ -45,6 +49,8 @@ test("main module wires renderer callbacks for project, epic, file, subtasks, an
   assert.match(source, /onOpenMappings/);
   assert.match(source, /onMappingBlockSelect/);
   assert.match(source, /onMappingRoleChange/);
+  assert.match(source, /onSyncJira/);
+  assert.match(source, /onDownloadPatchedExcel/);
 });
 
 test("rendering module exposes daily-diligence style mapping settings overlay", function () {
@@ -55,9 +61,13 @@ test("rendering module exposes daily-diligence style mapping settings overlay", 
   assert.match(source, /Блоки мапинга/);
   assert.match(source, /Модуль → Component/);
   assert.match(source, /Приоритет → Priority/);
+  assert.match(source, /Колонки Excel/);
+  assert.match(source, /Начало таблицы/);
   assert.match(source, /Дочерние задачи/);
   assert.match(source, /ujg-esi-mapping-block/);
   assert.match(source, /ujg-esi-mapping-entry-excel/);
+  assert.match(source, /ujg-esi-mapping-column-value/);
+  assert.match(source, /ujg-esi-mapping-start-marker/);
   assert.match(source, /ujg-esi-mapping-role-type/);
 });
 
@@ -96,6 +106,8 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /\/rest\/api\/2\/user\/picker/);
   assert.match(source, /getProjectCreateMeta/);
   assert.match(source, /\/rest\/api\/2\/issue\/createmeta/);
+  assert.match(source, /getIssuesByKeys/);
+  assert.match(source, /key in/);
 });
 
 test("rendering module always renders Jira keys as new-tab browse links", function () {

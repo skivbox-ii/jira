@@ -9,6 +9,7 @@ define("_ujgESI_config", [], function() {
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+  var DEFAULT_JSZIP_URL = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
 
   var KNOWN_COLUMNS = [
     "№",
@@ -31,11 +32,11 @@ define("_ujgESI_config", [], function() {
   ];
 
   var CREATE_TEMPLATE_ROLES = [
-    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала", originalEstimate: "4h", remainingEstimate: "4h" },
-    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI", originalEstimate: "6h", remainingEstimate: "6h" },
-    { role: "BE", issueType: "Backend Task", summary: "Реализация логики", originalEstimate: "8h", remainingEstimate: "8h" },
-    { role: "QA", issueType: "QA", summary: "Тестирование", originalEstimate: "4h", remainingEstimate: "4h" },
-    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "SE", issueType: "Задача разработки", summary: "Анализ и описание функционала", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "FE", issueType: "Задача разработки", summary: "Вёрстка / UI", originalEstimate: "6h", remainingEstimate: "6h" },
+    { role: "BE", issueType: "Задача разработки", summary: "Реализация логики", originalEstimate: "8h", remainingEstimate: "8h" },
+    { role: "QA", issueType: "Задача разработки", summary: "Тестирование", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "DevOps", issueType: "Задача разработки", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
   ];
 
   var MODULE_COMPONENT_MAP = {
@@ -63,6 +64,19 @@ define("_ujgESI_config", [], function() {
     "Medium": "Medium",
     "Low": "Low",
     "Lowest": "Lowest",
+  };
+
+  var COLUMN_MAP = {
+    summary: "Замечание",
+    jira: "Jira",
+    module: "Модуль",
+    priority: "Приоритет",
+    statusInJira: "Статус в Jira",
+    assigneeInJira: "Исполнитель в Jira",
+  };
+
+  var TABLE_START = {
+    headerMarker: "Замечание",
   };
 
   function trimSlash(s) {
@@ -97,9 +111,12 @@ define("_ujgESI_config", [], function() {
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
+    DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
     MODULE_COMPONENT_MAP: MODULE_COMPONENT_MAP,
     PRIORITY_MAP: PRIORITY_MAP,
+    COLUMN_MAP: COLUMN_MAP,
+    TABLE_START: TABLE_START,
   };
 });

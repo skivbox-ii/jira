@@ -59,6 +59,8 @@ test("mapping store loads dashboard property and saves the normalized mappings b
             mappings: {
               moduleComponentMap: { "Примитивы": "Primitive Component" },
               priorityMap: { "Срочно": "Highest" },
+              columnMap: { summary: "Тема", jira: "Тикет" },
+              tableStart: { headerMarker: "Тема" },
               roles: [{ role: "QA", issueType: "QA", originalEstimate: "3h", remainingEstimate: "3h", enabled: false }],
             },
           },
@@ -73,17 +75,22 @@ test("mapping store loads dashboard property and saves the normalized mappings b
   const loaded = await store.load();
   assert.equal(loaded.moduleComponentMap["Примитивы"], "Primitive Component");
   assert.equal(loaded.priorityMap["Срочно"], "Highest");
+  assert.equal(loaded.columnMap.summary, "Тема");
+  assert.equal(loaded.tableStart.headerMarker, "Тема");
   assert.equal(loaded.roles[0].enabled, false);
   assert.match(ajaxCalls[0].url, /\/rest\/api\/2\/dashboard\/77\/properties\/ujg-esi-mapping-settings-test/);
 
   await store.save({
     moduleComponentMap: { "Модуль": "Component" },
     priorityMap: { "Средний": "Medium" },
+    columnMap: { summary: "Замечание", jira: "Jira" },
+    tableStart: { headerMarker: "Замечание" },
     roles: [{ role: "SE", issueType: "System Engineer", originalEstimate: "2h", remainingEstimate: "1h", enabled: true }],
   });
 
   assert.equal(ajaxCalls[1].type, "PUT");
   assert.deepEqual(JSON.parse(ajaxCalls[1].data).mappings.moduleComponentMap, { "Модуль": "Component" });
+  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.columnMap.summary, "Замечание");
+  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.tableStart.headerMarker, "Замечание");
   assert.deepEqual(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.priorityMap, { "Средний": "Medium" });
 });
-

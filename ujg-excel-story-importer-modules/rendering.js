@@ -126,6 +126,31 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($button);
   }
 
+  function appendSyncActions($toolbar, state) {
+    var $wrap = $("<div/>").addClass("ujg-esi-sync-actions");
+    var rows = state && state.rows ? state.rows : [];
+    var canSync = !!rows.length && !(state && state.syncLoading);
+    var canDownload = !!(state && state.exportBuffer);
+    var $sync = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-sync-jira")
+      .text(state && state.syncLoading ? "Синхронизация..." : "Синхронизировать из Jira")
+      .prop("disabled", !canSync)
+      .on("click", function() {
+        if (services && services.onSyncJira) services.onSyncJira();
+      });
+    var $download = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-download-excel")
+      .text("Скачать Excel")
+      .prop("disabled", !canDownload)
+      .on("click", function() {
+        if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
+      });
+    $wrap.append($sync, $download);
+    $toolbar.append($wrap);
+  }
+
   function mapEntries(map) {
     return Object.keys(map || {}).map(function(key) {
       return { excel: key, jira: map[key] };
@@ -134,8 +159,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function activeMappingBlock(state) {
     var block = state && state.activeMappingBlock ? String(state.activeMappingBlock) : "";
-    if (block === "priorities" || block === "roles") return block;
+    if (block === "priorities" || block === "roles" || block === "columns" || block === "tableStart") return block;
     return "modules";
+  }
+
+  function columnMappingRows(settings) {
+    var map = settings && settings.columnMap ? settings.columnMap : {};
+    return [
+      { key: "summary", label: "Название / Summary", value: map.summary || "Замечание" },
+      { key: "jira", label: "Jira key", value: map.jira || "Jira" },
+      { key: "module", label: "Модуль", value: map.module || "Модуль" },
+      { key: "priority", label: "Приоритет", value: map.priority || "Приоритет" },
+      { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
+      { key: "assigneeInJira", label: "Исполнитель Jira", value: map.assigneeInJira || "Исполнитель в Jira" },
+    ];
   }
 
   function mappingBlockRows(settings) {
@@ -150,6 +187,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         key: "priorities",
         title: "Приоритет → Priority",
         subtitle: String(mapEntries(maps.priorityMap).length) + " значений",
+      },
+      {
+        key: "columns",
+        title: "Колонки Excel",
+        subtitle: String(columnMappingRows(maps).length) + " полей",
+      },
+      {
+        key: "tableStart",
+        title: "Начало таблицы",
+        subtitle: maps.tableStart && maps.tableStart.headerMarker ? String(maps.tableStart.headerMarker) : "Замечание",
       },
       {
         key: "roles",
@@ -394,6 +441,51 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($head, $table);
   }
 
+  function appendColumnMappings($parent, settings) {
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append($("<h2/>").text("Колонки Excel"));
+    var $table = $("<table/>").addClass("ujg-esi-mapping-table ujg-esi-mapping-columns");
+    var $tbody = $("<tbody/>");
+    $table.append(
+      $("<thead/>").append(
+        $("<tr/>")
+          .append($("<th/>").text("Поле importer"))
+          .append($("<th/>").text("Колонка Excel"))
+      )
+    );
+    columnMappingRows(settings).forEach(function(row) {
+      $tbody.append(
+        $("<tr/>")
+          .append($("<td/>").text(row.label))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-column-value", row.value, function(value) {
+            if (services && services.onMappingColumnChange) services.onMappingColumnChange(row.key, value);
+          })))
+      );
+    });
+    $table.append($tbody);
+    $parent.append($head, $table);
+  }
+
+  function appendTableStartMapping($parent, settings) {
+    var tableStart = settings && settings.tableStart ? settings.tableStart : {};
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append($("<h2/>").text("Начало таблицы"));
+    var $box = $("<div/>").addClass("ujg-esi-mapping-start");
+    $box.append(
+      $("<label/>")
+        .addClass("ujg-esi-mapping-start-field")
+        .append(
+          $("<span/>").text("Колонка-маркер заголовка"),
+          appendTextInput("ujg-esi-mapping-start-marker", tableStart.headerMarker || "Замечание", function(value) {
+            if (services && services.onMappingTableStartChange) services.onMappingTableStartChange("headerMarker", value);
+          })
+        )
+    );
+    $parent.append($head, $box);
+  }
+
   function appendMappingRoles($parent, roles) {
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
@@ -492,6 +584,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     });
     if (active === "priorities") {
       appendMappingPairs($right, "priorities", "Приоритет → Priority", mapEntries(settings.priorityMap));
+    } else if (active === "columns") {
+      appendColumnMappings($right, settings);
+    } else if (active === "tableStart") {
+      appendTableStartMapping($right, settings);
     } else if (active === "roles") {
       appendMappingRoles($right, settings.roles || []);
     } else {
@@ -717,9 +813,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendFileInput($toolbar, s);
     appendSubtasksToggle($toolbar, s);
     appendMappingButton($toolbar, s);
+    appendSyncActions($toolbar, s);
     $root.append($header, $toolbar);
     appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
+    if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
+    if (s.syncSummary) $root.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);

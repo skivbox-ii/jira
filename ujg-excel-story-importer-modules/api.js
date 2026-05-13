@@ -10,6 +10,18 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return /^[A-Za-z0-9_-]+$/.test(token) ? token : quoteJqlString(token);
   }
 
+  function uniqueIssueKeys(keys) {
+    var seen = {};
+    var out = [];
+    (keys || []).forEach(function(key) {
+      var value = key != null ? String(key).trim().toUpperCase() : "";
+      if (!value || seen[value]) return;
+      seen[value] = true;
+      out.push(value);
+    });
+    return out;
+  }
+
   return {
     baseUrl: config.baseUrl,
     getProjects: function() {
@@ -71,6 +83,22 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         },
       });
     },
+    getIssuesByKeys: function(keys) {
+      var list = uniqueIssueKeys(keys);
+      if (!list.length) return Promise.resolve({ issues: [] });
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/search",
+        type: "POST",
+        contentType: "application/json",
+        dataType: "json",
+        data: JSON.stringify({
+          jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
+          fields: ["summary", "status", "assignee"],
+          maxResults: list.length,
+        }),
+      });
+    },
     toJqlToken: toJqlToken,
+    uniqueIssueKeys: uniqueIssueKeys,
   };
 });

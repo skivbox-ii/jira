@@ -14,6 +14,7 @@ define("_ujgESI_config", [], function() {
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+  var DEFAULT_JSZIP_URL = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
 
   var KNOWN_COLUMNS = [
     "№",
@@ -36,11 +37,11 @@ define("_ujgESI_config", [], function() {
   ];
 
   var CREATE_TEMPLATE_ROLES = [
-    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала", originalEstimate: "4h", remainingEstimate: "4h" },
-    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI", originalEstimate: "6h", remainingEstimate: "6h" },
-    { role: "BE", issueType: "Backend Task", summary: "Реализация логики", originalEstimate: "8h", remainingEstimate: "8h" },
-    { role: "QA", issueType: "QA", summary: "Тестирование", originalEstimate: "4h", remainingEstimate: "4h" },
-    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "SE", issueType: "Задача разработки", summary: "Анализ и описание функционала", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "FE", issueType: "Задача разработки", summary: "Вёрстка / UI", originalEstimate: "6h", remainingEstimate: "6h" },
+    { role: "BE", issueType: "Задача разработки", summary: "Реализация логики", originalEstimate: "8h", remainingEstimate: "8h" },
+    { role: "QA", issueType: "Задача разработки", summary: "Тестирование", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "DevOps", issueType: "Задача разработки", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
   ];
 
   var MODULE_COMPONENT_MAP = {
@@ -68,6 +69,19 @@ define("_ujgESI_config", [], function() {
     "Medium": "Medium",
     "Low": "Low",
     "Lowest": "Lowest",
+  };
+
+  var COLUMN_MAP = {
+    summary: "Замечание",
+    jira: "Jira",
+    module: "Модуль",
+    priority: "Приоритет",
+    statusInJira: "Статус в Jira",
+    assigneeInJira: "Исполнитель в Jira",
+  };
+
+  var TABLE_START = {
+    headerMarker: "Замечание",
   };
 
   function trimSlash(s) {
@@ -102,10 +116,13 @@ define("_ujgESI_config", [], function() {
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
+    DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
     MODULE_COMPONENT_MAP: MODULE_COMPONENT_MAP,
     PRIORITY_MAP: PRIORITY_MAP,
+    COLUMN_MAP: COLUMN_MAP,
+    TABLE_START: TABLE_START,
   };
 });
 
@@ -172,10 +189,38 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     });
   }
 
+  function copyColumnMap(map) {
+    var defaults = config.COLUMN_MAP || {};
+    var source = map && typeof map === "object" ? map : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) {
+        out[key] = source[key] != null ? String(source[key]).trim() : "";
+      }
+    });
+    return out;
+  }
+
+  function copyTableStart(input) {
+    var defaults = config.TABLE_START || {};
+    var source = input && typeof input === "object" ? input : {};
+    return {
+      headerMarker: source.headerMarker != null && String(source.headerMarker).trim()
+        ? String(source.headerMarker).trim()
+        : String(defaults.headerMarker || config.SUMMARY_COLUMN || "Замечание").trim(),
+    };
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
+      columnMap: copyColumnMap(config.COLUMN_MAP),
+      tableStart: copyTableStart(config.TABLE_START),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -190,6 +235,12 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       priorityMap: hasInput && input.priorityMap && typeof input.priorityMap === "object"
         ? copyMap(input.priorityMap)
         : defaults.priorityMap,
+      columnMap: hasInput && input.columnMap && typeof input.columnMap === "object"
+        ? copyColumnMap(input.columnMap)
+        : defaults.columnMap,
+      tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
+        ? copyTableStart(input.tableStart)
+        : defaults.tableStart,
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,
@@ -349,12 +400,57 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return match ? match[1] : "";
   }
 
-  function findHeader(rows) {
+  function defaultColumnMap() {
+    return {
+      summary: config.SUMMARY_COLUMN,
+      jira: config.JIRA_COLUMN,
+      module: "Модуль",
+      priority: "Приоритет",
+      statusInJira: "Статус в Jira",
+      assigneeInJira: "Исполнитель в Jira",
+    };
+  }
+
+  function parserSettings(options) {
+    var source = options && typeof options === "object" ? options : {};
+    var columnMap = {};
+    var defaults = config.COLUMN_MAP || defaultColumnMap();
+    Object.keys(defaults).forEach(function(key) {
+      columnMap[key] = source.columnMap && source.columnMap[key] != null && String(source.columnMap[key]).trim()
+        ? String(source.columnMap[key]).trim()
+        : String(defaults[key] || "").trim();
+    });
+    return {
+      columnMap: columnMap,
+      tableStart: {
+        headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
+          ? String(source.tableStart.headerMarker).trim()
+          : config.TABLE_START && config.TABLE_START.headerMarker
+            ? String(config.TABLE_START.headerMarker)
+            : config.SUMMARY_COLUMN,
+      },
+    };
+  }
+
+  function canonicalColumnName(excelName, settings) {
+    var text = cellText(excelName);
+    var map = settings && settings.columnMap ? settings.columnMap : {};
+    if (text && cellText(map.summary) === text) return config.SUMMARY_COLUMN;
+    if (text && cellText(map.jira) === text) return config.JIRA_COLUMN;
+    if (text && cellText(map.module) === text) return "Модуль";
+    if (text && cellText(map.priority) === text) return "Приоритет";
+    if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
+    if (text && cellText(map.assigneeInJira) === text) return "Исполнитель в Jira";
+    return text;
+  }
+
+  function findHeader(rows, settings) {
     var i;
     var j;
+    var marker = settings && settings.tableStart ? cellText(settings.tableStart.headerMarker) : config.SUMMARY_COLUMN;
     for (i = 0; i < rows.length; i += 1) {
       for (j = 0; j < (rows[i] || []).length; j += 1) {
-        if (cellText(rows[i][j]) === config.SUMMARY_COLUMN) {
+        if (cellText(rows[i][j]) === marker) {
           return { rowIndex: i, summaryIndex: j };
         }
       }
@@ -362,11 +458,28 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return null;
   }
 
-  function headerNames(row) {
+  function headerNames(row, settings) {
     return (row || []).map(function(value, index) {
-      var text = cellText(value);
+      var text = canonicalColumnName(value, settings);
       return text || "Колонка " + String(index + 1);
     });
+  }
+
+  function columnIndexes(names) {
+    var out = {};
+    (names || []).forEach(function(name, index) {
+      var text = name != null ? String(name).trim() : "";
+      if (text && !Object.prototype.hasOwnProperty.call(out, text)) out[text] = index + 1;
+    });
+    return out;
+  }
+
+  function fallbackHeaderColumns() {
+    return {
+      "№": 1,
+      "Замечание": 2,
+      "Jira": 3,
+    };
   }
 
   function fallbackHeaderName(index) {
@@ -388,14 +501,16 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return text.length >= 3 && /[A-Za-zА-Яа-яЁё]/.test(text);
   }
 
-  function parseRows(sheetName, rows, header) {
-    var headers = headerNames(rows[header.rowIndex]);
+  function parseRows(sheetName, rows, header, settings) {
+    var headers = headerNames(rows[header.rowIndex], settings);
+    var indexes = columnIndexes(headers);
+    var summaryIndex = Object.prototype.hasOwnProperty.call(indexes, config.SUMMARY_COLUMN) ? indexes[config.SUMMARY_COLUMN] - 1 : header.summaryIndex;
     var out = [];
     var i;
     var j;
     for (i = header.rowIndex + 1; i < rows.length; i += 1) {
       var row = rows[i] || [];
-      var summary = cellText(row[header.summaryIndex]);
+      var summary = cellText(row[summaryIndex]);
       if (!summary) continue;
       var sourceColumns = {};
       for (j = 0; j < headers.length; j += 1) {
@@ -410,6 +525,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         excelRowNumber: i + 1,
         summary: summary,
         sourceColumns: sourceColumns,
+        sourceColumnIndexes: indexes,
         jiraKey: jiraKey,
         alreadyLinked: !!jiraKey,
         status: jiraKey ? "linked" : "ready",
@@ -421,7 +537,8 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   }
 
   function parseSimpleRows(sheetName, rows) {
-    if (rows.some(rowHasKnownHeader)) return [];
+    var indexes = fallbackHeaderColumns();
+    if (rows.some(rowHasKnownHeader)) return { rows: [], headerColumns: indexes };
     var out = [];
     var i;
     var j;
@@ -442,6 +559,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         excelRowNumber: i + 1,
         summary: summary,
         sourceColumns: sourceColumns,
+        sourceColumnIndexes: indexes,
         jiraKey: jiraKey,
         alreadyLinked: !!jiraKey,
         status: jiraKey ? "linked" : "ready",
@@ -449,43 +567,48 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         errors: [],
       });
     }
-    return out;
+    return { rows: out, headerColumns: indexes };
   }
 
-  function parseWorkbook(workbook) {
+  function parseWorkbook(workbook, options) {
+    var settings = parserSettings(options);
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
     var i;
     var fallback = null;
     for (i = 0; i < sheetNames.length; i += 1) {
       var sheetName = String(sheetNames[i]);
       var rows = sheetRows(workbook.Sheets && workbook.Sheets[sheetName]);
-      var header = findHeader(rows);
+      var header = findHeader(rows, settings);
       if (header) {
+        var headers = headerNames(rows[header.rowIndex], settings);
         return {
           sheetName: sheetName,
           headerRowNumber: header.rowIndex + 1,
-          rows: parseRows(sheetName, rows, header),
+          headerColumns: columnIndexes(headers),
+          rows: parseRows(sheetName, rows, header, settings),
         };
       }
       if (!fallback) {
-        var simpleRows = parseSimpleRows(sheetName, rows);
-        if (simpleRows.length) {
+        var simple = parseSimpleRows(sheetName, rows);
+        if (simple.rows.length) {
           fallback = {
             sheetName: sheetName,
             headerRowNumber: 0,
-            rows: simpleRows,
+            headerColumns: simple.headerColumns,
+            rows: simple.rows,
           };
         }
       }
     }
     if (fallback) return fallback;
-    throw new Error('Колонка "Замечание" не найдена');
+    throw new Error('Колонка "' + String(settings.tableStart.headerMarker || config.SUMMARY_COLUMN) + '" не найдена');
   }
 
   return {
     parseWorkbook: parseWorkbook,
     extractJiraKey: extractJiraKey,
     cellText: cellText,
+    columnIndexes: columnIndexes,
   };
 });
 
@@ -752,6 +875,18 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return /^[A-Za-z0-9_-]+$/.test(token) ? token : quoteJqlString(token);
   }
 
+  function uniqueIssueKeys(keys) {
+    var seen = {};
+    var out = [];
+    (keys || []).forEach(function(key) {
+      var value = key != null ? String(key).trim().toUpperCase() : "";
+      if (!value || seen[value]) return;
+      seen[value] = true;
+      out.push(value);
+    });
+    return out;
+  }
+
   return {
     baseUrl: config.baseUrl,
     getProjects: function() {
@@ -813,7 +948,23 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         },
       });
     },
+    getIssuesByKeys: function(keys) {
+      var list = uniqueIssueKeys(keys);
+      if (!list.length) return Promise.resolve({ issues: [] });
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/search",
+        type: "POST",
+        contentType: "application/json",
+        dataType: "json",
+        data: JSON.stringify({
+          jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
+          fields: ["summary", "status", "assignee"],
+          maxResults: list.length,
+        }),
+      });
+    },
     toJqlToken: toJqlToken,
+    uniqueIssueKeys: uniqueIssueKeys,
   };
 });
 
@@ -897,17 +1048,339 @@ define("_ujgESI_excel-loader", ["_ujgESI_config"], function(config) {
     return loadPromise;
   }
 
-  function readWorkbook(file) {
+  function readFileBuffer(file) {
+    return file.arrayBuffer();
+  }
+
+  function readWorkbookFromBuffer(buffer) {
     return ensureXlsx().then(function(xlsx) {
-      return file.arrayBuffer().then(function(buffer) {
-        return xlsx.read(buffer, { type: "array", cellDates: true });
+      return xlsx.read(buffer, { type: "array", cellDates: true });
+    });
+  }
+
+  function readWorkbook(file) {
+    return readFileBuffer(file).then(readWorkbookFromBuffer);
+  }
+
+  return {
+    ensureXlsx: ensureXlsx,
+    readFileBuffer: readFileBuffer,
+    readWorkbookFromBuffer: readWorkbookFromBuffer,
+    readWorkbook: readWorkbook,
+  };
+});
+
+/* === Module: xlsx-patcher.js === */
+define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
+  "use strict";
+
+  var loadPromise = null;
+
+  function loadScript(url) {
+    return new Promise(function(resolve, reject) {
+      var s = document.createElement("script");
+      s.src = url;
+      s.onload = function() {
+        resolve();
+      };
+      s.onerror = function() {
+        reject(new Error("JSZip load failed"));
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  function getGlobalJsZip() {
+    if (typeof window !== "undefined" && window.JSZip) return window.JSZip;
+    if (typeof globalThis !== "undefined" && globalThis.JSZip) return globalThis.JSZip;
+    if (typeof JSZip !== "undefined") return JSZip;
+    return null;
+  }
+
+  function isUsableJsZip(jszip) {
+    return !!(jszip && typeof jszip.loadAsync === "function");
+  }
+
+  function ensureJsZip() {
+    var existing = getGlobalJsZip();
+    if (isUsableJsZip(existing)) return Promise.resolve(existing);
+    if (!loadPromise) {
+      loadPromise = loadScript(config.DEFAULT_JSZIP_URL).then(function() {
+        var loaded = getGlobalJsZip();
+        if (isUsableJsZip(loaded)) return loaded;
+        throw new Error("JSZip is unavailable");
+      });
+    }
+    return loadPromise;
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function escapeXml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  function decodeXml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  }
+
+  function columnNumberToName(number) {
+    var n = Number(number);
+    var out = "";
+    while (n > 0) {
+      n -= 1;
+      out = String.fromCharCode(65 + (n % 26)) + out;
+      n = Math.floor(n / 26);
+    }
+    return out;
+  }
+
+  function columnNameToNumber(name) {
+    var text = String(name || "").toUpperCase();
+    var out = 0;
+    var i;
+    for (i = 0; i < text.length; i += 1) {
+      var code = text.charCodeAt(i);
+      if (code < 65 || code > 90) continue;
+      out = out * 26 + code - 64;
+    }
+    return out;
+  }
+
+  function cellRefColumnNumber(ref) {
+    var match = /^([A-Z]+)/i.exec(String(ref || ""));
+    return match ? columnNameToNumber(match[1]) : 0;
+  }
+
+  function attrValue(xml, name) {
+    var match = new RegExp("\\b" + escapeRegExp(name) + "=\"([^\"]*)\"").exec(xml || "");
+    return match ? decodeXml(match[1]) : "";
+  }
+
+  function attrXml(xml, name) {
+    var match = new RegExp("\\s" + escapeRegExp(name) + "=\"[^\"]*\"").exec(xml || "");
+    return match ? match[0] : "";
+  }
+
+  function extractRowXml(xml, rowNumber) {
+    var re = new RegExp("<row\\b[^>]*\\br=\"" + escapeRegExp(String(rowNumber)) + "\"[^>]*>[\\s\\S]*?<\\/row>", "i");
+    var match = re.exec(xml || "");
+    return match ? { text: match[0], index: match.index } : null;
+  }
+
+  function textFromRuns(xml) {
+    var out = "";
+    var re = /<t\b[^>]*>([\s\S]*?)<\/t>/gi;
+    var match;
+    while ((match = re.exec(xml || ""))) {
+      out += decodeXml(match[1]);
+    }
+    return out;
+  }
+
+  function parseSharedStrings(xml) {
+    var out = [];
+    var re = /<si\b[^>]*>([\s\S]*?)<\/si>/gi;
+    var match;
+    while ((match = re.exec(xml || ""))) {
+      out.push(textFromRuns(match[1]));
+    }
+    return out;
+  }
+
+  function cellTextFromXml(cellXml, sharedStrings) {
+    var type = attrValue(cellXml, "t");
+    var inlineText = textFromRuns(cellXml);
+    var valueMatch;
+    if (type === "inlineStr" || inlineText) return inlineText;
+    valueMatch = /<v\b[^>]*>([\s\S]*?)<\/v>/i.exec(cellXml || "");
+    if (!valueMatch) return "";
+    if (type === "s") {
+      var index = Number(decodeXml(valueMatch[1]));
+      return sharedStrings && sharedStrings[index] != null ? sharedStrings[index] : "";
+    }
+    return decodeXml(valueMatch[1]);
+  }
+
+  function headerColumnsFromWorksheetXml(xml, headerRowNumber, sharedStrings) {
+    var row = extractRowXml(xml, headerRowNumber);
+    var out = {};
+    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*>[\s\S]*?<\/c>|<c\b[^>]*\br="([A-Z]+\d+)"[^>]*\/>/gi;
+    var match;
+    if (!row) return out;
+    while ((match = re.exec(row.text))) {
+      var cellXml = match[0];
+      var text = cellTextFromXml(cellXml, sharedStrings).trim();
+      var ref = match[1] || match[2] || "";
+      if (text && !Object.prototype.hasOwnProperty.call(out, text)) {
+        out[text] = cellRefColumnNumber(ref);
+      }
+    }
+    return out;
+  }
+
+  function mergeColumns(primary, fallback) {
+    var out = {};
+    Object.keys(primary || {}).forEach(function(key) {
+      if (primary[key]) out[key] = primary[key];
+    });
+    Object.keys(fallback || {}).forEach(function(key) {
+      if (!out[key] && fallback[key]) out[key] = fallback[key];
+    });
+    return out;
+  }
+
+  function buildInlineCell(ref, value, styleAttr) {
+    return '<c r="' + escapeXml(ref) + '"' + (styleAttr || "") + ' t="inlineStr"><is><t>' + escapeXml(value) + "</t></is></c>";
+  }
+
+  function patchCellInRow(rowXml, columnNumber, rowNumber, value) {
+    var ref = columnNumberToName(columnNumber) + String(rowNumber);
+    var cellRe = new RegExp("<c\\b[^>]*\\br=\"" + escapeRegExp(ref) + "\"[^>]*(?:>[\\s\\S]*?<\\/c>|\\/>)", "i");
+    var match = cellRe.exec(rowXml);
+    if (match) {
+      return rowXml.slice(0, match.index) +
+        buildInlineCell(ref, value, attrXml(match[0], "s")) +
+        rowXml.slice(match.index + match[0].length);
+    }
+
+    var insert = buildInlineCell(ref, value, "");
+    var allCellsRe = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var cell;
+    while ((cell = allCellsRe.exec(rowXml))) {
+      if (cellRefColumnNumber(cell[1]) > columnNumber) {
+        return rowXml.slice(0, cell.index) + insert + rowXml.slice(cell.index);
+      }
+    }
+    return rowXml.replace(/<\/row>$/i, insert + "</row>");
+  }
+
+  function expandDimension(xml, rows, headerColumns) {
+    var match = /<dimension\b[^>]*\bref="([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?"[^>]*\/>/i.exec(xml || "");
+    var maxColumn = 0;
+    var maxRow = 0;
+    if (!match) return xml;
+    maxColumn = columnNameToNumber(match[3] || match[1]);
+    maxRow = Number(match[4] || match[2]) || 0;
+    (rows || []).forEach(function(rowPatch) {
+      var rowNumber = Number(rowPatch && rowPatch.excelRowNumber) || 0;
+      var values = rowPatch && rowPatch.values ? rowPatch.values : {};
+      if (rowNumber > maxRow) maxRow = rowNumber;
+      Object.keys(values).forEach(function(columnName) {
+        var columnNumber = Number(headerColumns[columnName]) || 0;
+        if (columnNumber > maxColumn) maxColumn = columnNumber;
+      });
+    });
+    if (!maxColumn || !maxRow) return xml;
+    return xml.replace(/(<dimension\b[^>]*\bref=")([A-Z]+\d+)(?::([A-Z]+\d+))?("[^>]*\/>)/i, function(_all, before, start, _end, after) {
+      return before + start + ":" + columnNumberToName(maxColumn) + String(maxRow) + after;
+    });
+  }
+
+  function patchWorksheetXml(xml, patch) {
+    var options = patch || {};
+    var headerColumns = mergeColumns(
+      headerColumnsFromWorksheetXml(xml, options.headerRowNumber || 0, options.sharedStrings || []),
+      options.headerColumns || {}
+    );
+    var out = String(xml || "");
+    (options.rows || []).forEach(function(rowPatch) {
+      var rowNumber = rowPatch && rowPatch.excelRowNumber;
+      var values = rowPatch && rowPatch.values ? rowPatch.values : {};
+      var row = extractRowXml(out, rowNumber);
+      var rowXml;
+      if (!row) return;
+      rowXml = row.text;
+      Object.keys(values).forEach(function(columnName) {
+        var columnNumber = headerColumns[columnName];
+        if (!columnNumber) return;
+        rowXml = patchCellInRow(rowXml, columnNumber, rowNumber, values[columnName]);
+      });
+      out = out.slice(0, row.index) + rowXml + out.slice(row.index + row.text.length);
+    });
+    return expandDimension(out, options.rows || [], headerColumns);
+  }
+
+  function sheetRelationshipId(workbookXml, sheetName) {
+    var re = /<sheet\b[^>]*\/?>/gi;
+    var match;
+    while ((match = re.exec(workbookXml || ""))) {
+      if (attrValue(match[0], "name") === String(sheetName || "")) return attrValue(match[0], "r:id");
+    }
+    return "";
+  }
+
+  function relationshipTarget(relsXml, relationshipId) {
+    var re = /<Relationship\b[^>]*\/?>/gi;
+    var match;
+    while ((match = re.exec(relsXml || ""))) {
+      if (attrValue(match[0], "Id") === String(relationshipId || "")) return attrValue(match[0], "Target");
+    }
+    return "";
+  }
+
+  function normalizeSheetPath(target) {
+    var text = String(target || "").replace(/^\/+/, "");
+    if (text.indexOf("xl/") === 0) return text;
+    return "xl/" + text.replace(/^\.\.\//, "");
+  }
+
+  function firstWorksheetPath(zip) {
+    var files = Object.keys(zip.files || {}).filter(function(name) {
+      return /^xl\/worksheets\/sheet\d+\.xml$/i.test(name);
+    });
+    files.sort();
+    return files[0] || "";
+  }
+
+  function patchWorkbook(buffer, patch) {
+    return ensureJsZip().then(function(JSZip) {
+      return JSZip.loadAsync(buffer).then(function(zip) {
+        return Promise.all([
+          zip.file("xl/workbook.xml") ? zip.file("xl/workbook.xml").async("string") : "",
+          zip.file("xl/_rels/workbook.xml.rels") ? zip.file("xl/_rels/workbook.xml.rels").async("string") : "",
+          zip.file("xl/sharedStrings.xml") ? zip.file("xl/sharedStrings.xml").async("string") : "",
+        ]).then(function(parts) {
+          var workbookXml = parts[0] || "";
+          var relsXml = parts[1] || "";
+          var sharedStrings = parseSharedStrings(parts[2] || "");
+          var relId = patch && patch.sheetName ? sheetRelationshipId(workbookXml, patch.sheetName) : "";
+          var target = relId ? relationshipTarget(relsXml, relId) : "";
+          var sheetPath = target ? normalizeSheetPath(target) : firstWorksheetPath(zip);
+          if (!sheetPath || !zip.file(sheetPath)) throw new Error("Worksheet not found");
+          return zip.file(sheetPath).async("string").then(function(sheetXml) {
+            var patchedXml = patchWorksheetXml(sheetXml, Object.assign({}, patch, { sharedStrings: sharedStrings }));
+            zip.file(sheetPath, patchedXml);
+            return zip.generateAsync({
+              type: typeof Blob !== "undefined" ? "blob" : "arraybuffer",
+              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            });
+          });
+        });
       });
     });
   }
 
   return {
-    ensureXlsx: ensureXlsx,
-    readWorkbook: readWorkbook,
+    ensureJsZip: ensureJsZip,
+    patchWorkbook: patchWorkbook,
+    patchWorksheetXml: patchWorksheetXml,
+    parseSharedStrings: parseSharedStrings,
+    headerColumnsFromWorksheetXml: headerColumnsFromWorksheetXml,
+    columnNumberToName: columnNumberToName,
+    columnNameToNumber: columnNameToNumber,
   };
 });
 
@@ -1040,6 +1513,31 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($button);
   }
 
+  function appendSyncActions($toolbar, state) {
+    var $wrap = $("<div/>").addClass("ujg-esi-sync-actions");
+    var rows = state && state.rows ? state.rows : [];
+    var canSync = !!rows.length && !(state && state.syncLoading);
+    var canDownload = !!(state && state.exportBuffer);
+    var $sync = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-sync-jira")
+      .text(state && state.syncLoading ? "Синхронизация..." : "Синхронизировать из Jira")
+      .prop("disabled", !canSync)
+      .on("click", function() {
+        if (services && services.onSyncJira) services.onSyncJira();
+      });
+    var $download = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-download-excel")
+      .text("Скачать Excel")
+      .prop("disabled", !canDownload)
+      .on("click", function() {
+        if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
+      });
+    $wrap.append($sync, $download);
+    $toolbar.append($wrap);
+  }
+
   function mapEntries(map) {
     return Object.keys(map || {}).map(function(key) {
       return { excel: key, jira: map[key] };
@@ -1048,8 +1546,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function activeMappingBlock(state) {
     var block = state && state.activeMappingBlock ? String(state.activeMappingBlock) : "";
-    if (block === "priorities" || block === "roles") return block;
+    if (block === "priorities" || block === "roles" || block === "columns" || block === "tableStart") return block;
     return "modules";
+  }
+
+  function columnMappingRows(settings) {
+    var map = settings && settings.columnMap ? settings.columnMap : {};
+    return [
+      { key: "summary", label: "Название / Summary", value: map.summary || "Замечание" },
+      { key: "jira", label: "Jira key", value: map.jira || "Jira" },
+      { key: "module", label: "Модуль", value: map.module || "Модуль" },
+      { key: "priority", label: "Приоритет", value: map.priority || "Приоритет" },
+      { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
+      { key: "assigneeInJira", label: "Исполнитель Jira", value: map.assigneeInJira || "Исполнитель в Jira" },
+    ];
   }
 
   function mappingBlockRows(settings) {
@@ -1064,6 +1574,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         key: "priorities",
         title: "Приоритет → Priority",
         subtitle: String(mapEntries(maps.priorityMap).length) + " значений",
+      },
+      {
+        key: "columns",
+        title: "Колонки Excel",
+        subtitle: String(columnMappingRows(maps).length) + " полей",
+      },
+      {
+        key: "tableStart",
+        title: "Начало таблицы",
+        subtitle: maps.tableStart && maps.tableStart.headerMarker ? String(maps.tableStart.headerMarker) : "Замечание",
       },
       {
         key: "roles",
@@ -1308,6 +1828,51 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($head, $table);
   }
 
+  function appendColumnMappings($parent, settings) {
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append($("<h2/>").text("Колонки Excel"));
+    var $table = $("<table/>").addClass("ujg-esi-mapping-table ujg-esi-mapping-columns");
+    var $tbody = $("<tbody/>");
+    $table.append(
+      $("<thead/>").append(
+        $("<tr/>")
+          .append($("<th/>").text("Поле importer"))
+          .append($("<th/>").text("Колонка Excel"))
+      )
+    );
+    columnMappingRows(settings).forEach(function(row) {
+      $tbody.append(
+        $("<tr/>")
+          .append($("<td/>").text(row.label))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-column-value", row.value, function(value) {
+            if (services && services.onMappingColumnChange) services.onMappingColumnChange(row.key, value);
+          })))
+      );
+    });
+    $table.append($tbody);
+    $parent.append($head, $table);
+  }
+
+  function appendTableStartMapping($parent, settings) {
+    var tableStart = settings && settings.tableStart ? settings.tableStart : {};
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append($("<h2/>").text("Начало таблицы"));
+    var $box = $("<div/>").addClass("ujg-esi-mapping-start");
+    $box.append(
+      $("<label/>")
+        .addClass("ujg-esi-mapping-start-field")
+        .append(
+          $("<span/>").text("Колонка-маркер заголовка"),
+          appendTextInput("ujg-esi-mapping-start-marker", tableStart.headerMarker || "Замечание", function(value) {
+            if (services && services.onMappingTableStartChange) services.onMappingTableStartChange("headerMarker", value);
+          })
+        )
+    );
+    $parent.append($head, $box);
+  }
+
   function appendMappingRoles($parent, roles) {
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
@@ -1406,6 +1971,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     });
     if (active === "priorities") {
       appendMappingPairs($right, "priorities", "Приоритет → Priority", mapEntries(settings.priorityMap));
+    } else if (active === "columns") {
+      appendColumnMappings($right, settings);
+    } else if (active === "tableStart") {
+      appendTableStartMapping($right, settings);
     } else if (active === "roles") {
       appendMappingRoles($right, settings.roles || []);
     } else {
@@ -1631,9 +2200,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendFileInput($toolbar, s);
     appendSubtasksToggle($toolbar, s);
     appendMappingButton($toolbar, s);
+    appendSyncActions($toolbar, s);
     $root.append($header, $toolbar);
     appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
+    if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
+    if (s.syncSummary) $root.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
@@ -1655,8 +2227,9 @@ define("_ujgESI_main", [
   "_ujgESI_parser",
   "_ujgESI_creator",
   "_ujgESI_mappingStore",
+  "_ujgESI_xlsxPatcher",
   "_ujgESI_rendering",
-], function($, config, api, excelLoader, parser, creator, mappingStore, rendering) {
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering) {
   "use strict";
 
   function copyRow(row) {
@@ -1673,6 +2246,11 @@ define("_ujgESI_main", [
   }
 
   function normalizeEpics(data) {
+    if (data && Array.isArray(data.issues)) return data.issues;
+    return Array.isArray(data) ? data : [];
+  }
+
+  function normalizeIssues(data) {
     if (data && Array.isArray(data.issues)) return data.issues;
     return Array.isArray(data) ? data : [];
   }
@@ -1733,6 +2311,30 @@ define("_ujgESI_main", [
     });
   }
 
+  function copyColumnMap(map) {
+    var defaults = config.COLUMN_MAP || {};
+    var source = map && typeof map === "object" ? map : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = source[key] != null ? String(source[key]).trim() : "";
+    });
+    return out;
+  }
+
+  function copyTableStart(input) {
+    var defaults = config.TABLE_START || {};
+    var source = input && typeof input === "object" ? input : {};
+    return {
+      headerMarker: source.headerMarker != null && String(source.headerMarker).trim()
+        ? String(source.headerMarker).trim()
+        : String(defaults.headerMarker || config.SUMMARY_COLUMN || "Замечание").trim(),
+    };
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -1740,6 +2342,8 @@ define("_ujgESI_main", [
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
+      columnMap: copyColumnMap(config.COLUMN_MAP),
+      tableStart: copyTableStart(config.TABLE_START),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -1757,6 +2361,12 @@ define("_ujgESI_main", [
       priorityMap: source.priorityMap && typeof source.priorityMap === "object"
         ? copyMap(source.priorityMap)
         : copyMap(defaults.priorityMap),
+      columnMap: source.columnMap && typeof source.columnMap === "object"
+        ? copyColumnMap(source.columnMap)
+        : copyColumnMap(defaults.columnMap),
+      tableStart: source.tableStart && typeof source.tableStart === "object"
+        ? copyTableStart(source.tableStart)
+        : copyTableStart(defaults.tableStart),
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
     };
   }
@@ -1792,6 +2402,57 @@ define("_ujgESI_main", [
 
   function promiseOf(value) {
     return value && typeof value.then === "function" ? Promise.resolve(value) : Promise.resolve(value);
+  }
+
+  function syncedFileName(name) {
+    var text = name != null ? String(name).trim() : "";
+    if (!text) return "jira-status.synced.xlsx";
+    if (/\.(xlsx|xlsm|xls)$/i.test(text)) return text.replace(/\.(xlsx|xlsm|xls)$/i, ".synced.xlsx");
+    return text + ".synced.xlsx";
+  }
+
+  function issueStatusName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var status = fields.status;
+    if (status && status.name != null) return String(status.name);
+    return status != null ? String(status) : "";
+  }
+
+  function issueAssigneeName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var assignee = fields.assignee;
+    if (!assignee) return "";
+    if (assignee.displayName != null && String(assignee.displayName).trim()) return String(assignee.displayName).trim();
+    if (assignee.name != null && String(assignee.name).trim()) return String(assignee.name).trim();
+    if (assignee.key != null && String(assignee.key).trim()) return String(assignee.key).trim();
+    if (assignee.accountId != null && String(assignee.accountId).trim()) return String(assignee.accountId).trim();
+    return "";
+  }
+
+  function issueKeyFromRow(row) {
+    var cols = row && row.sourceColumns ? row.sourceColumns : {};
+    var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[config.JIRA_COLUMN];
+    var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
+    return key || (value != null ? String(value).trim().toUpperCase() : "");
+  }
+
+  function uniqueKeys(rows) {
+    var seen = {};
+    var out = [];
+    (rows || []).forEach(function(row) {
+      var key = issueKeyFromRow(row);
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      out.push(key);
+    });
+    return out;
+  }
+
+  function copyArrayForHost(values) {
+    var out = new Array((values || []).length);
+    var i;
+    for (i = 0; i < out.length; i += 1) out[i] = values[i];
+    return out;
   }
 
   function ensureContainer($content) {
@@ -1834,6 +2495,13 @@ define("_ujgESI_main", [
       activeMappingBlock: "modules",
       mappingLoading: false,
       mappingError: "",
+      sourceFileBuffer: null,
+      sourceFileName: "",
+      exportBuffer: null,
+      exportFileName: "",
+      syncLoading: false,
+      syncError: "",
+      syncSummary: "",
       userPicker: {
         target: "",
         query: "",
@@ -1866,6 +2534,56 @@ define("_ujgESI_main", [
         return epic && String(epic.key || "") === key;
       })[0];
       return epicLabel(found) || key;
+    }
+
+    function resetExportState() {
+      state.exportBuffer = null;
+      state.exportFileName = "";
+      state.syncError = "";
+      state.syncSummary = "";
+    }
+
+    function readInputWorkbook(file) {
+      if (excelLoader && typeof excelLoader.readFileBuffer === "function" && typeof excelLoader.readWorkbookFromBuffer === "function") {
+        return promiseOf(excelLoader.readFileBuffer(file)).then(function(buffer) {
+          return promiseOf(excelLoader.readWorkbookFromBuffer(buffer)).then(function(workbook) {
+            return { buffer: buffer, workbook: workbook };
+          });
+        });
+      }
+      return promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
+        return { buffer: null, workbook: workbook };
+      });
+    }
+
+    function patchRowsForExport(rows) {
+      return (rows || []).map(function(row) {
+        var cols = row && row.sourceColumns ? row.sourceColumns : {};
+        var key = issueKeyFromRow(row);
+        var values = {};
+        if (key) values[config.JIRA_COLUMN] = key;
+        if (cols["Статус в Jira"] != null) values["Статус в Jira"] = cols["Статус в Jira"];
+        if (cols["Исполнитель в Jira"] != null) values["Исполнитель в Jira"] = cols["Исполнитель в Jira"];
+        return {
+          excelRowNumber: row && row.excelRowNumber,
+          values: values,
+        };
+      }).filter(function(rowPatch) {
+        return rowPatch.excelRowNumber && Object.keys(rowPatch.values || {}).length;
+      });
+    }
+
+    function issueMapByKey(data) {
+      var out = {};
+      normalizeIssues(data).forEach(function(issue) {
+        var key = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
+        if (key) out[key] = issue;
+      });
+      return out;
+    }
+
+    function syncSummaryText(count) {
+      return "Синхронизировано " + String(count) + " тикет";
     }
 
     function selectedUser(userId) {
@@ -2234,13 +2952,21 @@ define("_ujgESI_main", [
       if (!file) return;
       state.loading = true;
       state.error = "";
+      state.sourceFileBuffer = null;
+      state.sourceFileName = file && file.name != null ? String(file.name) : "";
       state.createDialog = null;
+      resetExportState();
       closeUserPicker();
       render();
-      promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
-        var parsed = parser.parseWorkbook(workbook);
+      readInputWorkbook(file).then(function(result) {
+        var parsed = parser.parseWorkbook(result.workbook, state.mappingSettings);
+        state.sourceFileBuffer = result.buffer;
         state.rows = (parsed.rows || []).map(copyRow);
-        state.parseMeta = { sheetName: parsed.sheetName, headerRowNumber: parsed.headerRowNumber };
+        state.parseMeta = {
+          sheetName: parsed.sheetName,
+          headerRowNumber: parsed.headerRowNumber,
+          headerColumns: parsed.headerColumns || {},
+        };
         state.loading = false;
         render();
       }).then(null,
@@ -2260,6 +2986,7 @@ define("_ujgESI_main", [
     function mappingKey(block) {
       var key = block != null ? String(block) : "";
       if (key === "priorities") return "priorityMap";
+      if (key === "columns") return "columnMap";
       return "moduleComponentMap";
     }
 
@@ -2277,8 +3004,22 @@ define("_ujgESI_main", [
 
     function onMappingBlockSelect(block) {
       var key = block != null ? String(block) : "";
-      state.activeMappingBlock = key === "priorities" || key === "roles" ? key : "modules";
+      state.activeMappingBlock = key === "priorities" || key === "roles" || key === "columns" || key === "tableStart" ? key : "modules";
       render();
+    }
+
+    function onMappingColumnChange(field, value) {
+      var key = field != null ? String(field) : "";
+      state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
+      state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
+      saveMappings();
+    }
+
+    function onMappingTableStartChange(field, value) {
+      var key = field != null ? String(field) : "";
+      state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
+      if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      saveMappings();
     }
 
     function onMappingPairAdd(block) {
@@ -2350,6 +3091,13 @@ define("_ujgESI_main", [
 
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
+      if (row.createdKey) {
+        row.jiraKey = row.createdKey;
+        row.alreadyLinked = true;
+        row.sourceColumns = row.sourceColumns || {};
+        row.sourceColumns[config.JIRA_COLUMN] = row.createdKey;
+        resetExportState();
+      }
       row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
       if (result && result.partial) {
         row.status = "partial";
@@ -2359,6 +3107,111 @@ define("_ujgESI_main", [
         row.status = "failed";
       }
       render();
+    }
+
+    function onSyncJira() {
+      var keys = uniqueKeys(state.rows);
+      if (state.syncLoading) return;
+      if (!state.rows.length) {
+        state.syncError = "Сначала загрузите Excel.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!keys.length) {
+        state.syncError = "В строках нет Jira-ключей для синхронизации.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!state.sourceFileBuffer) {
+        state.syncError = "Исходный Excel недоступен для выгрузки. Загрузите файл заново.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!api || typeof api.getIssuesByKeys !== "function") {
+        state.syncError = "API синхронизации Jira недоступен.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!xlsxPatcher || typeof xlsxPatcher.patchWorkbook !== "function") {
+        state.syncError = "Модуль выгрузки Excel недоступен.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      state.syncLoading = true;
+      state.syncError = "";
+      state.syncSummary = "";
+      state.exportBuffer = null;
+      state.exportFileName = "";
+      closeUserPicker();
+      render();
+      promiseOf(api.getIssuesByKeys(copyArrayForHost(keys))).then(function(data) {
+        var issues = issueMapByKey(data);
+        var synced = 0;
+        (state.rows || []).forEach(function(row) {
+          var key = issueKeyFromRow(row);
+          var issue = issues[key];
+          if (!issue) return;
+          row.jiraKey = key;
+          row.alreadyLinked = true;
+          row.sourceColumns = row.sourceColumns || {};
+          row.sourceColumns[config.JIRA_COLUMN] = key;
+          row.sourceColumns["Статус в Jira"] = issueStatusName(issue);
+          row.sourceColumns["Исполнитель в Jira"] = issueAssigneeName(issue);
+          synced += 1;
+        });
+        return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {
+          sheetName: state.parseMeta && state.parseMeta.sheetName,
+          headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
+          headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
+          rows: patchRowsForExport(state.rows),
+        })).then(function(buffer) {
+          state.exportBuffer = buffer;
+          state.exportFileName = syncedFileName(state.sourceFileName);
+          state.syncLoading = false;
+          state.syncError = "";
+          state.syncSummary = syncSummaryText(synced);
+          render();
+        });
+      }).then(null,
+        function(err) {
+          state.syncLoading = false;
+          state.exportBuffer = null;
+          state.exportFileName = "";
+          state.syncError = "Не удалось синхронизировать Jira: " + (err && err.message ? err.message : err && err.statusText ? err.statusText : "request failed");
+          state.syncSummary = "";
+          render();
+        }
+      );
+    }
+
+    function onDownloadPatchedExcel() {
+      var blob = state.exportBuffer;
+      var urlApi = typeof URL !== "undefined" ? URL : typeof webkitURL !== "undefined" ? webkitURL : null;
+      var a;
+      var url;
+      if (!blob || typeof document === "undefined" || !urlApi || typeof urlApi.createObjectURL !== "function") return;
+      if (typeof Blob !== "undefined" && !(blob instanceof Blob)) {
+        blob = new Blob([blob], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      }
+      url = urlApi.createObjectURL(blob);
+      a = document.createElement("a");
+      a.href = url;
+      a.download = state.exportFileName || "jira-status.synced.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          urlApi.revokeObjectURL(url);
+        }, 0);
+      } else {
+        urlApi.revokeObjectURL(url);
+      }
     }
 
     function createConfirmedRow(dialog) {
@@ -2530,9 +3383,13 @@ define("_ujgESI_main", [
       onMappingPairAdd: onMappingPairAdd,
       onMappingPairChange: onMappingPairChange,
       onMappingPairRemove: onMappingPairRemove,
+      onMappingColumnChange: onMappingColumnChange,
+      onMappingTableStartChange: onMappingTableStartChange,
       onMappingRoleAdd: onMappingRoleAdd,
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,
+      onSyncJira: onSyncJira,
+      onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
       onConfirmCreate: onConfirmCreate,
       onCancelCreate: onCancelCreate,

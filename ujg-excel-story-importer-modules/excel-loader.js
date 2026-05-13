@@ -77,16 +77,24 @@ define("_ujgESI_excel-loader", ["_ujgESI_config"], function(config) {
     return loadPromise;
   }
 
-  function readWorkbook(file) {
+  function readFileBuffer(file) {
+    return file.arrayBuffer();
+  }
+
+  function readWorkbookFromBuffer(buffer) {
     return ensureXlsx().then(function(xlsx) {
-      return file.arrayBuffer().then(function(buffer) {
-        return xlsx.read(buffer, { type: "array", cellDates: true });
-      });
+      return xlsx.read(buffer, { type: "array", cellDates: true });
     });
+  }
+
+  function readWorkbook(file) {
+    return readFileBuffer(file).then(readWorkbookFromBuffer);
   }
 
   return {
     ensureXlsx: ensureXlsx,
+    readFileBuffer: readFileBuffer,
+    readWorkbookFromBuffer: readWorkbookFromBuffer,
     readWorkbook: readWorkbook,
   };
 });

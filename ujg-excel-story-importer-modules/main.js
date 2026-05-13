@@ -6,8 +6,9 @@ define("_ujgESI_main", [
   "_ujgESI_parser",
   "_ujgESI_creator",
   "_ujgESI_mappingStore",
+  "_ujgESI_xlsxPatcher",
   "_ujgESI_rendering",
-], function($, config, api, excelLoader, parser, creator, mappingStore, rendering) {
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering) {
   "use strict";
 
   function copyRow(row) {
@@ -24,6 +25,11 @@ define("_ujgESI_main", [
   }
 
   function normalizeEpics(data) {
+    if (data && Array.isArray(data.issues)) return data.issues;
+    return Array.isArray(data) ? data : [];
+  }
+
+  function normalizeIssues(data) {
     if (data && Array.isArray(data.issues)) return data.issues;
     return Array.isArray(data) ? data : [];
   }
@@ -84,6 +90,30 @@ define("_ujgESI_main", [
     });
   }
 
+  function copyColumnMap(map) {
+    var defaults = config.COLUMN_MAP || {};
+    var source = map && typeof map === "object" ? map : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = source[key] != null ? String(source[key]).trim() : "";
+    });
+    return out;
+  }
+
+  function copyTableStart(input) {
+    var defaults = config.TABLE_START || {};
+    var source = input && typeof input === "object" ? input : {};
+    return {
+      headerMarker: source.headerMarker != null && String(source.headerMarker).trim()
+        ? String(source.headerMarker).trim()
+        : String(defaults.headerMarker || config.SUMMARY_COLUMN || "Замечание").trim(),
+    };
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -91,6 +121,8 @@ define("_ujgESI_main", [
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
+      columnMap: copyColumnMap(config.COLUMN_MAP),
+      tableStart: copyTableStart(config.TABLE_START),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -108,6 +140,12 @@ define("_ujgESI_main", [
       priorityMap: source.priorityMap && typeof source.priorityMap === "object"
         ? copyMap(source.priorityMap)
         : copyMap(defaults.priorityMap),
+      columnMap: source.columnMap && typeof source.columnMap === "object"
+        ? copyColumnMap(source.columnMap)
+        : copyColumnMap(defaults.columnMap),
+      tableStart: source.tableStart && typeof source.tableStart === "object"
+        ? copyTableStart(source.tableStart)
+        : copyTableStart(defaults.tableStart),
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
     };
   }
@@ -143,6 +181,57 @@ define("_ujgESI_main", [
 
   function promiseOf(value) {
     return value && typeof value.then === "function" ? Promise.resolve(value) : Promise.resolve(value);
+  }
+
+  function syncedFileName(name) {
+    var text = name != null ? String(name).trim() : "";
+    if (!text) return "jira-status.synced.xlsx";
+    if (/\.(xlsx|xlsm|xls)$/i.test(text)) return text.replace(/\.(xlsx|xlsm|xls)$/i, ".synced.xlsx");
+    return text + ".synced.xlsx";
+  }
+
+  function issueStatusName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var status = fields.status;
+    if (status && status.name != null) return String(status.name);
+    return status != null ? String(status) : "";
+  }
+
+  function issueAssigneeName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var assignee = fields.assignee;
+    if (!assignee) return "";
+    if (assignee.displayName != null && String(assignee.displayName).trim()) return String(assignee.displayName).trim();
+    if (assignee.name != null && String(assignee.name).trim()) return String(assignee.name).trim();
+    if (assignee.key != null && String(assignee.key).trim()) return String(assignee.key).trim();
+    if (assignee.accountId != null && String(assignee.accountId).trim()) return String(assignee.accountId).trim();
+    return "";
+  }
+
+  function issueKeyFromRow(row) {
+    var cols = row && row.sourceColumns ? row.sourceColumns : {};
+    var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[config.JIRA_COLUMN];
+    var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
+    return key || (value != null ? String(value).trim().toUpperCase() : "");
+  }
+
+  function uniqueKeys(rows) {
+    var seen = {};
+    var out = [];
+    (rows || []).forEach(function(row) {
+      var key = issueKeyFromRow(row);
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      out.push(key);
+    });
+    return out;
+  }
+
+  function copyArrayForHost(values) {
+    var out = new Array((values || []).length);
+    var i;
+    for (i = 0; i < out.length; i += 1) out[i] = values[i];
+    return out;
   }
 
   function ensureContainer($content) {
@@ -185,6 +274,13 @@ define("_ujgESI_main", [
       activeMappingBlock: "modules",
       mappingLoading: false,
       mappingError: "",
+      sourceFileBuffer: null,
+      sourceFileName: "",
+      exportBuffer: null,
+      exportFileName: "",
+      syncLoading: false,
+      syncError: "",
+      syncSummary: "",
       userPicker: {
         target: "",
         query: "",
@@ -217,6 +313,56 @@ define("_ujgESI_main", [
         return epic && String(epic.key || "") === key;
       })[0];
       return epicLabel(found) || key;
+    }
+
+    function resetExportState() {
+      state.exportBuffer = null;
+      state.exportFileName = "";
+      state.syncError = "";
+      state.syncSummary = "";
+    }
+
+    function readInputWorkbook(file) {
+      if (excelLoader && typeof excelLoader.readFileBuffer === "function" && typeof excelLoader.readWorkbookFromBuffer === "function") {
+        return promiseOf(excelLoader.readFileBuffer(file)).then(function(buffer) {
+          return promiseOf(excelLoader.readWorkbookFromBuffer(buffer)).then(function(workbook) {
+            return { buffer: buffer, workbook: workbook };
+          });
+        });
+      }
+      return promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
+        return { buffer: null, workbook: workbook };
+      });
+    }
+
+    function patchRowsForExport(rows) {
+      return (rows || []).map(function(row) {
+        var cols = row && row.sourceColumns ? row.sourceColumns : {};
+        var key = issueKeyFromRow(row);
+        var values = {};
+        if (key) values[config.JIRA_COLUMN] = key;
+        if (cols["Статус в Jira"] != null) values["Статус в Jira"] = cols["Статус в Jira"];
+        if (cols["Исполнитель в Jira"] != null) values["Исполнитель в Jira"] = cols["Исполнитель в Jira"];
+        return {
+          excelRowNumber: row && row.excelRowNumber,
+          values: values,
+        };
+      }).filter(function(rowPatch) {
+        return rowPatch.excelRowNumber && Object.keys(rowPatch.values || {}).length;
+      });
+    }
+
+    function issueMapByKey(data) {
+      var out = {};
+      normalizeIssues(data).forEach(function(issue) {
+        var key = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
+        if (key) out[key] = issue;
+      });
+      return out;
+    }
+
+    function syncSummaryText(count) {
+      return "Синхронизировано " + String(count) + " тикет";
     }
 
     function selectedUser(userId) {
@@ -585,13 +731,21 @@ define("_ujgESI_main", [
       if (!file) return;
       state.loading = true;
       state.error = "";
+      state.sourceFileBuffer = null;
+      state.sourceFileName = file && file.name != null ? String(file.name) : "";
       state.createDialog = null;
+      resetExportState();
       closeUserPicker();
       render();
-      promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
-        var parsed = parser.parseWorkbook(workbook);
+      readInputWorkbook(file).then(function(result) {
+        var parsed = parser.parseWorkbook(result.workbook, state.mappingSettings);
+        state.sourceFileBuffer = result.buffer;
         state.rows = (parsed.rows || []).map(copyRow);
-        state.parseMeta = { sheetName: parsed.sheetName, headerRowNumber: parsed.headerRowNumber };
+        state.parseMeta = {
+          sheetName: parsed.sheetName,
+          headerRowNumber: parsed.headerRowNumber,
+          headerColumns: parsed.headerColumns || {},
+        };
         state.loading = false;
         render();
       }).then(null,
@@ -611,6 +765,7 @@ define("_ujgESI_main", [
     function mappingKey(block) {
       var key = block != null ? String(block) : "";
       if (key === "priorities") return "priorityMap";
+      if (key === "columns") return "columnMap";
       return "moduleComponentMap";
     }
 
@@ -628,8 +783,22 @@ define("_ujgESI_main", [
 
     function onMappingBlockSelect(block) {
       var key = block != null ? String(block) : "";
-      state.activeMappingBlock = key === "priorities" || key === "roles" ? key : "modules";
+      state.activeMappingBlock = key === "priorities" || key === "roles" || key === "columns" || key === "tableStart" ? key : "modules";
       render();
+    }
+
+    function onMappingColumnChange(field, value) {
+      var key = field != null ? String(field) : "";
+      state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
+      state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
+      saveMappings();
+    }
+
+    function onMappingTableStartChange(field, value) {
+      var key = field != null ? String(field) : "";
+      state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
+      if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      saveMappings();
     }
 
     function onMappingPairAdd(block) {
@@ -701,6 +870,13 @@ define("_ujgESI_main", [
 
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
+      if (row.createdKey) {
+        row.jiraKey = row.createdKey;
+        row.alreadyLinked = true;
+        row.sourceColumns = row.sourceColumns || {};
+        row.sourceColumns[config.JIRA_COLUMN] = row.createdKey;
+        resetExportState();
+      }
       row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
       if (result && result.partial) {
         row.status = "partial";
@@ -710,6 +886,111 @@ define("_ujgESI_main", [
         row.status = "failed";
       }
       render();
+    }
+
+    function onSyncJira() {
+      var keys = uniqueKeys(state.rows);
+      if (state.syncLoading) return;
+      if (!state.rows.length) {
+        state.syncError = "Сначала загрузите Excel.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!keys.length) {
+        state.syncError = "В строках нет Jira-ключей для синхронизации.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!state.sourceFileBuffer) {
+        state.syncError = "Исходный Excel недоступен для выгрузки. Загрузите файл заново.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!api || typeof api.getIssuesByKeys !== "function") {
+        state.syncError = "API синхронизации Jira недоступен.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      if (!xlsxPatcher || typeof xlsxPatcher.patchWorkbook !== "function") {
+        state.syncError = "Модуль выгрузки Excel недоступен.";
+        state.syncSummary = "";
+        render();
+        return;
+      }
+      state.syncLoading = true;
+      state.syncError = "";
+      state.syncSummary = "";
+      state.exportBuffer = null;
+      state.exportFileName = "";
+      closeUserPicker();
+      render();
+      promiseOf(api.getIssuesByKeys(copyArrayForHost(keys))).then(function(data) {
+        var issues = issueMapByKey(data);
+        var synced = 0;
+        (state.rows || []).forEach(function(row) {
+          var key = issueKeyFromRow(row);
+          var issue = issues[key];
+          if (!issue) return;
+          row.jiraKey = key;
+          row.alreadyLinked = true;
+          row.sourceColumns = row.sourceColumns || {};
+          row.sourceColumns[config.JIRA_COLUMN] = key;
+          row.sourceColumns["Статус в Jira"] = issueStatusName(issue);
+          row.sourceColumns["Исполнитель в Jira"] = issueAssigneeName(issue);
+          synced += 1;
+        });
+        return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {
+          sheetName: state.parseMeta && state.parseMeta.sheetName,
+          headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
+          headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
+          rows: patchRowsForExport(state.rows),
+        })).then(function(buffer) {
+          state.exportBuffer = buffer;
+          state.exportFileName = syncedFileName(state.sourceFileName);
+          state.syncLoading = false;
+          state.syncError = "";
+          state.syncSummary = syncSummaryText(synced);
+          render();
+        });
+      }).then(null,
+        function(err) {
+          state.syncLoading = false;
+          state.exportBuffer = null;
+          state.exportFileName = "";
+          state.syncError = "Не удалось синхронизировать Jira: " + (err && err.message ? err.message : err && err.statusText ? err.statusText : "request failed");
+          state.syncSummary = "";
+          render();
+        }
+      );
+    }
+
+    function onDownloadPatchedExcel() {
+      var blob = state.exportBuffer;
+      var urlApi = typeof URL !== "undefined" ? URL : typeof webkitURL !== "undefined" ? webkitURL : null;
+      var a;
+      var url;
+      if (!blob || typeof document === "undefined" || !urlApi || typeof urlApi.createObjectURL !== "function") return;
+      if (typeof Blob !== "undefined" && !(blob instanceof Blob)) {
+        blob = new Blob([blob], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      }
+      url = urlApi.createObjectURL(blob);
+      a = document.createElement("a");
+      a.href = url;
+      a.download = state.exportFileName || "jira-status.synced.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          urlApi.revokeObjectURL(url);
+        }, 0);
+      } else {
+        urlApi.revokeObjectURL(url);
+      }
     }
 
     function createConfirmedRow(dialog) {
@@ -881,9 +1162,13 @@ define("_ujgESI_main", [
       onMappingPairAdd: onMappingPairAdd,
       onMappingPairChange: onMappingPairChange,
       onMappingPairRemove: onMappingPairRemove,
+      onMappingColumnChange: onMappingColumnChange,
+      onMappingTableStartChange: onMappingTableStartChange,
       onMappingRoleAdd: onMappingRoleAdd,
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,
+      onSyncJira: onSyncJira,
+      onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
       onConfirmCreate: onConfirmCreate,
       onCancelCreate: onCancelCreate,

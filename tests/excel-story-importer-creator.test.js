@@ -91,7 +91,7 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(calls[0].fields.components.length, 1);
   assert.equal(calls[0].fields.components[0].name, "Алармы");
   assert.equal(calls[0].fields.priority.name, "High");
-  assert.equal(calls[1].fields.issuetype.name, "System Engineer");
+  assert.equal(calls[1].fields.issuetype.name, "Задача разработки");
   assert.equal(calls[1].fields.summary, "[SE] Нет настроек полей сообщений");
   assert.equal(calls[5].fields.summary, "[DevOps] Нет настроек полей сообщений");
   assert.equal(calls[1].fields.parent, undefined);

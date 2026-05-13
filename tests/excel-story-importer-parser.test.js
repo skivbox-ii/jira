@@ -39,6 +39,8 @@ test("parseWorkbook finds remarks header below non-data rows", function () {
 
   assert.equal(result.sheetName, "Журнал");
   assert.equal(result.headerRowNumber, 3);
+  assert.deepEqual(result.headerColumns["Jira"], 3);
+  assert.deepEqual(result.headerColumns["Статус в Jira"], undefined);
   assert.equal(result.rows.length, 2);
   assert.equal(result.rows[0].summary, "Нет настроек полей сообщений");
   assert.equal(result.rows[0].excelRowNumber, 4);
@@ -47,6 +49,45 @@ test("parseWorkbook finds remarks header below non-data rows", function () {
   assert.equal(result.rows[1].jiraKey, "EVOSCADA-13495");
   assert.equal(result.rows[1].alreadyLinked, true);
   assert.equal(result.rows[1].sourceColumns["Модуль"], "PARA");
+  assert.equal(result.rows[1].sourceColumnIndexes["Jira"], 3);
+});
+
+test("parseWorkbook uses configured table marker and column mappings", function () {
+  const parser = loadParser();
+  const workbook = {
+    SheetNames: ["Импорт"],
+    Sheets: {
+      "Импорт": {
+        __rows: [
+          ["meta", "", "", ""],
+          ["Тема", "Тикет", "Подсистема", "Важность"],
+          ["Нет навигатора", "EVOSCADA-14450", "Алармы", "Высокий"],
+        ],
+      },
+    },
+  };
+
+  const result = parser.parseWorkbook(workbook, {
+    columnMap: {
+      summary: "Тема",
+      jira: "Тикет",
+      module: "Подсистема",
+      priority: "Важность",
+    },
+    tableStart: {
+      headerMarker: "Тема",
+    },
+  });
+
+  assert.equal(result.headerRowNumber, 2);
+  assert.equal(result.headerColumns["Замечание"], 1);
+  assert.equal(result.headerColumns["Jira"], 2);
+  assert.equal(result.rows[0].summary, "Нет навигатора");
+  assert.equal(result.rows[0].jiraKey, "EVOSCADA-14450");
+  assert.equal(result.rows[0].sourceColumns["Замечание"], "Нет навигатора");
+  assert.equal(result.rows[0].sourceColumns["Jira"], "EVOSCADA-14450");
+  assert.equal(result.rows[0].sourceColumns["Модуль"], "Алармы");
+  assert.equal(result.rows[0].sourceColumns["Приоритет"], "Высокий");
 });
 
 test("parseWorkbook scans sheets in order and skips sheets without remarks header", function () {
@@ -92,6 +133,7 @@ test("parseWorkbook falls back to two-column story rows without a header", funct
 
   assert.equal(result.sheetName, "Лист1");
   assert.equal(result.headerRowNumber, 0);
+  assert.equal(result.headerColumns["Jira"], 3);
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].excelRowNumber, 5);
   assert.equal(result.rows[0].summary, "Test jira task");
