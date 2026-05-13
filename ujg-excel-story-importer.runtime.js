@@ -329,6 +329,13 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (err.responseJSON && err.responseJSON.errorMessages && err.responseJSON.errorMessages.length) {
       return err.responseJSON.errorMessages.join(" ");
     }
+    if (err.responseJSON && err.responseJSON.errors) {
+      var parts = [];
+      Object.keys(err.responseJSON.errors).forEach(function(name) {
+        if (err.responseJSON.errors[name]) parts.push(String(err.responseJSON.errors[name]));
+      });
+      if (parts.length) return parts.join(" ");
+    }
     if (err.statusText) return String(err.statusText);
     if (err.message) return String(err.message);
     return "Request failed";
@@ -379,7 +386,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
       description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
-    if (opts.epicKey && config.EPIC_LINK_FIELD) {
+    if (opts.epicKey && config.EPIC_LINK_FIELD && opts.omitEpicLink !== true && opts.epicLinkAllowed !== false) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
     appendComponent(fields, row);
@@ -387,6 +394,25 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;
+  }
+
+  function epicLinkRejected(err) {
+    var field = config.EPIC_LINK_FIELD;
+    var errors = err && err.responseJSON && err.responseJSON.errors ? err.responseJSON.errors : {};
+    return !!(field && errors && Object.prototype.hasOwnProperty.call(errors, field));
+  }
+
+  function withoutEpicLinkOptions(opts) {
+    var out = {};
+    Object.keys(opts || {}).forEach(function(key) {
+      out[key] = opts[key];
+    });
+    out.omitEpicLink = true;
+    return out;
+  }
+
+  function epicSkippedWarning(epicKey) {
+    return "Epic " + String(epicKey || "") + " не установлен: Jira не разрешила поле " + String(config.EPIC_LINK_FIELD || "Epic Link") + " для этого типа задачи.";
   }
 
   function appendAssignee(fields, assignee) {
@@ -478,35 +504,51 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
     }
+    function finishStory(res, warnings, epicLinkSkipped) {
+      var key = createdKey(res);
+      warnings = warnings || [];
+      if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
+      if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
+      var storySummary = opts.summary != null ? opts.summary : row && row.summary;
+      var roles = Array.isArray(opts.childTasks)
+        ? opts.childTasks
+        : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
+            var out = {};
+            Object.keys(role || {}).forEach(function(name) {
+              out[name] = role[name];
+            });
+            out.summary = childSummary(role, storySummary);
+            return out;
+          });
+      roles = roles.filter(function(role) {
+        return !role || role.enabled !== false;
+      });
+      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
+        return {
+          ok: sub.errors.length === 0,
+          partial: sub.errors.length > 0,
+          createdKey: key,
+          errors: warnings.concat(sub.errors),
+          epicLinkSkipped: !!epicLinkSkipped,
+        };
+      });
+    }
+
     return Promise.resolve(api.createIssue({ fields: storyFields(row, opts) })).then(
       function(res) {
-        var key = createdKey(res);
-        if (!key) return { ok: false, errors: ["Story response missing issue key"] };
-        if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: [] };
-        var storySummary = opts.summary != null ? opts.summary : row && row.summary;
-        var roles = Array.isArray(opts.childTasks)
-          ? opts.childTasks
-          : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
-              var out = {};
-              Object.keys(role || {}).forEach(function(name) {
-                out[name] = role[name];
-              });
-              out.summary = childSummary(role, storySummary);
-              return out;
-            });
-        roles = roles.filter(function(role) {
-          return !role || role.enabled !== false;
-        });
-        return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
-          return {
-            ok: sub.errors.length === 0,
-            partial: sub.errors.length > 0,
-            createdKey: key,
-            errors: sub.errors,
-          };
-        });
+        return finishStory(res, [], false);
       },
       function(err) {
+        if (opts.epicKey && opts.omitEpicLink !== true && epicLinkRejected(err)) {
+          return Promise.resolve(api.createIssue({ fields: storyFields(row, withoutEpicLinkOptions(opts)) })).then(
+            function(res) {
+              return finishStory(res, [epicSkippedWarning(opts.epicKey)], true);
+            },
+            function(retryErr) {
+              return { ok: false, errors: [ajaxErrorText(retryErr)] };
+            }
+          );
+        }
         return { ok: false, errors: [ajaxErrorText(err)] };
       }
     );
@@ -553,6 +595,17 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
           fields: ["summary", "status"],
           maxResults: 100,
         }),
+      });
+    },
+    getProjectCreateMeta: function(projectKey) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/createmeta",
+        type: "GET",
+        dataType: "json",
+        data: {
+          projectKeys: String(projectKey || ""),
+          expand: "projects.issuetypes.fields",
+        },
       });
     },
     createIssue: function(payload) {
@@ -1077,6 +1130,13 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           }))
     );
     $modal.append($fields);
+    if (dialog.epicKey && dialog.epicLinkAllowed === false) {
+      $modal.append(
+        $("<div/>")
+          .addClass("ujg-esi-confirm-epic-warning")
+          .text("Epic выбран, но поле Epic Link недоступно для этого типа задачи; задача будет создана без Epic.")
+      );
+    }
     if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     $modal.append($("<h4/>").text("Описание"));
     appendConfirmSourceRows($modal, dialog.sourceRows);
@@ -1286,6 +1346,9 @@ define("_ujgESI_main", [
       users: [],
       usersLoading: false,
       usersError: "",
+      createMetaByProject: {},
+      createMetaLoading: false,
+      createMetaError: "",
       userPicker: {
         target: "",
         query: "",
@@ -1296,6 +1359,10 @@ define("_ujgESI_main", [
       },
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
+
+    function hasOwn(obj, key) {
+      return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
+    }
 
     function selectedProjectText() {
       var key = state.projectKey || "";
@@ -1407,17 +1474,49 @@ define("_ujgESI_main", [
       return (total || 1) + "h";
     }
 
+    function issueTypeFieldsFromCreateMeta(data, issueTypeName) {
+      var projects = data && Array.isArray(data.projects) ? data.projects : [];
+      var wanted = String(issueTypeName || "").toLowerCase();
+      var type = null;
+      projects.some(function(project) {
+        var types = project && Array.isArray(project.issuetypes) ? project.issuetypes : [];
+        return types.some(function(issueType) {
+          var name = issueType && issueType.name != null ? String(issueType.name).toLowerCase() : "";
+          if (name === wanted) {
+            type = issueType;
+            return true;
+          }
+          return false;
+        });
+      });
+      return type && type.fields ? type.fields : null;
+    }
+
+    function epicLinkAllowedFromCreateMeta(data, issueTypeName) {
+      var fields = issueTypeFieldsFromCreateMeta(data, issueTypeName);
+      if (!fields) return true;
+      return !!(config && config.EPIC_LINK_FIELD && hasOwn(fields, config.EPIC_LINK_FIELD));
+    }
+
+    function projectEpicLinkAllowed(projectKey, issueTypeName) {
+      var key = projectKey != null ? String(projectKey) : "";
+      if (!key || !hasOwn(state.createMetaByProject, key)) return true;
+      return epicLinkAllowedFromCreateMeta(state.createMetaByProject[key], issueTypeName);
+    }
+
     function buildCreateDialog(row, index) {
       var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
       var summary = row && row.summary != null ? String(row.summary) : "";
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
+      var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
         rowIndex: index,
-        issueType: config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story",
+        issueType: issueType,
         projectKey: state.projectKey,
         projectText: selectedProjectText(),
         epicKey: state.epicKey,
         epicText: selectedEpicText(),
+        epicLinkAllowed: projectEpicLinkAllowed(state.projectKey, issueType),
         summary: summary,
         assigneeId: "",
         assigneeLabel: "",
@@ -1489,6 +1588,31 @@ define("_ujgESI_main", [
       );
     }
 
+    function loadCreateMeta(projectKey) {
+      var key = projectKey != null ? String(projectKey) : "";
+      if (!key || !api || typeof api.getProjectCreateMeta !== "function") return Promise.resolve();
+      state.createMetaLoading = true;
+      state.createMetaError = "";
+      render();
+      return promiseOf(api.getProjectCreateMeta(key)).then(
+        function(data) {
+          state.createMetaByProject[key] = data;
+          state.createMetaLoading = false;
+          state.createMetaError = "";
+          if (state.createDialog && state.createDialog.projectKey === key) {
+            state.createDialog.epicLinkAllowed = projectEpicLinkAllowed(key, state.createDialog.issueType);
+          }
+          render();
+        },
+        function(err) {
+          state.createMetaByProject[key] = null;
+          state.createMetaLoading = false;
+          state.createMetaError = "Не удалось загрузить create metadata: " + (err && err.statusText ? err.statusText : "request failed");
+          render();
+        }
+      );
+    }
+
     function loadUsers() {
       if (!api || typeof api.searchUsers !== "function") return Promise.resolve();
       state.usersLoading = true;
@@ -1555,6 +1679,7 @@ define("_ujgESI_main", [
       state.createDialog = null;
       closeUserPicker();
       loadEpics(state.projectKey);
+      loadCreateMeta(state.projectKey);
     }
 
     function onEpicChange(epicKey) {
@@ -1616,6 +1741,7 @@ define("_ujgESI_main", [
         creator.createRow(api, row, {
           projectKey: dialog.projectKey,
           epicKey: dialog.epicKey,
+          epicLinkAllowed: dialog.epicLinkAllowed,
           issueType: dialog.issueType,
           summary: dialog.summary,
           assignee: dialog.assignee,
@@ -1658,9 +1784,12 @@ define("_ujgESI_main", [
         dialog.projectText = selectedProjectTextFor(dialog.projectKey);
         dialog.epicKey = "";
         dialog.epicText = "Без Epic";
+        dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
         loadEpics(dialog.projectKey);
+        loadCreateMeta(dialog.projectKey);
       } else if (key === "issueType") {
         dialog.issueType = value != null ? String(value) : "";
+        dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
       } else if (key === "epicKey") {
         dialog.epicKey = value != null ? String(value) : "";
         dialog.epicText = selectedEpicTextFor(dialog.epicKey);
