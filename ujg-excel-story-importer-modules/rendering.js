@@ -113,6 +113,52 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($label);
   }
 
+  function appendMappingButton($toolbar) {
+    var $button = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-mapping-button")
+      .attr("title", "Настроить мапинг")
+      .append($("<span/>").addClass("ujg-esi-mapping-button-icon").html("&#9881;"))
+      .append($("<span/>").text("Мапинг"))
+      .on("click", function() {
+        if (services && services.onOpenMappings) services.onOpenMappings();
+      });
+    $toolbar.append($button);
+  }
+
+  function mapEntries(map) {
+    return Object.keys(map || {}).map(function(key) {
+      return { excel: key, jira: map[key] };
+    });
+  }
+
+  function activeMappingBlock(state) {
+    var block = state && state.activeMappingBlock ? String(state.activeMappingBlock) : "";
+    if (block === "priorities" || block === "roles") return block;
+    return "modules";
+  }
+
+  function mappingBlockRows(settings) {
+    var maps = settings || {};
+    return [
+      {
+        key: "modules",
+        title: "Модуль → Component",
+        subtitle: String(mapEntries(maps.moduleComponentMap).length) + " значений",
+      },
+      {
+        key: "priorities",
+        title: "Приоритет → Priority",
+        subtitle: String(mapEntries(maps.priorityMap).length) + " значений",
+      },
+      {
+        key: "roles",
+        title: "Дочерние задачи",
+        subtitle: String((maps.roles || []).length) + " ролей",
+      },
+    ];
+  }
+
   function appendCounters($parent, state) {
     var rows = state.rows || [];
     var linked = rows.filter(function(row) {
@@ -280,6 +326,183 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       }
     }
     return $wrap;
+  }
+
+  function appendMappingBlock($parent, block, active) {
+    var $button = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-mapping-block")
+      .toggleClass("ujg-esi-mapping-block-active", active)
+      .append(
+        $("<span/>").addClass("ujg-esi-mapping-block-title").text(block.title),
+        $("<span/>").addClass("ujg-esi-mapping-block-subtitle").text(block.subtitle)
+      )
+      .on("click", function() {
+        if (services && services.onMappingBlockSelect) services.onMappingBlockSelect(block.key);
+      });
+    $parent.append($button);
+  }
+
+  function appendMappingPairs($parent, blockKey, title, entries) {
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append(
+        $("<h2/>").text(title),
+        $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-mapping-add")
+          .text("+ Добавить")
+          .on("click", function() {
+            if (services && services.onMappingPairAdd) services.onMappingPairAdd(blockKey);
+          })
+      );
+    var $table = $("<table/>").addClass("ujg-esi-mapping-table");
+    var $tbody = $("<tbody/>");
+    $table.append(
+      $("<thead/>").append(
+        $("<tr/>")
+          .append($("<th/>").text("Excel значение"))
+          .append($("<th/>").text("Jira значение"))
+          .append($("<th/>").text(""))
+      )
+    );
+    (entries || []).forEach(function(entry, index) {
+      $tbody.append(
+        $("<tr/>")
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-entry-excel", entry.excel, function(value) {
+            if (services && services.onMappingPairChange) services.onMappingPairChange(blockKey, index, "excel", value);
+          })))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-entry-jira", entry.jira, function(value) {
+            if (services && services.onMappingPairChange) services.onMappingPairChange(blockKey, index, "jira", value);
+          })))
+          .append($("<td/>").append(
+            $("<button/>")
+              .attr("type", "button")
+              .addClass("ujg-esi-mapping-remove")
+              .attr("title", "Удалить")
+              .text("×")
+              .on("click", function() {
+                if (services && services.onMappingPairRemove) services.onMappingPairRemove(blockKey, index);
+              })
+          ))
+      );
+    });
+    if (!(entries || []).length) {
+      $tbody.append($("<tr/>").append($("<td/>").attr("colspan", "3").addClass("ujg-esi-mapping-empty").text("Нет значений мапинга.")));
+    }
+    $table.append($tbody);
+    $parent.append($head, $table);
+  }
+
+  function appendMappingRoles($parent, roles) {
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append(
+        $("<h2/>").text("Дочерние задачи"),
+        $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-mapping-add")
+          .text("+ Добавить")
+          .on("click", function() {
+            if (services && services.onMappingRoleAdd) services.onMappingRoleAdd();
+          })
+      );
+    var $table = $("<table/>").addClass("ujg-esi-mapping-table ujg-esi-mapping-roles");
+    var $tbody = $("<tbody/>");
+    $table.append(
+      $("<thead/>").append(
+        $("<tr/>")
+          .append($("<th/>").text("Создавать"))
+          .append($("<th/>").text("Код"))
+          .append($("<th/>").text("Тип Jira"))
+          .append($("<th/>").text("Первоначальная оценка"))
+          .append($("<th/>").text("Оставшееся время"))
+          .append($("<th/>").text(""))
+      )
+    );
+    (roles || []).forEach(function(role, index) {
+      var enabled = !(role && role.enabled === false);
+      var $checkbox = $("<input/>")
+        .attr("type", "checkbox")
+        .addClass("ujg-esi-mapping-role-enabled")
+        .prop("checked", enabled)
+        .on("change", function() {
+          if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "enabled", !!$(this).prop("checked"));
+        });
+      $tbody.append(
+        $("<tr/>")
+          .append($("<td/>").append($checkbox))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-code", role.role, function(value) {
+            if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "role", value);
+          })))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-type", role.issueType, function(value) {
+            if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "issueType", value);
+          })))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-original", role.originalEstimate, function(value) {
+            if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "originalEstimate", value);
+          })))
+          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-remaining", role.remainingEstimate, function(value) {
+            if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "remainingEstimate", value);
+          })))
+          .append($("<td/>").append(
+            $("<button/>")
+              .attr("type", "button")
+              .addClass("ujg-esi-mapping-remove")
+              .attr("title", "Удалить")
+              .text("×")
+              .on("click", function() {
+                if (services && services.onMappingRoleRemove) services.onMappingRoleRemove(index);
+              })
+          ))
+      );
+    });
+    if (!(roles || []).length) {
+      $tbody.append($("<tr/>").append($("<td/>").attr("colspan", "6").addClass("ujg-esi-mapping-empty").text("Нет дочерних задач.")));
+    }
+    $table.append($tbody);
+    $parent.append($head, $table);
+  }
+
+  function appendMappingOverlay($parent, state) {
+    if (!state || !state.mappingEditorOpen) return;
+    var settings = state.mappingSettings || {};
+    var active = activeMappingBlock(state);
+    var $overlay = $("<div/>").addClass("ujg-esi-mapping-overlay");
+    var $shell = $("<div/>").addClass("ujg-esi-mapping-shell");
+    var $header = $("<div/>")
+      .addClass("ujg-esi-mapping-header")
+      .append(
+        $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-mapping-close")
+          .attr("title", "Закрыть")
+          .text("‹")
+          .on("click", function() {
+            if (services && services.onCloseMappings) services.onCloseMappings();
+          }),
+        $("<span/>").addClass("ujg-esi-mapping-header-icon").html("&#9881;"),
+        $("<h1/>").text("Мапинг Excel Import")
+      );
+    var $main = $("<div/>").addClass("ujg-esi-mapping-main");
+    var $left = $("<div/>").addClass("ujg-esi-mapping-left");
+    var $right = $("<div/>").addClass("ujg-esi-mapping-right");
+    $left.append($("<div/>").addClass("ujg-esi-mapping-section-title").text("Блоки мапинга"));
+    mappingBlockRows(settings).forEach(function(block) {
+      appendMappingBlock($left, block, active === block.key);
+    });
+    if (active === "priorities") {
+      appendMappingPairs($right, "priorities", "Приоритет → Priority", mapEntries(settings.priorityMap));
+    } else if (active === "roles") {
+      appendMappingRoles($right, settings.roles || []);
+    } else {
+      appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap));
+    }
+    if (state.mappingLoading) $right.append($("<div/>").addClass("ujg-esi-mapping-note").text("Загрузка мапинга..."));
+    if (state.mappingError) $right.append($("<div/>").addClass("ujg-esi-mapping-error").text(state.mappingError));
+    $main.append($left, $right);
+    $shell.append($header, $main);
+    $overlay.append($shell);
+    $parent.append($overlay);
   }
 
   function appendConfirmSourceRows($parent, rows) {
@@ -493,12 +716,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendEpicSelect($toolbar, s);
     appendFileInput($toolbar, s);
     appendSubtasksToggle($toolbar, s);
+    appendMappingButton($toolbar, s);
     $root.append($header, $toolbar);
     appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
+    appendMappingOverlay($root, s);
   }
 
   return {

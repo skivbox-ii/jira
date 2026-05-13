@@ -16,6 +16,8 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-epic-select/);
   assert.match(source, /ujg-esi-file/);
   assert.match(source, /ujg-esi-subtasks/);
+  assert.match(source, /ujg-esi-mapping-button/);
+  assert.match(source, /Мапинг/);
   assert.match(source, /Создавать дочерние задачи/);
   assert.match(source, /ujg-esi-create-row/);
 });
@@ -40,6 +42,23 @@ test("main module wires renderer callbacks for project, epic, file, subtasks, an
   assert.match(source, /onCreateRow/);
   assert.match(source, /onConfirmCreate/);
   assert.match(source, /onCancelCreate/);
+  assert.match(source, /onOpenMappings/);
+  assert.match(source, /onMappingBlockSelect/);
+  assert.match(source, /onMappingRoleChange/);
+});
+
+test("rendering module exposes daily-diligence style mapping settings overlay", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /ujg-esi-mapping-overlay/);
+  assert.match(source, /ujg-esi-mapping-close/);
+  assert.match(source, /Блоки мапинга/);
+  assert.match(source, /Модуль → Component/);
+  assert.match(source, /Приоритет → Priority/);
+  assert.match(source, /Дочерние задачи/);
+  assert.match(source, /ujg-esi-mapping-block/);
+  assert.match(source, /ujg-esi-mapping-entry-excel/);
+  assert.match(source, /ujg-esi-mapping-role-type/);
 });
 
 test("rendering module exposes create confirmation modal", function () {
@@ -97,4 +116,6 @@ test("importer CSS is scoped to widget root", function () {
   assert.match(source, /\.ujg-esi-row-linked/);
   assert.match(source, /\.ujg-esi-assignee-picker/);
   assert.match(source, /\.ujg-esi-assignee-options/);
+  assert.match(source, /\.ujg-esi-mapping-overlay/);
+  assert.match(source, /\.ujg-esi-mapping-block/);
 });

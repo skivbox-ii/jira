@@ -265,3 +265,32 @@ test("storyFields omits unknown module component and unknown priority", function
   assert.equal(fields.components, undefined);
   assert.equal(fields.priority, undefined);
 });
+
+test("storyFields applies editable mapping settings from create options", function () {
+  const creator = loadCreator();
+
+  const fields = creator.storyFields(
+    {
+      summary: "Mapped values",
+      sourceColumns: {
+        "Замечание": "Mapped values",
+        "Модуль": "Примитивы (tnWP)",
+        "Приоритет": "Срочно",
+      },
+    },
+    {
+      projectKey: "EVOSCADA",
+      mappings: {
+        moduleComponentMap: {
+          "Примитивы (tnWP)": "Primitive Component",
+        },
+        priorityMap: {
+          "Срочно": "Highest",
+        },
+      },
+    }
+  );
+
+  assert.equal(fields.components[0].name, "Primitive Component");
+  assert.equal(fields.priority.name, "Highest");
+});

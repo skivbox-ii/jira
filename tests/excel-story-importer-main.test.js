@@ -61,6 +61,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
     "_ujgESI_excel-loader": excelLoader,
     "_ujgESI_parser": parser,
     "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
     "_ujgESI_rendering": rendering,
   });
 
@@ -205,6 +206,7 @@ test("row create opens confirmation before creating without Epic", async functio
     "_ujgESI_excel-loader": excelLoader,
     "_ujgESI_parser": parser,
     "_ujgESI_creator": creator,
+    "_ujgESI_mappingStore": null,
     "_ujgESI_rendering": rendering,
   });
 
@@ -291,4 +293,167 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog, null);
   assert.equal(last.rows[0].status, "created");
   assert.equal(last.rows[0].createdKey, "EVOSCADA-1");
+});
+
+test("mapping editor opens from renderer callbacks and mappings are passed into creation", async function () {
+  const states = [];
+  let callbacks = null;
+  let creatorOptions = null;
+  let savedMappings = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        mappingEditorOpen: !!state.mappingEditorOpen,
+        activeMappingBlock: state.activeMappingBlock || "",
+        mappingSettings: state.mappingSettings
+          ? {
+              moduleComponentMap: Object.assign({}, state.mappingSettings.moduleComponentMap),
+              priorityMap: Object.assign({}, state.mappingSettings.priorityMap),
+              roles: state.mappingSettings.roles.map(function (role) {
+                return role.role + ":" + role.issueType + ":" + role.enabled + ":" + role.originalEstimate + ":" + role.remainingEstimate;
+              }),
+            }
+          : null,
+        createDialog: state.createDialog
+          ? {
+              childTasks: state.createDialog.childTasks.map(function (task) {
+                return task.role + ":" + task.issueType + ":" + task.enabled + ":" + task.originalEstimate + ":" + task.remainingEstimate;
+              }),
+            }
+          : null,
+      });
+    },
+  };
+  const mappingStore = {
+    create: function () {
+      return {
+        load: function () {
+          return Promise.resolve({
+            moduleComponentMap: {
+              "Примитивы (tnWP)": "Primitive Component",
+            },
+            priorityMap: {
+              "Срочно": "Highest",
+            },
+            roles: [
+              { role: "SE", issueType: "System Engineer", originalEstimate: "2h", remainingEstimate: "2h", enabled: true },
+              { role: "QA", issueType: "QA", originalEstimate: "3h", remainingEstimate: "3h", enabled: false },
+            ],
+          });
+        },
+        save: function (settings) {
+          savedMappings = settings;
+          return Promise.resolve(settings);
+        },
+      };
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    getProjectEpics: function () {
+      return Promise.resolve([]);
+    },
+    getProjectCreateMeta: function () {
+      return Promise.resolve({ projects: [] });
+    },
+    searchUsers: function () {
+      return Promise.resolve({ users: [] });
+    },
+  };
+  const excelLoader = {
+    readWorkbook: function () {
+      return Promise.resolve({ SheetNames: ["Лист1"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Лист1",
+        headerRowNumber: 1,
+        rows: [
+          {
+            summary: "Mapped story",
+            sourceColumns: {
+              "Замечание": "Mapped story",
+              "Модуль": "Примитивы (tnWP)",
+              "Приоритет": "Срочно",
+            },
+            status: "ready",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const creator = {
+    createRow: function (_api, _row, options) {
+      creatorOptions = options;
+      return Promise.resolve({ ok: true, createdKey: "EVOSCADA-2", errors: [] });
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": creator,
+    "_ujgESI_rendering": rendering,
+    "_ujgESI_mappingStore": mappingStore,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  await flush();
+
+  callbacks.onOpenMappings();
+  await flush();
+  let last = states[states.length - 1];
+  assert.equal(last.mappingEditorOpen, true);
+  assert.equal(last.activeMappingBlock, "modules");
+  assert.equal(last.mappingSettings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
+
+  callbacks.onMappingBlockSelect("roles");
+  callbacks.onMappingRoleChange(1, "enabled", true);
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.activeMappingBlock, "roles");
+  assert.equal(savedMappings.roles[1].enabled, true);
+
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  callbacks.onFileChange({ name: "rows.xlsx" });
+  await flush();
+  await flush();
+  callbacks.onCreateRow(0);
+  await flush();
+  last = states[states.length - 1];
+  assert.deepEqual(last.createDialog.childTasks, [
+    "SE:System Engineer:true:2h:2h",
+    "QA:QA:true:3h:3h",
+  ]);
+
+  callbacks.onConfirmCreate();
+  await flush();
+  await flush();
+
+  assert.equal(creatorOptions.mappings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
+  assert.equal(creatorOptions.mappings.priorityMap["Срочно"], "Highest");
 });

@@ -5,8 +5,9 @@ define("_ujgESI_main", [
   "_ujgESI_excel-loader",
   "_ujgESI_parser",
   "_ujgESI_creator",
+  "_ujgESI_mappingStore",
   "_ujgESI_rendering",
-], function($, config, api, excelLoader, parser, creator, rendering) {
+], function($, config, api, excelLoader, parser, creator, mappingStore, rendering) {
   "use strict";
 
   function copyRow(row) {
@@ -61,6 +62,72 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function copyMap(map) {
+    var out = {};
+    Object.keys(map || {}).forEach(function(key) {
+      var source = key != null ? String(key).trim() : "";
+      var target = map[key] != null ? String(map[key]).trim() : "";
+      if (source || target) out[source] = target;
+    });
+    return out;
+  }
+
+  function copyRoles(roles) {
+    return (Array.isArray(roles) ? roles : []).map(function(role) {
+      return {
+        enabled: !(role && role.enabled === false),
+        role: role && role.role != null ? String(role.role) : "",
+        issueType: role && role.issueType != null ? String(role.issueType) : "",
+        originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate) : "1h",
+        remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate) : "1h",
+      };
+    });
+  }
+
+  function defaultMappingSettings() {
+    if (mappingStore && typeof mappingStore.defaultSettings === "function") {
+      return mappingStore.defaultSettings();
+    }
+    return {
+      moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
+      priorityMap: copyMap(config.PRIORITY_MAP),
+      roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
+    };
+  }
+
+  function normalizeMappingSettings(input) {
+    if (mappingStore && typeof mappingStore.normalizeSettings === "function") {
+      return mappingStore.normalizeSettings(input);
+    }
+    var defaults = defaultMappingSettings();
+    var source = input && typeof input === "object" ? input : {};
+    return {
+      moduleComponentMap: source.moduleComponentMap && typeof source.moduleComponentMap === "object"
+        ? copyMap(source.moduleComponentMap)
+        : copyMap(defaults.moduleComponentMap),
+      priorityMap: source.priorityMap && typeof source.priorityMap === "object"
+        ? copyMap(source.priorityMap)
+        : copyMap(defaults.priorityMap),
+      roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
+    };
+  }
+
+  function mappingEntries(map) {
+    return Object.keys(map || {}).map(function(key) {
+      return { excel: key, jira: map[key] };
+    });
+  }
+
+  function mapFromEntries(entries) {
+    var out = {};
+    (entries || []).forEach(function(entry) {
+      var excel = entry && entry.excel != null ? String(entry.excel) : "";
+      var jira = entry && entry.jira != null ? String(entry.jira) : "";
+      if (excel || jira) out[excel] = jira;
+    });
+    return out;
+  }
+
   function projectLabel(project) {
     var key = project && project.key != null ? String(project.key) : "";
     var name = project && project.name != null ? String(project.name) : "";
@@ -90,6 +157,12 @@ define("_ujgESI_main", [
   function ExcelStoryImporterGadget(API) {
     var $content = API && API.getGadgetContentEl ? API.getGadgetContentEl() : $();
     var $container = ensureContainer($content);
+    var mappingStoreInstance = mappingStore && typeof mappingStore.create === "function"
+      ? mappingStore.create({
+          jiraBaseUrl: api && api.baseUrl ? api.baseUrl : config.baseUrl,
+          storageKey: config.MAPPING_STORAGE_KEY,
+        })
+      : null;
     var state = {
       projects: [],
       projectKey: "",
@@ -107,6 +180,11 @@ define("_ujgESI_main", [
       createMetaByProject: {},
       createMetaLoading: false,
       createMetaError: "",
+      mappingSettings: defaultMappingSettings(),
+      mappingEditorOpen: false,
+      activeMappingBlock: "modules",
+      mappingLoading: false,
+      mappingError: "",
       userPicker: {
         target: "",
         query: "",
@@ -226,10 +304,17 @@ define("_ujgESI_main", [
     }
 
     function storyEstimate(roles) {
-      var total = (roles || []).reduce(function(sum, role) {
+      var total = (roles || []).filter(function(role) {
+        return !role || role.enabled !== false;
+      }).reduce(function(sum, role) {
         return sum + estimateHours(role && role.originalEstimate);
       }, 0);
       return (total || 1) + "h";
+    }
+
+    function roleSettings() {
+      var settings = normalizeMappingSettings(state.mappingSettings);
+      return copyRoles(settings.roles);
     }
 
     function issueTypeFieldsFromCreateMeta(data, issueTypeName) {
@@ -263,7 +348,7 @@ define("_ujgESI_main", [
     }
 
     function buildCreateDialog(row, index) {
-      var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
+      var roles = roleSettings();
       var summary = row && row.summary != null ? String(row.summary) : "";
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
@@ -284,7 +369,7 @@ define("_ujgESI_main", [
         createSubtasks: state.createSubtasks !== false,
         childTasks: state.createSubtasks !== false ? roles.map(function(role) {
           return {
-            enabled: true,
+            enabled: !(role && role.enabled === false),
             role: role && role.role != null ? String(role.role) : "",
             issueType: role && role.issueType != null ? String(role.issueType) : "",
             summary: childSummary(role, summary),
@@ -308,6 +393,55 @@ define("_ujgESI_main", [
       state.error = message ? String(message) : "";
       state.loading = false;
       render();
+    }
+
+    function loadMappings() {
+      if (!mappingStoreInstance || typeof mappingStoreInstance.load !== "function") {
+        state.mappingSettings = normalizeMappingSettings(state.mappingSettings);
+        return Promise.resolve(state.mappingSettings);
+      }
+      state.mappingLoading = true;
+      state.mappingError = "";
+      render();
+      return promiseOf(mappingStoreInstance.load()).then(
+        function(settings) {
+          state.mappingSettings = normalizeMappingSettings(settings);
+          state.mappingLoading = false;
+          state.mappingError = "";
+          render();
+          return state.mappingSettings;
+        },
+        function(err) {
+          state.mappingSettings = normalizeMappingSettings(state.mappingSettings);
+          state.mappingLoading = false;
+          state.mappingError = "Не удалось загрузить мапинг: " + (err && err.statusText ? err.statusText : err && err.message ? err.message : "request failed");
+          render();
+          return state.mappingSettings;
+        }
+      );
+    }
+
+    function saveMappings() {
+      state.mappingSettings = normalizeMappingSettings(state.mappingSettings);
+      if (!mappingStoreInstance || typeof mappingStoreInstance.save !== "function") {
+        render();
+        return Promise.resolve(state.mappingSettings);
+      }
+      state.mappingError = "";
+      render();
+      return promiseOf(mappingStoreInstance.save(state.mappingSettings)).then(
+        function(settings) {
+          state.mappingSettings = normalizeMappingSettings(settings);
+          state.mappingError = "";
+          render();
+          return state.mappingSettings;
+        },
+        function(err) {
+          state.mappingError = "Не удалось сохранить мапинг: " + (err && err.statusText ? err.statusText : err && err.message ? err.message : "request failed");
+          render();
+          return state.mappingSettings;
+        }
+      );
     }
 
     function loadProjects() {
@@ -474,6 +608,97 @@ define("_ujgESI_main", [
       render();
     }
 
+    function mappingKey(block) {
+      var key = block != null ? String(block) : "";
+      if (key === "priorities") return "priorityMap";
+      return "moduleComponentMap";
+    }
+
+    function onOpenMappings() {
+      state.mappingEditorOpen = true;
+      state.activeMappingBlock = state.activeMappingBlock || "modules";
+      closeUserPicker();
+      render();
+    }
+
+    function onCloseMappings() {
+      state.mappingEditorOpen = false;
+      render();
+    }
+
+    function onMappingBlockSelect(block) {
+      var key = block != null ? String(block) : "";
+      state.activeMappingBlock = key === "priorities" || key === "roles" ? key : "modules";
+      render();
+    }
+
+    function onMappingPairAdd(block) {
+      var key = mappingKey(block);
+      var entries = mappingEntries(state.mappingSettings[key]);
+      var base = "Новое значение";
+      var name = base;
+      var index = 2;
+      while (state.mappingSettings[key] && Object.prototype.hasOwnProperty.call(state.mappingSettings[key], name)) {
+        name = base + " " + index;
+        index += 1;
+      }
+      entries.push({ excel: name, jira: "" });
+      state.mappingSettings[key] = mapFromEntries(entries);
+      saveMappings();
+    }
+
+    function onMappingPairChange(block, index, field, value) {
+      var key = mappingKey(block);
+      var i = Number(index);
+      var entries = mappingEntries(state.mappingSettings[key]);
+      var name = field != null ? String(field) : "";
+      if (!entries[i]) return;
+      if (name === "excel") entries[i].excel = value != null ? String(value) : "";
+      if (name === "jira") entries[i].jira = value != null ? String(value) : "";
+      state.mappingSettings[key] = mapFromEntries(entries);
+      saveMappings();
+    }
+
+    function onMappingPairRemove(block, index) {
+      var key = mappingKey(block);
+      var i = Number(index);
+      var entries = mappingEntries(state.mappingSettings[key]);
+      if (!entries[i]) return;
+      entries.splice(i, 1);
+      state.mappingSettings[key] = mapFromEntries(entries);
+      saveMappings();
+    }
+
+    function onMappingRoleAdd() {
+      var roles = copyRoles(state.mappingSettings.roles);
+      roles.push({ enabled: true, role: "NEW", issueType: "Task", originalEstimate: "1h", remainingEstimate: "1h" });
+      state.mappingSettings.roles = roles;
+      saveMappings();
+    }
+
+    function onMappingRoleChange(index, field, value) {
+      var i = Number(index);
+      var key = field != null ? String(field) : "";
+      var roles = copyRoles(state.mappingSettings.roles);
+      if (!roles[i]) return;
+      if (key === "enabled") roles[i].enabled = !!value;
+      if (key === "role") roles[i].role = value != null ? String(value) : "";
+      if (key === "issueType") roles[i].issueType = value != null ? String(value) : "";
+      if (key === "originalEstimate") roles[i].originalEstimate = value != null ? String(value) : "";
+      if (key === "remainingEstimate") roles[i].remainingEstimate = value != null ? String(value) : "";
+      state.mappingSettings.roles = roles;
+      saveMappings();
+    }
+
+    function onMappingRoleRemove(index) {
+      var i = Number(index);
+      var roles = copyRoles(state.mappingSettings.roles);
+      if (!roles[i]) return;
+      roles.splice(i, 1);
+      state.mappingSettings.roles = roles;
+      saveMappings();
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
@@ -508,6 +733,7 @@ define("_ujgESI_main", [
           sourceRows: dialog.sourceRows,
           createSubtasks: dialog.createSubtasks,
           childTasks: dialog.childTasks,
+          mappings: state.mappingSettings,
         })
       ).then(function(result) {
         completeCreate(row, result);
@@ -649,6 +875,15 @@ define("_ujgESI_main", [
       onEpicChange: onEpicChange,
       onFileChange: onFileChange,
       onSubtasksChange: onSubtasksChange,
+      onOpenMappings: onOpenMappings,
+      onCloseMappings: onCloseMappings,
+      onMappingBlockSelect: onMappingBlockSelect,
+      onMappingPairAdd: onMappingPairAdd,
+      onMappingPairChange: onMappingPairChange,
+      onMappingPairRemove: onMappingPairRemove,
+      onMappingRoleAdd: onMappingRoleAdd,
+      onMappingRoleChange: onMappingRoleChange,
+      onMappingRoleRemove: onMappingRoleRemove,
       onCreateRow: onCreateRow,
       onConfirmCreate: onConfirmCreate,
       onCancelCreate: onCancelCreate,
@@ -663,6 +898,7 @@ define("_ujgESI_main", [
     });
 
     rendering.render(state);
+    loadMappings();
     loadProjects();
   }
 

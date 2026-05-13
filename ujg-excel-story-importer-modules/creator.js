@@ -45,13 +45,19 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return fallbackToInput ? raw : "";
   }
 
-  function appendComponent(fields, row) {
-    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), false);
+  function mappingMap(options, name, fallback) {
+    var mappings = options && options.mappings && typeof options.mappings === "object" ? options.mappings : {};
+    var map = mappings && mappings[name] && typeof mappings[name] === "object" ? mappings[name] : null;
+    return map || fallback || {};
+  }
+
+  function appendComponent(fields, row, options) {
+    var component = lookupMappedValue(mappingMap(options, "moduleComponentMap", config.MODULE_COMPONENT_MAP), sourceValue(row, "Модуль"), false);
     if (component) fields.components = [{ name: component }];
   }
 
-  function appendPriority(fields, row) {
-    var priority = lookupMappedValue(config.PRIORITY_MAP, sourceValue(row, "Приоритет"), false);
+  function appendPriority(fields, row, options) {
+    var priority = lookupMappedValue(mappingMap(options, "priorityMap", config.PRIORITY_MAP), sourceValue(row, "Приоритет"), false);
     if (priority) fields.priority = { name: priority };
   }
 
@@ -66,8 +72,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (opts.epicKey && config.EPIC_LINK_FIELD && opts.omitEpicLink !== true && opts.epicLinkAllowed !== false) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
-    appendComponent(fields, row);
-    appendPriority(fields, row);
+    appendComponent(fields, row, opts);
+    appendPriority(fields, row, opts);
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;

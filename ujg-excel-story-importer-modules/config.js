@@ -3,6 +3,7 @@ define("_ujgESI_config", [], function() {
 
   var EPIC_LINK_FIELD = "customfield_10014";
   var STORAGE_KEY = "ujg-esi-state";
+  var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
   var JIRA_COLUMN = "Jira";
   var STORY_ISSUE_TYPE = "Story";
@@ -90,6 +91,7 @@ define("_ujgESI_config", [], function() {
     baseUrl: resolveJiraBaseUrl(),
     EPIC_LINK_FIELD: EPIC_LINK_FIELD,
     STORAGE_KEY: STORAGE_KEY,
+    MAPPING_STORAGE_KEY: MAPPING_STORAGE_KEY,
     SUMMARY_COLUMN: SUMMARY_COLUMN,
     JIRA_COLUMN: JIRA_COLUMN,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,

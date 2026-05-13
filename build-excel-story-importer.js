@@ -8,6 +8,7 @@ var OUTPUT_FILE = path.join(__dirname, "ujg-excel-story-importer.js");
 
 var MODULE_ORDER = [
   "config.js",
+  "mapping-store.js",
   "description.js",
   "parser.js",
   "creator.js",
