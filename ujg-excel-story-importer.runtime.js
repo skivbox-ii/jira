@@ -42,6 +42,33 @@ define("_ujgESI_config", [], function() {
     { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
   ];
 
+  var MODULE_COMPONENT_MAP = {
+    "Алармы": "Алармы",
+    "АСУТП": "АСУТП",
+    "Отдел АСУТП": "АСУТП",
+    "PARA": "PARA",
+    "PNGI": "PNGI",
+    "Multimedia2": "Multimedia2",
+    "Мультимедиа": "Multimedia2",
+    "Эвоскада замечания": "Эвоскада замечания",
+  };
+
+  var PRIORITY_MAP = {
+    "Критичный": "Highest",
+    "Критический": "Highest",
+    "Блокер": "Highest",
+    "Высокий": "High",
+    "Средний": "Medium",
+    "Обычный": "Medium",
+    "Низкий": "Low",
+    "Самый низкий": "Lowest",
+    "Highest": "Highest",
+    "High": "High",
+    "Medium": "Medium",
+    "Low": "Low",
+    "Lowest": "Lowest",
+  };
+
   function trimSlash(s) {
     return String(s || "").replace(/\/+$/, "");
   }
@@ -75,6 +102,8 @@ define("_ujgESI_config", [], function() {
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
+    MODULE_COMPONENT_MAP: MODULE_COMPONENT_MAP,
+    PRIORITY_MAP: PRIORITY_MAP,
   };
 });
 
@@ -309,6 +338,39 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return res && res.key != null ? String(res.key).trim() : "";
   }
 
+  function sourceValue(row, name) {
+    var cols = row && row.sourceColumns ? row.sourceColumns : {};
+    return cols && cols[name] != null ? String(cols[name]).trim() : "";
+  }
+
+  function normalizedKey(value) {
+    return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  function lookupMappedValue(map, value, fallbackToInput) {
+    var raw = String(value || "").trim();
+    var key = normalizedKey(raw);
+    var name;
+    if (!key) return "";
+    map = map || {};
+    for (name in map) {
+      if (Object.prototype.hasOwnProperty.call(map, name) && normalizedKey(name) === key) {
+        return String(map[name]).trim();
+      }
+    }
+    return fallbackToInput ? raw : "";
+  }
+
+  function appendComponent(fields, row) {
+    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), true);
+    if (component) fields.components = [{ name: component }];
+  }
+
+  function appendPriority(fields, row) {
+    var priority = lookupMappedValue(config.PRIORITY_MAP, sourceValue(row, "Приоритет"), false);
+    if (priority) fields.priority = { name: priority };
+  }
+
   function storyFields(row, options) {
     var opts = options || {};
     var fields = {
@@ -320,6 +382,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     if (opts.epicKey && config.EPIC_LINK_FIELD) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
+    appendComponent(fields, row);
+    appendPriority(fields, row);
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;
@@ -454,6 +518,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     subtaskFields: subtaskFields,
     childSummary: childSummary,
     childLinkPayload: childLinkPayload,
+    lookupMappedValue: lookupMappedValue,
   };
 });
 
@@ -830,18 +895,70 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $select;
   }
 
-  function userOptions(state) {
-    var out = [{ value: "", label: state && state.usersLoading ? "Загрузка..." : "Не назначать" }];
-    (state.users || []).forEach(function(user) {
-      out.push({ value: String(user.id || ""), label: String(user.label || user.id || "") });
+  function appendAssigneePicker(className, target, selectedId, selectedLabel, state, disabled) {
+    var picker = state && state.userPicker ? state.userPicker : {};
+    var active = !disabled && picker.target === target;
+    var value = active ? picker.query || "" : selectedLabel || "";
+    var $wrap = $("<div/>")
+      .addClass("ujg-esi-assignee-picker")
+      .addClass(className || "")
+      .toggleClass("ujg-esi-assignee-picker-active", active);
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .attr("autocomplete", "off")
+      .attr("placeholder", "Введите имя или логин")
+      .addClass("ujg-esi-assignee-search")
+      .val(value);
+    if (disabled) $input.prop("disabled", true);
+    $input.on("focus click", function() {
+      if (!disabled && services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus(target);
     });
-    return out;
-  }
-
-  function appendAssigneeSelect(className, value, state, onChange) {
-    var $select = appendSelect(className, value, userOptions(state), onChange);
-    if (state && state.usersLoading) $select.prop("disabled", true);
-    return $select;
+    $input.on("input", function() {
+      if (!disabled && services && services.onDialogAssigneeSearch) services.onDialogAssigneeSearch(target, $(this).val());
+    });
+    $wrap.append($input);
+    if (!disabled && selectedId) {
+      $wrap.append(
+        $("<button/>")
+          .attr("type", "button")
+          .attr("title", "Очистить исполнителя")
+          .addClass("ujg-esi-assignee-clear")
+          .text("×")
+          .on("click", function() {
+            if (services && services.onDialogAssigneeClear) services.onDialogAssigneeClear(target);
+          })
+      );
+    }
+    if (active) {
+      var $options = $("<div/>").addClass("ujg-esi-assignee-options");
+      if (picker.loading) $options.append($("<div/>").addClass("ujg-esi-assignee-loading").text("Поиск..."));
+      if (picker.error) $options.append($("<div/>").addClass("ujg-esi-assignee-error").text(String(picker.error)));
+      (picker.rows || []).forEach(function(user) {
+        var id = user && user.id != null ? String(user.id) : "";
+        if (!id) return;
+        $options.append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-assignee-option")
+            .text(user.label || id)
+            .on("click", function() {
+              if (services && services.onDialogAssigneeSelect) services.onDialogAssigneeSelect(target, id);
+            })
+        );
+      });
+      if (!picker.loading && !picker.error && !(picker.rows || []).length) {
+        $options.append($("<div/>").addClass("ujg-esi-assignee-empty").text("Ничего не найдено"));
+      }
+      $wrap.append($options);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          var node = $input[0];
+          $input.trigger("focus");
+          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
+        }, 0);
+      }
+    }
+    return $wrap;
   }
 
   function appendConfirmSourceRows($parent, rows) {
@@ -899,9 +1016,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled)))
-          .append($("<td/>").append(appendAssigneeSelect("ujg-esi-confirm-child-assignee", task.assigneeId || "", state, function(value) {
-            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "assigneeId", value);
-          }).prop("disabled", !enabled || state.usersLoading)))
+          .append($("<td/>").append(appendAssigneePicker("ujg-esi-confirm-child-assignee", "child-" + index, task.assigneeId || "", task.assigneeLabel || "", state, !enabled)))
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
           }).prop("disabled", !enabled)))
@@ -940,9 +1055,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendConfirmControl($fields, "Название", appendTextInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
     }));
-    appendConfirmControl($fields, "Исполнитель", appendAssigneeSelect("ujg-esi-confirm-assignee", dialog.assigneeId || "", state, function(value) {
-      if (services && services.onDialogFieldChange) services.onDialogFieldChange("assigneeId", value);
-    }));
+    appendConfirmControl($fields, "Исполнитель", appendAssigneePicker("ujg-esi-confirm-assignee", "story", dialog.assigneeId || "", dialog.assigneeLabel || "", state, false));
     appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);
     }));
@@ -1118,6 +1231,18 @@ define("_ujgESI_main", [
       .filter(Boolean);
   }
 
+  function mergeUsers(existing, incoming) {
+    var out = [];
+    var seen = {};
+    (existing || []).concat(incoming || []).forEach(function(user) {
+      var id = user && user.id != null ? String(user.id) : "";
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      out.push(user);
+    });
+    return out;
+  }
+
   function projectLabel(project) {
     var key = project && project.key != null ? String(project.key) : "";
     var name = project && project.name != null ? String(project.name) : "";
@@ -1161,6 +1286,14 @@ define("_ujgESI_main", [
       users: [],
       usersLoading: false,
       usersError: "",
+      userPicker: {
+        target: "",
+        query: "",
+        rows: [],
+        loading: false,
+        error: "",
+        seq: 0,
+      },
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
 
@@ -1189,6 +1322,41 @@ define("_ujgESI_main", [
         return user && String(user.id || "") === id;
       })[0];
       return found && found.raw ? found.raw : null;
+    }
+
+    function userLabel(user) {
+      if (!user || typeof user !== "object") return "";
+      if (user.displayName != null && String(user.displayName).trim()) return String(user.displayName).trim();
+      if (user.name != null && String(user.name).trim()) return String(user.name).trim();
+      if (user.key != null && String(user.key).trim()) return String(user.key).trim();
+      if (user.accountId != null && String(user.accountId).trim()) return String(user.accountId).trim();
+      return "";
+    }
+
+    function userTargetNode(target) {
+      var key = target != null ? String(target) : "";
+      var dialog = state.createDialog;
+      var match;
+      if (!dialog) return null;
+      if (key === "story") return dialog;
+      match = /^child-(\d+)$/.exec(key);
+      if (match) return dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+      return null;
+    }
+
+    function setTargetAssignee(target, userRow) {
+      var node = userTargetNode(target);
+      var raw = userRow && userRow.raw ? userRow.raw : null;
+      if (!node) return;
+      if (!raw) {
+        node.assigneeId = "";
+        node.assigneeLabel = "";
+        node.assignee = null;
+        return;
+      }
+      node.assigneeId = userRow.id || "";
+      node.assigneeLabel = userRow.label || userLabel(raw) || userRow.id || "";
+      node.assignee = raw;
     }
 
     function selectedProjectTextFor(projectKey) {
@@ -1252,6 +1420,7 @@ define("_ujgESI_main", [
         epicText: selectedEpicText(),
         summary: summary,
         assigneeId: "",
+        assigneeLabel: "",
         assignee: null,
         originalEstimate: estimate,
         remainingEstimate: estimate,
@@ -1263,6 +1432,7 @@ define("_ujgESI_main", [
             issueType: role && role.issueType != null ? String(role.issueType) : "",
             summary: childSummary(role, summary),
             assigneeId: "",
+            assigneeLabel: "",
             assignee: null,
             originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate) : "1h",
             remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate) : "1h",
@@ -1339,16 +1509,58 @@ define("_ujgESI_main", [
       );
     }
 
+    function closeUserPicker() {
+      state.userPicker.target = "";
+      state.userPicker.query = "";
+      state.userPicker.rows = [];
+      state.userPicker.loading = false;
+      state.userPicker.error = "";
+      state.userPicker.seq += 1;
+    }
+
+    function loadAssigneeSearch(target, query) {
+      var targetKey = target != null ? String(target) : "";
+      var q = query != null ? String(query) : "";
+      if (!api || typeof api.searchUsers !== "function" || !userTargetNode(targetKey)) return Promise.resolve();
+      state.userPicker.target = targetKey;
+      state.userPicker.query = q;
+      state.userPicker.loading = true;
+      state.userPicker.error = "";
+      state.userPicker.seq += 1;
+      var seq = state.userPicker.seq;
+      render();
+      return promiseOf(api.searchUsers(q)).then(
+        function(data) {
+          var rows = normalizeUsers(data);
+          if (!state.createDialog || state.userPicker.seq !== seq || state.userPicker.target !== targetKey) return;
+          state.users = mergeUsers(state.users, rows);
+          state.userPicker.rows = rows;
+          state.userPicker.loading = false;
+          state.userPicker.error = "";
+          render();
+        },
+        function(err) {
+          if (!state.createDialog || state.userPicker.seq !== seq || state.userPicker.target !== targetKey) return;
+          state.userPicker.rows = [];
+          state.userPicker.loading = false;
+          state.userPicker.error = "Не удалось найти исполнителей: " + (err && err.statusText ? err.statusText : "request failed");
+          render();
+        }
+      );
+    }
+
     function onProjectChange(projectKey) {
       state.projectKey = projectKey != null ? String(projectKey) : "";
       state.error = "";
       state.createDialog = null;
+      closeUserPicker();
       loadEpics(state.projectKey);
     }
 
     function onEpicChange(epicKey) {
       state.epicKey = epicKey != null ? String(epicKey) : "";
       state.createDialog = null;
+      closeUserPicker();
       render();
     }
 
@@ -1357,6 +1569,7 @@ define("_ujgESI_main", [
       state.loading = true;
       state.error = "";
       state.createDialog = null;
+      closeUserPicker();
       render();
       promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
         var parsed = parser.parseWorkbook(workbook);
@@ -1374,6 +1587,7 @@ define("_ujgESI_main", [
     function onSubtasksChange(enabled) {
       state.createSubtasks = !!enabled;
       state.createDialog = null;
+      closeUserPicker();
       render();
     }
 
@@ -1396,6 +1610,7 @@ define("_ujgESI_main", [
       row.status = "creating";
       row.errors = [];
       state.createDialog = null;
+      closeUserPicker();
       render();
       promiseOf(
         creator.createRow(api, row, {
@@ -1427,7 +1642,6 @@ define("_ujgESI_main", [
       state.error = "";
       state.createDialog = buildCreateDialog(row, i);
       render();
-      loadUsers();
     }
 
     function onDialogFieldChange(field, value) {
@@ -1453,6 +1667,7 @@ define("_ujgESI_main", [
       } else if (key === "assigneeId") {
         dialog.assigneeId = value != null ? String(value) : "";
         dialog.assignee = selectedUser(dialog.assigneeId);
+        dialog.assigneeLabel = userLabel(dialog.assignee);
       } else if (key === "originalEstimate") {
         dialog.originalEstimate = value != null ? String(value) : "";
       } else if (key === "remainingEstimate") {
@@ -1490,11 +1705,43 @@ define("_ujgESI_main", [
       } else if (key === "assigneeId") {
         task.assigneeId = value != null ? String(value) : "";
         task.assignee = selectedUser(task.assigneeId);
+        task.assigneeLabel = userLabel(task.assignee);
       } else if (key === "originalEstimate") {
         task.originalEstimate = value != null ? String(value) : "";
       } else if (key === "remainingEstimate") {
         task.remainingEstimate = value != null ? String(value) : "";
       }
+      render();
+    }
+
+    function onDialogAssigneeFocus(target) {
+      var targetKey = target != null ? String(target) : "";
+      if (!userTargetNode(targetKey)) return;
+      if (state.userPicker.target === targetKey && (state.userPicker.loading || state.userPicker.rows.length || state.userPicker.query)) {
+        return;
+      }
+      loadAssigneeSearch(targetKey, "");
+    }
+
+    function onDialogAssigneeSearch(target, query) {
+      loadAssigneeSearch(target, query);
+    }
+
+    function onDialogAssigneeSelect(target, userId) {
+      var id = userId != null ? String(userId) : "";
+      var row = (state.userPicker.rows || []).filter(function(user) {
+        return user && String(user.id || "") === id;
+      })[0] || (state.users || []).filter(function(user) {
+        return user && String(user.id || "") === id;
+      })[0] || null;
+      setTargetAssignee(target, row);
+      closeUserPicker();
+      render();
+    }
+
+    function onDialogAssigneeClear(target) {
+      setTargetAssignee(target, null);
+      closeUserPicker();
       render();
     }
 
@@ -1506,6 +1753,7 @@ define("_ujgESI_main", [
 
     function onCancelCreate() {
       state.createDialog = null;
+      closeUserPicker();
       render();
     }
 
@@ -1521,6 +1769,10 @@ define("_ujgESI_main", [
       onDialogSourceChange: onDialogSourceChange,
       onDialogChildToggle: onDialogChildToggle,
       onDialogChildChange: onDialogChildChange,
+      onDialogAssigneeFocus: onDialogAssigneeFocus,
+      onDialogAssigneeSearch: onDialogAssigneeSearch,
+      onDialogAssigneeSelect: onDialogAssigneeSelect,
+      onDialogAssigneeClear: onDialogAssigneeClear,
     });
 
     rendering.render(state);
