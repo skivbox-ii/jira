@@ -5,6 +5,16 @@ const path = require("node:path");
 const loadAmdModule = require("./helpers/load-amd-module");
 
 const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules");
+const CONFIG = {
+  STORY_ISSUE_TYPE: "Story",
+  CREATE_TEMPLATE_ROLES: [
+    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
+    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
+    { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
+    { role: "QA", issueType: "QA", summary: "Тестирование" },
+    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой" },
+  ],
+};
 
 function flush() {
   return new Promise(function (resolve) {
@@ -46,6 +56,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
     jquery: function () {
       return { length: 0 };
     },
+    "_ujgESI_config": CONFIG,
     "_ujgESI_api": api,
     "_ujgESI_excel-loader": excelLoader,
     "_ujgESI_parser": parser,
@@ -74,7 +85,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
   assert.match(last.error, /Не удалось прочитать Excel: bad workbook/);
 });
 
-test("row create allows empty Epic when project is selected", async function () {
+test("row create opens confirmation before creating without Epic", async function () {
   const states = [];
   let callbacks = null;
   let creatorOptions = null;
@@ -87,6 +98,16 @@ test("row create allows empty Epic when project is selected", async function () 
         projectKey: state.projectKey || "",
         epicKey: state.epicKey || "",
         error: state.error || "",
+        createDialog: state.createDialog
+          ? {
+              rowIndex: state.createDialog.rowIndex,
+              summary: state.createDialog.summary,
+              epicText: state.createDialog.epicText,
+              childTasks: state.createDialog.childTasks.map(function (task) {
+                return task.role + ":" + task.issueType;
+              }),
+            }
+          : null,
         rows: (state.rows || []).map(function (row) {
           return { status: row.status, createdKey: row.createdKey || "" };
         }),
@@ -133,6 +154,7 @@ test("row create allows empty Epic when project is selected", async function () 
     jquery: function () {
       return { length: 0 };
     },
+    "_ujgESI_config": CONFIG,
     "_ujgESI_api": api,
     "_ujgESI_excel-loader": excelLoader,
     "_ujgESI_parser": parser,
@@ -159,13 +181,32 @@ test("row create allows empty Epic when project is selected", async function () 
   await flush();
   callbacks.onCreateRow(0);
   await flush();
+
+  assert.equal(creatorOptions, null);
+  let last = states[states.length - 1];
+  assert.equal(last.error, "");
+  assert.equal(last.createDialog.rowIndex, 0);
+  assert.equal(last.createDialog.summary, "Test jira task");
+  assert.equal(last.createDialog.epicText, "Без Epic");
+  assert.deepEqual(last.createDialog.childTasks, [
+    "SE:System Engineer",
+    "FE:Frontend Task",
+    "BE:Backend Task",
+    "QA:QA",
+    "DevOps:DevOps",
+  ]);
+  assert.equal(last.rows[0].status, "ready");
+
+  callbacks.onConfirmCreate();
+  await flush();
   await flush();
 
   assert.equal(creatorOptions.projectKey, "EVOSCADA");
   assert.equal(creatorOptions.epicKey, "");
   assert.equal(creatorOptions.createSubtasks, true);
-  const last = states[states.length - 1];
+  last = states[states.length - 1];
   assert.equal(last.error, "");
+  assert.equal(last.createDialog, null);
   assert.equal(last.rows[0].status, "created");
   assert.equal(last.rows[0].createdKey, "EVOSCADA-1");
 });

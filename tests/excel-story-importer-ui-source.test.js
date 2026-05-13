@@ -29,7 +29,7 @@ test("row create action only requires project selection", function () {
   assert.doesNotMatch(source, /state\.epicKey &&/);
 });
 
-test("main module wires renderer callbacks for project, epic, file, subtasks, and row create", function () {
+test("main module wires renderer callbacks for project, epic, file, subtasks, and confirmed row create", function () {
   const source = read("ujg-excel-story-importer-modules/main.js");
 
   assert.match(source, /onProjectChange/);
@@ -37,6 +37,18 @@ test("main module wires renderer callbacks for project, epic, file, subtasks, an
   assert.match(source, /onFileChange/);
   assert.match(source, /onSubtasksChange/);
   assert.match(source, /onCreateRow/);
+  assert.match(source, /onConfirmCreate/);
+  assert.match(source, /onCancelCreate/);
+});
+
+test("rendering module exposes create confirmation modal", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /ujg-esi-confirm-overlay/);
+  assert.match(source, /ujg-esi-confirm-create/);
+  assert.match(source, /ujg-esi-confirm-cancel/);
+  assert.match(source, /Создать в Jira/);
+  assert.match(source, /Дочерние задачи/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

@@ -24,7 +24,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       description: description.buildDescription(row),
     };
     if (opts.epicKey && config.EPIC_LINK_FIELD) {
-      fields[config.EPIC_LINK_FIELD] = { key: String(opts.epicKey) };
+      fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
     return fields;
   }

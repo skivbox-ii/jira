@@ -1,11 +1,12 @@
 define("_ujgESI_main", [
   "jquery",
+  "_ujgESI_config",
   "_ujgESI_api",
   "_ujgESI_excel-loader",
   "_ujgESI_parser",
   "_ujgESI_creator",
   "_ujgESI_rendering",
-], function($, api, excelLoader, parser, creator, rendering) {
+], function($, config, api, excelLoader, parser, creator, rendering) {
   "use strict";
 
   function copyRow(row) {
@@ -24,6 +25,19 @@ define("_ujgESI_main", [
   function normalizeEpics(data) {
     if (data && Array.isArray(data.issues)) return data.issues;
     return Array.isArray(data) ? data : [];
+  }
+
+  function projectLabel(project) {
+    var key = project && project.key != null ? String(project.key) : "";
+    var name = project && project.name != null ? String(project.name) : "";
+    return key && name && name !== key ? key + " - " + name : key || name;
+  }
+
+  function epicLabel(epic) {
+    var key = epic && epic.key != null ? String(epic.key) : "";
+    var fields = epic && epic.fields ? epic.fields : {};
+    var summary = fields.summary != null ? String(fields.summary) : epic && epic.summary != null ? String(epic.summary) : "";
+    return key && summary && summary !== key ? key + " - " + summary : key || summary;
   }
 
   function promiseOf(value) {
@@ -52,8 +66,62 @@ define("_ujgESI_main", [
       loading: false,
       error: "",
       parseMeta: null,
+      createDialog: null,
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
+
+    function selectedProjectText() {
+      var key = state.projectKey || "";
+      var list = state.projects || [];
+      var found = list.filter(function(project) {
+        return project && String(project.key || "") === key;
+      })[0];
+      return projectLabel(found) || key;
+    }
+
+    function selectedEpicText() {
+      var key = state.epicKey || "";
+      if (!key) return "Без Epic";
+      var list = state.epics || [];
+      var found = list.filter(function(epic) {
+        return epic && String(epic.key || "") === key;
+      })[0];
+      return epicLabel(found) || key;
+    }
+
+    function sourceRows(row) {
+      var out = [];
+      var cols = row && row.sourceColumns ? row.sourceColumns : {};
+      if (row && row.sheetName) out.push({ name: "Лист", value: row.sheetName });
+      if (row && row.excelRowNumber != null) out.push({ name: "Строка Excel", value: row.excelRowNumber });
+      Object.keys(cols).forEach(function(name) {
+        var value = cols[name];
+        if (value != null && String(value).trim()) out.push({ name: name, value: value });
+      });
+      return out;
+    }
+
+    function buildCreateDialog(row, index) {
+      var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
+      return {
+        rowIndex: index,
+        issueType: config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story",
+        projectKey: state.projectKey,
+        projectText: selectedProjectText(),
+        epicKey: state.epicKey,
+        epicText: selectedEpicText(),
+        summary: row && row.summary != null ? String(row.summary) : "",
+        createSubtasks: state.createSubtasks !== false,
+        childTasks: state.createSubtasks !== false ? roles.map(function(role) {
+          return {
+            role: role && role.role != null ? String(role.role) : "",
+            issueType: role && role.issueType != null ? String(role.issueType) : "",
+            summary: role && role.summary != null ? String(role.summary) : "",
+          };
+        }) : [],
+        sourceRows: sourceRows(row),
+      };
+    }
 
     function render() {
       rendering.render(state);
@@ -105,11 +173,13 @@ define("_ujgESI_main", [
     function onProjectChange(projectKey) {
       state.projectKey = projectKey != null ? String(projectKey) : "";
       state.error = "";
+      state.createDialog = null;
       loadEpics(state.projectKey);
     }
 
     function onEpicChange(epicKey) {
       state.epicKey = epicKey != null ? String(epicKey) : "";
+      state.createDialog = null;
       render();
     }
 
@@ -117,6 +187,7 @@ define("_ujgESI_main", [
       if (!file) return;
       state.loading = true;
       state.error = "";
+      state.createDialog = null;
       render();
       promiseOf(excelLoader.readWorkbook(file)).then(function(workbook) {
         var parsed = parser.parseWorkbook(workbook);
@@ -133,7 +204,39 @@ define("_ujgESI_main", [
 
     function onSubtasksChange(enabled) {
       state.createSubtasks = !!enabled;
+      state.createDialog = null;
       render();
+    }
+
+    function completeCreate(row, result) {
+      row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
+      row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
+      if (result && result.partial) {
+        row.status = "partial";
+      } else if (result && result.ok) {
+        row.status = "created";
+      } else {
+        row.status = "failed";
+      }
+      render();
+    }
+
+    function createConfirmedRow(dialog) {
+      var row = dialog ? state.rows[dialog.rowIndex] : null;
+      if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      row.status = "creating";
+      row.errors = [];
+      state.createDialog = null;
+      render();
+      promiseOf(
+        creator.createRow(api, row, {
+          projectKey: dialog.projectKey,
+          epicKey: dialog.epicKey,
+          createSubtasks: dialog.createSubtasks,
+        })
+      ).then(function(result) {
+        completeCreate(row, result);
+      });
     }
 
     function onCreateRow(index) {
@@ -145,27 +248,20 @@ define("_ujgESI_main", [
         render();
         return;
       }
-      row.status = "creating";
-      row.errors = [];
+      state.error = "";
+      state.createDialog = buildCreateDialog(row, i);
       render();
-      promiseOf(
-        creator.createRow(api, row, {
-          projectKey: state.projectKey,
-          epicKey: state.epicKey,
-          createSubtasks: state.createSubtasks,
-        })
-      ).then(function(result) {
-        row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
-        row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
-        if (result && result.partial) {
-          row.status = "partial";
-        } else if (result && result.ok) {
-          row.status = "created";
-        } else {
-          row.status = "failed";
-        }
-        render();
-      });
+    }
+
+    function onConfirmCreate() {
+      var dialog = state.createDialog;
+      if (!dialog) return;
+      createConfirmedRow(dialog);
+    }
+
+    function onCancelCreate() {
+      state.createDialog = null;
+      render();
     }
 
     rendering.init($container, {
@@ -174,6 +270,8 @@ define("_ujgESI_main", [
       onFileChange: onFileChange,
       onSubtasksChange: onSubtasksChange,
       onCreateRow: onCreateRow,
+      onConfirmCreate: onConfirmCreate,
+      onCancelCreate: onCancelCreate,
     });
 
     rendering.render(state);

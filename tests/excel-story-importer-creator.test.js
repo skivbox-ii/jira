@@ -45,7 +45,7 @@ test("createRow skips rows that already have a Jira key", async function () {
   assert.equal(calls.length, 0);
 });
 
-test("createRow creates Story under selected Epic and then template subtasks", async function () {
+test("createRow creates Story with selected Epic Link and then template subtasks", async function () {
   const creator = loadCreator();
   const calls = [];
   const keys = [
@@ -78,7 +78,7 @@ test("createRow creates Story under selected Epic and then template subtasks", a
   assert.equal(calls.length, 6);
   assert.equal(calls[0].fields.project.key, "EVOSCADA");
   assert.equal(calls[0].fields.summary, "Нет настроек полей сообщений");
-  assert.equal(calls[0].fields.customfield_10014.key, "EVOSCADA-100");
+  assert.equal(calls[0].fields.customfield_10014, "EVOSCADA-100");
   assert.equal(calls[1].fields.parent.key, "EVOSCADA-2000");
   assert.equal(calls[1].fields.issuetype.name, "System Engineer");
 });

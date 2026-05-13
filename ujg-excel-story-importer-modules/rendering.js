@@ -182,6 +182,108 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($td);
   }
 
+  function appendConfirmItem($list, label, value) {
+    $list.append($("<dt/>").text(label), $("<dd/>").text(value != null && String(value) ? String(value) : "—"));
+  }
+
+  function appendConfirmSourceRows($parent, rows) {
+    var $table = $("<table/>").addClass("ujg-esi-confirm-source");
+    var $tbody = $("<tbody/>");
+    (rows || []).forEach(function(row) {
+      $tbody.append(
+        $("<tr/>")
+          .append($("<th/>").text(row.name != null ? String(row.name) : ""))
+          .append($("<td/>").text(row.value != null ? String(row.value) : ""))
+      );
+    });
+    $table.append($tbody);
+    $parent.append($("<div/>").addClass("ujg-esi-confirm-scroll").append($table));
+  }
+
+  function appendConfirmChildTasks($parent, tasks) {
+    var rows = tasks || [];
+    if (!rows.length) {
+      $parent.append($("<div/>").addClass("ujg-esi-confirm-empty").text("Не создавать"));
+      return;
+    }
+    var $table = $("<table/>").addClass("ujg-esi-confirm-tasks");
+    $table.append(
+      $("<thead/>").append(
+        $("<tr/>")
+          .append($("<th/>").text("Роль"))
+          .append($("<th/>").text("Тип"))
+          .append($("<th/>").text("Название"))
+      )
+    );
+    var $tbody = $("<tbody/>");
+    rows.forEach(function(task) {
+      $tbody.append(
+        $("<tr/>")
+          .append($("<td/>").text(task.role || ""))
+          .append($("<td/>").text(task.issueType || ""))
+          .append($("<td/>").text(task.summary || ""))
+      );
+    });
+    $table.append($tbody);
+    $parent.append($table);
+  }
+
+  function appendConfirmModal($parent, state) {
+    var dialog = state && state.createDialog ? state.createDialog : null;
+    if (!dialog) return;
+    var $overlay = $("<div/>").addClass("ujg-esi-confirm-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-confirm-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
+
+    appendConfirmItem($fields, "Проект", dialog.projectText || dialog.projectKey);
+    appendConfirmItem($fields, "Тип", dialog.issueType || "Story");
+    appendConfirmItem($fields, "Epic", dialog.epicText || "Без Epic");
+    appendConfirmItem($fields, "Название", dialog.summary);
+
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-confirm-head")
+        .append($("<h3/>").text("Подтвердите создание"), $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-confirm-close")
+          .attr("aria-label", "Закрыть")
+          .text("×")
+          .on("click", function() {
+            if (services && services.onCancelCreate) services.onCancelCreate();
+          }))
+    );
+    $modal.append($fields);
+    $modal.append($("<h4/>").text("Описание"));
+    appendConfirmSourceRows($modal, dialog.sourceRows);
+    $modal.append($("<h4/>").text("Дочерние задачи"));
+    appendConfirmChildTasks($modal, dialog.childTasks);
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-confirm-actions")
+        .append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-confirm-cancel")
+            .text("Отмена")
+            .on("click", function() {
+              if (services && services.onCancelCreate) services.onCancelCreate();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-confirm-create")
+            .text("Создать в Jira")
+            .on("click", function() {
+              if (services && services.onConfirmCreate) services.onConfirmCreate();
+            })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -244,6 +346,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
+    appendConfirmModal($root, s);
   }
 
   return {

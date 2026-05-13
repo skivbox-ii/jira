@@ -33,7 +33,7 @@ define("_ujgESI_config", [], function() {
     { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
     { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
     { role: "QA", issueType: "QA", summary: "Тестирование" },
-    { role: "DO", issueType: "DevOps", summary: "Подготовка окружения / деплой" },
+    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой" },
   ];
 
   function trimSlash(s) {
