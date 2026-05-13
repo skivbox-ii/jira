@@ -16,6 +16,7 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-epic-select/);
   assert.match(source, /ujg-esi-file/);
   assert.match(source, /ujg-esi-subtasks/);
+  assert.match(source, /Создавать дочерние задачи/);
   assert.match(source, /ujg-esi-create-row/);
 });
 

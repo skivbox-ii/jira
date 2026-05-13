@@ -109,7 +109,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $input.on("change", function() {
       if (services && services.onSubtasksChange) services.onSubtasksChange(!!$(this).prop("checked"));
     });
-    $label.append($input, $("<span/>").text("Создавать подзадачи"));
+    $label.append($input, $("<span/>").text("Создавать дочерние задачи"));
     $toolbar.append($label);
   }
 
