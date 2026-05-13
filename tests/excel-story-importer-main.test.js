@@ -261,7 +261,9 @@ test("row create opens confirmation before creating without Epic", async functio
   ]);
   assert.equal(last.rows[0].status, "ready");
 
+  const rendersBeforeTextEdit = states.length;
   callbacks.onDialogFieldChange("summary", "Edited story");
+  assert.equal(states.length, rendersBeforeTextEdit);
   callbacks.onDialogAssigneeSearch("story", "story");
   await flush();
   await flush();
@@ -273,9 +275,12 @@ test("row create opens confirmation before creating without Epic", async functio
   callbacks.onDialogAssigneeSelect("story", "story-acc");
   callbacks.onDialogFieldChange("originalEstimate", "2h");
   callbacks.onDialogFieldChange("remainingEstimate", "1h");
+  const rendersBeforeInlineEdits = states.length;
   callbacks.onDialogSourceChange(0, "Edited story from modal");
+  assert.equal(states.length, rendersBeforeInlineEdits);
   callbacks.onDialogChildToggle(1, false);
   callbacks.onDialogChildChange(0, "summary", "[SE] Edited story");
+  assert.equal(states.length, rendersBeforeInlineEdits + 1);
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();

@@ -9,6 +9,41 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     services = svc || {};
   }
 
+  function captureScrollState() {
+    var selectors = [".ujg-esi-confirm-modal", ".ujg-esi-confirm-scroll", ".ujg-esi-preview-wrap", ".ujg-esi-mapping-panel"];
+    var state = {
+      windowLeft: typeof window !== "undefined" && window.pageXOffset != null ? window.pageXOffset : null,
+      windowTop: typeof window !== "undefined" && window.pageYOffset != null ? window.pageYOffset : null,
+      nodes: [],
+    };
+    if (!$root || !$root.length) return state;
+    selectors.forEach(function(selector) {
+      $root.find(selector).each(function(index) {
+        var $node = $(this);
+        state.nodes.push({
+          selector: selector,
+          index: index,
+          left: $node.scrollLeft(),
+          top: $node.scrollTop(),
+        });
+      });
+    });
+    return state;
+  }
+
+  function restoreScrollState(state) {
+    if (!state || !$root || !$root.length) return;
+    (state.nodes || []).forEach(function(item) {
+      var $node = $root.find(item.selector).eq(item.index);
+      if (!$node.length) return;
+      $node.scrollLeft(item.left || 0);
+      $node.scrollTop(item.top || 0);
+    });
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function" && state.windowLeft != null && state.windowTop != null) {
+      window.scrollTo(state.windowLeft, state.windowTop);
+    }
+  }
+
   function projectLabel(project) {
     var key = project && project.key != null ? String(project.key) : "";
     var name = project && project.name != null ? String(project.name) : "";
@@ -118,8 +153,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .attr("type", "button")
       .addClass("ujg-esi-mapping-button")
       .attr("title", "Настроить мапинг")
+      .attr("aria-label", "Настроить мапинг")
       .append($("<span/>").addClass("ujg-esi-mapping-button-icon").html("&#9881;"))
-      .append($("<span/>").text("Мапинг"))
       .on("click", function() {
         if (services && services.onOpenMappings) services.onOpenMappings();
       });
@@ -134,7 +169,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $sync = $("<button/>")
       .attr("type", "button")
       .addClass("ujg-esi-sync-jira")
-      .text(state && state.syncLoading ? "Синхронизация..." : "Синхронизировать из Jira")
+      .attr("title", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
+      .attr("aria-label", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
+      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8635;"))
       .prop("disabled", !canSync)
       .on("click", function() {
         if (services && services.onSyncJira) services.onSyncJira();
@@ -142,7 +179,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $download = $("<button/>")
       .attr("type", "button")
       .addClass("ujg-esi-download-excel")
-      .text("Скачать Excel")
+      .attr("title", "Скачать Excel")
+      .attr("aria-label", "Скачать Excel")
+      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8681;"))
       .prop("disabled", !canDownload)
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
@@ -796,6 +835,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function render(state) {
     if (!$root || !$root.length) return;
+    var scrollState = captureScrollState();
     $root.empty();
     var s = state || {};
     var $header = $("<div/>").addClass("ujg-esi-header");
@@ -823,6 +863,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendPreview($root, s);
     appendConfirmModal($root, s);
     appendMappingOverlay($root, s);
+    restoreScrollState(scrollState);
   }
 
   return {

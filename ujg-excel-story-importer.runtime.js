@@ -1101,6 +1101,32 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return !!(jszip && typeof jszip.loadAsync === "function");
   }
 
+  function getAmdRequire() {
+    if (typeof require === "function") return require;
+    if (typeof window !== "undefined" && typeof window.require === "function") return window.require;
+    return null;
+  }
+
+  function loadAmdJsZip() {
+    var req = getAmdRequire();
+    if (!req) return Promise.resolve(null);
+    return new Promise(function(resolve) {
+      try {
+        req(
+          ["jszip"],
+          function(jszip) {
+            resolve(isUsableJsZip(jszip) ? jszip : null);
+          },
+          function() {
+            resolve(null);
+          }
+        );
+      } catch (_err) {
+        resolve(null);
+      }
+    });
+  }
+
   function ensureJsZip() {
     var existing = getGlobalJsZip();
     if (isUsableJsZip(existing)) return Promise.resolve(existing);
@@ -1108,7 +1134,12 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
       loadPromise = loadScript(config.DEFAULT_JSZIP_URL).then(function() {
         var loaded = getGlobalJsZip();
         if (isUsableJsZip(loaded)) return loaded;
-        throw new Error("JSZip is unavailable");
+        return loadAmdJsZip().then(function(amdJsZip) {
+          if (isUsableJsZip(amdJsZip)) return amdJsZip;
+          loaded = getGlobalJsZip();
+          if (isUsableJsZip(loaded)) return loaded;
+          throw new Error("JSZip is unavailable");
+        });
       });
     }
     return loadPromise;
@@ -1267,6 +1298,21 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return rowXml.replace(/<\/row>$/i, insert + "</row>");
   }
 
+  function expandRowSpans(rowXml) {
+    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var minColumn = 0;
+    var maxColumn = 0;
+    var match;
+    while ((match = re.exec(rowXml || ""))) {
+      var column = cellRefColumnNumber(match[1]);
+      if (!column) continue;
+      if (!minColumn || column < minColumn) minColumn = column;
+      if (column > maxColumn) maxColumn = column;
+    }
+    if (!minColumn || !maxColumn || !/\bspans="[^"]*"/.test(rowXml || "")) return rowXml;
+    return rowXml.replace(/\bspans="[^"]*"/, 'spans="' + String(minColumn) + ":" + String(maxColumn) + '"');
+  }
+
   function expandDimension(xml, rows, headerColumns) {
     var match = /<dimension\b[^>]*\bref="([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?"[^>]*\/>/i.exec(xml || "");
     var maxColumn = 0;
@@ -1308,6 +1354,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
         if (!columnNumber) return;
         rowXml = patchCellInRow(rowXml, columnNumber, rowNumber, values[columnName]);
       });
+      rowXml = expandRowSpans(rowXml);
       out = out.slice(0, row.index) + rowXml + out.slice(row.index + row.text.length);
     });
     return expandDimension(out, options.rows || [], headerColumns);
@@ -1394,6 +1441,41 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   function init(container, svc) {
     $root = container;
     services = svc || {};
+  }
+
+  function captureScrollState() {
+    var selectors = [".ujg-esi-confirm-modal", ".ujg-esi-confirm-scroll", ".ujg-esi-preview-wrap", ".ujg-esi-mapping-panel"];
+    var state = {
+      windowLeft: typeof window !== "undefined" && window.pageXOffset != null ? window.pageXOffset : null,
+      windowTop: typeof window !== "undefined" && window.pageYOffset != null ? window.pageYOffset : null,
+      nodes: [],
+    };
+    if (!$root || !$root.length) return state;
+    selectors.forEach(function(selector) {
+      $root.find(selector).each(function(index) {
+        var $node = $(this);
+        state.nodes.push({
+          selector: selector,
+          index: index,
+          left: $node.scrollLeft(),
+          top: $node.scrollTop(),
+        });
+      });
+    });
+    return state;
+  }
+
+  function restoreScrollState(state) {
+    if (!state || !$root || !$root.length) return;
+    (state.nodes || []).forEach(function(item) {
+      var $node = $root.find(item.selector).eq(item.index);
+      if (!$node.length) return;
+      $node.scrollLeft(item.left || 0);
+      $node.scrollTop(item.top || 0);
+    });
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function" && state.windowLeft != null && state.windowTop != null) {
+      window.scrollTo(state.windowLeft, state.windowTop);
+    }
   }
 
   function projectLabel(project) {
@@ -1505,8 +1587,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .attr("type", "button")
       .addClass("ujg-esi-mapping-button")
       .attr("title", "Настроить мапинг")
+      .attr("aria-label", "Настроить мапинг")
       .append($("<span/>").addClass("ujg-esi-mapping-button-icon").html("&#9881;"))
-      .append($("<span/>").text("Мапинг"))
       .on("click", function() {
         if (services && services.onOpenMappings) services.onOpenMappings();
       });
@@ -1521,7 +1603,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $sync = $("<button/>")
       .attr("type", "button")
       .addClass("ujg-esi-sync-jira")
-      .text(state && state.syncLoading ? "Синхронизация..." : "Синхронизировать из Jira")
+      .attr("title", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
+      .attr("aria-label", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
+      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8635;"))
       .prop("disabled", !canSync)
       .on("click", function() {
         if (services && services.onSyncJira) services.onSyncJira();
@@ -1529,7 +1613,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $download = $("<button/>")
       .attr("type", "button")
       .addClass("ujg-esi-download-excel")
-      .text("Скачать Excel")
+      .attr("title", "Скачать Excel")
+      .attr("aria-label", "Скачать Excel")
+      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8681;"))
       .prop("disabled", !canDownload)
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
@@ -2183,6 +2269,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function render(state) {
     if (!$root || !$root.length) return;
+    var scrollState = captureScrollState();
     $root.empty();
     var s = state || {};
     var $header = $("<div/>").addClass("ujg-esi-header");
@@ -2210,6 +2297,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendPreview($root, s);
     appendConfirmModal($root, s);
     appendMappingOverlay($root, s);
+    restoreScrollState(scrollState);
   }
 
   return {
@@ -3259,6 +3347,7 @@ define("_ujgESI_main", [
     function onDialogFieldChange(field, value) {
       var dialog = state.createDialog;
       var key = field != null ? String(field) : "";
+      var shouldRender = false;
       if (!dialog) return;
       if (key === "summary") {
         dialog.summary = value != null ? String(value) : "";
@@ -3273,9 +3362,11 @@ define("_ujgESI_main", [
         dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
         loadEpics(dialog.projectKey);
         loadCreateMeta(dialog.projectKey);
+        shouldRender = true;
       } else if (key === "issueType") {
         dialog.issueType = value != null ? String(value) : "";
         dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
+        shouldRender = true;
       } else if (key === "epicKey") {
         dialog.epicKey = value != null ? String(value) : "";
         dialog.epicText = selectedEpicTextFor(dialog.epicKey);
@@ -3288,7 +3379,7 @@ define("_ujgESI_main", [
       } else if (key === "remainingEstimate") {
         dialog.remainingEstimate = value != null ? String(value) : "";
       }
-      render();
+      if (shouldRender) render();
     }
 
     function onDialogSourceChange(index, value) {
@@ -3296,7 +3387,6 @@ define("_ujgESI_main", [
       var i = Number(index);
       if (!dialog || !dialog.sourceRows || !dialog.sourceRows[i]) return;
       dialog.sourceRows[i].value = value != null ? String(value) : "";
-      render();
     }
 
     function onDialogChildToggle(index, enabled) {
@@ -3326,15 +3416,12 @@ define("_ujgESI_main", [
       } else if (key === "remainingEstimate") {
         task.remainingEstimate = value != null ? String(value) : "";
       }
-      render();
     }
 
     function onDialogAssigneeFocus(target) {
       var targetKey = target != null ? String(target) : "";
       if (!userTargetNode(targetKey)) return;
-      if (state.userPicker.target === targetKey && (state.userPicker.loading || state.userPicker.rows.length || state.userPicker.query)) {
-        return;
-      }
+      if (state.userPicker.target === targetKey) return;
       loadAssigneeSearch(targetKey, "");
     }
 

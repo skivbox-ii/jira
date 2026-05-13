@@ -72,9 +72,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  width: 32px;
+  min-width: 32px;
   min-height: 32px;
-  padding: 5px 10px;
+  padding: 0;
   border: 1px solid #c1c7d0;
   border-radius: 4px;
   align-self: end;
@@ -89,10 +90,23 @@
   background: #f4f5f7;
 }
 
+.ujg-esi-mapping-button-icon,
+.ujg-esi-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+}
+
 .ujg-esi-mapping-button-icon {
   color: #0052cc;
   font-size: 14px;
-  line-height: 1;
+}
+
+.ujg-esi-action-icon {
+  font-size: 16px;
 }
 
 .ujg-esi-sync-actions {
@@ -104,8 +118,13 @@
 
 .ujg-esi-sync-jira,
 .ujg-esi-download-excel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
   min-height: 32px;
-  padding: 5px 10px;
+  padding: 0;
   border: 1px solid #c1c7d0;
   border-radius: 4px;
   background: #fff;

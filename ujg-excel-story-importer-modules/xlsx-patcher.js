@@ -28,6 +28,32 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return !!(jszip && typeof jszip.loadAsync === "function");
   }
 
+  function getAmdRequire() {
+    if (typeof require === "function") return require;
+    if (typeof window !== "undefined" && typeof window.require === "function") return window.require;
+    return null;
+  }
+
+  function loadAmdJsZip() {
+    var req = getAmdRequire();
+    if (!req) return Promise.resolve(null);
+    return new Promise(function(resolve) {
+      try {
+        req(
+          ["jszip"],
+          function(jszip) {
+            resolve(isUsableJsZip(jszip) ? jszip : null);
+          },
+          function() {
+            resolve(null);
+          }
+        );
+      } catch (_err) {
+        resolve(null);
+      }
+    });
+  }
+
   function ensureJsZip() {
     var existing = getGlobalJsZip();
     if (isUsableJsZip(existing)) return Promise.resolve(existing);
@@ -35,7 +61,12 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
       loadPromise = loadScript(config.DEFAULT_JSZIP_URL).then(function() {
         var loaded = getGlobalJsZip();
         if (isUsableJsZip(loaded)) return loaded;
-        throw new Error("JSZip is unavailable");
+        return loadAmdJsZip().then(function(amdJsZip) {
+          if (isUsableJsZip(amdJsZip)) return amdJsZip;
+          loaded = getGlobalJsZip();
+          if (isUsableJsZip(loaded)) return loaded;
+          throw new Error("JSZip is unavailable");
+        });
       });
     }
     return loadPromise;
@@ -194,6 +225,21 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return rowXml.replace(/<\/row>$/i, insert + "</row>");
   }
 
+  function expandRowSpans(rowXml) {
+    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var minColumn = 0;
+    var maxColumn = 0;
+    var match;
+    while ((match = re.exec(rowXml || ""))) {
+      var column = cellRefColumnNumber(match[1]);
+      if (!column) continue;
+      if (!minColumn || column < minColumn) minColumn = column;
+      if (column > maxColumn) maxColumn = column;
+    }
+    if (!minColumn || !maxColumn || !/\bspans="[^"]*"/.test(rowXml || "")) return rowXml;
+    return rowXml.replace(/\bspans="[^"]*"/, 'spans="' + String(minColumn) + ":" + String(maxColumn) + '"');
+  }
+
   function expandDimension(xml, rows, headerColumns) {
     var match = /<dimension\b[^>]*\bref="([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?"[^>]*\/>/i.exec(xml || "");
     var maxColumn = 0;
@@ -235,6 +281,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
         if (!columnNumber) return;
         rowXml = patchCellInRow(rowXml, columnNumber, rowNumber, values[columnName]);
       });
+      rowXml = expandRowSpans(rowXml);
       out = out.slice(0, row.index) + rowXml + out.slice(row.index + row.text.length);
     });
     return expandDimension(out, options.rows || [], headerColumns);

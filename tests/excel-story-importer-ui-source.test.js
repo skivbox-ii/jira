@@ -19,9 +19,12 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-mapping-button/);
   assert.match(source, /ujg-esi-sync-jira/);
   assert.match(source, /ujg-esi-download-excel/);
-  assert.match(source, /Мапинг/);
-  assert.match(source, /Синхронизировать из Jira/);
-  assert.match(source, /Скачать Excel/);
+  assert.match(source, /aria-label", "Настроить мапинг"/);
+  assert.match(source, /aria-label", state && state\.syncLoading \? "Синхронизация из Jira" : "Синхронизировать из Jira"/);
+  assert.match(source, /aria-label", "Скачать Excel"/);
+  assert.doesNotMatch(source, /\.append\(\$\(\"\<span\/\>\"\)\.text\(\"Мапинг\"\)\)/);
+  assert.doesNotMatch(source, /\.text\(state && state\.syncLoading \? "Синхронизация\.\.\." : "Синхронизировать из Jira"\)/);
+  assert.doesNotMatch(source, /\.text\("Скачать Excel"\)/);
   assert.match(source, /Создавать дочерние задачи/);
   assert.match(source, /ujg-esi-create-row/);
 });
@@ -91,6 +94,9 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /onDialogChildToggle/);
   assert.match(source, /ujg-esi-confirm-epic-warning/);
   assert.match(source, /задача будет создана без Epic/);
+  assert.match(source, /captureScrollState/);
+  assert.match(source, /restoreScrollState/);
+  assert.match(source, /ujg-esi-confirm-scroll/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

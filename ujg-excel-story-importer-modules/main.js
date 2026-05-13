@@ -1038,6 +1038,7 @@ define("_ujgESI_main", [
     function onDialogFieldChange(field, value) {
       var dialog = state.createDialog;
       var key = field != null ? String(field) : "";
+      var shouldRender = false;
       if (!dialog) return;
       if (key === "summary") {
         dialog.summary = value != null ? String(value) : "";
@@ -1052,9 +1053,11 @@ define("_ujgESI_main", [
         dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
         loadEpics(dialog.projectKey);
         loadCreateMeta(dialog.projectKey);
+        shouldRender = true;
       } else if (key === "issueType") {
         dialog.issueType = value != null ? String(value) : "";
         dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
+        shouldRender = true;
       } else if (key === "epicKey") {
         dialog.epicKey = value != null ? String(value) : "";
         dialog.epicText = selectedEpicTextFor(dialog.epicKey);
@@ -1067,7 +1070,7 @@ define("_ujgESI_main", [
       } else if (key === "remainingEstimate") {
         dialog.remainingEstimate = value != null ? String(value) : "";
       }
-      render();
+      if (shouldRender) render();
     }
 
     function onDialogSourceChange(index, value) {
@@ -1075,7 +1078,6 @@ define("_ujgESI_main", [
       var i = Number(index);
       if (!dialog || !dialog.sourceRows || !dialog.sourceRows[i]) return;
       dialog.sourceRows[i].value = value != null ? String(value) : "";
-      render();
     }
 
     function onDialogChildToggle(index, enabled) {
@@ -1105,15 +1107,12 @@ define("_ujgESI_main", [
       } else if (key === "remainingEstimate") {
         task.remainingEstimate = value != null ? String(value) : "";
       }
-      render();
     }
 
     function onDialogAssigneeFocus(target) {
       var targetKey = target != null ? String(target) : "";
       if (!userTargetNode(targetKey)) return;
-      if (state.userPicker.target === targetKey && (state.userPicker.loading || state.userPicker.rows.length || state.userPicker.query)) {
-        return;
-      }
+      if (state.userPicker.target === targetKey) return;
       loadAssigneeSearch(targetKey, "");
     }
 
