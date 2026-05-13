@@ -103,8 +103,14 @@ test("row create opens confirmation before creating without Epic", async functio
               rowIndex: state.createDialog.rowIndex,
               summary: state.createDialog.summary,
               epicText: state.createDialog.epicText,
+              assigneeId: state.createDialog.assigneeId || "",
+              originalEstimate: state.createDialog.originalEstimate || "",
+              remainingEstimate: state.createDialog.remainingEstimate || "",
+              sourceRows: state.createDialog.sourceRows.map(function (row) {
+                return row.name + ":" + row.value;
+              }),
               childTasks: state.createDialog.childTasks.map(function (task) {
-                return task.role + ":" + task.issueType + ":" + task.summary;
+                return task.role + ":" + task.issueType + ":" + task.summary + ":" + task.enabled + ":" + (task.assigneeId || "");
               }),
             }
           : null,
@@ -121,6 +127,14 @@ test("row create opens confirmation before creating without Epic", async functio
     },
     getProjectEpics: function () {
       return Promise.resolve([]);
+    },
+    searchUsers: function () {
+      return Promise.resolve({
+        users: [
+          { name: "story-user", displayName: "Story User", accountId: "story-acc" },
+          { name: "se-user", displayName: "SE User" },
+        ],
+      });
     },
   };
   const excelLoader = {
@@ -181,6 +195,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   callbacks.onCreateRow(0);
   await flush();
+  await flush();
 
   assert.equal(creatorOptions, null);
   let last = states[states.length - 1];
@@ -189,13 +204,25 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.summary, "Test jira task");
   assert.equal(last.createDialog.epicText, "Без Epic");
   assert.deepEqual(last.createDialog.childTasks, [
-    "SE:System Engineer:[SE] Test jira task",
-    "FE:Frontend Task:[FE] Test jira task",
-    "BE:Backend Task:[BE] Test jira task",
-    "QA:QA:[QA] Test jira task",
-    "DevOps:DevOps:[DevOps] Test jira task",
+    "SE:System Engineer:[SE] Test jira task:true:",
+    "FE:Frontend Task:[FE] Test jira task:true:",
+    "BE:Backend Task:[BE] Test jira task:true:",
+    "QA:QA:[QA] Test jira task:true:",
+    "DevOps:DevOps:[DevOps] Test jira task:true:",
   ]);
   assert.equal(last.rows[0].status, "ready");
+
+  callbacks.onDialogFieldChange("summary", "Edited story");
+  callbacks.onDialogFieldChange("assigneeId", "story-acc");
+  callbacks.onDialogFieldChange("originalEstimate", "2h");
+  callbacks.onDialogFieldChange("remainingEstimate", "1h");
+  callbacks.onDialogSourceChange(0, "Edited story from modal");
+  callbacks.onDialogChildToggle(1, false);
+  callbacks.onDialogChildChange(0, "summary", "[SE] Edited story");
+  callbacks.onDialogChildChange(0, "assigneeId", "se-user");
+  callbacks.onDialogChildChange(0, "originalEstimate", "4h");
+  callbacks.onDialogChildChange(0, "remainingEstimate", "4h");
+  await flush();
 
   callbacks.onConfirmCreate();
   await flush();
@@ -204,6 +231,16 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.projectKey, "EVOSCADA");
   assert.equal(creatorOptions.epicKey, "");
   assert.equal(creatorOptions.createSubtasks, true);
+  assert.equal(creatorOptions.summary, "Edited story");
+  assert.equal(creatorOptions.assignee.accountId, "story-acc");
+  assert.equal(creatorOptions.originalEstimate, "2h");
+  assert.equal(creatorOptions.remainingEstimate, "1h");
+  assert.equal(creatorOptions.sourceRows[0].value, "Edited story from modal");
+  assert.equal(creatorOptions.childTasks[0].summary, "[SE] Edited story");
+  assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
+  assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");
+  assert.equal(creatorOptions.childTasks[0].remainingEstimate, "4h");
+  assert.equal(creatorOptions.childTasks[1].enabled, false);
   last = states[states.length - 1];
   assert.equal(last.error, "");
   assert.equal(last.createDialog, null);

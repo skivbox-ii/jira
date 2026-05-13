@@ -43,3 +43,16 @@ test("buildDescription escapes Jira wiki table separators", function () {
   assert.match(text, /A \\&#124; B/);
   assert.match(text, /\\\\server\\\\path/);
 });
+
+test("buildDescriptionFromRows uses edited confirmation rows", function () {
+  const description = loadDescription();
+  const text = description.buildDescriptionFromRows([
+    { name: "Замечание", value: "Edited story" },
+    { name: "Комментарий", value: "Changed in modal" },
+    { name: "Пустое", value: "" },
+  ]);
+
+  assert.match(text, /\|Замечание\|Edited story\|/);
+  assert.match(text, /\|Комментарий\|Changed in modal\|/);
+  assert.doesNotMatch(text, /Пустое/);
+});

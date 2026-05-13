@@ -48,6 +48,17 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify(payload),
       });
     },
+    searchUsers: function(query) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/user/picker",
+        type: "GET",
+        dataType: "json",
+        data: {
+          query: String(query || ""),
+          maxResults: 20,
+        },
+      });
+    },
     toJqlToken: toJqlToken,
   };
 });

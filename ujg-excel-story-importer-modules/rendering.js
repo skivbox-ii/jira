@@ -154,6 +154,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .attr("href", String(base).replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key))
           .attr("target", "_blank")
           .attr("rel", "noreferrer noopener")
+          .addClass("ujg-esi-jira-link")
           .text(key)
       );
     } else {
@@ -182,25 +183,64 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($td);
   }
 
-  function appendConfirmItem($list, label, value) {
-    $list.append($("<dt/>").text(label), $("<dd/>").text(value != null && String(value) ? String(value) : "—"));
+  function appendConfirmControl($list, label, $control) {
+    $list.append($("<dt/>").text(label), $("<dd/>").append($control));
+  }
+
+  function appendTextInput(className, value, onChange) {
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .addClass(className || "")
+      .val(value != null ? String(value) : "");
+    $input.on("input", function() {
+      onChange($(this).val());
+    });
+    return $input;
+  }
+
+  function appendSelect(className, value, rows, onChange) {
+    var $select = $("<select/>").addClass(className || "");
+    (rows || []).forEach(function(row) {
+      $select.append($("<option/>").attr("value", row.value).text(row.label));
+    });
+    $select.val(value || "");
+    $select.on("change", function() {
+      onChange($(this).val());
+    });
+    return $select;
+  }
+
+  function userOptions(state) {
+    var out = [{ value: "", label: state && state.usersLoading ? "Загрузка..." : "Не назначать" }];
+    (state.users || []).forEach(function(user) {
+      out.push({ value: String(user.id || ""), label: String(user.label || user.id || "") });
+    });
+    return out;
+  }
+
+  function appendAssigneeSelect(className, value, state, onChange) {
+    var $select = appendSelect(className, value, userOptions(state), onChange);
+    if (state && state.usersLoading) $select.prop("disabled", true);
+    return $select;
   }
 
   function appendConfirmSourceRows($parent, rows) {
     var $table = $("<table/>").addClass("ujg-esi-confirm-source");
     var $tbody = $("<tbody/>");
-    (rows || []).forEach(function(row) {
+    (rows || []).forEach(function(row, index) {
       $tbody.append(
         $("<tr/>")
           .append($("<th/>").text(row.name != null ? String(row.name) : ""))
-          .append($("<td/>").text(row.value != null ? String(row.value) : ""))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-source-value", row.value, function(value) {
+            if (services && services.onDialogSourceChange) services.onDialogSourceChange(index, value);
+          })))
       );
     });
     $table.append($tbody);
     $parent.append($("<div/>").addClass("ujg-esi-confirm-scroll").append($table));
   }
 
-  function appendConfirmChildTasks($parent, tasks) {
+  function appendConfirmChildTasks($parent, tasks, state) {
     var rows = tasks || [];
     if (!rows.length) {
       $parent.append($("<div/>").addClass("ujg-esi-confirm-empty").text("Не создавать"));
@@ -210,18 +250,44 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $table.append(
       $("<thead/>").append(
         $("<tr/>")
+          .append($("<th/>").text("Создать"))
           .append($("<th/>").text("Роль"))
           .append($("<th/>").text("Тип Jira"))
           .append($("<th/>").text("Название"))
+          .append($("<th/>").text("Исполнитель"))
+          .append($("<th/>").text("Первоначальная оценка"))
+          .append($("<th/>").text("Оставшееся время"))
       )
     );
     var $tbody = $("<tbody/>");
-    rows.forEach(function(task) {
+    rows.forEach(function(task, index) {
+      var enabled = task.enabled !== false;
+      var $enabled = $("<input/>")
+        .attr("type", "checkbox")
+        .addClass("ujg-esi-confirm-child-enabled")
+        .prop("checked", enabled)
+        .on("change", function() {
+          if (services && services.onDialogChildToggle) services.onDialogChildToggle(index, !!$(this).prop("checked"));
+        });
       $tbody.append(
-        $("<tr/>")
+        $("<tr/>").toggleClass("ujg-esi-confirm-child-disabled", !enabled)
+          .append($("<td/>").append($enabled))
           .append($("<td/>").text(task.role || ""))
-          .append($("<td/>").text(task.issueType || ""))
-          .append($("<td/>").text(task.summary || ""))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-type", task.issueType, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "issueType", value);
+          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
+          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendAssigneeSelect("ujg-esi-confirm-child-assignee", task.assigneeId || "", state, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "assigneeId", value);
+          }).prop("disabled", !enabled || state.usersLoading)))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
+          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-remaining", task.remainingEstimate, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "remainingEstimate", value);
+          }).prop("disabled", !enabled)))
       );
     });
     $table.append($tbody);
@@ -238,11 +304,32 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .attr("aria-modal", "true");
     var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
 
-    appendConfirmItem($fields, "Проект", dialog.projectText || dialog.projectKey);
-    appendConfirmItem($fields, "Тип Jira", dialog.issueType || "Story");
-    appendConfirmItem($fields, "Epic", dialog.epicText || "Без Epic");
-    appendConfirmItem($fields, "Название", dialog.summary);
-    if (dialog.childTasks && dialog.childTasks.length) appendConfirmItem($fields, "Связь", "child of Story");
+    appendConfirmControl($fields, "Проект", appendSelect("ujg-esi-confirm-project", dialog.projectKey, (state.projects || []).map(function(project) {
+      return { value: project.key || "", label: projectLabel(project) };
+    }), function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("projectKey", value);
+    }));
+    appendConfirmControl($fields, "Тип Jira", appendTextInput("ujg-esi-confirm-issue-type", dialog.issueType || "Story", function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("issueType", value);
+    }));
+    appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
+      return { value: epic.key || "", label: epicLabel(epic) };
+    })), function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
+    }));
+    appendConfirmControl($fields, "Название", appendTextInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
+    }));
+    appendConfirmControl($fields, "Исполнитель", appendAssigneeSelect("ujg-esi-confirm-assignee", dialog.assigneeId || "", state, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("assigneeId", value);
+    }));
+    appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);
+    }));
+    appendConfirmControl($fields, "Оставшееся время", appendTextInput("ujg-esi-confirm-remaining", dialog.remainingEstimate, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("remainingEstimate", value);
+    }));
+    if (dialog.childTasks && dialog.childTasks.length) appendConfirmControl($fields, "Связь", $("<span/>").text("child of Story"));
 
     $modal.append(
       $("<div/>")
@@ -257,10 +344,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           }))
     );
     $modal.append($fields);
+    if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     $modal.append($("<h4/>").text("Описание"));
     appendConfirmSourceRows($modal, dialog.sourceRows);
     $modal.append($("<h4/>").text("Дочерние задачи"));
-    appendConfirmChildTasks($modal, dialog.childTasks);
+    appendConfirmChildTasks($modal, dialog.childTasks, state);
     $modal.append(
       $("<div/>")
         .addClass("ujg-esi-confirm-actions")
@@ -309,7 +397,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $tbody = $("<tbody/>");
     rows.forEach(function(row, index) {
       var cols = row.sourceColumns || {};
-      var $tr = $("<tr/>").addClass("ujg-esi-row-" + String(row.status || "ready"));
+      var $tr = $("<tr/>")
+        .addClass("ujg-esi-row-" + String(row.status || "ready"))
+        .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");

@@ -52,6 +52,10 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /Дочерние задачи/);
   assert.match(source, /Тип Jira/);
   assert.match(source, /child of Story/);
+  assert.match(source, /ujg-esi-confirm-summary/);
+  assert.match(source, /ujg-esi-confirm-assignee/);
+  assert.match(source, /ujg-esi-confirm-child-enabled/);
+  assert.match(source, /onDialogChildToggle/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {
@@ -62,6 +66,8 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /project = " \+ toJqlToken\(projectKey\)/);
   assert.match(source, /createIssueLink/);
   assert.match(source, /\/rest\/api\/2\/issueLink/);
+  assert.match(source, /searchUsers/);
+  assert.match(source, /\/rest\/api\/2\/user\/picker/);
 });
 
 test("importer CSS is scoped to widget root", function () {
@@ -69,4 +75,6 @@ test("importer CSS is scoped to widget root", function () {
 
   assert.match(source, /\.ujg-excel-story-importer/);
   assert.match(source, /\.ujg-esi-preview-table/);
+  assert.match(source, /\.ujg-esi-jira-link/);
+  assert.match(source, /\.ujg-esi-row-linked/);
 });

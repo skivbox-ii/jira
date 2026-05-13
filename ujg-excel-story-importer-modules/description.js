@@ -31,8 +31,17 @@ define("_ujgESI_description", [], function() {
     return lines.join("\n");
   }
 
+  function buildDescriptionFromRows(rows) {
+    var lines = ["Импортировано из журнала замечаний.", "", "||Поле||Значение||"];
+    (rows || []).forEach(function(row) {
+      appendRow(lines, row && row.name, row && row.value);
+    });
+    return lines.join("\n");
+  }
+
   return {
     buildDescription: buildDescription,
+    buildDescriptionFromRows: buildDescriptionFromRows,
     escapeCell: escapeCell,
   };
 });

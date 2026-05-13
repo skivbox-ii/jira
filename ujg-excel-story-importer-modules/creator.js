@@ -19,14 +19,34 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     var opts = options || {};
     var fields = {
       project: { key: String(opts.projectKey || "") },
-      summary: String(row && row.summary != null ? row.summary : "").trim(),
-      issuetype: { name: config.STORY_ISSUE_TYPE },
-      description: description.buildDescription(row),
+      summary: String(opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : "").trim(),
+      issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
+      description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
     if (opts.epicKey && config.EPIC_LINK_FIELD) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
+    appendAssignee(fields, opts.assignee);
+    appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;
+  }
+
+  function appendAssignee(fields, assignee) {
+    if (!fields || !assignee || typeof assignee !== "object") return;
+    if (assignee.accountId != null && String(assignee.accountId).trim()) {
+      fields.assignee = { accountId: String(assignee.accountId).trim() };
+    } else if (assignee.name != null && String(assignee.name).trim()) {
+      fields.assignee = { name: String(assignee.name).trim() };
+    }
+  }
+
+  function appendTimetracking(fields, originalEstimate, remainingEstimate) {
+    var original = originalEstimate != null ? String(originalEstimate).trim() : "";
+    var remaining = remainingEstimate != null ? String(remainingEstimate).trim() : "";
+    if (!fields || (!original && !remaining)) return;
+    fields.timetracking = {};
+    if (original) fields.timetracking.originalEstimate = original;
+    if (remaining) fields.timetracking.remainingEstimate = remaining;
   }
 
   function childSummary(role, storySummary) {
@@ -36,12 +56,15 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   }
 
   function subtaskFields(projectKey, parentKey, role, storySummary) {
-    return {
+    var fields = {
       project: { key: String(projectKey || "") },
-      summary: childSummary(role, storySummary),
+      summary: String(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
       issuetype: { name: String((role && role.issueType) || "") },
       description: "Создано автоматически из журнала замечаний.",
     };
+    appendAssignee(fields, role && role.assignee);
+    appendTimetracking(fields, role && role.originalEstimate, role && role.remainingEstimate);
+    return fields;
   }
 
   function childLinkPayload(parentKey, childKey) {
@@ -66,8 +89,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     );
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, storySummary, index, errors) {
-    var roles = config.CREATE_TEMPLATE_ROLES || [];
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors) {
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
     }
@@ -76,16 +98,16 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
         }
         return linkChildIssue(api, parentKey, key).then(function(link) {
           if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
         });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
       }
     );
   }
@@ -103,7 +125,21 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
         var key = createdKey(res);
         if (!key) return { ok: false, errors: ["Story response missing issue key"] };
         if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: [] };
-        return createSubtasksSequential(api, opts.projectKey, key, row && row.summary, 0, []).then(function(sub) {
+        var storySummary = opts.summary != null ? opts.summary : row && row.summary;
+        var roles = Array.isArray(opts.childTasks)
+          ? opts.childTasks
+          : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
+              var out = {};
+              Object.keys(role || {}).forEach(function(name) {
+                out[name] = role[name];
+              });
+              out.summary = childSummary(role, storySummary);
+              return out;
+            });
+        roles = roles.filter(function(role) {
+          return !role || role.enabled !== false;
+        });
+        return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
           return {
             ok: sub.errors.length === 0,
             partial: sub.errors.length > 0,

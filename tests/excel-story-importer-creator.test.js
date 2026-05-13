@@ -93,3 +93,87 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(links[0].outwardIssue.key, "EVOSCADA-2000");
   assert.equal(links[0].inwardIssue.key, "EVOSCADA-2001");
 });
+
+test("createRow uses edited dialog fields, assignees, and selected child tasks", async function () {
+  const creator = loadCreator();
+  const calls = [];
+  const links = [];
+  const api = {
+    createIssue: function (payload) {
+      calls.push(payload);
+      return Promise.resolve({ key: "EVOSCADA-" + String(3000 + calls.length - 1) });
+    },
+    createIssueLink: function (payload) {
+      links.push(payload);
+      return Promise.resolve({});
+    },
+  };
+
+  const result = await creator.createRow(
+    api,
+    {
+      summary: "Original story",
+      sourceColumns: { "Замечание": "Original story", "Комментарий": "Old" },
+      alreadyLinked: false,
+    },
+    {
+      projectKey: "EVOSCADA",
+      epicKey: "",
+      issueType: "Story",
+      summary: "Edited story",
+      assignee: { accountId: "story-acc", name: "ignored" },
+      originalEstimate: "2h",
+      remainingEstimate: "1h",
+      sourceRows: [
+        { name: "Замечание", value: "Edited story" },
+        { name: "Комментарий", value: "Changed in modal" },
+      ],
+      createSubtasks: true,
+      childTasks: [
+        {
+          enabled: true,
+          role: "SE",
+          issueType: "System Engineer",
+          summary: "[SE] Edited story",
+          assignee: { name: "se-user" },
+          originalEstimate: "4h",
+          remainingEstimate: "4h",
+        },
+        {
+          enabled: false,
+          role: "FE",
+          issueType: "Frontend Task",
+          summary: "[FE] Edited story",
+          assignee: { name: "fe-user" },
+          originalEstimate: "6h",
+          remainingEstimate: "6h",
+        },
+        {
+          enabled: true,
+          role: "QA",
+          issueType: "QA",
+          summary: "[QA] Edited story",
+          assignee: { accountId: "qa-acc" },
+          originalEstimate: "3h",
+          remainingEstimate: "2h",
+        },
+      ],
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].fields.summary, "Edited story");
+  assert.equal(calls[0].fields.assignee.accountId, "story-acc");
+  assert.equal(calls[0].fields.timetracking.originalEstimate, "2h");
+  assert.equal(calls[0].fields.timetracking.remainingEstimate, "1h");
+  assert.match(calls[0].fields.description, /Changed in modal/);
+  assert.doesNotMatch(calls[0].fields.description, /Old/);
+  assert.equal(calls[1].fields.summary, "[SE] Edited story");
+  assert.equal(calls[1].fields.assignee.name, "se-user");
+  assert.equal(calls[1].fields.timetracking.originalEstimate, "4h");
+  assert.equal(calls[2].fields.summary, "[QA] Edited story");
+  assert.equal(calls[2].fields.assignee.accountId, "qa-acc");
+  assert.equal(calls[2].fields.timetracking.remainingEstimate, "2h");
+  assert.equal(links.length, 2);
+});

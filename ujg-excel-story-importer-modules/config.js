@@ -30,11 +30,11 @@ define("_ujgESI_config", [], function() {
   ];
 
   var CREATE_TEMPLATE_ROLES = [
-    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
-    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
-    { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
-    { role: "QA", issueType: "QA", summary: "Тестирование" },
-    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой" },
+    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI", originalEstimate: "6h", remainingEstimate: "6h" },
+    { role: "BE", issueType: "Backend Task", summary: "Реализация логики", originalEstimate: "8h", remainingEstimate: "8h" },
+    { role: "QA", issueType: "QA", summary: "Тестирование", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
   ];
 
   function trimSlash(s) {

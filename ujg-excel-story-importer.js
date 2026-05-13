@@ -35,11 +35,11 @@ define("_ujgESI_config", [], function() {
   ];
 
   var CREATE_TEMPLATE_ROLES = [
-    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
-    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
-    { role: "BE", issueType: "Backend Task", summary: "Реализация логики" },
-    { role: "QA", issueType: "QA", summary: "Тестирование" },
-    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой" },
+    { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI", originalEstimate: "6h", remainingEstimate: "6h" },
+    { role: "BE", issueType: "Backend Task", summary: "Реализация логики", originalEstimate: "8h", remainingEstimate: "8h" },
+    { role: "QA", issueType: "QA", summary: "Тестирование", originalEstimate: "4h", remainingEstimate: "4h" },
+    { role: "DevOps", issueType: "DevOps", summary: "Подготовка окружения / деплой", originalEstimate: "4h", remainingEstimate: "4h" },
   ];
 
   function trimSlash(s) {
@@ -112,8 +112,17 @@ define("_ujgESI_description", [], function() {
     return lines.join("\n");
   }
 
+  function buildDescriptionFromRows(rows) {
+    var lines = ["Импортировано из журнала замечаний.", "", "||Поле||Значение||"];
+    (rows || []).forEach(function(row) {
+      appendRow(lines, row && row.name, row && row.value);
+    });
+    return lines.join("\n");
+  }
+
   return {
     buildDescription: buildDescription,
+    buildDescriptionFromRows: buildDescriptionFromRows,
     escapeCell: escapeCell,
   };
 });
@@ -304,14 +313,34 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     var opts = options || {};
     var fields = {
       project: { key: String(opts.projectKey || "") },
-      summary: String(row && row.summary != null ? row.summary : "").trim(),
-      issuetype: { name: config.STORY_ISSUE_TYPE },
-      description: description.buildDescription(row),
+      summary: String(opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : "").trim(),
+      issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
+      description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
     if (opts.epicKey && config.EPIC_LINK_FIELD) {
       fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
     }
+    appendAssignee(fields, opts.assignee);
+    appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
     return fields;
+  }
+
+  function appendAssignee(fields, assignee) {
+    if (!fields || !assignee || typeof assignee !== "object") return;
+    if (assignee.accountId != null && String(assignee.accountId).trim()) {
+      fields.assignee = { accountId: String(assignee.accountId).trim() };
+    } else if (assignee.name != null && String(assignee.name).trim()) {
+      fields.assignee = { name: String(assignee.name).trim() };
+    }
+  }
+
+  function appendTimetracking(fields, originalEstimate, remainingEstimate) {
+    var original = originalEstimate != null ? String(originalEstimate).trim() : "";
+    var remaining = remainingEstimate != null ? String(remainingEstimate).trim() : "";
+    if (!fields || (!original && !remaining)) return;
+    fields.timetracking = {};
+    if (original) fields.timetracking.originalEstimate = original;
+    if (remaining) fields.timetracking.remainingEstimate = remaining;
   }
 
   function childSummary(role, storySummary) {
@@ -321,12 +350,15 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   }
 
   function subtaskFields(projectKey, parentKey, role, storySummary) {
-    return {
+    var fields = {
       project: { key: String(projectKey || "") },
-      summary: childSummary(role, storySummary),
+      summary: String(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
       issuetype: { name: String((role && role.issueType) || "") },
       description: "Создано автоматически из журнала замечаний.",
     };
+    appendAssignee(fields, role && role.assignee);
+    appendTimetracking(fields, role && role.originalEstimate, role && role.remainingEstimate);
+    return fields;
   }
 
   function childLinkPayload(parentKey, childKey) {
@@ -351,8 +383,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     );
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, storySummary, index, errors) {
-    var roles = config.CREATE_TEMPLATE_ROLES || [];
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors) {
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
     }
@@ -361,16 +392,16 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
         }
         return linkChildIssue(api, parentKey, key).then(function(link) {
           if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
         });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
       }
     );
   }
@@ -388,7 +419,21 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
         var key = createdKey(res);
         if (!key) return { ok: false, errors: ["Story response missing issue key"] };
         if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: [] };
-        return createSubtasksSequential(api, opts.projectKey, key, row && row.summary, 0, []).then(function(sub) {
+        var storySummary = opts.summary != null ? opts.summary : row && row.summary;
+        var roles = Array.isArray(opts.childTasks)
+          ? opts.childTasks
+          : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
+              var out = {};
+              Object.keys(role || {}).forEach(function(name) {
+                out[name] = role[name];
+              });
+              out.summary = childSummary(role, storySummary);
+              return out;
+            });
+        roles = roles.filter(function(role) {
+          return !role || role.enabled !== false;
+        });
+        return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
           return {
             ok: sub.errors.length === 0,
             partial: sub.errors.length > 0,
@@ -461,6 +506,17 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         contentType: "application/json",
         dataType: "json",
         data: JSON.stringify(payload),
+      });
+    },
+    searchUsers: function(query) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/user/picker",
+        type: "GET",
+        dataType: "json",
+        data: {
+          query: String(query || ""),
+          maxResults: 20,
+        },
       });
     },
     toJqlToken: toJqlToken,
@@ -718,6 +774,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .attr("href", String(base).replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key))
           .attr("target", "_blank")
           .attr("rel", "noreferrer noopener")
+          .addClass("ujg-esi-jira-link")
           .text(key)
       );
     } else {
@@ -746,25 +803,64 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($td);
   }
 
-  function appendConfirmItem($list, label, value) {
-    $list.append($("<dt/>").text(label), $("<dd/>").text(value != null && String(value) ? String(value) : "—"));
+  function appendConfirmControl($list, label, $control) {
+    $list.append($("<dt/>").text(label), $("<dd/>").append($control));
+  }
+
+  function appendTextInput(className, value, onChange) {
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .addClass(className || "")
+      .val(value != null ? String(value) : "");
+    $input.on("input", function() {
+      onChange($(this).val());
+    });
+    return $input;
+  }
+
+  function appendSelect(className, value, rows, onChange) {
+    var $select = $("<select/>").addClass(className || "");
+    (rows || []).forEach(function(row) {
+      $select.append($("<option/>").attr("value", row.value).text(row.label));
+    });
+    $select.val(value || "");
+    $select.on("change", function() {
+      onChange($(this).val());
+    });
+    return $select;
+  }
+
+  function userOptions(state) {
+    var out = [{ value: "", label: state && state.usersLoading ? "Загрузка..." : "Не назначать" }];
+    (state.users || []).forEach(function(user) {
+      out.push({ value: String(user.id || ""), label: String(user.label || user.id || "") });
+    });
+    return out;
+  }
+
+  function appendAssigneeSelect(className, value, state, onChange) {
+    var $select = appendSelect(className, value, userOptions(state), onChange);
+    if (state && state.usersLoading) $select.prop("disabled", true);
+    return $select;
   }
 
   function appendConfirmSourceRows($parent, rows) {
     var $table = $("<table/>").addClass("ujg-esi-confirm-source");
     var $tbody = $("<tbody/>");
-    (rows || []).forEach(function(row) {
+    (rows || []).forEach(function(row, index) {
       $tbody.append(
         $("<tr/>")
           .append($("<th/>").text(row.name != null ? String(row.name) : ""))
-          .append($("<td/>").text(row.value != null ? String(row.value) : ""))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-source-value", row.value, function(value) {
+            if (services && services.onDialogSourceChange) services.onDialogSourceChange(index, value);
+          })))
       );
     });
     $table.append($tbody);
     $parent.append($("<div/>").addClass("ujg-esi-confirm-scroll").append($table));
   }
 
-  function appendConfirmChildTasks($parent, tasks) {
+  function appendConfirmChildTasks($parent, tasks, state) {
     var rows = tasks || [];
     if (!rows.length) {
       $parent.append($("<div/>").addClass("ujg-esi-confirm-empty").text("Не создавать"));
@@ -774,18 +870,44 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $table.append(
       $("<thead/>").append(
         $("<tr/>")
+          .append($("<th/>").text("Создать"))
           .append($("<th/>").text("Роль"))
           .append($("<th/>").text("Тип Jira"))
           .append($("<th/>").text("Название"))
+          .append($("<th/>").text("Исполнитель"))
+          .append($("<th/>").text("Первоначальная оценка"))
+          .append($("<th/>").text("Оставшееся время"))
       )
     );
     var $tbody = $("<tbody/>");
-    rows.forEach(function(task) {
+    rows.forEach(function(task, index) {
+      var enabled = task.enabled !== false;
+      var $enabled = $("<input/>")
+        .attr("type", "checkbox")
+        .addClass("ujg-esi-confirm-child-enabled")
+        .prop("checked", enabled)
+        .on("change", function() {
+          if (services && services.onDialogChildToggle) services.onDialogChildToggle(index, !!$(this).prop("checked"));
+        });
       $tbody.append(
-        $("<tr/>")
+        $("<tr/>").toggleClass("ujg-esi-confirm-child-disabled", !enabled)
+          .append($("<td/>").append($enabled))
           .append($("<td/>").text(task.role || ""))
-          .append($("<td/>").text(task.issueType || ""))
-          .append($("<td/>").text(task.summary || ""))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-type", task.issueType, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "issueType", value);
+          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
+          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendAssigneeSelect("ujg-esi-confirm-child-assignee", task.assigneeId || "", state, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "assigneeId", value);
+          }).prop("disabled", !enabled || state.usersLoading)))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
+          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-remaining", task.remainingEstimate, function(value) {
+            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "remainingEstimate", value);
+          }).prop("disabled", !enabled)))
       );
     });
     $table.append($tbody);
@@ -802,11 +924,32 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .attr("aria-modal", "true");
     var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
 
-    appendConfirmItem($fields, "Проект", dialog.projectText || dialog.projectKey);
-    appendConfirmItem($fields, "Тип Jira", dialog.issueType || "Story");
-    appendConfirmItem($fields, "Epic", dialog.epicText || "Без Epic");
-    appendConfirmItem($fields, "Название", dialog.summary);
-    if (dialog.childTasks && dialog.childTasks.length) appendConfirmItem($fields, "Связь", "child of Story");
+    appendConfirmControl($fields, "Проект", appendSelect("ujg-esi-confirm-project", dialog.projectKey, (state.projects || []).map(function(project) {
+      return { value: project.key || "", label: projectLabel(project) };
+    }), function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("projectKey", value);
+    }));
+    appendConfirmControl($fields, "Тип Jira", appendTextInput("ujg-esi-confirm-issue-type", dialog.issueType || "Story", function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("issueType", value);
+    }));
+    appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
+      return { value: epic.key || "", label: epicLabel(epic) };
+    })), function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
+    }));
+    appendConfirmControl($fields, "Название", appendTextInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
+    }));
+    appendConfirmControl($fields, "Исполнитель", appendAssigneeSelect("ujg-esi-confirm-assignee", dialog.assigneeId || "", state, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("assigneeId", value);
+    }));
+    appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);
+    }));
+    appendConfirmControl($fields, "Оставшееся время", appendTextInput("ujg-esi-confirm-remaining", dialog.remainingEstimate, function(value) {
+      if (services && services.onDialogFieldChange) services.onDialogFieldChange("remainingEstimate", value);
+    }));
+    if (dialog.childTasks && dialog.childTasks.length) appendConfirmControl($fields, "Связь", $("<span/>").text("child of Story"));
 
     $modal.append(
       $("<div/>")
@@ -821,10 +964,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           }))
     );
     $modal.append($fields);
+    if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     $modal.append($("<h4/>").text("Описание"));
     appendConfirmSourceRows($modal, dialog.sourceRows);
     $modal.append($("<h4/>").text("Дочерние задачи"));
-    appendConfirmChildTasks($modal, dialog.childTasks);
+    appendConfirmChildTasks($modal, dialog.childTasks, state);
     $modal.append(
       $("<div/>")
         .addClass("ujg-esi-confirm-actions")
@@ -873,7 +1017,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $tbody = $("<tbody/>");
     rows.forEach(function(row, index) {
       var cols = row.sourceColumns || {};
-      var $tr = $("<tr/>").addClass("ujg-esi-row-" + String(row.status || "ready"));
+      var $tr = $("<tr/>")
+        .addClass("ujg-esi-row-" + String(row.status || "ready"))
+        .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
@@ -950,6 +1096,28 @@ define("_ujgESI_main", [
     return Array.isArray(data) ? data : [];
   }
 
+  function normalizeUsers(data) {
+    var rows = data && Array.isArray(data.users) ? data.users : Array.isArray(data) ? data : [];
+    return rows
+      .map(function(user) {
+        var id = user && user.accountId != null && String(user.accountId).trim()
+          ? String(user.accountId).trim()
+          : user && user.name != null && String(user.name).trim()
+            ? String(user.name).trim()
+            : user && user.key != null && String(user.key).trim()
+              ? String(user.key).trim()
+              : "";
+        var label = user && user.displayName != null && String(user.displayName).trim()
+          ? String(user.displayName).trim()
+          : user && user.name != null && String(user.name).trim()
+            ? String(user.name).trim()
+            : id;
+        if (!id) return null;
+        return { id: id, label: label, raw: user };
+      })
+      .filter(Boolean);
+  }
+
   function projectLabel(project) {
     var key = project && project.key != null ? String(project.key) : "";
     var name = project && project.name != null ? String(project.name) : "";
@@ -990,6 +1158,9 @@ define("_ujgESI_main", [
       error: "",
       parseMeta: null,
       createDialog: null,
+      users: [],
+      usersLoading: false,
+      usersError: "",
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
 
@@ -1007,6 +1178,31 @@ define("_ujgESI_main", [
       if (!key) return "Без Epic";
       var list = state.epics || [];
       var found = list.filter(function(epic) {
+        return epic && String(epic.key || "") === key;
+      })[0];
+      return epicLabel(found) || key;
+    }
+
+    function selectedUser(userId) {
+      var id = userId != null ? String(userId) : "";
+      var found = (state.users || []).filter(function(user) {
+        return user && String(user.id || "") === id;
+      })[0];
+      return found && found.raw ? found.raw : null;
+    }
+
+    function selectedProjectTextFor(projectKey) {
+      var key = projectKey || "";
+      var found = (state.projects || []).filter(function(project) {
+        return project && String(project.key || "") === key;
+      })[0];
+      return projectLabel(found) || key;
+    }
+
+    function selectedEpicTextFor(epicKey) {
+      var key = epicKey || "";
+      if (!key) return "Без Epic";
+      var found = (state.epics || []).filter(function(epic) {
         return epic && String(epic.key || "") === key;
       })[0];
       return epicLabel(found) || key;
@@ -1030,9 +1226,23 @@ define("_ujgESI_main", [
       return (prefix ? "[" + prefix + "] " : "") + summary;
     }
 
+    function estimateHours(value) {
+      var text = value != null ? String(value) : "";
+      var match = /(\d+(?:[.,]\d+)?)/.exec(text);
+      return match ? Number(match[1].replace(",", ".")) : 0;
+    }
+
+    function storyEstimate(roles) {
+      var total = (roles || []).reduce(function(sum, role) {
+        return sum + estimateHours(role && role.originalEstimate);
+      }, 0);
+      return (total || 1) + "h";
+    }
+
     function buildCreateDialog(row, index) {
       var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
       var summary = row && row.summary != null ? String(row.summary) : "";
+      var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       return {
         rowIndex: index,
         issueType: config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story",
@@ -1041,12 +1251,21 @@ define("_ujgESI_main", [
         epicKey: state.epicKey,
         epicText: selectedEpicText(),
         summary: summary,
+        assigneeId: "",
+        assignee: null,
+        originalEstimate: estimate,
+        remainingEstimate: estimate,
         createSubtasks: state.createSubtasks !== false,
         childTasks: state.createSubtasks !== false ? roles.map(function(role) {
           return {
+            enabled: true,
             role: role && role.role != null ? String(role.role) : "",
             issueType: role && role.issueType != null ? String(role.issueType) : "",
             summary: childSummary(role, summary),
+            assigneeId: "",
+            assignee: null,
+            originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate) : "1h",
+            remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate) : "1h",
           };
         }) : [],
         sourceRows: sourceRows(row),
@@ -1096,6 +1315,26 @@ define("_ujgESI_main", [
         },
         function(err) {
           setError("Не удалось загрузить Epic: " + (err && err.statusText ? err.statusText : "request failed"));
+        }
+      );
+    }
+
+    function loadUsers() {
+      if (!api || typeof api.searchUsers !== "function") return Promise.resolve();
+      state.usersLoading = true;
+      state.usersError = "";
+      render();
+      return promiseOf(api.searchUsers("")).then(
+        function(data) {
+          state.users = normalizeUsers(data);
+          state.usersLoading = false;
+          state.usersError = "";
+          render();
+        },
+        function(err) {
+          state.usersLoading = false;
+          state.usersError = "Не удалось загрузить исполнителей: " + (err && err.statusText ? err.statusText : "request failed");
+          render();
         }
       );
     }
@@ -1162,7 +1401,14 @@ define("_ujgESI_main", [
         creator.createRow(api, row, {
           projectKey: dialog.projectKey,
           epicKey: dialog.epicKey,
+          issueType: dialog.issueType,
+          summary: dialog.summary,
+          assignee: dialog.assignee,
+          originalEstimate: dialog.originalEstimate,
+          remainingEstimate: dialog.remainingEstimate,
+          sourceRows: dialog.sourceRows,
           createSubtasks: dialog.createSubtasks,
+          childTasks: dialog.childTasks,
         })
       ).then(function(result) {
         completeCreate(row, result);
@@ -1180,6 +1426,75 @@ define("_ujgESI_main", [
       }
       state.error = "";
       state.createDialog = buildCreateDialog(row, i);
+      render();
+      loadUsers();
+    }
+
+    function onDialogFieldChange(field, value) {
+      var dialog = state.createDialog;
+      var key = field != null ? String(field) : "";
+      if (!dialog) return;
+      if (key === "summary") {
+        dialog.summary = value != null ? String(value) : "";
+        (dialog.childTasks || []).forEach(function(task) {
+          task.summary = childSummary(task, dialog.summary);
+        });
+      } else if (key === "projectKey") {
+        dialog.projectKey = value != null ? String(value) : "";
+        dialog.projectText = selectedProjectTextFor(dialog.projectKey);
+        dialog.epicKey = "";
+        dialog.epicText = "Без Epic";
+        loadEpics(dialog.projectKey);
+      } else if (key === "issueType") {
+        dialog.issueType = value != null ? String(value) : "";
+      } else if (key === "epicKey") {
+        dialog.epicKey = value != null ? String(value) : "";
+        dialog.epicText = selectedEpicTextFor(dialog.epicKey);
+      } else if (key === "assigneeId") {
+        dialog.assigneeId = value != null ? String(value) : "";
+        dialog.assignee = selectedUser(dialog.assigneeId);
+      } else if (key === "originalEstimate") {
+        dialog.originalEstimate = value != null ? String(value) : "";
+      } else if (key === "remainingEstimate") {
+        dialog.remainingEstimate = value != null ? String(value) : "";
+      }
+      render();
+    }
+
+    function onDialogSourceChange(index, value) {
+      var dialog = state.createDialog;
+      var i = Number(index);
+      if (!dialog || !dialog.sourceRows || !dialog.sourceRows[i]) return;
+      dialog.sourceRows[i].value = value != null ? String(value) : "";
+      render();
+    }
+
+    function onDialogChildToggle(index, enabled) {
+      var dialog = state.createDialog;
+      var i = Number(index);
+      if (!dialog || !dialog.childTasks || !dialog.childTasks[i]) return;
+      dialog.childTasks[i].enabled = !!enabled;
+      render();
+    }
+
+    function onDialogChildChange(index, field, value) {
+      var dialog = state.createDialog;
+      var i = Number(index);
+      var key = field != null ? String(field) : "";
+      var task = dialog && dialog.childTasks ? dialog.childTasks[i] : null;
+      if (!task) return;
+      if (key === "summary") {
+        task.summary = value != null ? String(value) : "";
+      } else if (key === "issueType") {
+        task.issueType = value != null ? String(value) : "";
+      } else if (key === "assigneeId") {
+        task.assigneeId = value != null ? String(value) : "";
+        task.assignee = selectedUser(task.assigneeId);
+      } else if (key === "originalEstimate") {
+        task.originalEstimate = value != null ? String(value) : "";
+      } else if (key === "remainingEstimate") {
+        task.remainingEstimate = value != null ? String(value) : "";
+      }
       render();
     }
 
@@ -1202,6 +1517,10 @@ define("_ujgESI_main", [
       onCreateRow: onCreateRow,
       onConfirmCreate: onConfirmCreate,
       onCancelCreate: onCancelCreate,
+      onDialogFieldChange: onDialogFieldChange,
+      onDialogSourceChange: onDialogSourceChange,
+      onDialogChildToggle: onDialogChildToggle,
+      onDialogChildChange: onDialogChildChange,
     });
 
     rendering.render(state);
