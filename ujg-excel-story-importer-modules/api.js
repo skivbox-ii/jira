@@ -11,6 +11,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
   }
 
   return {
+    baseUrl: config.baseUrl,
     getProjects: function() {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/project",

@@ -67,6 +67,7 @@ test("rendering module exposes create confirmation modal", function () {
 test("api module quotes project keys before embedding them in JQL", function () {
   const source = read("ujg-excel-story-importer-modules/api.js");
 
+  assert.match(source, /baseUrl:\s*config\.baseUrl/);
   assert.match(source, /function quoteJqlString/);
   assert.match(source, /function toJqlToken/);
   assert.match(source, /project = " \+ toJqlToken\(projectKey\)/);
@@ -76,6 +77,15 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /\/rest\/api\/2\/user\/picker/);
   assert.match(source, /getProjectCreateMeta/);
   assert.match(source, /\/rest\/api\/2\/issue\/createmeta/);
+});
+
+test("rendering module always renders Jira keys as new-tab browse links", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /function issueBrowseUrl/);
+  assert.match(source, /\/browse\//);
+  assert.match(source, /target", "_blank"/);
+  assert.doesNotMatch(source, /if \(key && base\)/);
 });
 
 test("importer CSS is scoped to widget root", function () {

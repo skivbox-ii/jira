@@ -369,7 +369,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   }
 
   function appendComponent(fields, row) {
-    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), true);
+    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), false);
     if (component) fields.components = [{ name: component }];
   }
 
@@ -578,6 +578,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
   }
 
   return {
+    baseUrl: config.baseUrl,
     getProjects: function() {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/project",
@@ -882,14 +883,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($("<td/>").addClass(className || "").text(value != null ? String(value) : ""));
   }
 
+  function issueBrowseUrl(key, baseUrl) {
+    var path = "/browse/" + encodeURIComponent(String(key || ""));
+    var base = baseUrl != null ? String(baseUrl).replace(/\/+$/, "") : "";
+    return base ? base + path : path;
+  }
+
   function appendJiraCell($tr, row, state) {
     var key = row.createdKey || row.jiraKey || "";
     var $td = $("<td/>");
     var base = state.baseUrl || "";
-    if (key && base) {
+    if (key) {
       $td.append(
         $("<a/>")
-          .attr("href", String(base).replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key))
+          .attr("href", issueBrowseUrl(key, base))
           .attr("target", "_blank")
           .attr("rel", "noreferrer noopener")
           .addClass("ujg-esi-jira-link")

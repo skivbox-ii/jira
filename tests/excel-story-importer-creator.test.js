@@ -247,7 +247,7 @@ test("storyFields omits Epic Link when create metadata marks it unavailable", fu
   assert.equal(fields.customfield_10014, undefined);
 });
 
-test("storyFields maps unknown module as component and omits unknown priority", function () {
+test("storyFields omits unknown module component and unknown priority", function () {
   const creator = loadCreator();
 
   const fields = creator.storyFields(
@@ -255,14 +255,13 @@ test("storyFields maps unknown module as component and omits unknown priority", 
       summary: "Unknown values",
       sourceColumns: {
         "Замечание": "Unknown values",
-        "Модуль": "Новый модуль",
+        "Модуль": "Примитивы (tnWP)",
         "Приоритет": "Срочно когда-нибудь",
       },
     },
     { projectKey: "EVOSCADA" }
   );
 
-  assert.equal(fields.components.length, 1);
-  assert.equal(fields.components[0].name, "Новый модуль");
+  assert.equal(fields.components, undefined);
   assert.equal(fields.priority, undefined);
 });

@@ -46,7 +46,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   }
 
   function appendComponent(fields, row) {
-    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), true);
+    var component = lookupMappedValue(config.MODULE_COMPONENT_MAP, sourceValue(row, "Модуль"), false);
     if (component) fields.components = [{ name: component }];
   }
 
