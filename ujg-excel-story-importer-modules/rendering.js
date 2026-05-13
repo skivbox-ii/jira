@@ -211,7 +211,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       $("<thead/>").append(
         $("<tr/>")
           .append($("<th/>").text("Роль"))
-          .append($("<th/>").text("Тип"))
+          .append($("<th/>").text("Тип Jira"))
           .append($("<th/>").text("Название"))
       )
     );
@@ -239,9 +239,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
 
     appendConfirmItem($fields, "Проект", dialog.projectText || dialog.projectKey);
-    appendConfirmItem($fields, "Тип", dialog.issueType || "Story");
+    appendConfirmItem($fields, "Тип Jira", dialog.issueType || "Story");
     appendConfirmItem($fields, "Epic", dialog.epicText || "Без Epic");
     appendConfirmItem($fields, "Название", dialog.summary);
+    if (dialog.childTasks && dialog.childTasks.length) appendConfirmItem($fields, "Связь", "child of Story");
 
     $modal.append(
       $("<div/>")

@@ -11,6 +11,7 @@ define("_ujgESI_config", [], function() {
   var SUMMARY_COLUMN = "Замечание";
   var JIRA_COLUMN = "Jira";
   var STORY_ISSUE_TYPE = "Story";
+  var CHILD_LINK_TYPE_NAME = "Child";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
 
   var KNOWN_COLUMNS = [
@@ -70,6 +71,7 @@ define("_ujgESI_config", [], function() {
     SUMMARY_COLUMN: SUMMARY_COLUMN,
     JIRA_COLUMN: JIRA_COLUMN,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
+    CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
@@ -312,31 +314,63 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return fields;
   }
 
-  function subtaskFields(projectKey, parentKey, role) {
+  function childSummary(role, storySummary) {
+    var prefix = role && role.role != null ? String(role.role).trim() : "";
+    var summary = storySummary != null ? String(storySummary).trim() : "";
+    return (prefix ? "[" + prefix + "] " : "") + summary;
+  }
+
+  function subtaskFields(projectKey, parentKey, role, storySummary) {
     return {
       project: { key: String(projectKey || "") },
-      parent: { key: String(parentKey || "") },
-      summary: String((role && role.summary) || ""),
+      summary: childSummary(role, storySummary),
       issuetype: { name: String((role && role.issueType) || "") },
       description: "Создано автоматически из журнала замечаний.",
     };
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, index, errors) {
+  function childLinkPayload(parentKey, childKey) {
+    return {
+      type: { name: String(config.CHILD_LINK_TYPE_NAME || "Child") },
+      outwardIssue: { key: String(parentKey || "") },
+      inwardIssue: { key: String(childKey || "") },
+    };
+  }
+
+  function linkChildIssue(api, parentKey, childKey) {
+    if (!api || typeof api.createIssueLink !== "function") {
+      return Promise.resolve({ ok: false, error: "Jira issue link API is not available" });
+    }
+    return Promise.resolve(api.createIssueLink(childLinkPayload(parentKey, childKey))).then(
+      function() {
+        return { ok: true };
+      },
+      function(err) {
+        return { ok: false, error: ajaxErrorText(err) };
+      }
+    );
+  }
+
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, index, errors) {
     var roles = config.CREATE_TEMPLATE_ROLES || [];
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
     }
-    return Promise.resolve(api.createIssue({ fields: subtaskFields(projectKey, parentKey, roles[index]) })).then(
+    return Promise.resolve(api.createIssue({ fields: subtaskFields(projectKey, parentKey, roles[index], storySummary) })).then(
       function(res) {
-        if (!createdKey(res)) {
+        var key = createdKey(res);
+        if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
         }
-        return createSubtasksSequential(api, projectKey, parentKey, index + 1, errors);
+        return linkChildIssue(api, parentKey, key).then(function(link) {
+          if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
+        });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, index + 1, errors);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, index + 1, errors);
       }
     );
   }
@@ -354,7 +388,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
         var key = createdKey(res);
         if (!key) return { ok: false, errors: ["Story response missing issue key"] };
         if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: [] };
-        return createSubtasksSequential(api, opts.projectKey, key, 0, []).then(function(sub) {
+        return createSubtasksSequential(api, opts.projectKey, key, row && row.summary, 0, []).then(function(sub) {
           return {
             ok: sub.errors.length === 0,
             partial: sub.errors.length > 0,
@@ -373,6 +407,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     createRow: createRow,
     storyFields: storyFields,
     subtaskFields: subtaskFields,
+    childSummary: childSummary,
+    childLinkPayload: childLinkPayload,
   };
 });
 
@@ -412,6 +448,15 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     createIssue: function(payload) {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/issue",
+        type: "POST",
+        contentType: "application/json",
+        dataType: "json",
+        data: JSON.stringify(payload),
+      });
+    },
+    createIssueLink: function(payload) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issueLink",
         type: "POST",
         contentType: "application/json",
         dataType: "json",
@@ -730,7 +775,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       $("<thead/>").append(
         $("<tr/>")
           .append($("<th/>").text("Роль"))
-          .append($("<th/>").text("Тип"))
+          .append($("<th/>").text("Тип Jira"))
           .append($("<th/>").text("Название"))
       )
     );
@@ -758,9 +803,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
 
     appendConfirmItem($fields, "Проект", dialog.projectText || dialog.projectKey);
-    appendConfirmItem($fields, "Тип", dialog.issueType || "Story");
+    appendConfirmItem($fields, "Тип Jira", dialog.issueType || "Story");
     appendConfirmItem($fields, "Epic", dialog.epicText || "Без Epic");
     appendConfirmItem($fields, "Название", dialog.summary);
+    if (dialog.childTasks && dialog.childTasks.length) appendConfirmItem($fields, "Связь", "child of Story");
 
     $modal.append(
       $("<div/>")
@@ -978,8 +1024,15 @@ define("_ujgESI_main", [
       return out;
     }
 
+    function childSummary(role, storySummary) {
+      var prefix = role && role.role != null ? String(role.role).trim() : "";
+      var summary = storySummary != null ? String(storySummary).trim() : "";
+      return (prefix ? "[" + prefix + "] " : "") + summary;
+    }
+
     function buildCreateDialog(row, index) {
       var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
+      var summary = row && row.summary != null ? String(row.summary) : "";
       return {
         rowIndex: index,
         issueType: config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story",
@@ -987,13 +1040,13 @@ define("_ujgESI_main", [
         projectText: selectedProjectText(),
         epicKey: state.epicKey,
         epicText: selectedEpicText(),
-        summary: row && row.summary != null ? String(row.summary) : "",
+        summary: summary,
         createSubtasks: state.createSubtasks !== false,
         childTasks: state.createSubtasks !== false ? roles.map(function(role) {
           return {
             role: role && role.role != null ? String(role.role) : "",
             issueType: role && role.issueType != null ? String(role.issueType) : "",
-            summary: role && role.summary != null ? String(role.summary) : "",
+            summary: childSummary(role, summary),
           };
         }) : [],
         sourceRows: sourceRows(row),

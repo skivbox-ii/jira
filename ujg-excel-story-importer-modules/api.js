@@ -39,6 +39,15 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify(payload),
       });
     },
+    createIssueLink: function(payload) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issueLink",
+        type: "POST",
+        contentType: "application/json",
+        dataType: "json",
+        data: JSON.stringify(payload),
+      });
+    },
     toJqlToken: toJqlToken,
   };
 });

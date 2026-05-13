@@ -104,7 +104,7 @@ test("row create opens confirmation before creating without Epic", async functio
               summary: state.createDialog.summary,
               epicText: state.createDialog.epicText,
               childTasks: state.createDialog.childTasks.map(function (task) {
-                return task.role + ":" + task.issueType;
+                return task.role + ":" + task.issueType + ":" + task.summary;
               }),
             }
           : null,
@@ -189,11 +189,11 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.summary, "Test jira task");
   assert.equal(last.createDialog.epicText, "Без Epic");
   assert.deepEqual(last.createDialog.childTasks, [
-    "SE:System Engineer",
-    "FE:Frontend Task",
-    "BE:Backend Task",
-    "QA:QA",
-    "DevOps:DevOps",
+    "SE:System Engineer:[SE] Test jira task",
+    "FE:Frontend Task:[FE] Test jira task",
+    "BE:Backend Task:[BE] Test jira task",
+    "QA:QA:[QA] Test jira task",
+    "DevOps:DevOps:[DevOps] Test jira task",
   ]);
   assert.equal(last.rows[0].status, "ready");
 

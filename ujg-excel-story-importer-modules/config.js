@@ -6,6 +6,7 @@ define("_ujgESI_config", [], function() {
   var SUMMARY_COLUMN = "Замечание";
   var JIRA_COLUMN = "Jira";
   var STORY_ISSUE_TYPE = "Story";
+  var CHILD_LINK_TYPE_NAME = "Child";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
 
   var KNOWN_COLUMNS = [
@@ -65,6 +66,7 @@ define("_ujgESI_config", [], function() {
     SUMMARY_COLUMN: SUMMARY_COLUMN,
     JIRA_COLUMN: JIRA_COLUMN,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
+    CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,

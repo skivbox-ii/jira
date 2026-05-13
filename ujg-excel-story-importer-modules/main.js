@@ -101,8 +101,15 @@ define("_ujgESI_main", [
       return out;
     }
 
+    function childSummary(role, storySummary) {
+      var prefix = role && role.role != null ? String(role.role).trim() : "";
+      var summary = storySummary != null ? String(storySummary).trim() : "";
+      return (prefix ? "[" + prefix + "] " : "") + summary;
+    }
+
     function buildCreateDialog(row, index) {
       var roles = config && Array.isArray(config.CREATE_TEMPLATE_ROLES) ? config.CREATE_TEMPLATE_ROLES : [];
+      var summary = row && row.summary != null ? String(row.summary) : "";
       return {
         rowIndex: index,
         issueType: config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story",
@@ -110,13 +117,13 @@ define("_ujgESI_main", [
         projectText: selectedProjectText(),
         epicKey: state.epicKey,
         epicText: selectedEpicText(),
-        summary: row && row.summary != null ? String(row.summary) : "",
+        summary: summary,
         createSubtasks: state.createSubtasks !== false,
         childTasks: state.createSubtasks !== false ? roles.map(function(role) {
           return {
             role: role && role.role != null ? String(role.role) : "",
             issueType: role && role.issueType != null ? String(role.issueType) : "",
-            summary: role && role.summary != null ? String(role.summary) : "",
+            summary: childSummary(role, summary),
           };
         }) : [],
         sourceRows: sourceRows(row),

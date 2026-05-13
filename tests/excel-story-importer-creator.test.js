@@ -48,6 +48,7 @@ test("createRow skips rows that already have a Jira key", async function () {
 test("createRow creates Story with selected Epic Link and then template subtasks", async function () {
   const creator = loadCreator();
   const calls = [];
+  const links = [];
   const keys = [
     "EVOSCADA-2000",
     "EVOSCADA-2001",
@@ -60,6 +61,10 @@ test("createRow creates Story with selected Epic Link and then template subtasks
     createIssue: function (payload) {
       calls.push(payload);
       return Promise.resolve({ key: keys[calls.length - 1] });
+    },
+    createIssueLink: function (payload) {
+      links.push(payload);
+      return Promise.resolve({});
     },
   };
 
@@ -79,6 +84,12 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(calls[0].fields.project.key, "EVOSCADA");
   assert.equal(calls[0].fields.summary, "Нет настроек полей сообщений");
   assert.equal(calls[0].fields.customfield_10014, "EVOSCADA-100");
-  assert.equal(calls[1].fields.parent.key, "EVOSCADA-2000");
   assert.equal(calls[1].fields.issuetype.name, "System Engineer");
+  assert.equal(calls[1].fields.summary, "[SE] Нет настроек полей сообщений");
+  assert.equal(calls[5].fields.summary, "[DevOps] Нет настроек полей сообщений");
+  assert.equal(calls[1].fields.parent, undefined);
+  assert.equal(links.length, 5);
+  assert.equal(links[0].type.name, "Child");
+  assert.equal(links[0].outwardIssue.key, "EVOSCADA-2000");
+  assert.equal(links[0].inwardIssue.key, "EVOSCADA-2001");
 });

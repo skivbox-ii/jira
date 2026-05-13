@@ -50,6 +50,8 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /ujg-esi-confirm-cancel/);
   assert.match(source, /Создать в Jira/);
   assert.match(source, /Дочерние задачи/);
+  assert.match(source, /Тип Jira/);
+  assert.match(source, /child of Story/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {
@@ -58,6 +60,8 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /function quoteJqlString/);
   assert.match(source, /function toJqlToken/);
   assert.match(source, /project = " \+ toJqlToken\(projectKey\)/);
+  assert.match(source, /createIssueLink/);
+  assert.match(source, /\/rest\/api\/2\/issueLink/);
 });
 
 test("importer CSS is scoped to widget root", function () {
