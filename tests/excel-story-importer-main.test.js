@@ -631,3 +631,132 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(creatorOptions.mappings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
   assert.equal(creatorOptions.mappings.priorityMap["Срочно"], "Highest");
 });
+
+test("meta sheet picker saves selected sheet and reparses current workbook", async function () {
+  const states = [];
+  let callbacks = null;
+  let savedMappings = null;
+  const parserOptions = [];
+  const workbook = {
+    SheetNames: ["Черновик", "Замечания"],
+    Sheets: {},
+  };
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        sheetNames: (state.sheetNames || []).slice(),
+        sheetPickerOpen: !!state.sheetPickerOpen,
+        parseMeta: state.parseMeta
+          ? {
+              sheetName: state.parseMeta.sheetName,
+              headerRowNumber: state.parseMeta.headerRowNumber,
+            }
+          : null,
+        rows: (state.rows || []).map(function (row) {
+          return row.summary;
+        }),
+      });
+    },
+  };
+  const mappingStore = {
+    create: function () {
+      return {
+        load: function () {
+          return Promise.resolve({
+            columnMap: { summary: "Замечание", jira: "Jira" },
+            tableStart: { headerMarker: "Замечание" },
+            sheetName: "",
+            roles: [],
+          });
+        },
+        save: function (settings) {
+          savedMappings = settings;
+          return Promise.resolve(settings);
+        },
+      };
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([]);
+    },
+  };
+  const excelLoader = {
+    readWorkbook: function () {
+      return Promise.resolve(workbook);
+    },
+  };
+  const parser = {
+    parseWorkbook: function (_workbook, options) {
+      parserOptions.push(options);
+      const selectedSheet = options.sheetName || "Черновик";
+      return {
+        sheetName: selectedSheet,
+        headerRowNumber: 1,
+        headerColumns: { Jira: 3 },
+        rows: [
+          {
+            summary: selectedSheet + " row",
+            sourceColumns: { Замечание: selectedSheet + " row" },
+            status: "ready",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_rendering": rendering,
+    "_ujgESI_mappingStore": mappingStore,
+    "_ujgESI_xlsxPatcher": null,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  await flush();
+
+  callbacks.onFileChange({ name: "rows.xlsx" });
+  await flush();
+  await flush();
+
+  let last = states[states.length - 1];
+  assert.deepEqual(last.sheetNames, ["Черновик", "Замечания"]);
+  assert.equal(last.parseMeta.sheetName, "Черновик");
+  assert.deepEqual(last.rows, ["Черновик row"]);
+
+  callbacks.onToggleSheetPicker();
+  last = states[states.length - 1];
+  assert.equal(last.sheetPickerOpen, true);
+
+  callbacks.onMetaSheetSelect("Замечания");
+  await flush();
+  await flush();
+
+  last = states[states.length - 1];
+  assert.equal(last.sheetPickerOpen, false);
+  assert.equal(last.parseMeta.sheetName, "Замечания");
+  assert.deepEqual(last.rows, ["Замечания row"]);
+  assert.equal(savedMappings.sheetName, "Замечания");
+  assert.equal(parserOptions[parserOptions.length - 1].sheetName, "Замечания");
+});

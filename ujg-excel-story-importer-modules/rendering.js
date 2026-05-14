@@ -190,6 +190,44 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($wrap);
   }
 
+  function appendParseMeta($header, state) {
+    var meta = state && state.parseMeta ? state.parseMeta : null;
+    var sheetNames = state && Array.isArray(state.sheetNames) ? state.sheetNames : [];
+    var currentSheet = meta && meta.sheetName != null ? String(meta.sheetName) : "";
+    var $meta = $("<div/>").addClass("ujg-esi-meta");
+    $meta.append($("<span/>").text("Лист: "));
+    var $sheetWrap = $("<span/>").addClass("ujg-esi-meta-sheet");
+    var $sheetButton = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-meta-sheet-button")
+      .attr("title", "Выбрать лист Excel")
+      .text(currentSheet || "Авто")
+      .prop("disabled", sheetNames.length <= 1)
+      .on("click", function() {
+        if (services && services.onToggleSheetPicker) services.onToggleSheetPicker();
+      });
+    $sheetWrap.append($sheetButton);
+    if (state && state.sheetPickerOpen && sheetNames.length) {
+      var $menu = $("<div/>").addClass("ujg-esi-meta-sheet-menu");
+      sheetNames.forEach(function(sheetName) {
+        var name = String(sheetName || "");
+        $menu.append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-meta-sheet-option")
+            .toggleClass("ujg-esi-meta-sheet-option-active", name === currentSheet)
+            .text(name)
+            .on("click", function() {
+              if (services && services.onMetaSheetSelect) services.onMetaSheetSelect(name);
+            })
+        );
+      });
+      $sheetWrap.append($menu);
+    }
+    $meta.append($sheetWrap, $("<span/>").text(" · заголовок строка " + meta.headerRowNumber));
+    $header.append($meta);
+  }
+
   function mapEntries(map) {
     return Object.keys(map || {}).map(function(key) {
       return { excel: key, jira: map[key] };
@@ -851,11 +889,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar");
     $header.append($("<h2/>").text("Импорт замечаний из Excel"));
     if (s.parseMeta) {
-      $header.append(
-        $("<div/>")
-          .addClass("ujg-esi-meta")
-          .text("Лист: " + s.parseMeta.sheetName + " · заголовок строка " + s.parseMeta.headerRowNumber)
-      );
+      appendParseMeta($header, s);
     }
     appendProjectSelect($toolbar, s);
     appendEpicSelect($toolbar, s);

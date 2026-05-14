@@ -282,6 +282,9 @@ define("_ujgESI_main", [
       mappingError: "",
       sourceFileBuffer: null,
       sourceFileName: "",
+      sourceWorkbook: null,
+      sheetNames: [],
+      sheetPickerOpen: false,
       exportBuffer: null,
       exportFileName: "",
       syncLoading: false,
@@ -326,6 +329,18 @@ define("_ujgESI_main", [
       state.exportFileName = "";
       state.syncError = "";
       state.syncSummary = "";
+    }
+
+    function parseLoadedWorkbook() {
+      var parsed = parser.parseWorkbook(state.sourceWorkbook, state.mappingSettings);
+      state.rows = (parsed.rows || []).map(copyRow);
+      state.parseMeta = {
+        sheetName: parsed.sheetName,
+        headerRowNumber: parsed.headerRowNumber,
+        headerColumns: parsed.headerColumns || {},
+      };
+      resetExportState();
+      return parsed;
     }
 
     function readInputWorkbook(file) {
@@ -739,19 +754,20 @@ define("_ujgESI_main", [
       state.error = "";
       state.sourceFileBuffer = null;
       state.sourceFileName = file && file.name != null ? String(file.name) : "";
+      state.sourceWorkbook = null;
+      state.sheetNames = [];
+      state.sheetPickerOpen = false;
       state.createDialog = null;
       resetExportState();
       closeUserPicker();
       render();
       readInputWorkbook(file).then(function(result) {
-        var parsed = parser.parseWorkbook(result.workbook, state.mappingSettings);
         state.sourceFileBuffer = result.buffer;
-        state.rows = (parsed.rows || []).map(copyRow);
-        state.parseMeta = {
-          sheetName: parsed.sheetName,
-          headerRowNumber: parsed.headerRowNumber,
-          headerColumns: parsed.headerColumns || {},
-        };
+        state.sourceWorkbook = result.workbook;
+        state.sheetNames = result.workbook && Array.isArray(result.workbook.SheetNames)
+          ? result.workbook.SheetNames.map(function(name) { return String(name); })
+          : [];
+        parseLoadedWorkbook();
         state.loading = false;
         render();
       }).then(null,
@@ -765,6 +781,35 @@ define("_ujgESI_main", [
       state.createSubtasks = !!enabled;
       state.createDialog = null;
       closeUserPicker();
+      render();
+    }
+
+    function onToggleSheetPicker() {
+      if (!state.parseMeta || !state.sheetNames.length) return;
+      state.sheetPickerOpen = !state.sheetPickerOpen;
+      render();
+    }
+
+    function onMetaSheetSelect(sheetName) {
+      var nextSheetName = copySheetName(sheetName);
+      if (!nextSheetName || !state.sourceWorkbook) {
+        state.sheetPickerOpen = false;
+        render();
+        return;
+      }
+      state.mappingSettings.sheetName = nextSheetName;
+      state.sheetPickerOpen = false;
+      state.createDialog = null;
+      state.error = "";
+      closeUserPicker();
+      try {
+        parseLoadedWorkbook();
+      } catch (err) {
+        setError("Не удалось прочитать лист: " + (err && err.message ? err.message : "unknown error"));
+        saveMappings();
+        return;
+      }
+      saveMappings();
       render();
     }
 
@@ -1166,6 +1211,8 @@ define("_ujgESI_main", [
       onEpicChange: onEpicChange,
       onFileChange: onFileChange,
       onSubtasksChange: onSubtasksChange,
+      onToggleSheetPicker: onToggleSheetPicker,
+      onMetaSheetSelect: onMetaSheetSelect,
       onOpenMappings: onOpenMappings,
       onCloseMappings: onCloseMappings,
       onMappingBlockSelect: onMappingBlockSelect,

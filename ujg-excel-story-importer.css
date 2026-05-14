@@ -28,8 +28,72 @@
 }
 
 .ujg-esi-meta {
+  position: relative;
   color: #5e6c84;
   font-size: 12px;
+}
+
+.ujg-esi-meta-sheet {
+  position: relative;
+  display: inline-block;
+}
+
+.ujg-esi-meta-sheet-button {
+  margin: 0;
+  padding: 0 1px 1px;
+  border: 0;
+  border-bottom: 1px dashed #5e6c84;
+  border-radius: 0;
+  background: transparent;
+  color: #5e6c84;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ujg-esi-meta-sheet-button:hover,
+.ujg-esi-meta-sheet-button:focus {
+  color: #0052cc;
+  border-bottom-color: #0052cc;
+  outline: none;
+}
+
+.ujg-esi-meta-sheet-button:disabled {
+  cursor: default;
+}
+
+.ujg-esi-meta-sheet-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #dfe1e6;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(9, 30, 66, 0.18);
+}
+
+.ujg-esi-meta-sheet-option {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #172b4d;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ujg-esi-meta-sheet-option:hover,
+.ujg-esi-meta-sheet-option-active {
+  background: #deebff;
+  color: #0052cc;
 }
 
 .ujg-esi-toolbar {
