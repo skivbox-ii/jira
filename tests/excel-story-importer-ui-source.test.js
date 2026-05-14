@@ -49,10 +49,14 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
 
 test("toolbar keeps the four Excel action icons together without subtasks toggle", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
+  const fileInputStart = source.indexOf("function appendFileInput($actions)");
+  const mappingStart = source.indexOf("function appendMappingButton", fileInputStart);
+  const appendFileInputSource = source.slice(fileInputStart, mappingStart);
 
   assert.match(source, /appendExcelActions/);
   assert.match(source, /ujg-esi-toolbar-actions/);
   assert.match(source, /html\("&#10515;"\)/);
+  assert.doesNotMatch(appendFileInputSource, /\$field\.append/);
   assert.doesNotMatch(source, /ujg-esi-subtasks/);
 });
 

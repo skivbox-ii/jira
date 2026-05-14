@@ -131,7 +131,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-file")
       .attr("type", "file")
       .attr("accept", ".xlsx,.xls");
-    $field.append($("<span/>").text("Excel"));
     $file.on("change", function() {
       var file = this.files && this.files.length ? this.files[0] : null;
       if (services && services.onFileChange) services.onFileChange(file);
