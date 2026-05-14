@@ -6,7 +6,8 @@
 define("_ujgESI_config", [], function() {
   "use strict";
 
-  var EPIC_LINK_FIELD = "customfield_10014";
+  var EPIC_LINK_FIELD = "customfield_10109";
+  var EPIC_LINK_VALUE_PREFIX = "key:";
   var STORAGE_KEY = "ujg-esi-state";
   var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
@@ -113,6 +114,7 @@ define("_ujgESI_config", [], function() {
   return {
     baseUrl: resolveJiraBaseUrl(),
     EPIC_LINK_FIELD: EPIC_LINK_FIELD,
+    EPIC_LINK_VALUE_PREFIX: EPIC_LINK_VALUE_PREFIX,
     STORAGE_KEY: STORAGE_KEY,
     MAPPING_STORAGE_KEY: MAPPING_STORAGE_KEY,
     SUMMARY_COLUMN: SUMMARY_COLUMN,
@@ -698,6 +700,13 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return map || fallback || {};
   }
 
+  function epicLinkValue(epicKey) {
+    var key = epicKey != null ? String(epicKey).trim() : "";
+    var prefix = config.EPIC_LINK_VALUE_PREFIX != null ? String(config.EPIC_LINK_VALUE_PREFIX) : "key:";
+    if (!key) return "";
+    return /^key:/i.test(key) ? key : prefix + key;
+  }
+
   function appendComponent(fields, row, options) {
     var component = lookupMappedValue(mappingMap(options, "moduleComponentMap", config.MODULE_COMPONENT_MAP), sourceValue(row, "Модуль"), false);
     if (component) fields.components = [{ name: component }];
@@ -717,7 +726,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
     if (opts.epicKey && config.EPIC_LINK_FIELD && opts.omitEpicLink !== true && opts.epicLinkAllowed !== false) {
-      fields[config.EPIC_LINK_FIELD] = String(opts.epicKey);
+      fields[config.EPIC_LINK_FIELD] = epicLinkValue(opts.epicKey);
     }
     appendComponent(fields, row, opts);
     appendPriority(fields, row, opts);

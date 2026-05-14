@@ -87,7 +87,7 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(calls.length, 6);
   assert.equal(calls[0].fields.project.key, "EVOSCADA");
   assert.equal(calls[0].fields.summary, "Нет настроек полей сообщений");
-  assert.equal(calls[0].fields.customfield_10014, "EVOSCADA-100");
+  assert.equal(calls[0].fields.customfield_10109, "key:EVOSCADA-100");
   assert.equal(calls[0].fields.components.length, 1);
   assert.equal(calls[0].fields.components[0].name, "Алармы");
   assert.equal(calls[0].fields.priority.name, "High");
@@ -157,7 +157,7 @@ test("createRow retries without Epic Link when Jira rejects the epic field", asy
           responseJSON: {
             errorMessages: [],
             errors: {
-              customfield_10014: "Field 'customfield_10014' cannot be set. It is not on the appropriate screen, or unknown.",
+              customfield_10109: "Field 'customfield_10109' cannot be set. It is not on the appropriate screen, or unknown.",
             },
           },
         });
@@ -184,8 +184,8 @@ test("createRow retries without Epic Link when Jira rejects the epic field", asy
   assert.equal(result.ok, true);
   assert.equal(result.createdKey, "EVOSCADA-5000");
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].fields.customfield_10014, "EVOSCADA-18333");
-  assert.equal(calls[1].fields.customfield_10014, undefined);
+  assert.equal(calls[0].fields.customfield_10109, "key:EVOSCADA-18333");
+  assert.equal(calls[1].fields.customfield_10109, undefined);
   assert.equal(result.epicLinkSkipped, true);
   assert.match(result.errors.join(" "), /Epic EVOSCADA-18333 не установлен/);
 });
@@ -341,6 +341,24 @@ test("storyFields omits Epic Link when create metadata marks it unavailable", fu
     }
   );
 
+  assert.equal(fields.customfield_10109, undefined);
+});
+
+test("storyFields sends Epic Link in Jira quick-create field format", function () {
+  const creator = loadCreator();
+
+  const fields = creator.storyFields(
+    {
+      summary: "Epic linked",
+      sourceColumns: { "Замечание": "Epic linked" },
+    },
+    {
+      projectKey: "EVOSCADA",
+      epicKey: "EVOSCADA-16245",
+    }
+  );
+
+  assert.equal(fields.customfield_10109, "key:EVOSCADA-16245");
   assert.equal(fields.customfield_10014, undefined);
 });
 
