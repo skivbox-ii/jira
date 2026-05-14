@@ -1573,9 +1573,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($field);
   }
 
-  function appendFileInput($toolbar) {
-    var $field = $("<div/>").addClass("ujg-esi-field ujg-esi-file-field");
-    var $control = $("<div/>").addClass("ujg-esi-file-control");
+  function appendFileInput($actions) {
     var $upload = $("<label/>")
       .addClass("ujg-esi-icon-button ujg-esi-upload-excel")
       .attr("title", "Загрузить Excel")
@@ -1590,23 +1588,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       if (services && services.onFileChange) services.onFileChange(file);
     });
     $upload.append($("<span/>").addClass("ujg-esi-action-icon").html("&#8682;"), $file);
-    $control.append($upload);
-    $field.append($control);
-    $toolbar.append($field);
+    $actions.append($upload);
   }
 
-  function appendSubtasksToggle($toolbar, state) {
-    var $label = $("<label/>").addClass("ujg-esi-check");
-    var $input = $("<input/>").addClass("ujg-esi-subtasks").attr("type", "checkbox");
-    $input.prop("checked", state.createSubtasks !== false);
-    $input.on("change", function() {
-      if (services && services.onSubtasksChange) services.onSubtasksChange(!!$(this).prop("checked"));
-    });
-    $label.append($input, $("<span/>").text("Создавать дочерние задачи"));
-    $toolbar.append($label);
-  }
-
-  function appendMappingButton($toolbar) {
+  function appendMappingButton($actions) {
     var $button = $("<button/>")
       .attr("type", "button")
       .addClass("ujg-esi-icon-button ujg-esi-mapping-button")
@@ -1616,11 +1601,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .on("click", function() {
         if (services && services.onOpenMappings) services.onOpenMappings();
       });
-    $toolbar.append($button);
+    $actions.append($button);
   }
 
-  function appendSyncActions($toolbar, state) {
-    var $wrap = $("<div/>").addClass("ujg-esi-sync-actions");
+  function appendSyncActions($actions, state) {
     var rows = state && state.rows ? state.rows : [];
     var canSync = !!rows.length && !(state && state.syncLoading);
     var canDownload = !!(state && state.exportBuffer);
@@ -1639,13 +1623,23 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-download-excel")
       .attr("title", "Скачать Excel")
       .attr("aria-label", "Скачать Excel")
-      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8681;"))
+      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#10515;"))
       .prop("disabled", !canDownload)
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
       });
-    $wrap.append($sync, $download);
-    $toolbar.append($wrap);
+    $actions.append($sync, $download);
+  }
+
+  function appendExcelActions($toolbar, state) {
+    var $field = $("<div/>").addClass("ujg-esi-field ujg-esi-file-field ujg-esi-actions-field");
+    var $actions = $("<div/>").addClass("ujg-esi-toolbar-actions");
+    $field.append($("<span/>").text("Excel"));
+    appendFileInput($actions);
+    appendMappingButton($actions);
+    appendSyncActions($actions, state);
+    $field.append($actions);
+    $toolbar.append($field);
   }
 
   function appendParseMeta($header, state) {
@@ -2357,10 +2351,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     }
     appendProjectSelect($toolbar, s);
     appendEpicSelect($toolbar, s);
-    appendFileInput($toolbar, s);
-    appendSubtasksToggle($toolbar, s);
-    appendMappingButton($toolbar, s);
-    appendSyncActions($toolbar, s);
+    appendExcelActions($toolbar, s);
     $root.append($header, $toolbar);
     appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
