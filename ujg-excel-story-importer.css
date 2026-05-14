@@ -98,7 +98,7 @@
 
 .ujg-esi-toolbar {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) minmax(240px, 1.4fr) minmax(220px, 1fr) auto auto minmax(72px, auto);
+  grid-template-columns: minmax(170px, 1fr) minmax(240px, 1.4fr) max-content;
   gap: 8px;
   align-items: end;
   margin-bottom: 10px;
@@ -136,6 +136,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 32px;
+}
+
+.ujg-esi-actions-field {
+  width: max-content;
+}
+
+.ujg-esi-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 32px;
 }
 
@@ -202,7 +213,7 @@
 }
 
 .ujg-esi-mapping-button {
-  align-self: end;
+  align-self: auto;
 }
 
 .ujg-esi-action-icon {
@@ -213,13 +224,6 @@
   height: 16px;
   font-size: 16px;
   line-height: 1;
-}
-
-.ujg-esi-sync-actions {
-  display: inline-flex;
-  gap: 6px;
-  align-self: end;
-  justify-content: flex-end;
 }
 
 .ujg-esi-counters {

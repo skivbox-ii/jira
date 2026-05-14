@@ -19,7 +19,7 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-file-name/);
   assert.match(source, /ujg-esi-meta-file/);
   assert.match(source, /ujg-esi-icon-button/);
-  assert.match(source, /ujg-esi-subtasks/);
+  assert.match(source, /ujg-esi-toolbar-actions/);
   assert.match(source, /ujg-esi-mapping-button/);
   assert.match(source, /ujg-esi-sync-jira/);
   assert.match(source, /ujg-esi-download-excel/);
@@ -30,7 +30,8 @@ test("rendering module exposes import controls and row create action classes", f
   assert.doesNotMatch(source, /\.append\(\$\(\"\<span\/\>\"\)\.text\(\"Мапинг\"\)\)/);
   assert.doesNotMatch(source, /\.text\(state && state\.syncLoading \? "Синхронизация\.\.\." : "Синхронизировать из Jira"\)/);
   assert.doesNotMatch(source, /\.text\("Скачать Excel"\)/);
-  assert.match(source, /Создавать дочерние задачи/);
+  assert.doesNotMatch(source, /Создавать дочерние задачи/);
+  assert.doesNotMatch(source, /appendSubtasksToggle/);
   assert.match(source, /ujg-esi-create-row/);
 });
 
@@ -39,9 +40,20 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
 
   assert.match(source, /\.ujg-esi-icon-button/);
   assert.match(source, /\.ujg-esi-upload-excel/);
+  assert.match(source, /\.ujg-esi-actions-field/);
+  assert.match(source, /\.ujg-esi-toolbar-actions/);
   assert.match(source, /\.ujg-esi-file-name/);
   assert.match(source, /\.ujg-esi-meta-file/);
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
+});
+
+test("toolbar keeps the four Excel action icons together without subtasks toggle", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /appendExcelActions/);
+  assert.match(source, /ujg-esi-toolbar-actions/);
+  assert.match(source, /html\("&#10515;"\)/);
+  assert.doesNotMatch(source, /ujg-esi-subtasks/);
 });
 
 test("file name is rendered in parse metadata, not beside upload icon", function () {
