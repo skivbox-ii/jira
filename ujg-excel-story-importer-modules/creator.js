@@ -22,6 +22,12 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return res && res.key != null ? String(res.key).trim() : "";
   }
 
+  function limitSummary(value) {
+    var max = Number(config.SUMMARY_MAX_LENGTH) || 250;
+    var text = value != null ? String(value).trim() : "";
+    return text.length > max ? text.slice(0, max) : text;
+  }
+
   function sourceValue(row, name) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
     return cols && cols[name] != null ? String(cols[name]).trim() : "";
@@ -65,7 +71,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     var opts = options || {};
     var fields = {
       project: { key: String(opts.projectKey || "") },
-      summary: String(opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : "").trim(),
+      summary: limitSummary(opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : ""),
       issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
       description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
@@ -119,13 +125,13 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   function childSummary(role, storySummary) {
     var prefix = role && role.role != null ? String(role.role).trim() : "";
     var summary = storySummary != null ? String(storySummary).trim() : "";
-    return (prefix ? "[" + prefix + "] " : "") + summary;
+    return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
   }
 
   function subtaskFields(projectKey, parentKey, role, storySummary) {
     var fields = {
       project: { key: String(projectKey || "") },
-      summary: String(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
+      summary: limitSummary(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
       issuetype: { name: String((role && role.issueType) || "") },
       description: "Создано автоматически из журнала замечаний.",
     };
@@ -242,6 +248,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     storyFields: storyFields,
     subtaskFields: subtaskFields,
     childSummary: childSummary,
+    limitSummary: limitSummary,
     childLinkPayload: childLinkPayload,
     lookupMappedValue: lookupMappedValue,
   };

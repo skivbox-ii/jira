@@ -101,6 +101,40 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(links[0].inwardIssue.key, "EVOSCADA-2001");
 });
 
+test("createRow limits story and child summaries to 250 characters", async function () {
+  const creator = loadCreator();
+  const calls = [];
+  const links = [];
+  const longSummary = "Д".repeat(320);
+  const api = {
+    createIssue: function (payload) {
+      calls.push(payload);
+      return Promise.resolve({ key: "EVOSCADA-" + String(4000 + calls.length) });
+    },
+    createIssueLink: function (payload) {
+      links.push(payload);
+      return Promise.resolve({});
+    },
+  };
+
+  const result = await creator.createRow(
+    api,
+    {
+      summary: longSummary,
+      sourceColumns: { "Замечание": longSummary },
+      alreadyLinked: false,
+    },
+    { projectKey: "EVOSCADA", createSubtasks: true }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].fields.summary.length, 250);
+  assert.equal(calls[0].fields.summary, longSummary.slice(0, 250));
+  assert.equal(calls[1].fields.summary.length, 250);
+  assert.equal(calls[1].fields.summary.startsWith("[SE] "), true);
+  assert.equal(calls[1].fields.summary, ("[SE] " + longSummary).slice(0, 250));
+});
+
 test("createRow retries without Epic Link when Jira rejects the epic field", async function () {
   const creator = loadCreator();
   const calls = [];

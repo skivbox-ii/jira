@@ -3,6 +3,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   var $root;
   var services;
+  var SUMMARY_MAX_LENGTH = 250;
 
   function init(container, svc) {
     $root = container;
@@ -385,6 +386,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $input;
   }
 
+  function appendSummaryInput(className, value, onChange) {
+    return appendTextInput(className, value, onChange).attr("maxlength", String(SUMMARY_MAX_LENGTH));
+  }
+
   function appendSelect(className, value, rows, onChange) {
     var $select = $("<select/>").addClass(className || "");
     (rows || []).forEach(function(row) {
@@ -750,7 +755,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-type", task.issueType, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "issueType", value);
           }).prop("disabled", !enabled)))
-          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
+          .append($("<td/>").append(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled)))
           .append($("<td/>").append(appendAssigneePicker("ujg-esi-confirm-child-assignee", "child-" + index, task.assigneeId || "", task.assigneeLabel || "", state, !enabled)))
@@ -789,7 +794,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     })), function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
-    appendConfirmControl($fields, "Название", appendTextInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
+    appendConfirmControl($fields, "Название", appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
     }));
     appendConfirmControl($fields, "Исполнитель", appendAssigneePicker("ujg-esi-confirm-assignee", "story", dialog.assigneeId || "", dialog.assigneeLabel || "", state, false));

@@ -515,10 +515,16 @@ define("_ujgESI_main", [
       return out;
     }
 
+    function limitSummary(value) {
+      var max = Number(config && config.SUMMARY_MAX_LENGTH) || 250;
+      var text = value != null ? String(value).trim() : "";
+      return text.length > max ? text.slice(0, max) : text;
+    }
+
     function childSummary(role, storySummary) {
       var prefix = role && role.role != null ? String(role.role).trim() : "";
       var summary = storySummary != null ? String(storySummary).trim() : "";
-      return (prefix ? "[" + prefix + "] " : "") + summary;
+      return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
     }
 
     function estimateHours(value) {
@@ -573,7 +579,7 @@ define("_ujgESI_main", [
 
     function buildCreateDialog(row, index) {
       var roles = roleSettings();
-      var summary = row && row.summary != null ? String(row.summary) : "";
+      var summary = limitSummary(row && row.summary != null ? row.summary : "");
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
@@ -1173,7 +1179,7 @@ define("_ujgESI_main", [
       var shouldRender = false;
       if (!dialog) return;
       if (key === "summary") {
-        dialog.summary = value != null ? String(value) : "";
+        dialog.summary = limitSummary(value);
         (dialog.childTasks || []).forEach(function(task) {
           task.summary = childSummary(task, dialog.summary);
         });
@@ -1227,7 +1233,7 @@ define("_ujgESI_main", [
       var task = dialog && dialog.childTasks ? dialog.childTasks[i] : null;
       if (!task) return;
       if (key === "summary") {
-        task.summary = value != null ? String(value) : "";
+        task.summary = limitSummary(value);
       } else if (key === "issueType") {
         task.issueType = value != null ? String(value) : "";
       } else if (key === "assigneeId") {

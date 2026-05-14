@@ -5,6 +5,7 @@ define("_ujgESI_config", [], function() {
   var STORAGE_KEY = "ujg-esi-state";
   var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
+  var SUMMARY_MAX_LENGTH = 250;
   var JIRA_COLUMN = "Jira";
   var SPRINT_FIELD = "customfield_10020";
   var STORY_ISSUE_TYPE = "Story";
@@ -109,6 +110,7 @@ define("_ujgESI_config", [], function() {
     STORAGE_KEY: STORAGE_KEY,
     MAPPING_STORAGE_KEY: MAPPING_STORAGE_KEY,
     SUMMARY_COLUMN: SUMMARY_COLUMN,
+    SUMMARY_MAX_LENGTH: SUMMARY_MAX_LENGTH,
     JIRA_COLUMN: JIRA_COLUMN,
     SPRINT_FIELD: SPRINT_FIELD,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
