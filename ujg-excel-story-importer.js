@@ -841,8 +841,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   function blocksLinkPayload(blockerKey, blockedKey) {
     return {
       type: { name: String(config.BLOCKS_LINK_TYPE_NAME || "Blocks") },
-      outwardIssue: { key: String(blockerKey || "") },
-      inwardIssue: { key: String(blockedKey || "") },
+      outwardIssue: { key: String(blockedKey || "") },
+      inwardIssue: { key: String(blockerKey || "") },
     };
   }
 

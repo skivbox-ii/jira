@@ -104,10 +104,10 @@ test("createRow creates Story with selected Epic Link and then template subtasks
       return [link.type.name, link.outwardIssue.key, link.inwardIssue.key];
     }),
     [
-      ["Blocks", "EVOSCADA-2001", "EVOSCADA-2004"],
-      ["Blocks", "EVOSCADA-2002", "EVOSCADA-2004"],
-      ["Blocks", "EVOSCADA-2003", "EVOSCADA-2004"],
-      ["Blocks", "EVOSCADA-2005", "EVOSCADA-2004"],
+      ["Blocks", "EVOSCADA-2004", "EVOSCADA-2001"],
+      ["Blocks", "EVOSCADA-2004", "EVOSCADA-2002"],
+      ["Blocks", "EVOSCADA-2004", "EVOSCADA-2003"],
+      ["Blocks", "EVOSCADA-2004", "EVOSCADA-2005"],
     ]
   );
 });
@@ -273,8 +273,8 @@ test("createRow uses edited dialog fields, assignees, and selected child tasks",
   assert.equal(calls[2].fields.timetracking.remainingEstimate, "2h");
   assert.equal(links.length, 3);
   assert.equal(links[2].type.name, "Blocks");
-  assert.equal(links[2].outwardIssue.key, "EVOSCADA-3001");
-  assert.equal(links[2].inwardIssue.key, "EVOSCADA-3002");
+  assert.equal(links[2].outwardIssue.key, "EVOSCADA-3002");
+  assert.equal(links[2].inwardIssue.key, "EVOSCADA-3001");
 });
 
 test("createRow links testing child as blocked by every other created child", async function () {
@@ -320,8 +320,8 @@ test("createRow links testing child as blocked by every other created child", as
       ["Child", "EVOSCADA-7000", "EVOSCADA-7001"],
       ["Child", "EVOSCADA-7000", "EVOSCADA-7002"],
       ["Child", "EVOSCADA-7000", "EVOSCADA-7003"],
-      ["Blocks", "EVOSCADA-7001", "EVOSCADA-7003"],
-      ["Blocks", "EVOSCADA-7002", "EVOSCADA-7003"],
+      ["Blocks", "EVOSCADA-7003", "EVOSCADA-7001"],
+      ["Blocks", "EVOSCADA-7003", "EVOSCADA-7002"],
     ]
   );
 });
