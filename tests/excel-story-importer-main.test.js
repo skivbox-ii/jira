@@ -493,6 +493,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(patchArgs.patch.rows[0].values["Статус в Jira"], "In Review");
   assert.equal(patchArgs.patch.rows[0].values["Исполнитель в Jira"], "Иван Иванов");
   assert.equal(patchArgs.patch.rows[0].values["Спринт"], "Sprint 42");
+  assert.equal(patchArgs.patch.rows[0].comments["Статус в Jira"], "[SE] Existing | Done | Сергей\n[QA] Existing | Testing | Ольга");
   assert.deepEqual(patchArgs.patch.headerColumns, {
     Jira: 11,
     "Статус в Jira": 15,

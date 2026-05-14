@@ -201,6 +201,14 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return out;
   }
 
+  function headerColumnsForPatch(xml, options) {
+    options = options || {};
+    return mergeColumns(
+      headerColumnsFromWorksheetXml(xml, options.headerRowNumber || 0, options.sharedStrings || []),
+      options.headerColumns || {}
+    );
+  }
+
   function buildInlineCell(ref, value, styleAttr) {
     return '<c r="' + escapeXml(ref) + '"' + (styleAttr || "") + ' t="inlineStr"><is><t>' + escapeXml(value) + "</t></is></c>";
   }
@@ -285,10 +293,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
 
   function patchWorksheetXml(xml, patch) {
     var options = patch || {};
-    var headerColumns = mergeColumns(
-      headerColumnsFromWorksheetXml(xml, options.headerRowNumber || 0, options.sharedStrings || []),
-      options.headerColumns || {}
-    );
+    var headerColumns = headerColumnsForPatch(xml, options);
     var out = String(xml || "");
     (options.rows || []).forEach(function(rowPatch) {
       var rowNumber = rowPatch && rowPatch.excelRowNumber;
@@ -306,6 +311,225 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
       out = out.slice(0, row.index) + rowXml + out.slice(row.index + row.text.length);
     });
     return expandDimension(out, options.rows || [], headerColumns);
+  }
+
+  function cellCommentsForWorksheet(xml, patch) {
+    var options = patch || {};
+    var headerColumns = headerColumnsForPatch(xml, options);
+    var out = [];
+    (options.rows || []).forEach(function(rowPatch) {
+      var rowNumber = Number(rowPatch && rowPatch.excelRowNumber) || 0;
+      var comments = rowPatch && rowPatch.comments ? rowPatch.comments : {};
+      if (!rowNumber) return;
+      Object.keys(comments).forEach(function(columnName) {
+        var text = comments[columnName] != null ? String(comments[columnName]).trim() : "";
+        var columnNumber = Number(headerColumns[columnName]) || 0;
+        if (!text || !columnNumber) return;
+        out.push({
+          ref: columnNumberToName(columnNumber) + String(rowNumber),
+          rowNumber: rowNumber,
+          columnNumber: columnNumber,
+          text: text,
+        });
+      });
+    });
+    return out;
+  }
+
+  function buildCommentXml(comment, index) {
+    return '<comment ref="' + escapeXml(comment.ref) + '" authorId="0" shapeId="' + String(index) + '">' +
+      '<text><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr>' +
+      '<t xml:space="preserve">' + escapeXml(comment.text) + '</t></r></text></comment>';
+  }
+
+  function existingCommentXmlItems(xml, refsToReplace) {
+    var out = [];
+    var re = /<comment\b(?=[^>]*\bref="([^"]*)")[^>]*>[\s\S]*?<\/comment>/gi;
+    var match;
+    while ((match = re.exec(xml || ""))) {
+      if (!refsToReplace[decodeXml(match[1] || "")]) out.push(match[0]);
+    }
+    return out;
+  }
+
+  function patchCommentsXml(xml, comments) {
+    var list = comments || [];
+    var refs = {};
+    var existing = String(xml || "");
+    var kept;
+    var commentXml;
+    if (!list.length && existing) return existing;
+    list.forEach(function(comment) {
+      if (comment && comment.ref) refs[String(comment.ref)] = true;
+    });
+    kept = existingCommentXmlItems(existing, refs);
+    commentXml = kept.concat(list.map(buildCommentXml)).join("");
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<authors><author>UJG</author></authors><commentList>' +
+      commentXml +
+      '</commentList></comments>';
+  }
+
+  function ensureWorksheetRNamespace(xml) {
+    var text = String(xml || "");
+    if (/\sxmlns:r=/.test(text)) return text;
+    return text.replace(/<worksheet\b([^>]*)>/i, '<worksheet$1 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">');
+  }
+
+  function ensureWorksheetLegacyDrawing(xml, relId) {
+    var text = ensureWorksheetRNamespace(xml);
+    if (/<legacyDrawing\b/i.test(text)) return text;
+    return text.replace(/<\/worksheet>\s*$/i, '<legacyDrawing r:id="' + escapeXml(relId) + '"/></worksheet>');
+  }
+
+  function ensureContentTypeDefault(xml, extension, contentType) {
+    var text = String(xml || "");
+    var re = new RegExp('<Default\\b(?=[^>]*\\bExtension="' + escapeRegExp(extension) + '")[^>]*>', "i");
+    if (re.test(text)) return text;
+    return text.replace("</Types>", '<Default Extension="' + escapeXml(extension) + '" ContentType="' + escapeXml(contentType) + '"/></Types>');
+  }
+
+  function ensureContentTypeOverride(xml, partName, contentType) {
+    var text = String(xml || "");
+    var re = new RegExp('<Override\\b(?=[^>]*\\bPartName="' + escapeRegExp(partName) + '")[^>]*>', "i");
+    if (re.test(text)) return text;
+    return text.replace("</Types>", '<Override PartName="' + escapeXml(partName) + '" ContentType="' + escapeXml(contentType) + '"/></Types>');
+  }
+
+  function relationshipXml(id, type, target) {
+    return '<Relationship Id="' + escapeXml(id) + '" Type="' + escapeXml(type) + '" Target="' + escapeXml(target) + '"/>';
+  }
+
+  function emptyRelationshipsXml() {
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  }
+
+  function nextRelationshipId(xml) {
+    var max = 0;
+    var re = /\bId="rId(\d+)"/gi;
+    var match;
+    while ((match = re.exec(xml || ""))) {
+      max = Math.max(max, Number(match[1]) || 0);
+    }
+    return "rId" + String(max + 1);
+  }
+
+  function relationshipByType(xml, type) {
+    var re = /<Relationship\b[^>]*\/?>/gi;
+    var match;
+    while ((match = re.exec(xml || ""))) {
+      if (attrValue(match[0], "Type") === type) return {
+        id: attrValue(match[0], "Id"),
+        target: attrValue(match[0], "Target"),
+      };
+    }
+    return null;
+  }
+
+  function appendRelationship(xml, id, type, target) {
+    var text = String(xml || "") || emptyRelationshipsXml();
+    return text.replace("</Relationships>", relationshipXml(id, type, target) + "</Relationships>");
+  }
+
+  function dirname(path) {
+    return String(path || "").replace(/\/[^\/]*$/, "");
+  }
+
+  function basename(path) {
+    var text = String(path || "");
+    return text.slice(text.lastIndexOf("/") + 1);
+  }
+
+  function worksheetRelsPath(sheetPath) {
+    return dirname(sheetPath) + "/_rels/" + basename(sheetPath) + ".rels";
+  }
+
+  function normalizePartPath(path) {
+    var parts = [];
+    String(path || "").split("/").forEach(function(part) {
+      if (!part || part === ".") return;
+      if (part === "..") parts.pop();
+      else parts.push(part);
+    });
+    return parts.join("/");
+  }
+
+  function resolvePartTarget(fromPartPath, target) {
+    var raw = String(target || "");
+    if (raw.charAt(0) === "/") return raw.replace(/^\/+/, "");
+    return normalizePartPath(dirname(fromPartPath) + "/" + raw);
+  }
+
+  function relativeTargetFromWorksheet(partPath) {
+    var text = String(partPath || "");
+    if (text.indexOf("xl/") === 0) return "../" + text.slice(3);
+    return text;
+  }
+
+  function nextPartPath(zip, prefix, suffix) {
+    var index = 1;
+    var path;
+    do {
+      path = prefix + String(index) + suffix;
+      index += 1;
+    } while (zip.file(path));
+    return path;
+  }
+
+  function baseVmlXml() {
+    return '<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">' +
+      '<o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>' +
+      '<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe">' +
+      '<v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype></xml>';
+  }
+
+  function nextVmlShapeId(xml) {
+    var max = 1024;
+    var re = /_x0000_s(\d+)/g;
+    var match;
+    while ((match = re.exec(xml || ""))) {
+      max = Math.max(max, Number(match[1]) || 0);
+    }
+    return max + 1;
+  }
+
+  function vmlShapeXml(comment, shapeId) {
+    var row = Math.max(0, Number(comment.rowNumber) - 1);
+    var column = Math.max(0, Number(comment.columnNumber) - 1);
+    var anchor = [column + 1, 15, row, 2, column + 3, 15, row + 4, 16].join(", ");
+    return '<v:shape id="_x0000_s' + String(shapeId) + '" type="#_x0000_t202" ' +
+      'style="position:absolute;margin-left:80pt;margin-top:5pt;width:180pt;height:90pt;z-index:1;visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto">' +
+      '<v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/>' +
+      '<v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox>' +
+      '<x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>' + anchor + '</x:Anchor>' +
+      '<x:AutoFill>False</x:AutoFill><x:Row>' + String(row) + '</x:Row><x:Column>' + String(column) + '</x:Column></x:ClientData></v:shape>';
+  }
+
+  function removeExistingVmlShapes(xml, comments) {
+    var refs = {};
+    (comments || []).forEach(function(comment) {
+      refs[String(Math.max(0, Number(comment.rowNumber) - 1)) + ":" + String(Math.max(0, Number(comment.columnNumber) - 1))] = true;
+    });
+    return String(xml || "").replace(/<v:shape\b[\s\S]*?<\/v:shape>/gi, function(shape) {
+      var row = /<x:Row>(\d+)<\/x:Row>/i.exec(shape);
+      var column = /<x:Column>(\d+)<\/x:Column>/i.exec(shape);
+      var key = (row ? row[1] : "") + ":" + (column ? column[1] : "");
+      return refs[key] ? "" : shape;
+    });
+  }
+
+  function patchVmlDrawingXml(xml, comments) {
+    var text = String(xml || "") || baseVmlXml();
+    var nextId;
+    text = removeExistingVmlShapes(text, comments);
+    nextId = nextVmlShapeId(text);
+    (comments || []).forEach(function(comment) {
+      text = text.replace(/<\/xml>\s*$/i, vmlShapeXml(comment, nextId) + "</xml>");
+      nextId += 1;
+    });
+    return text;
   }
 
   function sheetRelationshipId(workbookXml, sheetName) {
@@ -332,6 +556,61 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return "xl/" + text.replace(/^\.\.\//, "");
   }
 
+  function applyWorksheetComments(zip, sheetPath, sheetXml, patch, comments) {
+    if (!comments.length) return Promise.resolve(sheetXml);
+    var relsPath = worksheetRelsPath(sheetPath);
+    var commentsRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+    var vmlRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+    return Promise.all([
+      zip.file("[Content_Types].xml") ? zip.file("[Content_Types].xml").async("string") : "",
+      zip.file(relsPath) ? zip.file(relsPath).async("string") : "",
+    ]).then(function(parts) {
+      var contentTypesXml = parts[0] || "";
+      var sheetRelsXml = parts[1] || emptyRelationshipsXml();
+      var commentsRel = relationshipByType(sheetRelsXml, commentsRelType);
+      var vmlRel = relationshipByType(sheetRelsXml, vmlRelType);
+      var commentsPath;
+      var vmlPath;
+      var commentsId;
+      var vmlId;
+      var existingCommentsPromise;
+      var existingVmlPromise;
+
+      if (commentsRel && commentsRel.target) {
+        commentsPath = resolvePartTarget(sheetPath, commentsRel.target);
+      } else {
+        commentsPath = nextPartPath(zip, "xl/comments", ".xml");
+        commentsId = nextRelationshipId(sheetRelsXml);
+        sheetRelsXml = appendRelationship(sheetRelsXml, commentsId, commentsRelType, relativeTargetFromWorksheet(commentsPath));
+      }
+
+      if (vmlRel && vmlRel.target) {
+        vmlPath = resolvePartTarget(sheetPath, vmlRel.target);
+      } else {
+        vmlPath = nextPartPath(zip, "xl/drawings/vmlDrawing", ".vml");
+        vmlId = nextRelationshipId(sheetRelsXml);
+        sheetRelsXml = appendRelationship(sheetRelsXml, vmlId, vmlRelType, relativeTargetFromWorksheet(vmlPath));
+        sheetXml = ensureWorksheetLegacyDrawing(sheetXml, vmlId);
+      }
+
+      if (contentTypesXml) {
+        contentTypesXml = ensureContentTypeDefault(contentTypesXml, "vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
+        contentTypesXml = ensureContentTypeOverride(contentTypesXml, "/" + commentsPath, "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml");
+        zip.file("[Content_Types].xml", contentTypesXml);
+      }
+
+      existingCommentsPromise = zip.file(commentsPath) ? zip.file(commentsPath).async("string") : Promise.resolve("");
+      existingVmlPromise = zip.file(vmlPath) ? zip.file(vmlPath).async("string") : Promise.resolve("");
+
+      return Promise.all([existingCommentsPromise, existingVmlPromise]).then(function(existingParts) {
+        zip.file(commentsPath, patchCommentsXml(existingParts[0] || "", comments));
+        zip.file(vmlPath, patchVmlDrawingXml(existingParts[1] || "", comments));
+        zip.file(relsPath, sheetRelsXml);
+        return sheetXml;
+      });
+    });
+  }
+
   function firstWorksheetPath(zip) {
     var files = Object.keys(zip.files || {}).filter(function(name) {
       return /^xl\/worksheets\/sheet\d+\.xml$/i.test(name);
@@ -356,11 +635,14 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
           var sheetPath = target ? normalizeSheetPath(target) : firstWorksheetPath(zip);
           if (!sheetPath || !zip.file(sheetPath)) throw new Error("Worksheet not found");
           return zip.file(sheetPath).async("string").then(function(sheetXml) {
+            var comments = cellCommentsForWorksheet(sheetXml, Object.assign({}, patch, { sharedStrings: sharedStrings }));
             var patchedXml = patchWorksheetXml(sheetXml, Object.assign({}, patch, { sharedStrings: sharedStrings }));
-            zip.file(sheetPath, patchedXml);
-            return zip.generateAsync({
-              type: typeof Blob !== "undefined" ? "blob" : "arraybuffer",
-              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            return applyWorksheetComments(zip, sheetPath, patchedXml, patch, comments).then(function(patchedWithCommentsXml) {
+              zip.file(sheetPath, patchedWithCommentsXml);
+              return zip.generateAsync({
+                type: typeof Blob !== "undefined" ? "blob" : "arraybuffer",
+                mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              });
             });
           });
         });
@@ -372,6 +654,10 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     ensureJsZip: ensureJsZip,
     patchWorkbook: patchWorkbook,
     patchWorksheetXml: patchWorksheetXml,
+    cellCommentsForWorksheet: cellCommentsForWorksheet,
+    patchCommentsXml: patchCommentsXml,
+    patchVmlDrawingXml: patchVmlDrawingXml,
+    ensureWorksheetLegacyDrawing: ensureWorksheetLegacyDrawing,
     parseSharedStrings: parseSharedStrings,
     headerColumnsFromWorksheetXml: headerColumnsFromWorksheetXml,
     columnNumberToName: columnNumberToName,

@@ -232,3 +232,63 @@ test("patchWorksheetXml expands row spans when appended cells exceed existing sp
   assert.match(out, /<row r="5" spans="1:5">/);
   assert.match(out, /<c r="E5" t="inlineStr"><is><t>Иван Иванов<\/t><\/is><\/c>/);
 });
+
+test("cellCommentsForWorksheet maps row comments to existing header columns", function () {
+  const { patcher } = loadPatcher();
+  const xml = [
+    '<worksheet><sheetData>',
+    '<row r="1"><c r="A1" t="inlineStr"><is><t>Jira</t></is></c><c r="C1" t="inlineStr"><is><t>Статус в Jira</t></is></c><c r="D1" t="inlineStr"><is><t>Комментарий</t></is></c></row>',
+    '<row r="792"><c r="C792" s="50"/></row>',
+    '</sheetData></worksheet>',
+  ].join("");
+
+  const comments = patcher.cellCommentsForWorksheet(xml, {
+    headerRowNumber: 1,
+    rows: [
+      {
+        excelRowNumber: 792,
+        comments: {
+          "Статус в Jira": "[SE] Existing | Done | Сергей\n[QA] Existing | Testing | Ольга",
+          "Неизвестная колонка": "ignore",
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(comments)), [
+    {
+      ref: "C792",
+      rowNumber: 792,
+      columnNumber: 3,
+      text: "[SE] Existing | Done | Сергей\n[QA] Existing | Testing | Ольга",
+    },
+  ]);
+});
+
+test("patchCommentsXml writes escaped multiline Excel note text", function () {
+  const { patcher } = loadPatcher();
+
+  const out = patcher.patchCommentsXml("", [
+    {
+      ref: "C792",
+      rowNumber: 792,
+      columnNumber: 3,
+      text: "[SE] A&B | Done | Иван\n[QA] Test | In <Review> | Ольга",
+    },
+  ]);
+
+  assert.match(out, /<comment ref="C792" authorId="0" shapeId="0">/);
+  assert.match(out, /\[SE\] A&amp;B \| Done \| Иван/);
+  assert.match(out, /\[QA\] Test \| In &lt;Review&gt; \| Ольга/);
+});
+
+test("ensureWorksheetLegacyDrawing adds only the drawing reference and namespace", function () {
+  const { patcher } = loadPatcher();
+  const xml = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>';
+
+  const out = patcher.ensureWorksheetLegacyDrawing(xml, "rId7");
+
+  assert.match(out, /xmlns:r="http:\/\/schemas.openxmlformats.org\/officeDocument\/2006\/relationships"/);
+  assert.match(out, /<legacyDrawing r:id="rId7"\/><\/worksheet>/);
+  assert.doesNotMatch(out, /comments/);
+});
