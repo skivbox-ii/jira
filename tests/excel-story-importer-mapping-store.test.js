@@ -46,44 +46,39 @@ function loadStore($, localStorage, window) {
   );
 }
 
-test("mapping store loads dashboard property and saves the normalized mappings back", async function () {
+test("mapping store loads and saves mappings only in localStorage", async function () {
   const localStorage = createLocalStorage();
   const ajaxCalls = [];
   const $ = {
     ajax: function (options) {
       ajaxCalls.push(options);
-      if (options.type === "GET") {
-        return Promise.resolve({
-          key: "ujg-esi-mapping-settings-test",
-          value: {
-            mappings: {
-              moduleComponentMap: { "Примитивы": "Primitive Component" },
-              priorityMap: { "Срочно": "Highest" },
-              columnMap: { summary: "Тема", jira: "Тикет" },
-              tableStart: { headerMarker: "Тема" },
-              sheetName: "Замечания",
-              storyAssigneeId: "story-acc",
-              storyAssigneeLabel: "Story User",
-              storyAssignee: { accountId: "story-acc", displayName: "Story User" },
-              roles: [
-                {
-                  role: "QA",
-                  issueType: "QA",
-                  originalEstimate: "3h",
-                  remainingEstimate: "3h",
-                  enabled: false,
-                  assigneeId: "qa-name",
-                  assigneeLabel: "QA User",
-                  assignee: { name: "qa-name", displayName: "QA User" },
-                },
-              ],
-            },
-          },
-        });
-      }
-      return Promise.resolve({});
+      return Promise.reject(new Error("mapping store must not call Jira REST"));
     },
   };
+  localStorage.setItem("ujg-esi-mapping-settings-test", JSON.stringify({
+    mappings: {
+      moduleComponentMap: { "Примитивы": "Primitive Component" },
+      priorityMap: { "Срочно": "Highest" },
+      columnMap: { summary: "Тема", jira: "Тикет" },
+      tableStart: { headerMarker: "Тема" },
+      sheetName: "Замечания",
+      storyAssigneeId: "story-acc",
+      storyAssigneeLabel: "Story User",
+      storyAssignee: { accountId: "story-acc", displayName: "Story User" },
+      roles: [
+        {
+          role: "QA",
+          issueType: "QA",
+          originalEstimate: "3h",
+          remainingEstimate: "3h",
+          enabled: false,
+          assigneeId: "qa-name",
+          assigneeLabel: "QA User",
+          assignee: { name: "qa-name", displayName: "QA User" },
+        },
+      ],
+    },
+  }));
   const module = loadStore($, localStorage, { location: { search: "?selectPageId=77" } });
   const store = module.create();
 
@@ -100,7 +95,7 @@ test("mapping store loads dashboard property and saves the normalized mappings b
   assert.equal(loaded.roles[0].assigneeId, "qa-name");
   assert.equal(loaded.roles[0].assignee.name, "qa-name");
   assert.equal(loaded.roles[0].assignee.displayName, "QA User");
-  assert.match(ajaxCalls[0].url, /\/rest\/api\/2\/dashboard\/77\/properties\/ujg-esi-mapping-settings-test/);
+  assert.equal(ajaxCalls.length, 0);
 
   await store.save({
     moduleComponentMap: { "Модуль": "Component" },
@@ -125,13 +120,13 @@ test("mapping store loads dashboard property and saves the normalized mappings b
     ],
   });
 
-  assert.equal(ajaxCalls[1].type, "PUT");
-  assert.deepEqual(JSON.parse(ajaxCalls[1].data).mappings.moduleComponentMap, { "Модуль": "Component" });
-  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.columnMap.summary, "Замечание");
-  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.tableStart.headerMarker, "Замечание");
-  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.sheetName, "Журнал приемки");
-  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.storyAssigneeId, "lead-acc");
-  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.roles[0].assigneeId, "se-name");
+  assert.equal(ajaxCalls.length, 0);
   assert.deepEqual(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.priorityMap, { "Средний": "Medium" });
+  assert.deepEqual(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.moduleComponentMap, { "Модуль": "Component" });
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.columnMap.summary, "Замечание");
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.tableStart.headerMarker, "Замечание");
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.sheetName, "Журнал приемки");
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.storyAssigneeId, "lead-acc");
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assigneeId, "se-name");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assignee.displayName, "SE User");
 });
