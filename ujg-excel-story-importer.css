@@ -773,17 +773,20 @@
 }
 
 .ujg-esi-assignee-picker,
+.ujg-esi-epic-picker,
 .ujg-esi-issue-type-picker {
   position: relative;
   width: 100%;
 }
 
 .ujg-esi-assignee-search,
+.ujg-esi-epic-search,
 .ujg-esi-issue-type-search {
   padding-right: 28px !important;
 }
 
-.ujg-esi-assignee-clear {
+.ujg-esi-assignee-clear,
+.ujg-esi-epic-clear {
   position: absolute;
   top: 3px;
   right: 3px;
@@ -798,12 +801,14 @@
   cursor: pointer;
 }
 
-.ujg-esi-assignee-clear:hover {
+.ujg-esi-assignee-clear:hover,
+.ujg-esi-epic-clear:hover {
   background: #f4f5f7;
   color: #172b4d;
 }
 
 .ujg-esi-assignee-options,
+.ujg-esi-epic-options,
 .ujg-esi-issue-type-options {
   position: absolute;
   top: calc(100% + 2px);
@@ -819,6 +824,7 @@
 }
 
 .ujg-esi-assignee-option,
+.ujg-esi-epic-option,
 .ujg-esi-issue-type-option {
   display: block;
   width: 100%;
@@ -833,6 +839,8 @@
 }
 
 .ujg-esi-assignee-option:hover,
+.ujg-esi-epic-option:hover,
+.ujg-esi-epic-option-active,
 .ujg-esi-issue-type-option:hover {
   background: #f4f5f7;
 }
@@ -840,6 +848,7 @@
 .ujg-esi-assignee-loading,
 .ujg-esi-assignee-error,
 .ujg-esi-assignee-empty,
+.ujg-esi-epic-empty,
 .ujg-esi-issue-type-empty {
   padding: 7px 9px;
   font-size: 12px;
@@ -847,6 +856,7 @@
 
 .ujg-esi-assignee-loading,
 .ujg-esi-assignee-empty,
+.ujg-esi-epic-empty,
 .ujg-esi-issue-type-empty {
   color: #5e6c84;
 }

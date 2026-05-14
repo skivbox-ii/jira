@@ -208,6 +208,41 @@ define("_ujgESI_main", [
     return value && typeof value.then === "function" ? Promise.resolve(value) : Promise.resolve(value);
   }
 
+  function stateStorageKey() {
+    return config && config.STORAGE_KEY ? String(config.STORAGE_KEY) : "ujg-esi-state";
+  }
+
+  function readStoredState() {
+    if (typeof localStorage === "undefined") return {};
+    try {
+      var raw = localStorage.getItem(stateStorageKey());
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function readStoredProjectKey() {
+    var stored = readStoredState();
+    var key = stored.projectKey != null ? stored.projectKey : stored.project;
+    return key != null ? String(key).trim() : "";
+  }
+
+  function writeStoredProjectKey(projectKey) {
+    if (typeof localStorage === "undefined") return;
+    try {
+      var key = projectKey != null ? String(projectKey).trim() : "";
+      var stored = readStoredState();
+      if (key) stored.projectKey = key;
+      else delete stored.projectKey;
+      localStorage.setItem(stateStorageKey(), JSON.stringify(stored));
+    } catch (err) {
+      // Dashboard storage is best-effort; failing to persist must not block import.
+    }
+  }
+
   function syncedFileName(name) {
     var text = name != null ? String(name).trim() : "";
     if (!text) return "jira-status.synced.xlsx";
@@ -550,6 +585,10 @@ define("_ujgESI_main", [
         error: "",
         seq: 0,
       },
+      epicPicker: {
+        open: false,
+        query: "",
+      },
       issueTypePicker: {
         target: "",
         query: "",
@@ -569,6 +608,13 @@ define("_ujgESI_main", [
         return project && String(project.key || "") === key;
       })[0];
       return projectLabel(found) || key;
+    }
+
+    function hasProjectKey(projectKey) {
+      var key = projectKey != null ? String(projectKey) : "";
+      return !!(state.projects || []).filter(function(project) {
+        return project && String(project.key || "") === key;
+      })[0];
     }
 
     function selectedEpicText() {
@@ -856,6 +902,11 @@ define("_ujgESI_main", [
       state.issueTypePicker.rows = [];
     }
 
+    function closeEpicPicker() {
+      state.epicPicker.open = false;
+      state.epicPicker.query = "";
+    }
+
     function selectedProjectTextFor(projectKey) {
       var key = projectKey || "";
       var found = (state.projects || []).filter(function(project) {
@@ -1053,8 +1104,16 @@ define("_ujgESI_main", [
       return promiseOf(api.getProjects()).then(
         function(projects) {
           state.projects = normalizeProjects(projects);
+          if (!state.projectKey) {
+            var storedProjectKey = readStoredProjectKey();
+            if (storedProjectKey && hasProjectKey(storedProjectKey)) state.projectKey = storedProjectKey;
+          }
           state.loading = false;
           render();
+          if (state.projectKey) {
+            loadEpics(state.projectKey);
+            loadCreateMeta(state.projectKey);
+          }
         },
         function(err) {
           setError("Не удалось загрузить проекты: " + (err && err.statusText ? err.statusText : "request failed"));
@@ -1065,6 +1124,7 @@ define("_ujgESI_main", [
     function loadEpics(projectKey) {
       state.epicKey = "";
       state.epics = [];
+      closeEpicPicker();
       if (!projectKey) {
         render();
         return Promise.resolve();
@@ -1181,6 +1241,8 @@ define("_ujgESI_main", [
       state.projectKey = projectKey != null ? String(projectKey) : "";
       state.error = "";
       state.createDialog = null;
+      writeStoredProjectKey(state.projectKey);
+      closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
       loadEpics(state.projectKey);
@@ -1188,8 +1250,20 @@ define("_ujgESI_main", [
     }
 
     function onEpicChange(epicKey) {
+      onEpicSelect(epicKey);
+    }
+
+    function onEpicSearch(query) {
+      if (!state.projectKey) return;
+      state.epicPicker.open = true;
+      state.epicPicker.query = query != null ? String(query) : "";
+      render();
+    }
+
+    function onEpicSelect(epicKey) {
       state.epicKey = epicKey != null ? String(epicKey) : "";
       state.createDialog = null;
+      closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -1206,6 +1280,7 @@ define("_ujgESI_main", [
       state.sheetPickerOpen = false;
       state.createDialog = null;
       resetExportState();
+      closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -1717,6 +1792,8 @@ define("_ujgESI_main", [
     rendering.init($container, {
       onProjectChange: onProjectChange,
       onEpicChange: onEpicChange,
+      onEpicSearch: onEpicSearch,
+      onEpicSelect: onEpicSelect,
       onFileChange: onFileChange,
       onSubtasksChange: onSubtasksChange,
       onToggleSheetPicker: onToggleSheetPicker,

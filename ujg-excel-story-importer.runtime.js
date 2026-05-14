@@ -1947,10 +1947,23 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   var $root;
   var services;
   var SUMMARY_MAX_LENGTH = 250;
+  var epicSearchTimer = null;
 
   function init(container, svc) {
     $root = container;
     services = svc || {};
+  }
+
+  function scheduleEpicSearch(query) {
+    if (typeof clearTimeout === "function" && epicSearchTimer) clearTimeout(epicSearchTimer);
+    if (typeof setTimeout === "function") {
+      epicSearchTimer = setTimeout(function() {
+        epicSearchTimer = null;
+        if (services && services.onEpicSearch) services.onEpicSearch(query);
+      }, 80);
+    } else if (services && services.onEpicSearch) {
+      services.onEpicSearch(query);
+    }
   }
 
   function captureScrollState() {
@@ -1999,6 +2012,29 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var fields = epic && epic.fields ? epic.fields : {};
     var summary = fields.summary != null ? String(fields.summary) : epic && epic.summary != null ? String(epic.summary) : "";
     return key && summary && summary !== key ? key + " - " + summary : key || summary;
+  }
+
+  function selectedEpicLabel(state) {
+    var key = state && state.epicKey != null ? String(state.epicKey) : "";
+    if (!key) return "";
+    var found = (state.epics || []).filter(function(epic) {
+      return epic && String(epic.key || "") === key;
+    })[0];
+    return epicLabel(found) || key;
+  }
+
+  function normalizedSearch(value) {
+    return String(value || "").toLowerCase().trim();
+  }
+
+  function filteredEpics(state) {
+    var picker = state && state.epicPicker ? state.epicPicker : {};
+    var query = normalizedSearch(picker.query);
+    return (state.epics || []).filter(function(epic) {
+      var label = normalizedSearch(epicLabel(epic));
+      var key = normalizedSearch(epic && epic.key);
+      return !query || label.indexOf(query) !== -1 || key.indexOf(query) !== -1;
+    }).slice(0, 50);
   }
 
   function rowStatusText(row) {
@@ -2051,22 +2087,80 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($field);
   }
 
-  function appendEpicSelect($toolbar, state) {
+  function appendEpicPicker($toolbar, state) {
+    var picker = state && state.epicPicker ? state.epicPicker : {};
+    var disabled = !state.projectKey;
+    var active = !disabled && !!picker.open;
+    var selected = selectedEpicLabel(state);
+    var value = active ? picker.query || "" : selected;
     var $field = $("<label/>").addClass("ujg-esi-field");
-    var $select = $("<select/>").addClass("ujg-esi-epic-select");
+    var $wrap = $("<div/>")
+      .addClass("ujg-esi-epic-picker")
+      .toggleClass("ujg-esi-epic-picker-active", active);
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .attr("autocomplete", "off")
+      .attr("placeholder", state.projectKey ? "Поиск Epic" : "Сначала проект")
+      .addClass("ujg-esi-epic-search")
+      .val(value);
     $field.append($("<span/>").text("Epic"));
-    $select.append($("<option/>").attr("value", "").text(state.projectKey ? "Без Epic" : "Сначала проект"));
-    (state.epics || []).forEach(function(epic) {
-      var key = epic && epic.key != null ? String(epic.key) : "";
-      if (!key) return;
-      $select.append($("<option/>").attr("value", key).text(epicLabel(epic)));
+    if (disabled) $input.prop("disabled", true);
+    $input.on("input", function() {
+      var query = $(this).val();
+      if (!disabled) scheduleEpicSearch(query);
     });
-    $select.val(state.epicKey || "");
-    if (!state.projectKey) $select.prop("disabled", true);
-    $select.on("change", function() {
-      if (services && services.onEpicChange) services.onEpicChange($(this).val());
-    });
-    $field.append($select);
+    $wrap.append($input);
+    if (!disabled && state.epicKey) {
+      $wrap.append(
+        $("<button/>")
+          .attr("type", "button")
+          .attr("title", "Очистить Epic")
+          .addClass("ujg-esi-epic-clear")
+          .text("×")
+          .on("click", function() {
+            if (services && services.onEpicSelect) services.onEpicSelect("");
+          })
+      );
+    }
+    if (active) {
+      var $options = $("<div/>").addClass("ujg-esi-epic-options");
+      $options.append(
+        $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-epic-option")
+          .toggleClass("ujg-esi-epic-option-active", !state.epicKey)
+          .text("Без Epic")
+          .on("click", function() {
+            if (services && services.onEpicSelect) services.onEpicSelect("");
+          })
+      );
+      filteredEpics(state).forEach(function(epic) {
+        var key = epic && epic.key != null ? String(epic.key) : "";
+        if (!key) return;
+        $options.append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-epic-option")
+            .toggleClass("ujg-esi-epic-option-active", key === state.epicKey)
+            .text(epicLabel(epic))
+            .on("click", function() {
+              if (services && services.onEpicSelect) services.onEpicSelect(key);
+            })
+        );
+      });
+      if (!filteredEpics(state).length) {
+        $options.append($("<div/>").addClass("ujg-esi-epic-empty").text("Ничего не найдено"));
+      }
+      $wrap.append($options);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          var node = $input[0];
+          $input.trigger("focus");
+          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
+        }, 0);
+      }
+    }
+    $field.append($wrap);
     $toolbar.append($field);
   }
 
@@ -2908,7 +3002,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendParseMeta($header, s);
     }
     appendProjectSelect($toolbar, s);
-    appendEpicSelect($toolbar, s);
+    appendEpicPicker($toolbar, s);
     appendExcelActions($toolbar, s);
     $root.append($header, $toolbar);
     appendCounters($root, s);
@@ -3137,6 +3231,41 @@ define("_ujgESI_main", [
 
   function promiseOf(value) {
     return value && typeof value.then === "function" ? Promise.resolve(value) : Promise.resolve(value);
+  }
+
+  function stateStorageKey() {
+    return config && config.STORAGE_KEY ? String(config.STORAGE_KEY) : "ujg-esi-state";
+  }
+
+  function readStoredState() {
+    if (typeof localStorage === "undefined") return {};
+    try {
+      var raw = localStorage.getItem(stateStorageKey());
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function readStoredProjectKey() {
+    var stored = readStoredState();
+    var key = stored.projectKey != null ? stored.projectKey : stored.project;
+    return key != null ? String(key).trim() : "";
+  }
+
+  function writeStoredProjectKey(projectKey) {
+    if (typeof localStorage === "undefined") return;
+    try {
+      var key = projectKey != null ? String(projectKey).trim() : "";
+      var stored = readStoredState();
+      if (key) stored.projectKey = key;
+      else delete stored.projectKey;
+      localStorage.setItem(stateStorageKey(), JSON.stringify(stored));
+    } catch (err) {
+      // Dashboard storage is best-effort; failing to persist must not block import.
+    }
   }
 
   function syncedFileName(name) {
@@ -3481,6 +3610,10 @@ define("_ujgESI_main", [
         error: "",
         seq: 0,
       },
+      epicPicker: {
+        open: false,
+        query: "",
+      },
       issueTypePicker: {
         target: "",
         query: "",
@@ -3500,6 +3633,13 @@ define("_ujgESI_main", [
         return project && String(project.key || "") === key;
       })[0];
       return projectLabel(found) || key;
+    }
+
+    function hasProjectKey(projectKey) {
+      var key = projectKey != null ? String(projectKey) : "";
+      return !!(state.projects || []).filter(function(project) {
+        return project && String(project.key || "") === key;
+      })[0];
     }
 
     function selectedEpicText() {
@@ -3787,6 +3927,11 @@ define("_ujgESI_main", [
       state.issueTypePicker.rows = [];
     }
 
+    function closeEpicPicker() {
+      state.epicPicker.open = false;
+      state.epicPicker.query = "";
+    }
+
     function selectedProjectTextFor(projectKey) {
       var key = projectKey || "";
       var found = (state.projects || []).filter(function(project) {
@@ -3984,8 +4129,16 @@ define("_ujgESI_main", [
       return promiseOf(api.getProjects()).then(
         function(projects) {
           state.projects = normalizeProjects(projects);
+          if (!state.projectKey) {
+            var storedProjectKey = readStoredProjectKey();
+            if (storedProjectKey && hasProjectKey(storedProjectKey)) state.projectKey = storedProjectKey;
+          }
           state.loading = false;
           render();
+          if (state.projectKey) {
+            loadEpics(state.projectKey);
+            loadCreateMeta(state.projectKey);
+          }
         },
         function(err) {
           setError("Не удалось загрузить проекты: " + (err && err.statusText ? err.statusText : "request failed"));
@@ -3996,6 +4149,7 @@ define("_ujgESI_main", [
     function loadEpics(projectKey) {
       state.epicKey = "";
       state.epics = [];
+      closeEpicPicker();
       if (!projectKey) {
         render();
         return Promise.resolve();
@@ -4112,6 +4266,8 @@ define("_ujgESI_main", [
       state.projectKey = projectKey != null ? String(projectKey) : "";
       state.error = "";
       state.createDialog = null;
+      writeStoredProjectKey(state.projectKey);
+      closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
       loadEpics(state.projectKey);
@@ -4119,8 +4275,20 @@ define("_ujgESI_main", [
     }
 
     function onEpicChange(epicKey) {
+      onEpicSelect(epicKey);
+    }
+
+    function onEpicSearch(query) {
+      if (!state.projectKey) return;
+      state.epicPicker.open = true;
+      state.epicPicker.query = query != null ? String(query) : "";
+      render();
+    }
+
+    function onEpicSelect(epicKey) {
       state.epicKey = epicKey != null ? String(epicKey) : "";
       state.createDialog = null;
+      closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -4137,6 +4305,7 @@ define("_ujgESI_main", [
       state.sheetPickerOpen = false;
       state.createDialog = null;
       resetExportState();
+      closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -4648,6 +4817,8 @@ define("_ujgESI_main", [
     rendering.init($container, {
       onProjectChange: onProjectChange,
       onEpicChange: onEpicChange,
+      onEpicSearch: onEpicSearch,
+      onEpicSelect: onEpicSelect,
       onFileChange: onFileChange,
       onSubtasksChange: onSubtasksChange,
       onToggleSheetPicker: onToggleSheetPicker,

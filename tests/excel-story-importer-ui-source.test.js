@@ -13,7 +13,9 @@ test("rendering module exposes import controls and row create action classes", f
   const source = read("ujg-excel-story-importer-modules/rendering.js");
 
   assert.match(source, /ujg-esi-project-select/);
-  assert.match(source, /ujg-esi-epic-select/);
+  assert.match(source, /ujg-esi-epic-picker/);
+  assert.match(source, /ujg-esi-epic-search/);
+  assert.match(source, /ujg-esi-epic-options/);
   assert.match(source, /ujg-esi-file/);
   assert.match(source, /ujg-esi-upload-excel/);
   assert.match(source, /ujg-esi-file-name/);
@@ -87,11 +89,25 @@ test("row create action only requires project selection", function () {
   assert.doesNotMatch(source, /state\.epicKey &&/);
 });
 
+test("epic picker searches from input without replacing the field on focus", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+  const start = source.indexOf("function appendEpicPicker");
+  const end = source.indexOf("function appendFileInput", start);
+  const block = source.slice(start, end);
+
+  assert.match(source, /function scheduleEpicSearch\(query\)/);
+  assert.match(block, /var query = \$\(this\)\.val\(\);/);
+  assert.match(block, /if \(!disabled\) scheduleEpicSearch\(query\);/);
+  assert.doesNotMatch(block, /\.on\("focus click"/);
+  assert.doesNotMatch(block, /!disabled && services && services\.onEpicSearch\) services\.onEpicSearch\(""\)/);
+});
+
 test("main module wires renderer callbacks for project, epic, file, subtasks, and confirmed row create", function () {
   const source = read("ujg-excel-story-importer-modules/main.js");
 
   assert.match(source, /onProjectChange/);
-  assert.match(source, /onEpicChange/);
+  assert.match(source, /onEpicSearch/);
+  assert.match(source, /onEpicSelect/);
   assert.match(source, /onFileChange/);
   assert.match(source, /onSubtasksChange/);
   assert.match(source, /onCreateRow/);

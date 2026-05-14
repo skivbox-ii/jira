@@ -22,6 +22,21 @@ function flush() {
   });
 }
 
+function createLocalStorage() {
+  const values = {};
+  return {
+    getItem: function (key) {
+      return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
+    },
+    setItem: function (key, value) {
+      values[key] = String(value);
+    },
+    removeItem: function (key) {
+      delete values[key];
+    },
+  };
+}
+
 test("file import surfaces parser exceptions as visible errors", async function () {
   const states = [];
   let callbacks = null;
@@ -85,6 +100,161 @@ test("file import surfaces parser exceptions as visible errors", async function 
   const last = states[states.length - 1];
   assert.equal(last.loading, false);
   assert.match(last.error, /Не удалось прочитать Excel: bad workbook/);
+});
+
+test("project selection is stored in localStorage and restored on next load", async function () {
+  const storage = createLocalStorage();
+  const config = Object.assign({}, CONFIG, { STORAGE_KEY: "ujg-esi-state-test" });
+  const firstStates = [];
+  const secondStates = [];
+  const firstEpicCalls = [];
+  const secondEpicCalls = [];
+  let firstCallbacks = null;
+
+  function loadWith(renderedStates, epicCalls, captureCallbacks) {
+    const rendering = {
+      init: function (_container, services) {
+        if (captureCallbacks) firstCallbacks = services;
+      },
+      render: function (state) {
+        renderedStates.push({
+          projectKey: state.projectKey || "",
+          epicKey: state.epicKey || "",
+        });
+      },
+    };
+    const api = {
+      baseUrl: "https://jira.example.com",
+      getProjects: function () {
+        return Promise.resolve([{ key: "P1", name: "Project 1" }, { key: "P2", name: "Project 2" }]);
+      },
+      getProjectEpics: function (projectKey) {
+        epicCalls.push(projectKey);
+        return Promise.resolve([]);
+      },
+      getProjectCreateMeta: function () {
+        return Promise.resolve({ projects: [] });
+      },
+    };
+    const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+      jquery: function () {
+        return { length: 0 };
+      },
+      "_ujgESI_config": config,
+      "_ujgESI_api": api,
+      "_ujgESI_excel-loader": {},
+      "_ujgESI_parser": {},
+      "_ujgESI_creator": {},
+      "_ujgESI_mappingStore": null,
+      "_ujgESI_xlsxPatcher": null,
+      "_ujgESI_rendering": rendering,
+    }, { localStorage: storage });
+    new Gadget({
+      getGadgetContentEl: function () {
+        return {
+          find: function () {
+            return { length: 1 };
+          },
+        };
+      },
+      resize: function () {},
+    });
+  }
+
+  loadWith(firstStates, firstEpicCalls, true);
+  await flush();
+  await flush();
+  firstCallbacks.onProjectChange("P2");
+  await flush();
+  await flush();
+
+  assert.equal(JSON.parse(storage.getItem("ujg-esi-state-test")).projectKey, "P2");
+  assert.deepEqual(firstEpicCalls, ["P2"]);
+
+  loadWith(secondStates, secondEpicCalls, false);
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(secondStates[secondStates.length - 1].projectKey, "P2");
+  assert.deepEqual(secondEpicCalls, ["P2"]);
+});
+
+test("epic picker search opens filtered epic choices and select stores epic key", async function () {
+  const states = [];
+  let callbacks = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        projectKey: state.projectKey || "",
+        epicKey: state.epicKey || "",
+        epicPicker: state.epicPicker
+          ? {
+              open: !!state.epicPicker.open,
+              query: state.epicPicker.query || "",
+            }
+          : null,
+      });
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    getProjectEpics: function () {
+      return Promise.resolve({
+        issues: [
+          { key: "EVOSCADA-10", fields: { summary: "Север замечания" } },
+          { key: "EVOSCADA-20", fields: { summary: "Юг замечания" } },
+        ],
+      });
+    },
+    getProjectCreateMeta: function () {
+      return Promise.resolve({ projects: [] });
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": {},
+    "_ujgESI_parser": {},
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": null,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  await flush();
+  callbacks.onEpicSearch("Север");
+  let last = states[states.length - 1];
+  assert.equal(last.epicPicker.open, true);
+  assert.equal(last.epicPicker.query, "Север");
+
+  callbacks.onEpicSelect("EVOSCADA-10");
+  last = states[states.length - 1];
+  assert.equal(last.epicKey, "EVOSCADA-10");
+  assert.equal(last.epicPicker.open, false);
 });
 
 test("row create opens confirmation before creating without Epic", async function () {
