@@ -86,12 +86,17 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     };
   }
 
+  function copySheetName(value) {
+    return value != null ? String(value).trim() : "";
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
+      sheetName: copySheetName(config.SHEET_NAME),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -112,6 +117,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,
+      sheetName: hasInput ? copySheetName(input.sheetName) : defaults.sheetName,
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,

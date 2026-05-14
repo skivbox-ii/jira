@@ -114,6 +114,10 @@ define("_ujgESI_main", [
     };
   }
 
+  function copySheetName(value) {
+    return value != null ? String(value).trim() : "";
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -123,6 +127,7 @@ define("_ujgESI_main", [
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
+      sheetName: copySheetName(config.SHEET_NAME),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -146,6 +151,7 @@ define("_ujgESI_main", [
       tableStart: source.tableStart && typeof source.tableStart === "object"
         ? copyTableStart(source.tableStart)
         : copyTableStart(defaults.tableStart),
+      sheetName: source.sheetName != null ? copySheetName(source.sheetName) : copySheetName(defaults.sheetName),
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
     };
   }
@@ -801,6 +807,11 @@ define("_ujgESI_main", [
       saveMappings();
     }
 
+    function onMappingSheetNameChange(value) {
+      state.mappingSettings.sheetName = copySheetName(value);
+      saveMappings();
+    }
+
     function onMappingPairAdd(block) {
       var key = mappingKey(block);
       var entries = mappingEntries(state.mappingSettings[key]);
@@ -1163,6 +1174,7 @@ define("_ujgESI_main", [
       onMappingPairRemove: onMappingPairRemove,
       onMappingColumnChange: onMappingColumnChange,
       onMappingTableStartChange: onMappingTableStartChange,
+      onMappingSheetNameChange: onMappingSheetNameChange,
       onMappingRoleAdd: onMappingRoleAdd,
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,

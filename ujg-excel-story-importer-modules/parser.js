@@ -9,9 +9,15 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function sheetRows(sheet) {
     if (!sheet) return [];
-    if (Array.isArray(sheet.__rows)) return sheet.__rows;
+    var hiddenRows = sheet["!rows"] || [];
+    function visibleRows(rows) {
+      return (rows || []).map(function(row, index) {
+        return hiddenRows[index] && hiddenRows[index].hidden ? [] : row;
+      });
+    }
+    if (Array.isArray(sheet.__rows)) return visibleRows(sheet.__rows);
     if (typeof XLSX !== "undefined" && XLSX.utils && XLSX.utils.sheet_to_json) {
-      return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+      return visibleRows(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }));
     }
     return [];
   }
@@ -42,6 +48,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         : String(defaults[key] || "").trim();
     });
     return {
+      sheetName: source.sheetName != null && String(source.sheetName).trim() ? String(source.sheetName).trim() : "",
       columnMap: columnMap,
       tableStart: {
         headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
@@ -194,10 +201,14 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   function parseWorkbook(workbook, options) {
     var settings = parserSettings(options);
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
+    var selectedSheetName = settings.sheetName;
+    var scanSheetNames = selectedSheetName ? sheetNames.filter(function(name) {
+      return String(name) === selectedSheetName;
+    }) : sheetNames;
     var i;
     var fallback = null;
-    for (i = 0; i < sheetNames.length; i += 1) {
-      var sheetName = String(sheetNames[i]);
+    for (i = 0; i < scanSheetNames.length; i += 1) {
+      var sheetName = String(scanSheetNames[i]);
       var rows = sheetRows(workbook.Sheets && workbook.Sheets[sheetName]);
       var header = findHeader(rows, settings);
       if (header) {

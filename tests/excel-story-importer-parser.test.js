@@ -112,6 +112,62 @@ test("parseWorkbook scans sheets in order and skips sheets without remarks heade
   assert.equal(result.rows[0].jiraKey, "EVOSCADA-14447");
 });
 
+test("parseWorkbook uses configured sheet name instead of first matching sheet", function () {
+  const parser = loadParser();
+  const workbook = {
+    SheetNames: ["Черновик", "Замечания"],
+    Sheets: {
+      "Черновик": {
+        __rows: [
+          ["№", "Замечание", "Jira"],
+          ["1", "Не тот лист", ""],
+        ],
+      },
+      "Замечания": {
+        __rows: [
+          ["№", "Замечание", "Jira"],
+          ["2", "Основной журнал замечаний", "EVOSCADA-2"],
+        ],
+      },
+    },
+  };
+
+  const result = parser.parseWorkbook(workbook, { sheetName: "Замечания" });
+
+  assert.equal(result.sheetName, "Замечания");
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].summary, "Основной журнал замечаний");
+  assert.equal(result.rows[0].jiraKey, "EVOSCADA-2");
+});
+
+test("parseWorkbook skips hidden worksheet rows but keeps Excel row numbers", function () {
+  const parser = loadParser();
+  const workbook = {
+    SheetNames: ["Журнал"],
+    Sheets: {
+      "Журнал": {
+        "!rows": [
+          {},
+          {},
+          { hidden: true },
+          {},
+        ],
+        __rows: [
+          ["№", "Замечание", "Jira"],
+          ["1", "Видимая строка", ""],
+          ["2", "Скрытая строка", ""],
+          ["3", "Вторая видимая строка", ""],
+        ],
+      },
+    },
+  };
+
+  const result = parser.parseWorkbook(workbook);
+
+  assert.deepEqual(Array.from(result.rows, (row) => row.summary), ["Видимая строка", "Вторая видимая строка"]);
+  assert.deepEqual(Array.from(result.rows, (row) => row.excelRowNumber), [2, 4]);
+});
+
 test("parseWorkbook falls back to two-column story rows without a header", function () {
   const parser = loadParser();
   const workbook = {

@@ -235,7 +235,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       {
         key: "tableStart",
         title: "Начало таблицы",
-        subtitle: maps.tableStart && maps.tableStart.headerMarker ? String(maps.tableStart.headerMarker) : "Замечание",
+        subtitle: (maps.sheetName ? String(maps.sheetName) + " · " : "") + (maps.tableStart && maps.tableStart.headerMarker ? String(maps.tableStart.headerMarker) : "Замечание"),
       },
       {
         key: "roles",
@@ -508,11 +508,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendTableStartMapping($parent, settings) {
     var tableStart = settings && settings.tableStart ? settings.tableStart : {};
+    var sheetName = settings && settings.sheetName != null ? String(settings.sheetName) : "";
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append($("<h2/>").text("Начало таблицы"));
     var $box = $("<div/>").addClass("ujg-esi-mapping-start");
     $box.append(
+      $("<label/>")
+        .addClass("ujg-esi-mapping-start-field")
+        .append(
+          $("<span/>").text("Лист"),
+          appendTextInput("ujg-esi-mapping-sheet-name", sheetName, function(value) {
+            if (services && services.onMappingSheetNameChange) services.onMappingSheetNameChange(value);
+          }).attr("placeholder", "Пусто = авто")
+        ),
       $("<label/>")
         .addClass("ujg-esi-mapping-start-field")
         .append(

@@ -215,12 +215,17 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     };
   }
 
+  function copySheetName(value) {
+    return value != null ? String(value).trim() : "";
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
+      sheetName: copySheetName(config.SHEET_NAME),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -241,6 +246,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,
+      sheetName: hasInput ? copySheetName(input.sheetName) : defaults.sheetName,
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,
@@ -388,9 +394,15 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function sheetRows(sheet) {
     if (!sheet) return [];
-    if (Array.isArray(sheet.__rows)) return sheet.__rows;
+    var hiddenRows = sheet["!rows"] || [];
+    function visibleRows(rows) {
+      return (rows || []).map(function(row, index) {
+        return hiddenRows[index] && hiddenRows[index].hidden ? [] : row;
+      });
+    }
+    if (Array.isArray(sheet.__rows)) return visibleRows(sheet.__rows);
     if (typeof XLSX !== "undefined" && XLSX.utils && XLSX.utils.sheet_to_json) {
-      return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+      return visibleRows(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }));
     }
     return [];
   }
@@ -421,6 +433,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
         : String(defaults[key] || "").trim();
     });
     return {
+      sheetName: source.sheetName != null && String(source.sheetName).trim() ? String(source.sheetName).trim() : "",
       columnMap: columnMap,
       tableStart: {
         headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
@@ -573,10 +586,14 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   function parseWorkbook(workbook, options) {
     var settings = parserSettings(options);
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
+    var selectedSheetName = settings.sheetName;
+    var scanSheetNames = selectedSheetName ? sheetNames.filter(function(name) {
+      return String(name) === selectedSheetName;
+    }) : sheetNames;
     var i;
     var fallback = null;
-    for (i = 0; i < sheetNames.length; i += 1) {
-      var sheetName = String(sheetNames[i]);
+    for (i = 0; i < scanSheetNames.length; i += 1) {
+      var sheetName = String(scanSheetNames[i]);
       var rows = sheetRows(workbook.Sheets && workbook.Sheets[sheetName]);
       var header = findHeader(rows, settings);
       if (header) {
@@ -1669,7 +1686,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       {
         key: "tableStart",
         title: "Начало таблицы",
-        subtitle: maps.tableStart && maps.tableStart.headerMarker ? String(maps.tableStart.headerMarker) : "Замечание",
+        subtitle: (maps.sheetName ? String(maps.sheetName) + " · " : "") + (maps.tableStart && maps.tableStart.headerMarker ? String(maps.tableStart.headerMarker) : "Замечание"),
       },
       {
         key: "roles",
@@ -1942,11 +1959,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendTableStartMapping($parent, settings) {
     var tableStart = settings && settings.tableStart ? settings.tableStart : {};
+    var sheetName = settings && settings.sheetName != null ? String(settings.sheetName) : "";
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append($("<h2/>").text("Начало таблицы"));
     var $box = $("<div/>").addClass("ujg-esi-mapping-start");
     $box.append(
+      $("<label/>")
+        .addClass("ujg-esi-mapping-start-field")
+        .append(
+          $("<span/>").text("Лист"),
+          appendTextInput("ujg-esi-mapping-sheet-name", sheetName, function(value) {
+            if (services && services.onMappingSheetNameChange) services.onMappingSheetNameChange(value);
+          }).attr("placeholder", "Пусто = авто")
+        ),
       $("<label/>")
         .addClass("ujg-esi-mapping-start-field")
         .append(
@@ -2423,6 +2449,10 @@ define("_ujgESI_main", [
     };
   }
 
+  function copySheetName(value) {
+    return value != null ? String(value).trim() : "";
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -2432,6 +2462,7 @@ define("_ujgESI_main", [
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
+      sheetName: copySheetName(config.SHEET_NAME),
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -2455,6 +2486,7 @@ define("_ujgESI_main", [
       tableStart: source.tableStart && typeof source.tableStart === "object"
         ? copyTableStart(source.tableStart)
         : copyTableStart(defaults.tableStart),
+      sheetName: source.sheetName != null ? copySheetName(source.sheetName) : copySheetName(defaults.sheetName),
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
     };
   }
@@ -3110,6 +3142,11 @@ define("_ujgESI_main", [
       saveMappings();
     }
 
+    function onMappingSheetNameChange(value) {
+      state.mappingSettings.sheetName = copySheetName(value);
+      saveMappings();
+    }
+
     function onMappingPairAdd(block) {
       var key = mappingKey(block);
       var entries = mappingEntries(state.mappingSettings[key]);
@@ -3472,6 +3509,7 @@ define("_ujgESI_main", [
       onMappingPairRemove: onMappingPairRemove,
       onMappingColumnChange: onMappingColumnChange,
       onMappingTableStartChange: onMappingTableStartChange,
+      onMappingSheetNameChange: onMappingSheetNameChange,
       onMappingRoleAdd: onMappingRoleAdd,
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,

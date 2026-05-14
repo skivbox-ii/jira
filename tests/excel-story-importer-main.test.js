@@ -506,6 +506,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
             tableStart: {
               headerMarker: "Тема",
             },
+            sheetName: "Замечания",
             roles: [
               { role: "SE", issueType: "System Engineer", originalEstimate: "2h", remainingEstimate: "2h", enabled: true },
               { role: "QA", issueType: "QA", originalEstimate: "3h", remainingEstimate: "3h", enabled: false },
@@ -614,6 +615,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   await flush();
   assert.equal(parserOptions.columnMap.summary, "Тема");
   assert.equal(parserOptions.tableStart.headerMarker, "Тема");
+  assert.equal(parserOptions.sheetName, "Замечания");
   callbacks.onCreateRow(0);
   await flush();
   last = states[states.length - 1];
