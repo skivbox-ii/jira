@@ -2602,6 +2602,10 @@ define("_ujgESI_main", [
     return text + ".synced.xlsx";
   }
 
+  function nonBlank(value) {
+    return value != null && String(value).trim() !== "";
+  }
+
   function issueStatusName(issue) {
     var fields = issue && issue.fields ? issue.fields : {};
     var status = fields.status;
@@ -2816,13 +2820,13 @@ define("_ujgESI_main", [
 
     function patchRowsForExport(rows) {
       return (rows || []).map(function(row) {
-        var cols = row && row.sourceColumns ? row.sourceColumns : {};
-        var key = issueKeyFromRow(row);
+        var synced = row && row.syncedColumns ? row.syncedColumns : {};
         var values = {};
-        if (key) values[config.JIRA_COLUMN] = key;
-        if (cols["Статус в Jira"] != null) values["Статус в Jira"] = cols["Статус в Jira"];
-        if (cols["Исполнитель в Jira"] != null) values["Исполнитель в Jira"] = cols["Исполнитель в Jira"];
-        if (cols["Спринт"] != null) values["Спринт"] = cols["Спринт"];
+        var createdKey = row && row.createdKey ? issueKeyFromRow(row) : "";
+        if (createdKey) values[config.JIRA_COLUMN] = createdKey;
+        if (nonBlank(synced["Статус в Jira"])) values["Статус в Jira"] = synced["Статус в Jira"];
+        if (nonBlank(synced["Исполнитель в Jira"])) values["Исполнитель в Jira"] = synced["Исполнитель в Jira"];
+        if (nonBlank(synced["Спринт"])) values["Спринт"] = synced["Спринт"];
         return {
           excelRowNumber: row && row.excelRowNumber,
           values: values,
@@ -3459,10 +3463,22 @@ define("_ujgESI_main", [
           row.jiraKey = key;
           row.alreadyLinked = true;
           row.sourceColumns = row.sourceColumns || {};
-          row.sourceColumns[config.JIRA_COLUMN] = key;
-          row.sourceColumns["Статус в Jira"] = issueStatusName(issue);
-          row.sourceColumns["Исполнитель в Jira"] = issueAssigneeName(issue);
-          row.sourceColumns["Спринт"] = issueSprintName(issue);
+          row.syncedColumns = {};
+          var statusName = issueStatusName(issue);
+          var assigneeName = issueAssigneeName(issue);
+          var sprintNameValue = issueSprintName(issue);
+          if (nonBlank(statusName)) {
+            row.sourceColumns["Статус в Jira"] = statusName;
+            row.syncedColumns["Статус в Jira"] = statusName;
+          }
+          if (nonBlank(assigneeName)) {
+            row.sourceColumns["Исполнитель в Jira"] = assigneeName;
+            row.syncedColumns["Исполнитель в Jira"] = assigneeName;
+          }
+          if (nonBlank(sprintNameValue)) {
+            row.sourceColumns["Спринт"] = sprintNameValue;
+            row.syncedColumns["Спринт"] = sprintNameValue;
+          }
           synced += 1;
         });
         return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {

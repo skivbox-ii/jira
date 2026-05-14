@@ -444,6 +444,10 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(patchArgs.patch.sheetName, "Журнал");
   assert.equal(patchArgs.patch.headerRowNumber, 9);
   assert.equal(patchArgs.patch.rows[0].excelRowNumber, 12);
+  assert.equal(Object.prototype.hasOwnProperty.call(patchArgs.patch.rows[0].values, "Jira"), false);
+  assert.equal(patchArgs.patch.rows[0].values["Статус в Jira"], "In Review");
+  assert.equal(patchArgs.patch.rows[0].values["Исполнитель в Jira"], "Иван Иванов");
+  assert.equal(patchArgs.patch.rows[0].values["Спринт"], "Sprint 42");
   assert.deepEqual(patchArgs.patch.headerColumns, {
     Jira: 11,
     "Статус в Jira": 15,
@@ -459,6 +463,125 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(last.rows[0].statusInJira, "In Review");
   assert.equal(last.rows[0].assigneeInJira, "Иван Иванов");
   assert.equal(last.rows[0].sprintInJira, "Sprint 42");
+});
+
+test("sync from Jira does not blank existing sprint when issue has no sprint field", async function () {
+  const states = [];
+  let callbacks = null;
+  let patchArgs = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        rows: (state.rows || []).map(function (row) {
+          return {
+            sprintInJira: row.sourceColumns && row.sourceColumns["Спринт"] || "",
+          };
+        }),
+      });
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([]);
+    },
+    getIssuesByKeys: function () {
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-10",
+            fields: {
+              status: { name: "In Review" },
+              assignee: { displayName: "Иван Иванов" },
+            },
+          },
+        ],
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(new ArrayBuffer(12));
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Журнал"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Журнал",
+        headerRowNumber: 1,
+        headerColumns: {
+          Jira: 16,
+          "Статус в Jira": 13,
+          "Исполнитель в Jira": 15,
+          "Спринт": 22,
+        },
+        rows: [
+          {
+            excelRowNumber: 792,
+            summary: "Existing",
+            jiraKey: "EVOSCADA-10",
+            sourceColumns: {
+              Замечание: "Existing",
+              Jira: "EVOSCADA-10",
+              "Спринт": "18.05-01.06",
+            },
+            sourceColumnIndexes: { Jira: 16, "Спринт": 22 },
+            alreadyLinked: true,
+            status: "linked",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (_buffer, patch) {
+      patchArgs = patch;
+      return Promise.resolve(new ArrayBuffer(8));
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+
+  callbacks.onFileChange({ name: "test.xlsx" });
+  await flush();
+  await flush();
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+
+  assert.equal(states[states.length - 1].rows[0].sprintInJira, "18.05-01.06");
+  assert.equal(Object.prototype.hasOwnProperty.call(patchArgs.rows[0].values, "Спринт"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(patchArgs.rows[0].values, "Jira"), false);
 });
 
 test("column mapping changes reparse the loaded workbook before Jira sync export", async function () {
