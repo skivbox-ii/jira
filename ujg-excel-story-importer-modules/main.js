@@ -218,6 +218,76 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function normalizeLinkName(name) {
+    return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
+  }
+
+  function isChildLinkName(name) {
+    var normalized = normalizeLinkName(name);
+    var configured = normalizeLinkName(config.CHILD_LINK_TYPE_NAME || "Child");
+    return !!normalized && (
+      normalized === configured ||
+      normalized === "child" ||
+      normalized === "is_child" ||
+      normalized === "child_of_story"
+    );
+  }
+
+  function issueSummaryName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    if (fields.summary != null && String(fields.summary).trim()) return String(fields.summary).trim();
+    return issue && issue.summary != null ? String(issue.summary).trim() : "";
+  }
+
+  function linkedChildIssues(issue) {
+    var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+    var seen = {};
+    var out = [];
+
+    function push(linkName, linkedIssue) {
+      var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key).trim().toUpperCase() : "";
+      var summary = issueSummaryName(linkedIssue);
+      var identity = key || summary + "|" + issueStatusName(linkedIssue) + "|" + issueAssigneeName(linkedIssue);
+      if (!isChildLinkName(linkName) || !linkedIssue || !identity || seen[identity]) return;
+      seen[identity] = true;
+      out.push(linkedIssue);
+    }
+
+    links.forEach(function(link) {
+      var type = link && link.type ? link.type : {};
+      push(type.name, link && link.inwardIssue);
+      push(type.inward, link && link.inwardIssue);
+      push(type.name, link && link.outwardIssue);
+      push(type.outward, link && link.outwardIssue);
+    });
+    return out;
+  }
+
+  function childIssueKeysFromIssues(issues) {
+    var seen = {};
+    var out = [];
+    (issues || []).forEach(function(issue) {
+      linkedChildIssues(issue).forEach(function(child) {
+        var key = child && child.key != null ? String(child.key).trim().toUpperCase() : "";
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        out.push(key);
+      });
+    });
+    return out;
+  }
+
+  function issueChildStatusTitle(issue, childIssueMap) {
+    return linkedChildIssues(issue).map(function(child) {
+      var key = child && child.key != null ? String(child.key).trim().toUpperCase() : "";
+      var resolved = key && childIssueMap && childIssueMap[key] ? childIssueMap[key] : child;
+      var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
+      var status = issueStatusName(resolved) || "Без статуса";
+      var assignee = issueAssigneeName(resolved) || "Не назначен";
+      return summary + " | " + status + " | " + assignee;
+    }).join("\n");
+  }
+
   function sprintNameFromString(value) {
     var text = String(value || "");
     var start = text.indexOf("name=");
@@ -1054,7 +1124,18 @@ define("_ujgESI_main", [
       closeUserPicker();
       render();
       promiseOf(api.getIssuesByKeys(copyArrayForHost(keys))).then(function(data) {
-        var issues = issueMapByKey(data);
+        var issueList = normalizeIssues(data);
+        var childKeys = childIssueKeysFromIssues(issueList);
+        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys))) : Promise.resolve({ issues: [] });
+        return childrenPromise.then(function(childData) {
+          return {
+            data: data,
+            childIssues: issueMapByKey(childData),
+          };
+        });
+      }).then(function(syncData) {
+        var issues = issueMapByKey(syncData.data);
+        var childIssues = syncData.childIssues || {};
         var synced = 0;
         (state.rows || []).forEach(function(row) {
           var key = issueKeyFromRow(row);
@@ -1067,6 +1148,8 @@ define("_ujgESI_main", [
           var statusName = issueStatusName(issue);
           var assigneeName = issueAssigneeName(issue);
           var sprintNameValue = issueSprintName(issue);
+          var statusTitle = issueChildStatusTitle(issue, childIssues);
+          row.statusTitle = statusTitle;
           if (nonBlank(statusName)) {
             row.sourceColumns["Статус в Jira"] = statusName;
             row.syncedColumns["Статус в Jira"] = statusName;

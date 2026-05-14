@@ -66,7 +66,7 @@ test("preview status column prefers Jira sync status and falls back to Excel sta
   assert.match(source, /function previewStatusText/);
   assert.match(source, /cols\["Статус в Jira"\]/);
   assert.match(source, /cols\["Статус"\]/);
-  assert.match(source, /appendValue\(\$tr, previewStatusText\(cols\), "ujg-esi-status"\)/);
+  assert.match(source, /appendValue\(\$tr, previewStatusText\(cols\), "ujg-esi-status", row\.statusTitle \|\| ""\)/);
 });
 
 test("file name is rendered in parse metadata, not beside upload icon", function () {
@@ -164,6 +164,7 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /getProjectCreateMeta/);
   assert.match(source, /\/rest\/api\/2\/issue\/createmeta/);
   assert.match(source, /getIssuesByKeys/);
+  assert.match(source, /issuelinks/);
   assert.match(source, /key in/);
 });
 
@@ -173,6 +174,7 @@ test("rendering module always renders Jira keys as new-tab browse links", functi
   assert.match(source, /function issueBrowseUrl/);
   assert.match(source, /\/browse\//);
   assert.match(source, /target", "_blank"/);
+  assert.match(source, /row\.statusTitle/);
   assert.doesNotMatch(source, /if \(key && base\)/);
 });
 

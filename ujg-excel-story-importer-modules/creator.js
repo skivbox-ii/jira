@@ -148,11 +148,33 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     };
   }
 
-  function linkChildIssue(api, parentKey, childKey) {
+  function blocksLinkPayload(blockerKey, blockedKey) {
+    return {
+      type: { name: String(config.BLOCKS_LINK_TYPE_NAME || "Blocks") },
+      outwardIssue: { key: String(blockerKey || "") },
+      inwardIssue: { key: String(blockedKey || "") },
+    };
+  }
+
+  function isTestingRole(role) {
+    var roleText = normalizedKey(
+      [
+        role && role.role,
+        role && role.issueType,
+      ].join(" ")
+    );
+    var summary = normalizedKey(role && role.summary);
+    return /(^|\s)(qa|test|testing)(\s|$)/.test(roleText) ||
+      roleText.indexOf("тест") !== -1 ||
+      /^\s*\[(qa|test|testing)\]/.test(summary) ||
+      /^тест/.test(summary);
+  }
+
+  function linkIssue(api, payload) {
     if (!api || typeof api.createIssueLink !== "function") {
       return Promise.resolve({ ok: false, error: "Jira issue link API is not available" });
     }
-    return Promise.resolve(api.createIssueLink(childLinkPayload(parentKey, childKey))).then(
+    return Promise.resolve(api.createIssueLink(payload)).then(
       function() {
         return { ok: true };
       },
@@ -162,25 +184,66 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     );
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors) {
-    if (index >= roles.length) {
+  function linkChildIssue(api, parentKey, childKey) {
+    return linkIssue(api, childLinkPayload(parentKey, childKey));
+  }
+
+  function linkBlockedByIssue(api, blockerKey, blockedKey) {
+    return linkIssue(api, blocksLinkPayload(blockerKey, blockedKey));
+  }
+
+  function linkTestingBlockedBySequential(api, testing, blockers, index, errors) {
+    var testingRole = testing && testing.role && testing.role.role ? String(testing.role.role) : "QA";
+    var blockerRole;
+    if (!testing || index >= blockers.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
+    }
+    blockerRole = blockers[index] && blockers[index].role && blockers[index].role.role ? String(blockers[index].role.role) : "child";
+    return linkBlockedByIssue(api, blockers[index].key, testing.key).then(function(link) {
+      if (!link.ok) errors.push(testingRole + " blocked by " + blockerRole + ": " + link.error);
+      return linkTestingBlockedBySequential(api, testing, blockers, index + 1, errors);
+    });
+  }
+
+  function linkTestingTasksBlockedBy(api, created, index, errors) {
+    var testing;
+    var blockers;
+    if (index >= created.length) {
+      return Promise.resolve({ ok: errors.length === 0, errors: errors });
+    }
+    testing = created[index];
+    if (!isTestingRole(testing && testing.role)) {
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+    }
+    blockers = created.filter(function(child) {
+      return child && child.key && child.key !== testing.key && !isTestingRole(child.role);
+    });
+    return linkTestingBlockedBySequential(api, testing, blockers, 0, errors).then(function() {
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+    });
+  }
+
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors, created) {
+    created = created || [];
+    if (index >= roles.length) {
+      return Promise.resolve({ ok: errors.length === 0, errors: errors, created: created });
     }
     return Promise.resolve(api.createIssue({ fields: subtaskFields(projectKey, parentKey, roles[index], storySummary) })).then(
       function(res) {
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
         }
+        created.push({ key: key, role: roles[index] });
         return linkChildIssue(api, parentKey, key).then(function(link) {
           if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
         });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
       }
     );
   }
@@ -212,7 +275,11 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       roles = roles.filter(function(role) {
         return !role || role.enabled !== false;
       });
-      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
+      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], []).then(function(sub) {
+        return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
+          return linked;
+        });
+      }).then(function(sub) {
         return {
           ok: sub.errors.length === 0,
           partial: sub.errors.length > 0,
@@ -250,6 +317,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     childSummary: childSummary,
     limitSummary: limitSummary,
     childLinkPayload: childLinkPayload,
+    blocksLinkPayload: blocksLinkPayload,
+    isTestingRole: isTestingRole,
     lookupMappedValue: lookupMappedValue,
   };
 });

@@ -15,6 +15,7 @@ define("_ujgESI_config", [], function() {
   var SPRINT_FIELD = "customfield_10020";
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
+  var BLOCKS_LINK_TYPE_NAME = "Blocks";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
   var DEFAULT_JSZIP_URL = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
 
@@ -120,6 +121,7 @@ define("_ujgESI_config", [], function() {
     SPRINT_FIELD: SPRINT_FIELD,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
+    BLOCKS_LINK_TYPE_NAME: BLOCKS_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
@@ -787,11 +789,33 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     };
   }
 
-  function linkChildIssue(api, parentKey, childKey) {
+  function blocksLinkPayload(blockerKey, blockedKey) {
+    return {
+      type: { name: String(config.BLOCKS_LINK_TYPE_NAME || "Blocks") },
+      outwardIssue: { key: String(blockerKey || "") },
+      inwardIssue: { key: String(blockedKey || "") },
+    };
+  }
+
+  function isTestingRole(role) {
+    var roleText = normalizedKey(
+      [
+        role && role.role,
+        role && role.issueType,
+      ].join(" ")
+    );
+    var summary = normalizedKey(role && role.summary);
+    return /(^|\s)(qa|test|testing)(\s|$)/.test(roleText) ||
+      roleText.indexOf("тест") !== -1 ||
+      /^\s*\[(qa|test|testing)\]/.test(summary) ||
+      /^тест/.test(summary);
+  }
+
+  function linkIssue(api, payload) {
     if (!api || typeof api.createIssueLink !== "function") {
       return Promise.resolve({ ok: false, error: "Jira issue link API is not available" });
     }
-    return Promise.resolve(api.createIssueLink(childLinkPayload(parentKey, childKey))).then(
+    return Promise.resolve(api.createIssueLink(payload)).then(
       function() {
         return { ok: true };
       },
@@ -801,25 +825,66 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     );
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors) {
-    if (index >= roles.length) {
+  function linkChildIssue(api, parentKey, childKey) {
+    return linkIssue(api, childLinkPayload(parentKey, childKey));
+  }
+
+  function linkBlockedByIssue(api, blockerKey, blockedKey) {
+    return linkIssue(api, blocksLinkPayload(blockerKey, blockedKey));
+  }
+
+  function linkTestingBlockedBySequential(api, testing, blockers, index, errors) {
+    var testingRole = testing && testing.role && testing.role.role ? String(testing.role.role) : "QA";
+    var blockerRole;
+    if (!testing || index >= blockers.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
+    }
+    blockerRole = blockers[index] && blockers[index].role && blockers[index].role.role ? String(blockers[index].role.role) : "child";
+    return linkBlockedByIssue(api, blockers[index].key, testing.key).then(function(link) {
+      if (!link.ok) errors.push(testingRole + " blocked by " + blockerRole + ": " + link.error);
+      return linkTestingBlockedBySequential(api, testing, blockers, index + 1, errors);
+    });
+  }
+
+  function linkTestingTasksBlockedBy(api, created, index, errors) {
+    var testing;
+    var blockers;
+    if (index >= created.length) {
+      return Promise.resolve({ ok: errors.length === 0, errors: errors });
+    }
+    testing = created[index];
+    if (!isTestingRole(testing && testing.role)) {
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+    }
+    blockers = created.filter(function(child) {
+      return child && child.key && child.key !== testing.key && !isTestingRole(child.role);
+    });
+    return linkTestingBlockedBySequential(api, testing, blockers, 0, errors).then(function() {
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+    });
+  }
+
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors, created) {
+    created = created || [];
+    if (index >= roles.length) {
+      return Promise.resolve({ ok: errors.length === 0, errors: errors, created: created });
     }
     return Promise.resolve(api.createIssue({ fields: subtaskFields(projectKey, parentKey, roles[index], storySummary) })).then(
       function(res) {
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
         }
+        created.push({ key: key, role: roles[index] });
         return linkChildIssue(api, parentKey, key).then(function(link) {
           if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
         });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
       }
     );
   }
@@ -851,7 +916,11 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       roles = roles.filter(function(role) {
         return !role || role.enabled !== false;
       });
-      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, []).then(function(sub) {
+      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], []).then(function(sub) {
+        return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
+          return linked;
+        });
+      }).then(function(sub) {
         return {
           ok: sub.errors.length === 0,
           partial: sub.errors.length > 0,
@@ -889,6 +958,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     childSummary: childSummary,
     limitSummary: limitSummary,
     childLinkPayload: childLinkPayload,
+    blocksLinkPayload: blocksLinkPayload,
+    isTestingRole: isTestingRole,
     lookupMappedValue: lookupMappedValue,
   };
 });
@@ -981,7 +1052,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys) {
       var list = uniqueIssueKeys(keys);
-      var fields = ["summary", "status", "assignee"];
+      var fields = ["summary", "status", "assignee", "issuelinks"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -1812,8 +1883,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($counters);
   }
 
-  function appendValue($tr, value, className) {
-    $tr.append($("<td/>").addClass(className || "").text(value != null ? String(value) : ""));
+  function appendValue($tr, value, className, title) {
+    var $td = $("<td/>").addClass(className || "").text(value != null ? String(value) : "");
+    if (title != null && String(title).trim()) $td.attr("title", String(title));
+    $tr.append($td);
   }
 
   function issueBrowseUrl(key, baseUrl) {
@@ -2375,7 +2448,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendValue($tr, previewStatusText(cols), "ujg-esi-status");
+      appendValue($tr, previewStatusText(cols), "ujg-esi-status", row.statusTitle || "");
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
       appendJiraCell($tr, row, state);
       appendActionCell($tr, row, state, index);
@@ -2637,6 +2710,76 @@ define("_ujgESI_main", [
     if (assignee.key != null && String(assignee.key).trim()) return String(assignee.key).trim();
     if (assignee.accountId != null && String(assignee.accountId).trim()) return String(assignee.accountId).trim();
     return "";
+  }
+
+  function normalizeLinkName(name) {
+    return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
+  }
+
+  function isChildLinkName(name) {
+    var normalized = normalizeLinkName(name);
+    var configured = normalizeLinkName(config.CHILD_LINK_TYPE_NAME || "Child");
+    return !!normalized && (
+      normalized === configured ||
+      normalized === "child" ||
+      normalized === "is_child" ||
+      normalized === "child_of_story"
+    );
+  }
+
+  function issueSummaryName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    if (fields.summary != null && String(fields.summary).trim()) return String(fields.summary).trim();
+    return issue && issue.summary != null ? String(issue.summary).trim() : "";
+  }
+
+  function linkedChildIssues(issue) {
+    var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+    var seen = {};
+    var out = [];
+
+    function push(linkName, linkedIssue) {
+      var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key).trim().toUpperCase() : "";
+      var summary = issueSummaryName(linkedIssue);
+      var identity = key || summary + "|" + issueStatusName(linkedIssue) + "|" + issueAssigneeName(linkedIssue);
+      if (!isChildLinkName(linkName) || !linkedIssue || !identity || seen[identity]) return;
+      seen[identity] = true;
+      out.push(linkedIssue);
+    }
+
+    links.forEach(function(link) {
+      var type = link && link.type ? link.type : {};
+      push(type.name, link && link.inwardIssue);
+      push(type.inward, link && link.inwardIssue);
+      push(type.name, link && link.outwardIssue);
+      push(type.outward, link && link.outwardIssue);
+    });
+    return out;
+  }
+
+  function childIssueKeysFromIssues(issues) {
+    var seen = {};
+    var out = [];
+    (issues || []).forEach(function(issue) {
+      linkedChildIssues(issue).forEach(function(child) {
+        var key = child && child.key != null ? String(child.key).trim().toUpperCase() : "";
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        out.push(key);
+      });
+    });
+    return out;
+  }
+
+  function issueChildStatusTitle(issue, childIssueMap) {
+    return linkedChildIssues(issue).map(function(child) {
+      var key = child && child.key != null ? String(child.key).trim().toUpperCase() : "";
+      var resolved = key && childIssueMap && childIssueMap[key] ? childIssueMap[key] : child;
+      var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
+      var status = issueStatusName(resolved) || "Без статуса";
+      var assignee = issueAssigneeName(resolved) || "Не назначен";
+      return summary + " | " + status + " | " + assignee;
+    }).join("\n");
   }
 
   function sprintNameFromString(value) {
@@ -3475,7 +3618,18 @@ define("_ujgESI_main", [
       closeUserPicker();
       render();
       promiseOf(api.getIssuesByKeys(copyArrayForHost(keys))).then(function(data) {
-        var issues = issueMapByKey(data);
+        var issueList = normalizeIssues(data);
+        var childKeys = childIssueKeysFromIssues(issueList);
+        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys))) : Promise.resolve({ issues: [] });
+        return childrenPromise.then(function(childData) {
+          return {
+            data: data,
+            childIssues: issueMapByKey(childData),
+          };
+        });
+      }).then(function(syncData) {
+        var issues = issueMapByKey(syncData.data);
+        var childIssues = syncData.childIssues || {};
         var synced = 0;
         (state.rows || []).forEach(function(row) {
           var key = issueKeyFromRow(row);
@@ -3488,6 +3642,8 @@ define("_ujgESI_main", [
           var statusName = issueStatusName(issue);
           var assigneeName = issueAssigneeName(issue);
           var sprintNameValue = issueSprintName(issue);
+          var statusTitle = issueChildStatusTitle(issue, childIssues);
+          row.statusTitle = statusTitle;
           if (nonBlank(statusName)) {
             row.sourceColumns["Статус в Jira"] = statusName;
             row.syncedColumns["Статус в Jira"] = statusName;

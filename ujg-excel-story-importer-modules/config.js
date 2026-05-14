@@ -10,6 +10,7 @@ define("_ujgESI_config", [], function() {
   var SPRINT_FIELD = "customfield_10020";
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
+  var BLOCKS_LINK_TYPE_NAME = "Blocks";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
   var DEFAULT_JSZIP_URL = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
 
@@ -115,6 +116,7 @@ define("_ujgESI_config", [], function() {
     SPRINT_FIELD: SPRINT_FIELD,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
+    BLOCKS_LINK_TYPE_NAME: BLOCKS_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     KNOWN_COLUMNS: KNOWN_COLUMNS,

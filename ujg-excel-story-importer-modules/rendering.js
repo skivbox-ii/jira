@@ -322,8 +322,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($counters);
   }
 
-  function appendValue($tr, value, className) {
-    $tr.append($("<td/>").addClass(className || "").text(value != null ? String(value) : ""));
+  function appendValue($tr, value, className, title) {
+    var $td = $("<td/>").addClass(className || "").text(value != null ? String(value) : "");
+    if (title != null && String(title).trim()) $td.attr("title", String(title));
+    $tr.append($td);
   }
 
   function issueBrowseUrl(key, baseUrl) {
@@ -885,7 +887,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendValue($tr, previewStatusText(cols), "ujg-esi-status");
+      appendValue($tr, previewStatusText(cols), "ujg-esi-status", row.statusTitle || "");
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
       appendJiraCell($tr, row, state);
       appendActionCell($tr, row, state, index);

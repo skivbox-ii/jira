@@ -95,10 +95,21 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(calls[1].fields.summary, "[SE] Нет настроек полей сообщений");
   assert.equal(calls[5].fields.summary, "[DevOps] Нет настроек полей сообщений");
   assert.equal(calls[1].fields.parent, undefined);
-  assert.equal(links.length, 5);
+  assert.equal(links.length, 9);
   assert.equal(links[0].type.name, "Child");
   assert.equal(links[0].outwardIssue.key, "EVOSCADA-2000");
   assert.equal(links[0].inwardIssue.key, "EVOSCADA-2001");
+  assert.deepEqual(
+    links.slice(5).map(function (link) {
+      return [link.type.name, link.outwardIssue.key, link.inwardIssue.key];
+    }),
+    [
+      ["Blocks", "EVOSCADA-2001", "EVOSCADA-2004"],
+      ["Blocks", "EVOSCADA-2002", "EVOSCADA-2004"],
+      ["Blocks", "EVOSCADA-2003", "EVOSCADA-2004"],
+      ["Blocks", "EVOSCADA-2005", "EVOSCADA-2004"],
+    ]
+  );
 });
 
 test("createRow limits story and child summaries to 250 characters", async function () {
@@ -260,7 +271,59 @@ test("createRow uses edited dialog fields, assignees, and selected child tasks",
   assert.equal(calls[2].fields.summary, "[QA] Edited story");
   assert.equal(calls[2].fields.assignee.accountId, "qa-acc");
   assert.equal(calls[2].fields.timetracking.remainingEstimate, "2h");
-  assert.equal(links.length, 2);
+  assert.equal(links.length, 3);
+  assert.equal(links[2].type.name, "Blocks");
+  assert.equal(links[2].outwardIssue.key, "EVOSCADA-3001");
+  assert.equal(links[2].inwardIssue.key, "EVOSCADA-3002");
+});
+
+test("createRow links testing child as blocked by every other created child", async function () {
+  const creator = loadCreator();
+  const calls = [];
+  const links = [];
+  const api = {
+    createIssue: function (payload) {
+      calls.push(payload);
+      return Promise.resolve({ key: "EVOSCADA-" + String(7000 + calls.length - 1) });
+    },
+    createIssueLink: function (payload) {
+      links.push(payload);
+      return Promise.resolve({});
+    },
+  };
+
+  const result = await creator.createRow(
+    api,
+    {
+      summary: "Story with QA blocker",
+      sourceColumns: { "Замечание": "Story with QA blocker" },
+      alreadyLinked: false,
+    },
+    {
+      projectKey: "EVOSCADA",
+      createSubtasks: true,
+      childTasks: [
+        { enabled: true, role: "SE", issueType: "Task", summary: "[SE] Story with QA blocker" },
+        { enabled: true, role: "BE", issueType: "Task", summary: "[BE] Story with QA blocker" },
+        { enabled: true, role: "QA", issueType: "Task", summary: "[QA] Story with QA blocker" },
+      ],
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(
+    links.map(function (link) {
+      return [link.type.name, link.outwardIssue.key, link.inwardIssue.key];
+    }),
+    [
+      ["Child", "EVOSCADA-7000", "EVOSCADA-7001"],
+      ["Child", "EVOSCADA-7000", "EVOSCADA-7002"],
+      ["Child", "EVOSCADA-7000", "EVOSCADA-7003"],
+      ["Blocks", "EVOSCADA-7001", "EVOSCADA-7003"],
+      ["Blocks", "EVOSCADA-7002", "EVOSCADA-7003"],
+    ]
+  );
 });
 
 test("storyFields omits Epic Link when create metadata marks it unavailable", function () {

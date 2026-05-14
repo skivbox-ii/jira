@@ -317,7 +317,7 @@ test("row create opens confirmation before creating without Epic", async functio
 test("sync from Jira updates parsed rows and prepares patched Excel for download", async function () {
   const states = [];
   let callbacks = null;
-  let issueKeys = null;
+  const issueKeyCalls = [];
   let patchArgs = null;
   const sourceBuffer = new ArrayBuffer(12);
   const patchedBuffer = new ArrayBuffer(8);
@@ -339,6 +339,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
             statusInJira: row.sourceColumns && row.sourceColumns["Статус в Jira"] || "",
             assigneeInJira: row.sourceColumns && row.sourceColumns["Исполнитель в Jira"] || "",
             sprintInJira: row.sourceColumns && row.sourceColumns["Спринт"] || "",
+            statusTitle: row.statusTitle || "",
           };
         }),
       });
@@ -350,7 +351,29 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
       return Promise.resolve([]);
     },
     getIssuesByKeys: function (keys) {
-      issueKeys = keys.slice();
+      issueKeyCalls.push(keys.slice());
+      if (keys[0] !== "EVOSCADA-10") {
+        return Promise.resolve({
+          issues: [
+            {
+              key: "EVOSCADA-11",
+              fields: {
+                summary: "[SE] Existing",
+                status: { name: "Done" },
+                assignee: { displayName: "Сергей" },
+              },
+            },
+            {
+              key: "EVOSCADA-12",
+              fields: {
+                summary: "[QA] Existing",
+                status: { name: "Testing" },
+                assignee: { displayName: "Ольга" },
+              },
+            },
+          ],
+        });
+      }
       return Promise.resolve({
         issues: [
           {
@@ -359,6 +382,28 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               status: { name: "In Review" },
               assignee: { displayName: "Иван Иванов" },
               customfield_10020: [{ name: "Sprint 42" }],
+              issuelinks: [
+                {
+                  type: { name: "Child", inward: "child" },
+                  inwardIssue: {
+                    key: "EVOSCADA-11",
+                    fields: {
+                      summary: "[SE] Existing",
+                      status: { name: "Done" },
+                    },
+                  },
+                },
+                {
+                  type: { name: "Child", inward: "child" },
+                  inwardIssue: {
+                    key: "EVOSCADA-12",
+                    fields: {
+                      summary: "[QA] Existing",
+                      status: { name: "Testing" },
+                    },
+                  },
+                },
+              ],
             },
           },
         ],
@@ -439,7 +484,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   await flush();
   await flush();
 
-  assert.deepEqual(issueKeys, ["EVOSCADA-10"]);
+  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10"], ["EVOSCADA-11", "EVOSCADA-12"]]);
   assert.equal(patchArgs.buffer, sourceBuffer);
   assert.equal(patchArgs.patch.sheetName, "Журнал");
   assert.equal(patchArgs.patch.headerRowNumber, 9);
@@ -463,6 +508,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(last.rows[0].statusInJira, "In Review");
   assert.equal(last.rows[0].assigneeInJira, "Иван Иванов");
   assert.equal(last.rows[0].sprintInJira, "Sprint 42");
+  assert.equal(last.rows[0].statusTitle, "[SE] Existing | Done | Сергей\n[QA] Existing | Testing | Ольга");
 });
 
 test("sync from Jira does not blank existing sprint when issue has no sprint field", async function () {
