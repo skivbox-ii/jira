@@ -1071,7 +1071,7 @@ define("_ujgESI_excel-loader", ["_ujgESI_config"], function(config) {
 
   function readWorkbookFromBuffer(buffer) {
     return ensureXlsx().then(function(xlsx) {
-      return xlsx.read(buffer, { type: "array", cellDates: true });
+      return xlsx.read(buffer, { type: "array", cellDates: true, cellStyles: true });
     });
   }
 

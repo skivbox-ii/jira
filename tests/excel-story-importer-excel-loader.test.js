@@ -62,6 +62,7 @@ test("readWorkbook reloads SheetJS when global XLSX is not usable", async functi
   assert.equal(readArgs.buffer, buffer);
   assert.equal(readArgs.options.type, "array");
   assert.equal(readArgs.options.cellDates, true);
+  assert.equal(readArgs.options.cellStyles, true);
 });
 
 test("readFileBuffer and readWorkbookFromBuffer allow one file read for parsing and export", async function () {
@@ -93,6 +94,7 @@ test("readFileBuffer and readWorkbookFromBuffer allow one file read for parsing 
   assert.equal(result, workbook);
   assert.equal(readArgs.length, 1);
   assert.equal(readArgs[0].buffer, buffer);
+  assert.equal(readArgs[0].options.cellStyles, true);
 });
 
 test("readWorkbook resolves SheetJS from AMD module when CDN defines xlsx", async function () {
@@ -153,4 +155,5 @@ test("readWorkbook resolves SheetJS from AMD module when CDN defines xlsx", asyn
   assert.equal(readArgs.buffer, buffer);
   assert.equal(readArgs.options.type, "array");
   assert.equal(readArgs.options.cellDates, true);
+  assert.equal(readArgs.options.cellStyles, true);
 });
