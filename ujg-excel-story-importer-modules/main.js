@@ -214,6 +214,47 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function sprintNameFromString(value) {
+    var text = String(value || "");
+    var start = text.indexOf("name=");
+    var markers = [",startDate=", ",endDate=", ",completeDate=", ",activatedDate=", ",goal=", ",sequence=", ",originBoardId=", ",rapidViewId=", ",state=", ",id=", ",synced=", "]"];
+    var end = text.length;
+    var i;
+    if (start === -1) return text;
+    start += 5;
+    for (i = 0; i < markers.length; i += 1) {
+      var markerIndex = text.indexOf(markers[i], start);
+      if (markerIndex !== -1 && markerIndex < end) end = markerIndex;
+    }
+    return text.slice(start, end);
+  }
+
+  function sprintNameOne(value) {
+    if (value == null || value === "") return "";
+    if (Array.isArray(value)) return issueSprintName({ fields: { sprint: value } });
+    if (typeof value === "string") return sprintNameFromString(value);
+    if (typeof value === "object" && value.name != null) return String(value.name);
+    return "";
+  }
+
+  function sprintName(value) {
+    if (value == null || value === "") return "";
+    if (Array.isArray(value)) {
+      return value.map(sprintNameOne).filter(Boolean).join(", ");
+    }
+    return sprintNameOne(value);
+  }
+
+  function issueSprintName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var configured = config.SPRINT_FIELD && fields[config.SPRINT_FIELD] != null ? fields[config.SPRINT_FIELD] : null;
+    if (configured != null) return sprintName(configured);
+    if (fields.customfield_10020 != null) return sprintName(fields.customfield_10020);
+    if (fields.customfield_10007 != null) return sprintName(fields.customfield_10007);
+    if (fields.sprint != null) return sprintName(fields.sprint);
+    return "";
+  }
+
   function issueKeyFromRow(row) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
     var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[config.JIRA_COLUMN];
@@ -343,6 +384,17 @@ define("_ujgESI_main", [
       return parsed;
     }
 
+    function reparseLoadedWorkbookAfterMappingChange() {
+      if (!state.sourceWorkbook) return;
+      state.createDialog = null;
+      state.error = "";
+      try {
+        parseLoadedWorkbook();
+      } catch (err) {
+        state.error = "Не удалось применить мапинг: " + (err && err.message ? err.message : "unknown error");
+      }
+    }
+
     function readInputWorkbook(file) {
       if (excelLoader && typeof excelLoader.readFileBuffer === "function" && typeof excelLoader.readWorkbookFromBuffer === "function") {
         return promiseOf(excelLoader.readFileBuffer(file)).then(function(buffer) {
@@ -364,6 +416,7 @@ define("_ujgESI_main", [
         if (key) values[config.JIRA_COLUMN] = key;
         if (cols["Статус в Jira"] != null) values["Статус в Jira"] = cols["Статус в Jira"];
         if (cols["Исполнитель в Jira"] != null) values["Исполнитель в Jira"] = cols["Исполнитель в Jira"];
+        if (cols["Спринт"] != null) values["Спринт"] = cols["Спринт"];
         return {
           excelRowNumber: row && row.excelRowNumber,
           values: values,
@@ -842,19 +895,25 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
+      reparseLoadedWorkbookAfterMappingChange();
       saveMappings();
+      render();
     }
 
     function onMappingTableStartChange(field, value) {
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      reparseLoadedWorkbookAfterMappingChange();
       saveMappings();
+      render();
     }
 
     function onMappingSheetNameChange(value) {
       state.mappingSettings.sheetName = copySheetName(value);
+      reparseLoadedWorkbookAfterMappingChange();
       saveMappings();
+      render();
     }
 
     function onMappingPairAdd(block) {
@@ -997,6 +1056,7 @@ define("_ujgESI_main", [
           row.sourceColumns[config.JIRA_COLUMN] = key;
           row.sourceColumns["Статус в Jira"] = issueStatusName(issue);
           row.sourceColumns["Исполнитель в Jira"] = issueAssigneeName(issue);
+          row.sourceColumns["Спринт"] = issueSprintName(issue);
           synced += 1;
         });
         return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {

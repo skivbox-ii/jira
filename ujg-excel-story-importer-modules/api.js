@@ -85,6 +85,10 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys) {
       var list = uniqueIssueKeys(keys);
+      var fields = ["summary", "status", "assignee"];
+      if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
+      if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
+      if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
       if (!list.length) return Promise.resolve({ issues: [] });
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/search",
@@ -93,7 +97,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         dataType: "json",
         data: JSON.stringify({
           jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
-          fields: ["summary", "status", "assignee"],
+          fields: fields,
           maxResults: list.length,
         }),
       });

@@ -338,6 +338,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
             createdKey: row.createdKey || "",
             statusInJira: row.sourceColumns && row.sourceColumns["Статус в Jira"] || "",
             assigneeInJira: row.sourceColumns && row.sourceColumns["Исполнитель в Jira"] || "",
+            sprintInJira: row.sourceColumns && row.sourceColumns["Спринт"] || "",
           };
         }),
       });
@@ -357,9 +358,11 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
             fields: {
               status: { name: "In Review" },
               assignee: { displayName: "Иван Иванов" },
+              customfield_10020: [{ name: "Sprint 42" }],
             },
           },
         ],
+        ujgSprintField: "customfield_10020",
       });
     },
   };
@@ -380,6 +383,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
           Jira: 11,
           "Статус в Jira": 15,
           "Исполнитель в Jira": 16,
+          "Спринт": 17,
         },
         rows: [
           {
@@ -444,6 +448,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
     Jira: 11,
     "Статус в Jira": 15,
     "Исполнитель в Jira": 16,
+    "Спринт": 17,
   });
 
   const last = states[states.length - 1];
@@ -453,6 +458,126 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(last.exportFileName, "test.synced.xlsx");
   assert.equal(last.rows[0].statusInJira, "In Review");
   assert.equal(last.rows[0].assigneeInJira, "Иван Иванов");
+  assert.equal(last.rows[0].sprintInJira, "Sprint 42");
+});
+
+test("column mapping changes reparse the loaded workbook before Jira sync export", async function () {
+  const states = [];
+  let callbacks = null;
+  let patchArgs = null;
+  const parserOptions = [];
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        rows: (state.rows || []).map(function (row) {
+          return {
+            statusInJira: row.sourceColumns && row.sourceColumns["Статус в Jira"] || "",
+          };
+        }),
+      });
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([]);
+    },
+    getIssuesByKeys: function () {
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-10",
+            fields: {
+              status: { name: "Done" },
+              assignee: null,
+            },
+          },
+        ],
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(new ArrayBuffer(12));
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Журнал"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function (_workbook, options) {
+      parserOptions.push(JSON.parse(JSON.stringify(options || {})));
+      return {
+        sheetName: "Журнал",
+        headerRowNumber: 1,
+        headerColumns: {
+          Jira: 16,
+          "Статус в Jira": options.columnMap.statusInJira === "Статус исполнителя" ? 13 : 15,
+        },
+        rows: [
+          {
+            excelRowNumber: 792,
+            summary: "Existing",
+            jiraKey: "EVOSCADA-10",
+            sourceColumns: { Замечание: "Existing", Jira: "EVOSCADA-10" },
+            sourceColumnIndexes: { Jira: 16 },
+            alreadyLinked: true,
+            status: "linked",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (_buffer, patch) {
+      patchArgs = patch;
+      return Promise.resolve(new ArrayBuffer(8));
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+
+  callbacks.onFileChange({ name: "test.xlsx" });
+  await flush();
+  await flush();
+  callbacks.onMappingColumnChange("statusInJira", "Статус исполнителя");
+  await flush();
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+
+  assert.equal(parserOptions.length >= 2, true);
+  assert.equal(parserOptions[parserOptions.length - 1].columnMap.statusInJira, "Статус исполнителя");
+  assert.equal(patchArgs.headerColumns["Статус в Jira"], 13);
+  assert.equal(patchArgs.rows[0].values["Статус в Jira"], "Done");
+  assert.equal(states[states.length - 1].rows[0].statusInJira, "Done");
 });
 
 test("mapping editor opens from renderer callbacks and mappings are passed into creation", async function () {

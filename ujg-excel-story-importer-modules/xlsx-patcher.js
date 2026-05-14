@@ -127,9 +127,10 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return match ? decodeXml(match[1]) : "";
   }
 
-  function attrXml(xml, name) {
-    var match = new RegExp("\\s" + escapeRegExp(name) + "=\"[^\"]*\"").exec(xml || "");
-    return match ? match[0] : "";
+  function cellAttributesXml(cellXml) {
+    var match = /^<c\b([^>]*?)(?:\/>|>)/i.exec(cellXml || "");
+    if (!match) return "";
+    return match[1].replace(/\s(?:r|t)="[^"]*"/gi, "");
   }
 
   function extractRowXml(xml, rowNumber) {
@@ -204,17 +205,36 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return '<c r="' + escapeXml(ref) + '"' + (styleAttr || "") + ' t="inlineStr"><is><t>' + escapeXml(value) + "</t></is></c>";
   }
 
+  function nearestRowStyleAttr(rowXml, columnNumber) {
+    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var nearestDistance = Infinity;
+    var nearestStyle = "";
+    var match;
+    while ((match = re.exec(rowXml || ""))) {
+      var column = cellRefColumnNumber(match[1]);
+      var style = /\ss="[^"]*"/i.exec(match[0] || "");
+      var distance;
+      if (!column || !style) continue;
+      distance = Math.abs(column - columnNumber);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestStyle = style[0];
+      }
+    }
+    return nearestStyle;
+  }
+
   function patchCellInRow(rowXml, columnNumber, rowNumber, value) {
     var ref = columnNumberToName(columnNumber) + String(rowNumber);
     var cellRe = new RegExp("<c\\b[^>]*\\br=\"" + escapeRegExp(ref) + "\"[^>]*(?:>[\\s\\S]*?<\\/c>|\\/>)", "i");
     var match = cellRe.exec(rowXml);
     if (match) {
       return rowXml.slice(0, match.index) +
-        buildInlineCell(ref, value, attrXml(match[0], "s")) +
+        buildInlineCell(ref, value, cellAttributesXml(match[0])) +
         rowXml.slice(match.index + match[0].length);
     }
 
-    var insert = buildInlineCell(ref, value, "");
+    var insert = buildInlineCell(ref, value, nearestRowStyleAttr(rowXml, columnNumber));
     var allCellsRe = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
     var cell;
     while ((cell = allCellsRe.exec(rowXml))) {

@@ -90,6 +90,38 @@ test("parseWorkbook uses configured table marker and column mappings", function 
   assert.equal(result.rows[0].sourceColumns["Приоритет"], "Высокий");
 });
 
+test("parseWorkbook maps configured Jira sync status and sprint columns", function () {
+  const parser = loadParser();
+  const workbook = {
+    SheetNames: ["Импорт"],
+    Sheets: {
+      "Импорт": {
+        __rows: [
+          ["Тема", "Тикет", "Статус исполнителя", "Спринт Jira"],
+          ["Нет навигатора", "EVOSCADA-14450", "Выдано", "18.05-01.06"],
+        ],
+      },
+    },
+  };
+
+  const result = parser.parseWorkbook(workbook, {
+    columnMap: {
+      summary: "Тема",
+      jira: "Тикет",
+      statusInJira: "Статус исполнителя",
+      sprintInJira: "Спринт Jira",
+    },
+    tableStart: {
+      headerMarker: "Тема",
+    },
+  });
+
+  assert.equal(result.headerColumns["Статус в Jira"], 3);
+  assert.equal(result.headerColumns["Спринт"], 4);
+  assert.equal(result.rows[0].sourceColumns["Статус в Jira"], "Выдано");
+  assert.equal(result.rows[0].sourceColumns["Спринт"], "18.05-01.06");
+});
+
 test("parseWorkbook scans sheets in order and skips sheets without remarks header", function () {
   const parser = loadParser();
   const workbook = {

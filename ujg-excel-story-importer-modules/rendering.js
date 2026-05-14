@@ -85,6 +85,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return status;
   }
 
+  function previewStatusText(cols) {
+    return cols && (cols["Статус в Jira"] || cols["Статус"] || "") || "";
+  }
+
   function appendProjectSelect($toolbar, state) {
     var $field = $("<label/>").addClass("ujg-esi-field");
     var $select = $("<select/>").addClass("ujg-esi-project-select");
@@ -255,6 +259,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       { key: "priority", label: "Приоритет", value: map.priority || "Приоритет" },
       { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
       { key: "assigneeInJira", label: "Исполнитель Jira", value: map.assigneeInJira || "Исполнитель в Jira" },
+      { key: "sprintInJira", label: "Спринт Jira", value: map.sprintInJira || "Спринт" },
     ];
   }
 
@@ -875,7 +880,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendValue($tr, cols["Статус"] || "", "ujg-esi-status");
+      appendValue($tr, previewStatusText(cols), "ujg-esi-status");
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
       appendJiraCell($tr, row, state);
       appendActionCell($tr, row, state, index);

@@ -6,6 +6,7 @@ define("_ujgESI_config", [], function() {
   var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
   var JIRA_COLUMN = "Jira";
+  var SPRINT_FIELD = "customfield_10020";
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
@@ -73,6 +74,7 @@ define("_ujgESI_config", [], function() {
     priority: "Приоритет",
     statusInJira: "Статус в Jira",
     assigneeInJira: "Исполнитель в Jira",
+    sprintInJira: "Спринт",
   };
 
   var TABLE_START = {
@@ -108,6 +110,7 @@ define("_ujgESI_config", [], function() {
     MAPPING_STORAGE_KEY: MAPPING_STORAGE_KEY,
     SUMMARY_COLUMN: SUMMARY_COLUMN,
     JIRA_COLUMN: JIRA_COLUMN,
+    SPRINT_FIELD: SPRINT_FIELD,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,

@@ -11,6 +11,7 @@ define("_ujgESI_config", [], function() {
   var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
   var JIRA_COLUMN = "Jira";
+  var SPRINT_FIELD = "customfield_10020";
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
   var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
@@ -78,6 +79,7 @@ define("_ujgESI_config", [], function() {
     priority: "Приоритет",
     statusInJira: "Статус в Jira",
     assigneeInJira: "Исполнитель в Jira",
+    sprintInJira: "Спринт",
   };
 
   var TABLE_START = {
@@ -113,6 +115,7 @@ define("_ujgESI_config", [], function() {
     MAPPING_STORAGE_KEY: MAPPING_STORAGE_KEY,
     SUMMARY_COLUMN: SUMMARY_COLUMN,
     JIRA_COLUMN: JIRA_COLUMN,
+    SPRINT_FIELD: SPRINT_FIELD,
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
@@ -420,6 +423,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       priority: "Приоритет",
       statusInJira: "Статус в Jira",
       assigneeInJira: "Исполнитель в Jira",
+      sprintInJira: "Спринт",
     };
   }
 
@@ -454,6 +458,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     if (text && cellText(map.priority) === text) return "Приоритет";
     if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
     if (text && cellText(map.assigneeInJira) === text) return "Исполнитель в Jira";
+    if (text && cellText(map.sprintInJira) === text) return "Спринт";
     return text;
   }
 
@@ -967,6 +972,10 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys) {
       var list = uniqueIssueKeys(keys);
+      var fields = ["summary", "status", "assignee"];
+      if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
+      if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
+      if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
       if (!list.length) return Promise.resolve({ issues: [] });
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/search",
@@ -975,7 +984,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         dataType: "json",
         data: JSON.stringify({
           jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
-          fields: ["summary", "status", "assignee"],
+          fields: fields,
           maxResults: list.length,
         }),
       });
@@ -1217,9 +1226,10 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return match ? decodeXml(match[1]) : "";
   }
 
-  function attrXml(xml, name) {
-    var match = new RegExp("\\s" + escapeRegExp(name) + "=\"[^\"]*\"").exec(xml || "");
-    return match ? match[0] : "";
+  function cellAttributesXml(cellXml) {
+    var match = /^<c\b([^>]*?)(?:\/>|>)/i.exec(cellXml || "");
+    if (!match) return "";
+    return match[1].replace(/\s(?:r|t)="[^"]*"/gi, "");
   }
 
   function extractRowXml(xml, rowNumber) {
@@ -1294,17 +1304,36 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     return '<c r="' + escapeXml(ref) + '"' + (styleAttr || "") + ' t="inlineStr"><is><t>' + escapeXml(value) + "</t></is></c>";
   }
 
+  function nearestRowStyleAttr(rowXml, columnNumber) {
+    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var nearestDistance = Infinity;
+    var nearestStyle = "";
+    var match;
+    while ((match = re.exec(rowXml || ""))) {
+      var column = cellRefColumnNumber(match[1]);
+      var style = /\ss="[^"]*"/i.exec(match[0] || "");
+      var distance;
+      if (!column || !style) continue;
+      distance = Math.abs(column - columnNumber);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestStyle = style[0];
+      }
+    }
+    return nearestStyle;
+  }
+
   function patchCellInRow(rowXml, columnNumber, rowNumber, value) {
     var ref = columnNumberToName(columnNumber) + String(rowNumber);
     var cellRe = new RegExp("<c\\b[^>]*\\br=\"" + escapeRegExp(ref) + "\"[^>]*(?:>[\\s\\S]*?<\\/c>|\\/>)", "i");
     var match = cellRe.exec(rowXml);
     if (match) {
       return rowXml.slice(0, match.index) +
-        buildInlineCell(ref, value, attrXml(match[0], "s")) +
+        buildInlineCell(ref, value, cellAttributesXml(match[0])) +
         rowXml.slice(match.index + match[0].length);
     }
 
-    var insert = buildInlineCell(ref, value, "");
+    var insert = buildInlineCell(ref, value, nearestRowStyleAttr(rowXml, columnNumber));
     var allCellsRe = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
     var cell;
     while ((cell = allCellsRe.exec(rowXml))) {
@@ -1536,6 +1565,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return status;
   }
 
+  function previewStatusText(cols) {
+    return cols && (cols["Статус в Jira"] || cols["Статус"] || "") || "";
+  }
+
   function appendProjectSelect($toolbar, state) {
     var $field = $("<label/>").addClass("ujg-esi-field");
     var $select = $("<select/>").addClass("ujg-esi-project-select");
@@ -1706,6 +1739,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       { key: "priority", label: "Приоритет", value: map.priority || "Приоритет" },
       { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
       { key: "assigneeInJira", label: "Исполнитель Jira", value: map.assigneeInJira || "Исполнитель в Jira" },
+      { key: "sprintInJira", label: "Спринт Jira", value: map.sprintInJira || "Спринт" },
     ];
   }
 
@@ -2326,7 +2360,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendValue($tr, cols["Статус"] || "", "ujg-esi-status");
+      appendValue($tr, previewStatusText(cols), "ujg-esi-status");
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
       appendJiraCell($tr, row, state);
       appendActionCell($tr, row, state, index);
@@ -2586,6 +2620,47 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function sprintNameFromString(value) {
+    var text = String(value || "");
+    var start = text.indexOf("name=");
+    var markers = [",startDate=", ",endDate=", ",completeDate=", ",activatedDate=", ",goal=", ",sequence=", ",originBoardId=", ",rapidViewId=", ",state=", ",id=", ",synced=", "]"];
+    var end = text.length;
+    var i;
+    if (start === -1) return text;
+    start += 5;
+    for (i = 0; i < markers.length; i += 1) {
+      var markerIndex = text.indexOf(markers[i], start);
+      if (markerIndex !== -1 && markerIndex < end) end = markerIndex;
+    }
+    return text.slice(start, end);
+  }
+
+  function sprintNameOne(value) {
+    if (value == null || value === "") return "";
+    if (Array.isArray(value)) return issueSprintName({ fields: { sprint: value } });
+    if (typeof value === "string") return sprintNameFromString(value);
+    if (typeof value === "object" && value.name != null) return String(value.name);
+    return "";
+  }
+
+  function sprintName(value) {
+    if (value == null || value === "") return "";
+    if (Array.isArray(value)) {
+      return value.map(sprintNameOne).filter(Boolean).join(", ");
+    }
+    return sprintNameOne(value);
+  }
+
+  function issueSprintName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var configured = config.SPRINT_FIELD && fields[config.SPRINT_FIELD] != null ? fields[config.SPRINT_FIELD] : null;
+    if (configured != null) return sprintName(configured);
+    if (fields.customfield_10020 != null) return sprintName(fields.customfield_10020);
+    if (fields.customfield_10007 != null) return sprintName(fields.customfield_10007);
+    if (fields.sprint != null) return sprintName(fields.sprint);
+    return "";
+  }
+
   function issueKeyFromRow(row) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
     var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[config.JIRA_COLUMN];
@@ -2715,6 +2790,17 @@ define("_ujgESI_main", [
       return parsed;
     }
 
+    function reparseLoadedWorkbookAfterMappingChange() {
+      if (!state.sourceWorkbook) return;
+      state.createDialog = null;
+      state.error = "";
+      try {
+        parseLoadedWorkbook();
+      } catch (err) {
+        state.error = "Не удалось применить мапинг: " + (err && err.message ? err.message : "unknown error");
+      }
+    }
+
     function readInputWorkbook(file) {
       if (excelLoader && typeof excelLoader.readFileBuffer === "function" && typeof excelLoader.readWorkbookFromBuffer === "function") {
         return promiseOf(excelLoader.readFileBuffer(file)).then(function(buffer) {
@@ -2736,6 +2822,7 @@ define("_ujgESI_main", [
         if (key) values[config.JIRA_COLUMN] = key;
         if (cols["Статус в Jira"] != null) values["Статус в Jira"] = cols["Статус в Jira"];
         if (cols["Исполнитель в Jira"] != null) values["Исполнитель в Jira"] = cols["Исполнитель в Jira"];
+        if (cols["Спринт"] != null) values["Спринт"] = cols["Спринт"];
         return {
           excelRowNumber: row && row.excelRowNumber,
           values: values,
@@ -3214,19 +3301,25 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
+      reparseLoadedWorkbookAfterMappingChange();
       saveMappings();
+      render();
     }
 
     function onMappingTableStartChange(field, value) {
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      reparseLoadedWorkbookAfterMappingChange();
       saveMappings();
+      render();
     }
 
     function onMappingSheetNameChange(value) {
       state.mappingSettings.sheetName = copySheetName(value);
+      reparseLoadedWorkbookAfterMappingChange();
       saveMappings();
+      render();
     }
 
     function onMappingPairAdd(block) {
@@ -3369,6 +3462,7 @@ define("_ujgESI_main", [
           row.sourceColumns[config.JIRA_COLUMN] = key;
           row.sourceColumns["Статус в Jira"] = issueStatusName(issue);
           row.sourceColumns["Исполнитель в Jira"] = issueAssigneeName(issue);
+          row.sourceColumns["Спринт"] = issueSprintName(issue);
           synced += 1;
         });
         return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {

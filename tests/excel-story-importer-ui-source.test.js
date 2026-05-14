@@ -60,6 +60,15 @@ test("toolbar keeps the four Excel action icons together without subtasks toggle
   assert.doesNotMatch(source, /ujg-esi-subtasks/);
 });
 
+test("preview status column prefers Jira sync status and falls back to Excel status", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /function previewStatusText/);
+  assert.match(source, /cols\["Статус в Jira"\]/);
+  assert.match(source, /cols\["Статус"\]/);
+  assert.match(source, /appendValue\(\$tr, previewStatusText\(cols\), "ujg-esi-status"\)/);
+});
+
 test("file name is rendered in parse metadata, not beside upload icon", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
 

@@ -35,6 +35,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       priority: "Приоритет",
       statusInJira: "Статус в Jira",
       assigneeInJira: "Исполнитель в Jira",
+      sprintInJira: "Спринт",
     };
   }
 
@@ -69,6 +70,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     if (text && cellText(map.priority) === text) return "Приоритет";
     if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
     if (text && cellText(map.assigneeInJira) === text) return "Исполнитель в Jira";
+    if (text && cellText(map.sprintInJira) === text) return "Спринт";
     return text;
   }
 
