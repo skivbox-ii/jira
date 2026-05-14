@@ -62,7 +62,21 @@ test("mapping store loads dashboard property and saves the normalized mappings b
               columnMap: { summary: "Тема", jira: "Тикет" },
               tableStart: { headerMarker: "Тема" },
               sheetName: "Замечания",
-              roles: [{ role: "QA", issueType: "QA", originalEstimate: "3h", remainingEstimate: "3h", enabled: false }],
+              storyAssigneeId: "story-acc",
+              storyAssigneeLabel: "Story User",
+              storyAssignee: { accountId: "story-acc", displayName: "Story User" },
+              roles: [
+                {
+                  role: "QA",
+                  issueType: "QA",
+                  originalEstimate: "3h",
+                  remainingEstimate: "3h",
+                  enabled: false,
+                  assigneeId: "qa-name",
+                  assigneeLabel: "QA User",
+                  assignee: { name: "qa-name", displayName: "QA User" },
+                },
+              ],
             },
           },
         });
@@ -79,7 +93,13 @@ test("mapping store loads dashboard property and saves the normalized mappings b
   assert.equal(loaded.columnMap.summary, "Тема");
   assert.equal(loaded.tableStart.headerMarker, "Тема");
   assert.equal(loaded.sheetName, "Замечания");
+  assert.equal(loaded.storyAssigneeId, "story-acc");
+  assert.equal(loaded.storyAssignee.accountId, "story-acc");
+  assert.equal(loaded.storyAssignee.displayName, "Story User");
   assert.equal(loaded.roles[0].enabled, false);
+  assert.equal(loaded.roles[0].assigneeId, "qa-name");
+  assert.equal(loaded.roles[0].assignee.name, "qa-name");
+  assert.equal(loaded.roles[0].assignee.displayName, "QA User");
   assert.match(ajaxCalls[0].url, /\/rest\/api\/2\/dashboard\/77\/properties\/ujg-esi-mapping-settings-test/);
 
   await store.save({
@@ -88,7 +108,21 @@ test("mapping store loads dashboard property and saves the normalized mappings b
     columnMap: { summary: "Замечание", jira: "Jira" },
     tableStart: { headerMarker: "Замечание" },
     sheetName: "Журнал приемки",
-    roles: [{ role: "SE", issueType: "System Engineer", originalEstimate: "2h", remainingEstimate: "1h", enabled: true }],
+    storyAssigneeId: "lead-acc",
+    storyAssigneeLabel: "Lead User",
+    storyAssignee: { accountId: "lead-acc", displayName: "Lead User" },
+    roles: [
+      {
+        role: "SE",
+        issueType: "System Engineer",
+        originalEstimate: "2h",
+        remainingEstimate: "1h",
+        enabled: true,
+        assigneeId: "se-name",
+        assigneeLabel: "SE User",
+        assignee: { name: "se-name", displayName: "SE User" },
+      },
+    ],
   });
 
   assert.equal(ajaxCalls[1].type, "PUT");
@@ -96,5 +130,8 @@ test("mapping store loads dashboard property and saves the normalized mappings b
   assert.equal(JSON.parse(ajaxCalls[1].data).mappings.columnMap.summary, "Замечание");
   assert.equal(JSON.parse(ajaxCalls[1].data).mappings.tableStart.headerMarker, "Замечание");
   assert.equal(JSON.parse(ajaxCalls[1].data).mappings.sheetName, "Журнал приемки");
+  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.storyAssigneeId, "lead-acc");
+  assert.equal(JSON.parse(ajaxCalls[1].data).mappings.roles[0].assigneeId, "se-name");
   assert.deepEqual(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.priorityMap, { "Средний": "Medium" });
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assignee.displayName, "SE User");
 });

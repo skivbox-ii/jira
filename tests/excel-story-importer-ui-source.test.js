@@ -122,6 +122,8 @@ test("rendering module exposes daily-diligence style mapping settings overlay", 
   assert.match(source, /ujg-esi-mapping-sheet-name/);
   assert.match(source, /ujg-esi-meta-sheet-button/);
   assert.match(source, /ujg-esi-meta-sheet-menu/);
+  assert.match(source, /ujg-esi-mapping-story-assignee/);
+  assert.match(source, /ujg-esi-mapping-role-assignee/);
   assert.match(source, /ujg-esi-mapping-role-type/);
 });
 

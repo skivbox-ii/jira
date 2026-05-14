@@ -46,6 +46,16 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyAssignee(user) {
+    var source = user && typeof user === "object" ? user : null;
+    var out = {};
+    if (!source) return null;
+    ["accountId", "name", "key", "displayName"].forEach(function(field) {
+      if (source[field] != null && String(source[field]).trim()) out[field] = String(source[field]).trim();
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
   function copyRoles(roles) {
     return (Array.isArray(roles) ? roles : []).map(function(role) {
       return {
@@ -54,6 +64,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate).trim() : "1h",
         remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate).trim() : "1h",
         enabled: !(role && role.enabled === false),
+        assigneeId: role && role.assigneeId != null ? String(role.assigneeId).trim() : "",
+        assigneeLabel: role && role.assigneeLabel != null ? String(role.assigneeLabel).trim() : "",
+        assignee: copyAssignee(role && role.assignee),
       };
     }).filter(function(role) {
       return role.role || role.issueType;
@@ -97,6 +110,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
+      storyAssigneeId: "",
+      storyAssigneeLabel: "",
+      storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -118,6 +134,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,
       sheetName: hasInput ? copySheetName(input.sheetName) : defaults.sheetName,
+      storyAssigneeId: hasInput && input.storyAssigneeId != null ? String(input.storyAssigneeId).trim() : defaults.storyAssigneeId,
+      storyAssigneeLabel: hasInput && input.storyAssigneeLabel != null ? String(input.storyAssigneeLabel).trim() : defaults.storyAssigneeLabel,
+      storyAssignee: hasInput ? copyAssignee(input.storyAssignee) : defaults.storyAssignee,
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,

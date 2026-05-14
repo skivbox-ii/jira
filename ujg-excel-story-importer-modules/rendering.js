@@ -590,7 +590,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($head, $box);
   }
 
-  function appendMappingRoles($parent, roles) {
+  function appendMappingRoles($parent, settings, state) {
+    var roles = settings && settings.roles ? settings.roles : [];
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append(
@@ -603,6 +604,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             if (services && services.onMappingRoleAdd) services.onMappingRoleAdd();
           })
       );
+    var $storyAssignee = $("<label/>")
+      .addClass("ujg-esi-mapping-default-assignee")
+      .append(
+        $("<span/>").text("Исполнитель истории по умолчанию"),
+        appendAssigneePicker("ujg-esi-mapping-story-assignee", "mapping-story", settings && settings.storyAssigneeId || "", settings && settings.storyAssigneeLabel || "", state, false)
+      );
     var $table = $("<table/>").addClass("ujg-esi-mapping-table ujg-esi-mapping-roles");
     var $tbody = $("<tbody/>");
     $table.append(
@@ -611,6 +618,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<th/>").text("Создавать"))
           .append($("<th/>").text("Код"))
           .append($("<th/>").text("Тип Jira"))
+          .append($("<th/>").text("Исполнитель"))
           .append($("<th/>").text("Первоначальная оценка"))
           .append($("<th/>").text("Оставшееся время"))
           .append($("<th/>").text(""))
@@ -634,6 +642,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-type", role.issueType, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "issueType", value);
           })))
+          .append($("<td/>").append(appendAssigneePicker("ujg-esi-mapping-role-assignee", "mapping-role-" + index, role.assigneeId || "", role.assigneeLabel || "", state, false)))
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-original", role.originalEstimate, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "originalEstimate", value);
           })))
@@ -653,10 +662,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       );
     });
     if (!(roles || []).length) {
-      $tbody.append($("<tr/>").append($("<td/>").attr("colspan", "6").addClass("ujg-esi-mapping-empty").text("Нет дочерних задач.")));
+      $tbody.append($("<tr/>").append($("<td/>").attr("colspan", "7").addClass("ujg-esi-mapping-empty").text("Нет дочерних задач.")));
     }
     $table.append($tbody);
-    $parent.append($head, $table);
+    $parent.append($head, $storyAssignee, $table);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -693,7 +702,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     } else if (active === "tableStart") {
       appendTableStartMapping($right, settings);
     } else if (active === "roles") {
-      appendMappingRoles($right, settings.roles || []);
+      appendMappingRoles($right, settings, state);
     } else {
       appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap));
     }

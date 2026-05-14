@@ -768,15 +768,19 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
           ? {
               moduleComponentMap: Object.assign({}, state.mappingSettings.moduleComponentMap),
               priorityMap: Object.assign({}, state.mappingSettings.priorityMap),
+              storyAssigneeId: state.mappingSettings.storyAssigneeId || "",
+              storyAssigneeLabel: state.mappingSettings.storyAssigneeLabel || "",
               roles: state.mappingSettings.roles.map(function (role) {
-                return role.role + ":" + role.issueType + ":" + role.enabled + ":" + role.originalEstimate + ":" + role.remainingEstimate;
+                return role.role + ":" + role.issueType + ":" + role.enabled + ":" + role.originalEstimate + ":" + role.remainingEstimate + ":" + (role.assigneeId || "") + ":" + (role.assigneeLabel || "");
               }),
             }
           : null,
         createDialog: state.createDialog
           ? {
+              assigneeId: state.createDialog.assigneeId || "",
+              assigneeLabel: state.createDialog.assigneeLabel || "",
               childTasks: state.createDialog.childTasks.map(function (task) {
-                return task.role + ":" + task.issueType + ":" + task.enabled + ":" + task.originalEstimate + ":" + task.remainingEstimate;
+                return task.role + ":" + task.issueType + ":" + task.enabled + ":" + task.originalEstimate + ":" + task.remainingEstimate + ":" + (task.assigneeId || "") + ":" + (task.assigneeLabel || "");
               }),
             }
           : null,
@@ -802,9 +806,30 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
               headerMarker: "Тема",
             },
             sheetName: "Замечания",
+            storyAssigneeId: "story-acc",
+            storyAssigneeLabel: "Story User",
+            storyAssignee: { accountId: "story-acc", displayName: "Story User" },
             roles: [
-              { role: "SE", issueType: "System Engineer", originalEstimate: "2h", remainingEstimate: "2h", enabled: true },
-              { role: "QA", issueType: "QA", originalEstimate: "3h", remainingEstimate: "3h", enabled: false },
+              {
+                role: "SE",
+                issueType: "System Engineer",
+                originalEstimate: "2h",
+                remainingEstimate: "2h",
+                enabled: true,
+                assigneeId: "se-user",
+                assigneeLabel: "SE User",
+                assignee: { name: "se-user", displayName: "SE User" },
+              },
+              {
+                role: "QA",
+                issueType: "QA",
+                originalEstimate: "3h",
+                remainingEstimate: "3h",
+                enabled: false,
+                assigneeId: "qa-old",
+                assigneeLabel: "Old QA",
+                assignee: { name: "qa-old", displayName: "Old QA" },
+              },
             ],
           });
         },
@@ -826,7 +851,9 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
     getProjectCreateMeta: function () {
       return Promise.resolve({ projects: [] });
     },
-    searchUsers: function () {
+    searchUsers: function (query) {
+      if (query === "lead") return Promise.resolve({ users: [{ accountId: "lead-acc", displayName: "Lead User" }] });
+      if (query === "qa") return Promise.resolve({ users: [{ name: "qa-user", displayName: "QA User" }] });
       return Promise.resolve({ users: [] });
     },
   };
@@ -895,6 +922,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(last.mappingEditorOpen, true);
   assert.equal(last.activeMappingBlock, "modules");
   assert.equal(last.mappingSettings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
+  assert.equal(last.mappingSettings.storyAssigneeId, "story-acc");
 
   callbacks.onMappingBlockSelect("roles");
   callbacks.onMappingRoleChange(1, "enabled", true);
@@ -902,6 +930,18 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   last = states[states.length - 1];
   assert.equal(last.activeMappingBlock, "roles");
   assert.equal(savedMappings.roles[1].enabled, true);
+  callbacks.onDialogAssigneeSearch("mapping-story", "lead");
+  await flush();
+  await flush();
+  callbacks.onDialogAssigneeSelect("mapping-story", "lead-acc");
+  assert.equal(savedMappings.storyAssigneeId, "lead-acc");
+  assert.equal(savedMappings.storyAssignee.displayName, "Lead User");
+  callbacks.onDialogAssigneeSearch("mapping-role-1", "qa");
+  await flush();
+  await flush();
+  callbacks.onDialogAssigneeSelect("mapping-role-1", "qa-user");
+  assert.equal(savedMappings.roles[1].assigneeId, "qa-user");
+  assert.equal(savedMappings.roles[1].assignee.displayName, "QA User");
 
   callbacks.onProjectChange("EVOSCADA");
   await flush();
@@ -914,9 +954,11 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   callbacks.onCreateRow(0);
   await flush();
   last = states[states.length - 1];
+  assert.equal(last.createDialog.assigneeId, "lead-acc");
+  assert.equal(last.createDialog.assigneeLabel, "Lead User");
   assert.deepEqual(last.createDialog.childTasks, [
-    "SE:System Engineer:true:2h:2h",
-    "QA:QA:true:3h:3h",
+    "SE:System Engineer:true:2h:2h:se-user:SE User",
+    "QA:QA:true:3h:3h:qa-user:QA User",
   ]);
 
   callbacks.onConfirmCreate();
@@ -925,6 +967,9 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
 
   assert.equal(creatorOptions.mappings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
   assert.equal(creatorOptions.mappings.priorityMap["Срочно"], "Highest");
+  assert.equal(creatorOptions.assignee.accountId, "lead-acc");
+  assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
+  assert.equal(creatorOptions.childTasks[1].assignee.name, "qa-user");
 });
 
 test("meta sheet picker saves selected sheet and reparses current workbook", async function () {

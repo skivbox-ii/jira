@@ -182,6 +182,16 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyAssignee(user) {
+    var source = user && typeof user === "object" ? user : null;
+    var out = {};
+    if (!source) return null;
+    ["accountId", "name", "key", "displayName"].forEach(function(field) {
+      if (source[field] != null && String(source[field]).trim()) out[field] = String(source[field]).trim();
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
   function copyRoles(roles) {
     return (Array.isArray(roles) ? roles : []).map(function(role) {
       return {
@@ -190,6 +200,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate).trim() : "1h",
         remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate).trim() : "1h",
         enabled: !(role && role.enabled === false),
+        assigneeId: role && role.assigneeId != null ? String(role.assigneeId).trim() : "",
+        assigneeLabel: role && role.assigneeLabel != null ? String(role.assigneeLabel).trim() : "",
+        assignee: copyAssignee(role && role.assignee),
       };
     }).filter(function(role) {
       return role.role || role.issueType;
@@ -233,6 +246,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
+      storyAssigneeId: "",
+      storyAssigneeLabel: "",
+      storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -254,6 +270,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,
       sheetName: hasInput ? copySheetName(input.sheetName) : defaults.sheetName,
+      storyAssigneeId: hasInput && input.storyAssigneeId != null ? String(input.storyAssigneeId).trim() : defaults.storyAssigneeId,
+      storyAssigneeLabel: hasInput && input.storyAssigneeLabel != null ? String(input.storyAssigneeLabel).trim() : defaults.storyAssigneeLabel,
+      storyAssignee: hasInput ? copyAssignee(input.storyAssignee) : defaults.storyAssignee,
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,
@@ -2443,7 +2462,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($head, $box);
   }
 
-  function appendMappingRoles($parent, roles) {
+  function appendMappingRoles($parent, settings, state) {
+    var roles = settings && settings.roles ? settings.roles : [];
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append(
@@ -2456,6 +2476,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             if (services && services.onMappingRoleAdd) services.onMappingRoleAdd();
           })
       );
+    var $storyAssignee = $("<label/>")
+      .addClass("ujg-esi-mapping-default-assignee")
+      .append(
+        $("<span/>").text("Исполнитель истории по умолчанию"),
+        appendAssigneePicker("ujg-esi-mapping-story-assignee", "mapping-story", settings && settings.storyAssigneeId || "", settings && settings.storyAssigneeLabel || "", state, false)
+      );
     var $table = $("<table/>").addClass("ujg-esi-mapping-table ujg-esi-mapping-roles");
     var $tbody = $("<tbody/>");
     $table.append(
@@ -2464,6 +2490,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<th/>").text("Создавать"))
           .append($("<th/>").text("Код"))
           .append($("<th/>").text("Тип Jira"))
+          .append($("<th/>").text("Исполнитель"))
           .append($("<th/>").text("Первоначальная оценка"))
           .append($("<th/>").text("Оставшееся время"))
           .append($("<th/>").text(""))
@@ -2487,6 +2514,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-type", role.issueType, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "issueType", value);
           })))
+          .append($("<td/>").append(appendAssigneePicker("ujg-esi-mapping-role-assignee", "mapping-role-" + index, role.assigneeId || "", role.assigneeLabel || "", state, false)))
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-original", role.originalEstimate, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "originalEstimate", value);
           })))
@@ -2506,10 +2534,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       );
     });
     if (!(roles || []).length) {
-      $tbody.append($("<tr/>").append($("<td/>").attr("colspan", "6").addClass("ujg-esi-mapping-empty").text("Нет дочерних задач.")));
+      $tbody.append($("<tr/>").append($("<td/>").attr("colspan", "7").addClass("ujg-esi-mapping-empty").text("Нет дочерних задач.")));
     }
     $table.append($tbody);
-    $parent.append($head, $table);
+    $parent.append($head, $storyAssignee, $table);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -2546,7 +2574,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     } else if (active === "tableStart") {
       appendTableStartMapping($right, settings);
     } else if (active === "roles") {
-      appendMappingRoles($right, settings.roles || []);
+      appendMappingRoles($right, settings, state);
     } else {
       appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap));
     }
@@ -2864,6 +2892,16 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function copyAssignee(user) {
+    var source = user && typeof user === "object" ? user : null;
+    var out = {};
+    if (!source) return null;
+    ["accountId", "name", "key", "displayName"].forEach(function(field) {
+      if (source[field] != null && String(source[field]).trim()) out[field] = String(source[field]).trim();
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
   function copyRoles(roles) {
     return (Array.isArray(roles) ? roles : []).map(function(role) {
       return {
@@ -2872,6 +2910,9 @@ define("_ujgESI_main", [
         issueType: role && role.issueType != null ? String(role.issueType) : "",
         originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate) : "1h",
         remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate) : "1h",
+        assigneeId: role && role.assigneeId != null ? String(role.assigneeId) : "",
+        assigneeLabel: role && role.assigneeLabel != null ? String(role.assigneeLabel) : "",
+        assignee: copyAssignee(role && role.assignee),
       };
     });
   }
@@ -2914,6 +2955,9 @@ define("_ujgESI_main", [
       columnMap: copyColumnMap(config.COLUMN_MAP),
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
+      storyAssigneeId: "",
+      storyAssigneeLabel: "",
+      storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
     };
   }
@@ -2938,6 +2982,9 @@ define("_ujgESI_main", [
         ? copyTableStart(source.tableStart)
         : copyTableStart(defaults.tableStart),
       sheetName: source.sheetName != null ? copySheetName(source.sheetName) : copySheetName(defaults.sheetName),
+      storyAssigneeId: source.storyAssigneeId != null ? String(source.storyAssigneeId).trim() : defaults.storyAssigneeId,
+      storyAssigneeLabel: source.storyAssigneeLabel != null ? String(source.storyAssigneeLabel).trim() : defaults.storyAssigneeLabel,
+      storyAssignee: source.storyAssignee != null ? copyAssignee(source.storyAssignee) : defaults.storyAssignee,
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
     };
   }
@@ -3319,30 +3366,45 @@ define("_ujgESI_main", [
       return "";
     }
 
-    function userTargetNode(target) {
+    function userTargetRef(target) {
       var key = target != null ? String(target) : "";
       var dialog = state.createDialog;
       var match;
-      if (!dialog) return null;
-      if (key === "story") return dialog;
+      if (dialog && key === "story") return { node: dialog, idKey: "assigneeId", labelKey: "assigneeLabel", assigneeKey: "assignee", mapping: false };
       match = /^child-(\d+)$/.exec(key);
-      if (match) return dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+      if (dialog && match && dialog.childTasks && dialog.childTasks[Number(match[1])]) {
+        return { node: dialog.childTasks[Number(match[1])], idKey: "assigneeId", labelKey: "assigneeLabel", assigneeKey: "assignee", mapping: false };
+      }
+      if (key === "mapping-story") {
+        return { node: state.mappingSettings, idKey: "storyAssigneeId", labelKey: "storyAssigneeLabel", assigneeKey: "storyAssignee", mapping: true };
+      }
+      match = /^mapping-role-(\d+)$/.exec(key);
+      if (match && state.mappingSettings && state.mappingSettings.roles && state.mappingSettings.roles[Number(match[1])]) {
+        return { node: state.mappingSettings.roles[Number(match[1])], idKey: "assigneeId", labelKey: "assigneeLabel", assigneeKey: "assignee", mapping: true };
+      }
       return null;
     }
 
+    function userTargetNode(target) {
+      var ref = userTargetRef(target);
+      return ref && ref.node ? ref.node : null;
+    }
+
     function setTargetAssignee(target, userRow) {
-      var node = userTargetNode(target);
+      var ref = userTargetRef(target);
+      var node = ref && ref.node ? ref.node : null;
       var raw = userRow && userRow.raw ? userRow.raw : null;
-      if (!node) return;
+      if (!node) return false;
       if (!raw) {
-        node.assigneeId = "";
-        node.assigneeLabel = "";
-        node.assignee = null;
-        return;
+        node[ref.idKey] = "";
+        node[ref.labelKey] = "";
+        node[ref.assigneeKey] = null;
+        return !!ref.mapping;
       }
-      node.assigneeId = userRow.id || "";
-      node.assigneeLabel = userRow.label || userLabel(raw) || userRow.id || "";
-      node.assignee = raw;
+      node[ref.idKey] = userRow.id || "";
+      node[ref.labelKey] = userRow.label || userLabel(raw) || userRow.id || "";
+      node[ref.assigneeKey] = raw;
+      return !!ref.mapping;
     }
 
     function selectedProjectTextFor(projectKey) {
@@ -3401,9 +3463,11 @@ define("_ujgESI_main", [
       return (total || 1) + "h";
     }
 
-    function roleSettings() {
-      var settings = normalizeMappingSettings(state.mappingSettings);
-      return copyRoles(settings.roles);
+    function assigneeFromSettings(id, assignee) {
+      var raw = copyAssignee(assignee);
+      if (raw) return raw;
+      var user = selectedUser(id);
+      return user ? copyAssignee(user) : null;
     }
 
     function issueTypeFieldsFromCreateMeta(data, issueTypeName) {
@@ -3437,7 +3501,8 @@ define("_ujgESI_main", [
     }
 
     function buildCreateDialog(row, index) {
-      var roles = roleSettings();
+      var settings = normalizeMappingSettings(state.mappingSettings);
+      var roles = copyRoles(settings.roles);
       var summary = limitSummary(row && row.summary != null ? row.summary : "");
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
@@ -3450,9 +3515,9 @@ define("_ujgESI_main", [
         epicText: selectedEpicText(),
         epicLinkAllowed: projectEpicLinkAllowed(state.projectKey, issueType),
         summary: summary,
-        assigneeId: "",
-        assigneeLabel: "",
-        assignee: null,
+        assigneeId: settings.storyAssigneeId || "",
+        assigneeLabel: settings.storyAssigneeLabel || "",
+        assignee: assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
         originalEstimate: estimate,
         remainingEstimate: estimate,
         createSubtasks: state.createSubtasks !== false,
@@ -3462,9 +3527,9 @@ define("_ujgESI_main", [
             role: role && role.role != null ? String(role.role) : "",
             issueType: role && role.issueType != null ? String(role.issueType) : "",
             summary: childSummary(role, summary),
-            assigneeId: "",
-            assigneeLabel: "",
-            assignee: null,
+            assigneeId: role && role.assigneeId != null ? String(role.assigneeId) : "",
+            assigneeLabel: role && role.assigneeLabel != null ? String(role.assigneeLabel) : "",
+            assignee: assigneeFromSettings(role && role.assigneeId, role && role.assignee),
             originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate) : "1h",
             remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate) : "1h",
           };
@@ -3637,7 +3702,7 @@ define("_ujgESI_main", [
       return promiseOf(api.searchUsers(q)).then(
         function(data) {
           var rows = normalizeUsers(data);
-          if (!state.createDialog || state.userPicker.seq !== seq || state.userPicker.target !== targetKey) return;
+          if (!userTargetRef(targetKey) || state.userPicker.seq !== seq || state.userPicker.target !== targetKey) return;
           state.users = mergeUsers(state.users, rows);
           state.userPicker.rows = rows;
           state.userPicker.loading = false;
@@ -3645,7 +3710,7 @@ define("_ujgESI_main", [
           render();
         },
         function(err) {
-          if (!state.createDialog || state.userPicker.seq !== seq || state.userPicker.target !== targetKey) return;
+          if (!userTargetRef(targetKey) || state.userPicker.seq !== seq || state.userPicker.target !== targetKey) return;
           state.userPicker.rows = [];
           state.userPicker.loading = false;
           state.userPicker.error = "Не удалось найти исполнителей: " + (err && err.statusText ? err.statusText : "request failed");
@@ -3824,7 +3889,7 @@ define("_ujgESI_main", [
 
     function onMappingRoleAdd() {
       var roles = copyRoles(state.mappingSettings.roles);
-      roles.push({ enabled: true, role: "NEW", issueType: "Task", originalEstimate: "1h", remainingEstimate: "1h" });
+      roles.push({ enabled: true, role: "NEW", issueType: "Task", originalEstimate: "1h", remainingEstimate: "1h", assigneeId: "", assigneeLabel: "", assignee: null });
       state.mappingSettings.roles = roles;
       saveMappings();
     }
@@ -3839,6 +3904,11 @@ define("_ujgESI_main", [
       if (key === "issueType") roles[i].issueType = value != null ? String(value) : "";
       if (key === "originalEstimate") roles[i].originalEstimate = value != null ? String(value) : "";
       if (key === "remainingEstimate") roles[i].remainingEstimate = value != null ? String(value) : "";
+      if (key === "assigneeId") {
+        roles[i].assigneeId = value != null ? String(value) : "";
+        roles[i].assignee = selectedUser(roles[i].assigneeId);
+        roles[i].assigneeLabel = userLabel(roles[i].assignee);
+      }
       state.mappingSettings.roles = roles;
       saveMappings();
     }
@@ -4137,14 +4207,16 @@ define("_ujgESI_main", [
       })[0] || (state.users || []).filter(function(user) {
         return user && String(user.id || "") === id;
       })[0] || null;
-      setTargetAssignee(target, row);
+      var mappingTarget = setTargetAssignee(target, row);
       closeUserPicker();
+      if (mappingTarget) saveMappings();
       render();
     }
 
     function onDialogAssigneeClear(target) {
-      setTargetAssignee(target, null);
+      var mappingTarget = setTargetAssignee(target, null);
       closeUserPicker();
+      if (mappingTarget) saveMappings();
       render();
     }
 
