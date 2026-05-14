@@ -326,6 +326,52 @@ test("createRow links testing child as blocked by every other created child", as
   );
 });
 
+test("createRow resolves child issue link type from Jira metadata", async function () {
+  const creator = loadCreator();
+  const calls = [];
+  const links = [];
+  const api = {
+    createIssue: function (payload) {
+      calls.push(payload);
+      return Promise.resolve({ key: "EVOSCADA-" + String(8000 + calls.length - 1) });
+    },
+    getIssueLinkTypes: function () {
+      return Promise.resolve({
+        issueLinkTypes: [
+          { id: "10001", name: "Blocks", outward: "blocks", inward: "is blocked by" },
+          { id: "10002", name: "Hierarchy", outward: "parent", inward: "child" },
+        ],
+      });
+    },
+    createIssueLink: function (payload) {
+      links.push(payload);
+      return Promise.resolve({});
+    },
+  };
+
+  const result = await creator.createRow(
+    api,
+    {
+      summary: "Story with Jira child link metadata",
+      sourceColumns: { "Замечание": "Story with Jira child link metadata" },
+      alreadyLinked: false,
+    },
+    {
+      projectKey: "EVOSCADA",
+      createSubtasks: true,
+      childTasks: [
+        { enabled: true, role: "SE", issueType: "Task", summary: "[SE] Story with Jira child link metadata" },
+      ],
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].type.name, "Hierarchy");
+  assert.equal(links[0].outwardIssue.key, "EVOSCADA-8000");
+  assert.equal(links[0].inwardIssue.key, "EVOSCADA-8001");
+});
+
 test("storyFields omits Epic Link when create metadata marks it unavailable", function () {
   const creator = loadCreator();
 

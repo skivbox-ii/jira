@@ -161,6 +161,8 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /project = " \+ toJqlToken\(projectKey\)/);
   assert.match(source, /createIssueLink/);
   assert.match(source, /\/rest\/api\/2\/issueLink/);
+  assert.match(source, /getIssueLinkTypes/);
+  assert.match(source, /\/rest\/api\/2\/issueLinkType/);
   assert.match(source, /searchUsers/);
   assert.match(source, /\/rest\/api\/2\/user\/picker/);
   assert.match(source, /getProjectCreateMeta/);

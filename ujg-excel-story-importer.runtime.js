@@ -806,11 +806,97 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     return fields;
   }
 
-  function childLinkPayload(parentKey, childKey) {
+  function normalizeLinkText(value) {
+    return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  }
+
+  function looksLikeChildRelation(value) {
+    var text = normalizeLinkText(value);
+    return text === "child" ||
+      text === "is_child" ||
+      text === "child_of" ||
+      text === "is_child_of" ||
+      text.indexOf("child") !== -1 ||
+      text.indexOf("дочер") !== -1;
+  }
+
+  function looksLikeParentRelation(value) {
+    var text = normalizeLinkText(value);
+    return text === "parent" ||
+      text === "is_parent" ||
+      text === "parent_of" ||
+      text === "is_parent_of" ||
+      text.indexOf("parent") !== -1 ||
+      text.indexOf("родител") !== -1;
+  }
+
+  function defaultChildLinkType() {
     return {
-      type: { name: String(config.CHILD_LINK_TYPE_NAME || "Child") },
-      outwardIssue: { key: String(parentKey || "") },
-      inwardIssue: { key: String(childKey || "") },
+      name: String(config.CHILD_LINK_TYPE_NAME || "Child"),
+      parentOutward: true,
+    };
+  }
+
+  function issueLinkTypes(data) {
+    if (Array.isArray(data)) return data;
+    return data && Array.isArray(data.issueLinkTypes) ? data.issueLinkTypes : [];
+  }
+
+  function scoreChildLinkType(type, configured) {
+    var name = normalizeLinkText(type && type.name);
+    var outward = type && type.outward;
+    var inward = type && type.inward;
+    var outwardChild = looksLikeChildRelation(outward);
+    var inwardChild = looksLikeChildRelation(inward);
+    var outwardParent = looksLikeParentRelation(outward);
+    var inwardParent = looksLikeParentRelation(inward);
+
+    if (name && name === configured) return { score: 100, parentOutward: true };
+    if (outwardParent && inwardChild) return { score: 90, parentOutward: true };
+    if (outwardChild && inwardParent) return { score: 90, parentOutward: false };
+    if (inwardChild) return { score: 80, parentOutward: true };
+    if (outwardChild) return { score: 80, parentOutward: false };
+    return { score: 0, parentOutward: true };
+  }
+
+  function pickChildLinkType(data) {
+    var configured = normalizeLinkText(config.CHILD_LINK_TYPE_NAME || "Child");
+    var best = null;
+    issueLinkTypes(data).forEach(function(type) {
+      var scored = scoreChildLinkType(type, configured);
+      if (!scored.score || !type || !type.name) return;
+      if (!best || scored.score > best.score) {
+        best = {
+          name: String(type.name),
+          parentOutward: scored.parentOutward,
+          score: scored.score,
+        };
+      }
+    });
+    return best || defaultChildLinkType();
+  }
+
+  function resolveChildLinkType(api) {
+    if (!api || typeof api.getIssueLinkTypes !== "function") {
+      return Promise.resolve(defaultChildLinkType());
+    }
+    return Promise.resolve(api.getIssueLinkTypes()).then(
+      function(data) {
+        return pickChildLinkType(data);
+      },
+      function() {
+        return defaultChildLinkType();
+      }
+    );
+  }
+
+  function childLinkPayload(parentKey, childKey, linkType) {
+    var type = linkType || defaultChildLinkType();
+    var parentOutward = type.parentOutward !== false;
+    return {
+      type: { name: String(type.name || config.CHILD_LINK_TYPE_NAME || "Child") },
+      outwardIssue: { key: String(parentOutward ? parentKey || "" : childKey || "") },
+      inwardIssue: { key: String(parentOutward ? childKey || "" : parentKey || "") },
     };
   }
 
@@ -850,8 +936,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     );
   }
 
-  function linkChildIssue(api, parentKey, childKey) {
-    return linkIssue(api, childLinkPayload(parentKey, childKey));
+  function linkChildIssue(api, parentKey, childKey, linkType) {
+    return linkIssue(api, childLinkPayload(parentKey, childKey, linkType));
   }
 
   function linkBlockedByIssue(api, blockerKey, blockedKey) {
@@ -889,7 +975,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     });
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors, created) {
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors, created, childLinkType) {
     created = created || [];
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors, created: created });
@@ -899,17 +985,17 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
         }
         created.push({ key: key, role: roles[index] });
-        return linkChildIssue(api, parentKey, key).then(function(link) {
+        return linkChildIssue(api, parentKey, key, childLinkType).then(function(link) {
           if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
         });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
       }
     );
   }
@@ -941,9 +1027,11 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       roles = roles.filter(function(role) {
         return !role || role.enabled !== false;
       });
-      return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], []).then(function(sub) {
-        return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
-          return linked;
+      return resolveChildLinkType(api).then(function(childLinkType) {
+        return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType).then(function(sub) {
+          return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
+            return linked;
+          });
         });
       }).then(function(sub) {
         return {
@@ -983,6 +1071,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     childSummary: childSummary,
     limitSummary: limitSummary,
     childLinkPayload: childLinkPayload,
+    pickChildLinkType: pickChildLinkType,
     blocksLinkPayload: blocksLinkPayload,
     isTestingRole: isTestingRole,
     lookupMappedValue: lookupMappedValue,
@@ -1062,6 +1151,13 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         contentType: "application/json",
         dataType: "json",
         data: JSON.stringify(payload),
+      });
+    },
+    getIssueLinkTypes: function() {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issueLinkType",
+        type: "GET",
+        dataType: "json",
       });
     },
     searchUsers: function(query) {

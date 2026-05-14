@@ -72,6 +72,13 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify(payload),
       });
     },
+    getIssueLinkTypes: function() {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issueLinkType",
+        type: "GET",
+        dataType: "json",
+      });
+    },
     searchUsers: function(query) {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/user/picker",
