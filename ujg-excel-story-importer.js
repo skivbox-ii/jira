@@ -1130,7 +1130,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     searchIssueBySummary: function(projectKey, summaryText) {
       var text = summaryText != null ? String(summaryText).trim() : "";
-      var fields = ["summary", "status", "assignee", "issuelinks"];
+      var fields = ["summary", "status", "assignee", "issuelinks", "issuetype"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -1143,7 +1143,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify({
           jql: "project = " + toJqlToken(projectKey) + " AND summary ~ " + quoteJqlString(text) + " ORDER BY updated DESC",
           fields: fields,
-          maxResults: 2,
+          maxResults: 10,
         }),
       });
     },
@@ -3146,6 +3146,38 @@ define("_ujgESI_main", [
     return words.slice(0, 10).join(" ");
   }
 
+  function issueProjectKey(value) {
+    var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
+    var match = String(key || value || "").trim().toUpperCase().match(/^([A-Z][A-Z0-9_]+)-\d+$/);
+    return match ? match[1] : "";
+  }
+
+  function issueTypeName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var issueType = fields.issuetype;
+    if (issueType && issueType.name != null) return String(issueType.name);
+    return issueType != null ? String(issueType) : "";
+  }
+
+  function isStoryIssue(issue) {
+    var typeName = issueTypeName(issue).trim().toLowerCase();
+    var configured = config && config.STORY_ISSUE_TYPE != null ? String(config.STORY_ISSUE_TYPE).trim().toLowerCase() : "";
+    return !!typeName && (
+      typeName === configured ||
+      typeName === "story" ||
+      typeName === "user story" ||
+      typeName === "история"
+    );
+  }
+
+  function bestSummaryIssueMatch(issues) {
+    var list = normalizeIssues(issues);
+    var storyIssues = list.filter(isStoryIssue);
+    if (storyIssues.length === 1) return storyIssues[0];
+    if (list.length === 1) return list[0];
+    return null;
+  }
+
   function issueStatusName(issue) {
     var fields = issue && issue.fields ? issue.fields : {};
     var status = fields.status;
@@ -3468,9 +3500,26 @@ define("_ujgESI_main", [
       return "Синхронизировано " + String(count) + " тикет";
     }
 
+    function projectKeyForSummarySearch() {
+      var selected = state.projectKey != null ? String(state.projectKey).trim() : "";
+      var seen = {};
+      var keys;
+      var epicProject;
+      if (selected) return selected;
+      epicProject = issueProjectKey(state.epicKey);
+      if (epicProject) return epicProject;
+      keys = uniqueKeys(state.rows);
+      keys.forEach(function(key) {
+        var project = issueProjectKey(key);
+        if (project) seen[project] = true;
+      });
+      keys = Object.keys(seen);
+      return keys.length === 1 ? keys[0] : "";
+    }
+
     function tryMatchRowsBySummary() {
       var rows = state.rows || [];
-      var projectKey = state.projectKey != null ? String(state.projectKey).trim() : "";
+      var projectKey = projectKeyForSummarySearch();
       var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
       var chain = Promise.resolve();
       rows.forEach(function(row) {
@@ -3481,9 +3530,8 @@ define("_ujgESI_main", [
           searchText = summarySearchText(row.summary);
           if (!searchText) return;
           return promiseOf(api.searchIssueBySummary(projectKey, searchText)).then(function(data) {
-            var issues = normalizeIssues(data);
-            if (issues.length !== 1) return;
-            var foundKey = issues[0] && issues[0].key != null ? String(issues[0].key).trim().toUpperCase() : "";
+            var issue = bestSummaryIssueMatch(data);
+            var foundKey = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
             if (!foundKey) return;
             row.jiraKey = foundKey;
             row.alreadyLinked = true;

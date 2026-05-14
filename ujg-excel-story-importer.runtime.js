@@ -1128,6 +1128,25 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         }),
       });
     },
+    searchIssueBySummary: function(projectKey, summaryText) {
+      var text = summaryText != null ? String(summaryText).trim() : "";
+      var fields = ["summary", "status", "assignee", "issuelinks", "issuetype"];
+      if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
+      if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
+      if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
+      if (!projectKey || !text) return Promise.resolve({ issues: [] });
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/search",
+        type: "POST",
+        contentType: "application/json",
+        dataType: "json",
+        data: JSON.stringify({
+          jql: "project = " + toJqlToken(projectKey) + " AND summary ~ " + quoteJqlString(text) + " ORDER BY updated DESC",
+          fields: fields,
+          maxResults: 10,
+        }),
+      });
+    },
     toJqlToken: toJqlToken,
     uniqueIssueKeys: uniqueIssueKeys,
   };
@@ -3113,6 +3132,52 @@ define("_ujgESI_main", [
     return value != null && String(value).trim() !== "";
   }
 
+  function jiraColumnName() {
+    return config && config.JIRA_COLUMN ? String(config.JIRA_COLUMN) : "Jira";
+  }
+
+  function summarySearchText(value) {
+    var words = String(value || "")
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/[^\w\u0400-\u04FF-]+/g, " ")
+      .split(/\s+/)
+      .map(function(word) { return String(word || "").trim(); })
+      .filter(function(word) { return word.length >= 3; });
+    return words.slice(0, 10).join(" ");
+  }
+
+  function issueProjectKey(value) {
+    var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
+    var match = String(key || value || "").trim().toUpperCase().match(/^([A-Z][A-Z0-9_]+)-\d+$/);
+    return match ? match[1] : "";
+  }
+
+  function issueTypeName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var issueType = fields.issuetype;
+    if (issueType && issueType.name != null) return String(issueType.name);
+    return issueType != null ? String(issueType) : "";
+  }
+
+  function isStoryIssue(issue) {
+    var typeName = issueTypeName(issue).trim().toLowerCase();
+    var configured = config && config.STORY_ISSUE_TYPE != null ? String(config.STORY_ISSUE_TYPE).trim().toLowerCase() : "";
+    return !!typeName && (
+      typeName === configured ||
+      typeName === "story" ||
+      typeName === "user story" ||
+      typeName === "история"
+    );
+  }
+
+  function bestSummaryIssueMatch(issues) {
+    var list = normalizeIssues(issues);
+    var storyIssues = list.filter(isStoryIssue);
+    if (storyIssues.length === 1) return storyIssues[0];
+    if (list.length === 1) return list[0];
+    return null;
+  }
+
   function issueStatusName(issue) {
     var fields = issue && issue.fields ? issue.fields : {};
     var status = fields.status;
@@ -3244,7 +3309,7 @@ define("_ujgESI_main", [
 
   function issueKeyFromRow(row) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
-    var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[config.JIRA_COLUMN];
+    var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[jiraColumnName()];
     var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
     return key || (value != null ? String(value).trim().toUpperCase() : "");
   }
@@ -3400,26 +3465,27 @@ define("_ujgESI_main", [
       });
     }
 
-    function patchRowsForExport(rows) {
-      return (rows || []).map(function(row) {
-        var synced = row && row.syncedColumns ? row.syncedColumns : {};
-        var values = {};
-        var comments = {};
-        var createdKey = row && row.createdKey ? issueKeyFromRow(row) : "";
-        if (createdKey) values[config.JIRA_COLUMN] = createdKey;
-        if (nonBlank(synced["Статус в Jira"])) values["Статус в Jira"] = synced["Статус в Jira"];
-        if (nonBlank(synced["Исполнитель в Jira"])) values["Исполнитель в Jira"] = synced["Исполнитель в Jira"];
-        if (nonBlank(synced["Спринт"])) values["Спринт"] = synced["Спринт"];
-        if (nonBlank(row && row.statusTitle)) comments["Статус в Jira"] = row.statusTitle;
-        return {
-          excelRowNumber: row && row.excelRowNumber,
-          values: values,
-          comments: comments,
-        };
-      }).filter(function(rowPatch) {
-        return rowPatch.excelRowNumber && (Object.keys(rowPatch.values || {}).length || Object.keys(rowPatch.comments || {}).length);
-      });
-    }
+  function patchRowsForExport(rows) {
+    return (rows || []).map(function(row) {
+      var synced = row && row.syncedColumns ? row.syncedColumns : {};
+      var values = {};
+      var comments = {};
+      var createdKey = row && row.createdKey ? issueKeyFromRow(row) : "";
+      if (createdKey) values[jiraColumnName()] = createdKey;
+      if (nonBlank(synced[jiraColumnName()])) values[jiraColumnName()] = synced[jiraColumnName()];
+      if (nonBlank(synced["Статус в Jira"])) values["Статус в Jira"] = synced["Статус в Jira"];
+      if (nonBlank(synced["Исполнитель в Jira"])) values["Исполнитель в Jira"] = synced["Исполнитель в Jira"];
+      if (nonBlank(synced["Спринт"])) values["Спринт"] = synced["Спринт"];
+      if (nonBlank(row && row.statusTitle)) comments["Статус в Jira"] = row.statusTitle;
+      return {
+        excelRowNumber: row && row.excelRowNumber,
+        values: values,
+        comments: comments,
+      };
+    }).filter(function(rowPatch) {
+      return rowPatch.excelRowNumber && (Object.keys(rowPatch.values || {}).length || Object.keys(rowPatch.comments || {}).length);
+    });
+  }
 
     function issueMapByKey(data) {
       var out = {};
@@ -3432,6 +3498,50 @@ define("_ujgESI_main", [
 
     function syncSummaryText(count) {
       return "Синхронизировано " + String(count) + " тикет";
+    }
+
+    function projectKeyForSummarySearch() {
+      var selected = state.projectKey != null ? String(state.projectKey).trim() : "";
+      var seen = {};
+      var keys;
+      var epicProject;
+      if (selected) return selected;
+      epicProject = issueProjectKey(state.epicKey);
+      if (epicProject) return epicProject;
+      keys = uniqueKeys(state.rows);
+      keys.forEach(function(key) {
+        var project = issueProjectKey(key);
+        if (project) seen[project] = true;
+      });
+      keys = Object.keys(seen);
+      return keys.length === 1 ? keys[0] : "";
+    }
+
+    function tryMatchRowsBySummary() {
+      var rows = state.rows || [];
+      var projectKey = projectKeyForSummarySearch();
+      var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
+      var chain = Promise.resolve();
+      rows.forEach(function(row) {
+        chain = chain.then(function() {
+          var key = issueKeyFromRow(row);
+          var searchText;
+          if (key || !canSearch || !row || !row.summary) return;
+          searchText = summarySearchText(row.summary);
+          if (!searchText) return;
+          return promiseOf(api.searchIssueBySummary(projectKey, searchText)).then(function(data) {
+            var issue = bestSummaryIssueMatch(data);
+            var foundKey = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
+            if (!foundKey) return;
+            row.jiraKey = foundKey;
+            row.alreadyLinked = true;
+            row.sourceColumns = row.sourceColumns || {};
+            row.sourceColumns[jiraColumnName()] = foundKey;
+            row.matchedBySummary = true;
+          });
+        });
+      });
+      return chain;
     }
 
     function selectedUser(userId) {
@@ -4113,7 +4223,7 @@ define("_ujgESI_main", [
         row.jiraKey = row.createdKey;
         row.alreadyLinked = true;
         row.sourceColumns = row.sourceColumns || {};
-        row.sourceColumns[config.JIRA_COLUMN] = row.createdKey;
+        row.sourceColumns[jiraColumnName()] = row.createdKey;
         resetExportState();
       }
       row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
@@ -4128,16 +4238,9 @@ define("_ujgESI_main", [
     }
 
     function onSyncJira() {
-      var keys = uniqueKeys(state.rows);
       if (state.syncLoading) return;
       if (!state.rows.length) {
         state.syncError = "Сначала загрузите Excel.";
-        state.syncSummary = "";
-        render();
-        return;
-      }
-      if (!keys.length) {
-        state.syncError = "В строках нет Jira-ключей для синхронизации.";
         state.syncSummary = "";
         render();
         return;
@@ -4167,7 +4270,11 @@ define("_ujgESI_main", [
       state.exportFileName = "";
       closeUserPicker();
       render();
-      promiseOf(api.getIssuesByKeys(copyArrayForHost(keys))).then(function(data) {
+      promiseOf(tryMatchRowsBySummary()).then(function() {
+        var keys = uniqueKeys(state.rows);
+        if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
+        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys)));
+      }).then(function(data) {
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
         var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys))) : Promise.resolve({ issues: [] });
@@ -4189,6 +4296,7 @@ define("_ujgESI_main", [
           row.alreadyLinked = true;
           row.sourceColumns = row.sourceColumns || {};
           row.syncedColumns = {};
+          if (row.matchedBySummary && nonBlank(key)) row.syncedColumns[jiraColumnName()] = key;
           var statusName = issueStatusName(issue);
           var assigneeName = issueAssigneeName(issue);
           var sprintNameValue = issueSprintName(issue);

@@ -777,6 +777,281 @@ test("sync from Jira tries to find missing Jira key by summary in selected proje
   assert.equal(last.rows[0].jira, "EVOSCADA-77");
 });
 
+test("sync from Jira finds missing key by summary using project inferred from existing Jira keys", async function () {
+  let callbacks = null;
+  const searchCalls = [];
+  const issueKeyCalls = [];
+  let patchArgs = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function () {},
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    searchIssueBySummary: function (projectKey, summary) {
+      searchCalls.push([projectKey, summary]);
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-18440",
+            fields: {
+              summary: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться",
+              issuetype: { name: "История" },
+            },
+          },
+        ],
+      });
+    },
+    getIssuesByKeys: function (keys) {
+      issueKeyCalls.push(keys.slice());
+      return Promise.resolve({
+        issues: keys.map(function (key) {
+          return {
+            key: key,
+            fields: {
+              status: { name: "Выдано" },
+              assignee: null,
+            },
+          };
+        }),
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(new ArrayBuffer(12));
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Замечания"] });
+    },
+  };
+  const parser = {
+    extractJiraKey: function (value) {
+      const match = String(value || "").match(/[A-Z][A-Z0-9_]+-\d+/);
+      return match ? match[0] : "";
+    },
+    parseWorkbook: function () {
+      return {
+        sheetName: "Замечания",
+        headerRowNumber: 1,
+        headerColumns: {
+          Jira: 16,
+          "Статус в Jira": 13,
+        },
+        rows: [
+          {
+            excelRowNumber: 792,
+            summary: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться в ремонт",
+            jiraKey: "",
+            sourceColumns: { Замечание: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться в ремонт", Jira: "" },
+            sourceColumnIndexes: { Jira: 16 },
+            alreadyLinked: false,
+            status: "ready",
+            errors: [],
+          },
+          {
+            excelRowNumber: 822,
+            summary: "Реализовать сохранение состояния панели распределения плотности после перезагрузки",
+            jiraKey: "EVOSCADA-18116",
+            sourceColumns: { Замечание: "Реализовать сохранение состояния панели распределения плотности после перезагрузки", Jira: "EVOSCADA-18116" },
+            sourceColumnIndexes: { Jira: 16 },
+            alreadyLinked: true,
+            status: "linked",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (_buffer, patch) {
+      patchArgs = patch;
+      return Promise.resolve(new ArrayBuffer(8));
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  callbacks.onFileChange({ name: "journal.xlsx" });
+  await flush();
+  await flush();
+
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(searchCalls.length, 1);
+  assert.equal(searchCalls[0][0], "EVOSCADA");
+  assert.deepEqual(issueKeyCalls[0], ["EVOSCADA-18440", "EVOSCADA-18116"]);
+  assert.equal(patchArgs.rows[0].values.Jira, "EVOSCADA-18440");
+});
+
+test("sync from Jira picks the story when summary search also returns linked child tasks", async function () {
+  let callbacks = null;
+  const issueKeyCalls = [];
+  let patchArgs = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function () {},
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    getProjectEpics: function () {
+      return Promise.resolve([]);
+    },
+    searchIssueBySummary: function () {
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-18441",
+            fields: {
+              summary: "[SE] Присутствует возможность вывода в ремонт объектов, которые не должны выводиться",
+              issuetype: { name: "Задача разработки" },
+            },
+          },
+          {
+            key: "EVOSCADA-18440",
+            fields: {
+              summary: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться",
+              issuetype: { name: "История" },
+            },
+          },
+          {
+            key: "EVOSCADA-18442",
+            fields: {
+              summary: "[QA] Присутствует возможность вывода в ремонт объектов, которые не должны выводиться",
+              issuetype: { name: "Задача разработки" },
+            },
+          },
+        ],
+      });
+    },
+    getIssuesByKeys: function (keys) {
+      issueKeyCalls.push(keys.slice());
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-18440",
+            fields: {
+              status: { name: "Выдано" },
+              assignee: null,
+            },
+          },
+        ],
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(new ArrayBuffer(12));
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Замечания"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Замечания",
+        headerRowNumber: 1,
+        headerColumns: {
+          Jira: 16,
+          "Статус в Jira": 13,
+        },
+        rows: [
+          {
+            excelRowNumber: 792,
+            summary: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться в ремонт",
+            jiraKey: "",
+            sourceColumns: { Замечание: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться в ремонт", Jira: "" },
+            sourceColumnIndexes: { Jira: 16 },
+            alreadyLinked: false,
+            status: "ready",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (_buffer, patch) {
+      patchArgs = patch;
+      return Promise.resolve(new ArrayBuffer(8));
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  callbacks.onFileChange({ name: "journal.xlsx" });
+  await flush();
+  await flush();
+
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.deepEqual(issueKeyCalls[0], ["EVOSCADA-18440"]);
+  assert.equal(patchArgs.rows[0].values.Jira, "EVOSCADA-18440");
+});
+
 test("column mapping changes reparse the loaded workbook before Jira sync export", async function () {
   const states = [];
   let callbacks = null;

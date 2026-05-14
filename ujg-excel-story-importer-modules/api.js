@@ -111,7 +111,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     searchIssueBySummary: function(projectKey, summaryText) {
       var text = summaryText != null ? String(summaryText).trim() : "";
-      var fields = ["summary", "status", "assignee", "issuelinks"];
+      var fields = ["summary", "status", "assignee", "issuelinks", "issuetype"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -124,7 +124,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify({
           jql: "project = " + toJqlToken(projectKey) + " AND summary ~ " + quoteJqlString(text) + " ORDER BY updated DESC",
           fields: fields,
-          maxResults: 2,
+          maxResults: 10,
         }),
       });
     },
