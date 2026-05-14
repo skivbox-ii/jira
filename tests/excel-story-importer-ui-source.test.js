@@ -15,11 +15,15 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-project-select/);
   assert.match(source, /ujg-esi-epic-select/);
   assert.match(source, /ujg-esi-file/);
+  assert.match(source, /ujg-esi-upload-excel/);
+  assert.match(source, /ujg-esi-file-name/);
+  assert.match(source, /ujg-esi-icon-button/);
   assert.match(source, /ujg-esi-subtasks/);
   assert.match(source, /ujg-esi-mapping-button/);
   assert.match(source, /ujg-esi-sync-jira/);
   assert.match(source, /ujg-esi-download-excel/);
   assert.match(source, /aria-label", "Настроить мапинг"/);
+  assert.match(source, /aria-label", "Загрузить Excel"/);
   assert.match(source, /aria-label", state && state\.syncLoading \? "Синхронизация из Jira" : "Синхронизировать из Jira"/);
   assert.match(source, /aria-label", "Скачать Excel"/);
   assert.doesNotMatch(source, /\.append\(\$\(\"\<span\/\>\"\)\.text\(\"Мапинг\"\)\)/);
@@ -27,6 +31,15 @@ test("rendering module exposes import controls and row create action classes", f
   assert.doesNotMatch(source, /\.text\("Скачать Excel"\)/);
   assert.match(source, /Создавать дочерние задачи/);
   assert.match(source, /ujg-esi-create-row/);
+});
+
+test("importer CSS uses one icon button style for toolbar actions", function () {
+  const source = read("ujg-excel-story-importer.css");
+
+  assert.match(source, /\.ujg-esi-icon-button/);
+  assert.match(source, /\.ujg-esi-upload-excel/);
+  assert.match(source, /\.ujg-esi-file-name/);
+  assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
 });
 
 test("row create action only requires project selection", function () {

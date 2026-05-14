@@ -122,8 +122,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($field);
   }
 
-  function appendFileInput($toolbar) {
-    var $field = $("<label/>").addClass("ujg-esi-field ujg-esi-file-field");
+  function appendFileInput($toolbar, state) {
+    var fileName = state && state.sourceFileName ? String(state.sourceFileName) : "Файл не выбран";
+    var $field = $("<div/>").addClass("ujg-esi-field ujg-esi-file-field");
+    var $control = $("<div/>").addClass("ujg-esi-file-control");
+    var $upload = $("<label/>")
+      .addClass("ujg-esi-icon-button ujg-esi-upload-excel")
+      .attr("title", "Загрузить Excel")
+      .attr("aria-label", "Загрузить Excel");
     var $file = $("<input/>")
       .addClass("ujg-esi-file")
       .attr("type", "file")
@@ -133,7 +139,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       var file = this.files && this.files.length ? this.files[0] : null;
       if (services && services.onFileChange) services.onFileChange(file);
     });
-    $field.append($file);
+    $upload.append($("<span/>").addClass("ujg-esi-action-icon").html("&#8682;"), $file);
+    $control.append($upload, $("<span/>").addClass("ujg-esi-file-name").text(fileName));
+    $field.append($control);
     $toolbar.append($field);
   }
 
@@ -151,10 +159,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   function appendMappingButton($toolbar) {
     var $button = $("<button/>")
       .attr("type", "button")
-      .addClass("ujg-esi-mapping-button")
+      .addClass("ujg-esi-icon-button ujg-esi-mapping-button")
       .attr("title", "Настроить мапинг")
       .attr("aria-label", "Настроить мапинг")
-      .append($("<span/>").addClass("ujg-esi-mapping-button-icon").html("&#9881;"))
+      .append($("<span/>").addClass("ujg-esi-action-icon ujg-esi-mapping-button-icon").html("&#9881;"))
       .on("click", function() {
         if (services && services.onOpenMappings) services.onOpenMappings();
       });
@@ -168,7 +176,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var canDownload = !!(state && state.exportBuffer);
     var $sync = $("<button/>")
       .attr("type", "button")
-      .addClass("ujg-esi-sync-jira")
+      .addClass("ujg-esi-icon-button ujg-esi-sync-jira")
       .attr("title", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
       .attr("aria-label", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
       .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8635;"))
@@ -178,7 +186,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       });
     var $download = $("<button/>")
       .attr("type", "button")
-      .addClass("ujg-esi-download-excel")
+      .addClass("ujg-esi-icon-button ujg-esi-download-excel")
       .attr("title", "Скачать Excel")
       .attr("aria-label", "Скачать Excel")
       .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8681;"))
