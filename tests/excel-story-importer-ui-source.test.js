@@ -17,6 +17,7 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-file/);
   assert.match(source, /ujg-esi-upload-excel/);
   assert.match(source, /ujg-esi-file-name/);
+  assert.match(source, /ujg-esi-meta-file/);
   assert.match(source, /ujg-esi-icon-button/);
   assert.match(source, /ujg-esi-subtasks/);
   assert.match(source, /ujg-esi-mapping-button/);
@@ -39,7 +40,16 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-icon-button/);
   assert.match(source, /\.ujg-esi-upload-excel/);
   assert.match(source, /\.ujg-esi-file-name/);
+  assert.match(source, /\.ujg-esi-meta-file/);
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
+});
+
+test("file name is rendered in parse metadata, not beside upload icon", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /sourceFileName/);
+  assert.match(source, /ujg-esi-meta-file/);
+  assert.doesNotMatch(source, /\$control\.append\(\$upload,\s*\$\(\"\<span\/\>\"\)\.addClass\(\"ujg-esi-file-name\"\)/);
 });
 
 test("row create action only requires project selection", function () {

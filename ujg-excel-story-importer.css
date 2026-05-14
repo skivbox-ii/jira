@@ -158,6 +158,12 @@
   white-space: nowrap;
 }
 
+.ujg-esi-meta-file {
+  display: inline-block;
+  max-width: 240px;
+  vertical-align: bottom;
+}
+
 .ujg-esi-icon-button {
   display: inline-flex;
   align-items: center;
