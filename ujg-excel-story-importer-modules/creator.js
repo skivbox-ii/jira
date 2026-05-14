@@ -59,9 +59,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
 
   function epicLinkValue(epicKey) {
     var key = epicKey != null ? String(epicKey).trim() : "";
-    var prefix = config.EPIC_LINK_VALUE_PREFIX != null ? String(config.EPIC_LINK_VALUE_PREFIX) : "key:";
     if (!key) return "";
-    return /^key:/i.test(key) ? key : prefix + key;
+    return key.replace(/^key:/i, "").trim();
   }
 
   function appendComponent(fields, row, options) {

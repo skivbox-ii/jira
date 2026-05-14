@@ -2,7 +2,6 @@ define("_ujgESI_config", [], function() {
   "use strict";
 
   var EPIC_LINK_FIELD = "customfield_10109";
-  var EPIC_LINK_VALUE_PREFIX = "key:";
   var STORAGE_KEY = "ujg-esi-state";
   var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
@@ -109,7 +108,6 @@ define("_ujgESI_config", [], function() {
   return {
     baseUrl: resolveJiraBaseUrl(),
     EPIC_LINK_FIELD: EPIC_LINK_FIELD,
-    EPIC_LINK_VALUE_PREFIX: EPIC_LINK_VALUE_PREFIX,
     STORAGE_KEY: STORAGE_KEY,
     MAPPING_STORAGE_KEY: MAPPING_STORAGE_KEY,
     SUMMARY_COLUMN: SUMMARY_COLUMN,
