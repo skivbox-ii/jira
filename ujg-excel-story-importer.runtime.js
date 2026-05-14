@@ -1573,8 +1573,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $toolbar.append($field);
   }
 
-  function appendFileInput($toolbar, state) {
-    var fileName = state && state.sourceFileName ? String(state.sourceFileName) : "Файл не выбран";
+  function appendFileInput($toolbar) {
     var $field = $("<div/>").addClass("ujg-esi-field ujg-esi-file-field");
     var $control = $("<div/>").addClass("ujg-esi-file-control");
     var $upload = $("<label/>")
@@ -1591,7 +1590,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       if (services && services.onFileChange) services.onFileChange(file);
     });
     $upload.append($("<span/>").addClass("ujg-esi-action-icon").html("&#8682;"), $file);
-    $control.append($upload, $("<span/>").addClass("ujg-esi-file-name").text(fileName));
+    $control.append($upload);
     $field.append($control);
     $toolbar.append($field);
   }
@@ -1684,6 +1683,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       $sheetWrap.append($menu);
     }
     $meta.append($sheetWrap, $("<span/>").text(" · заголовок строка " + meta.headerRowNumber));
+    if (state && state.sourceFileName) {
+      $meta.append(
+        $("<span/>").text(" · файл: "),
+        $("<span/>").addClass("ujg-esi-file-name ujg-esi-meta-file").text(String(state.sourceFileName))
+      );
+    }
     $header.append($meta);
   }
 
