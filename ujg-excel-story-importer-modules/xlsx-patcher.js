@@ -176,13 +176,13 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
   function headerColumnsFromWorksheetXml(xml, headerRowNumber, sharedStrings) {
     var row = extractRowXml(xml, headerRowNumber);
     var out = {};
-    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*>[\s\S]*?<\/c>|<c\b[^>]*\br="([A-Z]+\d+)"[^>]*\/>/gi;
+    var re = /<c\b(?=[^>]*\br="([A-Z]+\d+)")[^>]*?(?:\/>|>[\s\S]*?<\/c>)/gi;
     var match;
     if (!row) return out;
     while ((match = re.exec(row.text))) {
       var cellXml = match[0];
       var text = cellTextFromXml(cellXml, sharedStrings).trim();
-      var ref = match[1] || match[2] || "";
+      var ref = match[1] || "";
       if (text && !Object.prototype.hasOwnProperty.call(out, text)) {
         out[text] = cellRefColumnNumber(ref);
       }
@@ -206,7 +206,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
   }
 
   function nearestRowStyleAttr(rowXml, columnNumber) {
-    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var re = /<c\b(?=[^>]*\br="([A-Z]+\d+)")[^>]*?(?:\/>|>[\s\S]*?<\/c>)/gi;
     var nearestDistance = Infinity;
     var nearestStyle = "";
     var match;
@@ -226,7 +226,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
 
   function patchCellInRow(rowXml, columnNumber, rowNumber, value) {
     var ref = columnNumberToName(columnNumber) + String(rowNumber);
-    var cellRe = new RegExp("<c\\b[^>]*\\br=\"" + escapeRegExp(ref) + "\"[^>]*(?:>[\\s\\S]*?<\\/c>|\\/>)", "i");
+    var cellRe = new RegExp("<c\\b(?=[^>]*\\br=\"" + escapeRegExp(ref) + "\")[^>]*?(?:\\/>|>[\\s\\S]*?<\\/c>)", "i");
     var match = cellRe.exec(rowXml);
     if (match) {
       return rowXml.slice(0, match.index) +
@@ -235,10 +235,11 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
     }
 
     var insert = buildInlineCell(ref, value, nearestRowStyleAttr(rowXml, columnNumber));
-    var allCellsRe = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var allCellsRe = /<c\b(?=[^>]*\br="([A-Z]+\d+)")[^>]*?(?:\/>|>[\s\S]*?<\/c>)/gi;
     var cell;
     while ((cell = allCellsRe.exec(rowXml))) {
-      if (cellRefColumnNumber(cell[1]) > columnNumber) {
+      var nextColumn = cellRefColumnNumber(cell[1]);
+      if (nextColumn > columnNumber) {
         return rowXml.slice(0, cell.index) + insert + rowXml.slice(cell.index);
       }
     }
@@ -246,7 +247,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
   }
 
   function expandRowSpans(rowXml) {
-    var re = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:>[\s\S]*?<\/c>|\/>)/gi;
+    var re = /<c\b(?=[^>]*\br="([A-Z]+\d+)")[^>]*?(?:\/>|>[\s\S]*?<\/c>)/gi;
     var minColumn = 0;
     var maxColumn = 0;
     var match;

@@ -118,6 +118,37 @@ test("patchWorksheetXml preserves existing cell attributes while replacing only 
   assert.match(out, /<c r="B2" s="12" t="inlineStr"><is><t>Done<\/t><\/is><\/c>/);
 });
 
+test("patchWorksheetXml updates only the target self-closing cell", function () {
+  const { patcher } = loadPatcher();
+  const xml = [
+    '<worksheet><sheetData>',
+    '<row r="1"><c r="M1" t="inlineStr"><is><t>Статус исполнителя</t></is></c><c r="N1" t="inlineStr"><is><t>Планируемая дата</t></is></c><c r="O1" t="inlineStr"><is><t>Фактическая дата</t></is></c><c r="P1" t="inlineStr"><is><t>Примечание исполнитель</t></is></c></row>',
+    '<row r="792"><c r="M792" s="50"/><c r="N792" s="51"/><c r="O792" s="52"/><c r="P792" s="53"/><c r="Q792" s="54" t="inlineStr"><is><t>Примечание заказчик</t></is></c></row>',
+    '</sheetData></worksheet>',
+  ].join("");
+
+  const out = patcher.patchWorksheetXml(xml, {
+    headerRowNumber: 1,
+    headerColumns: {
+      "Статус в Jira": 13,
+    },
+    rows: [
+      {
+        excelRowNumber: 792,
+        values: {
+          "Статус в Jira": "Выдано",
+        },
+      },
+    ],
+  });
+
+  assert.match(out, /<c r="M792" s="50" t="inlineStr"><is><t>Выдано<\/t><\/is><\/c>/);
+  assert.match(out, /<c r="N792" s="51"\/>/);
+  assert.match(out, /<c r="O792" s="52"\/>/);
+  assert.match(out, /<c r="P792" s="53"\/>/);
+  assert.match(out, /<c r="Q792" s="54" t="inlineStr"><is><t>Примечание заказчик<\/t><\/is><\/c>/);
+});
+
 test("patchWorksheetXml inserts missing target cells in row order", function () {
   const { patcher } = loadPatcher();
   const xml = [
