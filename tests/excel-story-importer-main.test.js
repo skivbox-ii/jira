@@ -1314,6 +1314,140 @@ test("sync from Jira picks the closest story when text search returns several st
   assert.equal(patchArgs.rows[0].values.Jira, "EVOSCADA-18440");
 });
 
+test("sync from Jira prefers exact remark text found in issue description over summary similarity", async function () {
+  let callbacks = null;
+  const issueKeyCalls = [];
+  let patchArgs = null;
+  const remark = "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться в ремонт (колодцы, КППСОД, емкости и т.п.). При этом объект раскрашивается коричневым цветом";
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function () {},
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    getProjectEpics: function () {
+      return Promise.resolve([]);
+    },
+    searchIssueBySummary: function () {
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-18000",
+            fields: {
+              summary: "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться",
+              description: "Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Замечание|Похожее замечание про ремонт объектов|",
+              issuetype: { name: "История" },
+            },
+          },
+          {
+            key: "EVOSCADA-18440",
+            fields: {
+              summary: "Укороченный заголовок",
+              description: "Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Замечание|" + remark + "|",
+              issuetype: { name: "История" },
+            },
+          },
+        ],
+      });
+    },
+    getIssuesByKeys: function (keys) {
+      issueKeyCalls.push(keys.slice());
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-18440",
+            fields: {
+              status: { name: "Выдано" },
+              assignee: null,
+            },
+          },
+        ],
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(new ArrayBuffer(12));
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Замечания"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Замечания",
+        headerRowNumber: 1,
+        headerColumns: {
+          Jira: 16,
+          "Статус в Jira": 13,
+        },
+        rows: [
+          {
+            excelRowNumber: 792,
+            summary: remark,
+            jiraKey: "",
+            sourceColumns: { Замечание: remark, Jira: "" },
+            sourceColumnIndexes: { Jira: 16 },
+            alreadyLinked: false,
+            status: "ready",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (_buffer, patch) {
+      patchArgs = patch;
+      return Promise.resolve(new ArrayBuffer(8));
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  callbacks.onFileChange({ name: "journal.xlsx" });
+  await flush();
+  await flush();
+
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.deepEqual(issueKeyCalls[0], ["EVOSCADA-18440"]);
+  assert.equal(patchArgs.rows[0].values.Jira, "EVOSCADA-18440");
+});
+
 test("column mapping changes reparse the loaded workbook before Jira sync export", async function () {
   const states = [];
   let callbacks = null;

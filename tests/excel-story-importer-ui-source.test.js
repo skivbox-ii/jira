@@ -178,6 +178,8 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /getIssuesByKeys/);
   assert.match(source, /issuelinks/);
   assert.match(source, /key in/);
+  assert.match(source, /description/);
+  assert.match(source, /description ~ /);
 });
 
 test("rendering module always renders Jira keys as new-tab browse links", function () {

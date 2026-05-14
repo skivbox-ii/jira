@@ -1055,7 +1055,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     var tokens = textSearchTokens(text);
     if (!tokens.length) return "summary ~ " + quoteJqlString(text);
     return tokens.map(function(token) {
-      return "summary ~ " + quoteJqlString(token);
+      return "(summary ~ " + quoteJqlString(token) + " OR description ~ " + quoteJqlString(token) + ")";
     }).join(" AND ");
   }
 
@@ -1148,7 +1148,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     searchIssueBySummary: function(projectKey, summaryText) {
       var text = summaryText != null ? String(summaryText).trim() : "";
-      var fields = ["summary", "status", "assignee", "issuelinks", "issuetype"];
+      var fields = ["summary", "description", "status", "assignee", "issuelinks", "issuetype"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -3189,6 +3189,15 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function exactRemarkText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/[^\w\u0400-\u04FF]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function issueProjectKey(value) {
     var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
     var match = String(key || value || "").trim().toUpperCase().match(/^([A-Z][A-Z0-9_]+)-\d+$/);
@@ -3213,6 +3222,18 @@ define("_ujgESI_main", [
     );
   }
 
+  function issueDescriptionName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    if (fields.description != null) return String(fields.description);
+    return issue && issue.description != null ? String(issue.description) : "";
+  }
+
+  function descriptionContainsExactRemark(issue, sourceSummary) {
+    var needle = exactRemarkText(sourceSummary);
+    var haystack = exactRemarkText(issueDescriptionName(issue));
+    return needle.length >= 20 && haystack.indexOf(needle) !== -1;
+  }
+
   function issueSummaryMatchScore(issue, sourceSummary) {
     var issueWords = summarySearchWords(issueSummaryName(issue).replace(/^\s*\[[^\]]+\]\s*/, ""));
     var sourceWords = summarySearchWords(sourceSummary);
@@ -3230,11 +3251,15 @@ define("_ujgESI_main", [
   function bestSummaryIssueMatch(issues, sourceSummary) {
     var list = normalizeIssues(issues);
     var ranked;
+    var exactDescriptionIssues = list.filter(function(issue) {
+      return descriptionContainsExactRemark(issue, sourceSummary);
+    });
     var storyIssues = list.filter(isStoryIssue);
+    if (exactDescriptionIssues.length === 1) return exactDescriptionIssues[0];
     if (storyIssues.length === 1) return storyIssues[0];
     if (list.length === 1) return list[0];
     ranked = list.map(function(issue, index) {
-      return { issue: issue, index: index, score: issueSummaryMatchScore(issue, sourceSummary) };
+      return { issue: issue, index: index, score: (descriptionContainsExactRemark(issue, sourceSummary) ? 100000 : 0) + issueSummaryMatchScore(issue, sourceSummary) };
     }).sort(function(a, b) {
       if (b.score !== a.score) return b.score - a.score;
       return a.index - b.index;
