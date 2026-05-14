@@ -125,6 +125,11 @@ test("rendering module exposes daily-diligence style mapping settings overlay", 
   assert.match(source, /ujg-esi-mapping-story-assignee/);
   assert.match(source, /ujg-esi-mapping-role-assignee/);
   assert.match(source, /ujg-esi-mapping-role-type/);
+  assert.match(source, /ujg-esi-issue-type-picker/);
+  assert.match(source, /ujg-esi-issue-type-search/);
+  assert.match(source, /ujg-esi-issue-type-options/);
+  assert.match(source, /onIssueTypeSearch/);
+  assert.match(source, /onIssueTypeSelect/);
 });
 
 test("rendering module exposes create confirmation modal", function () {
@@ -143,6 +148,9 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /ujg-esi-assignee-options/);
   assert.match(source, /onDialogAssigneeSearch/);
   assert.match(source, /onDialogAssigneeSelect/);
+  assert.match(source, /ujg-esi-issue-type-picker/);
+  assert.match(source, /onIssueTypeSearch/);
+  assert.match(source, /onIssueTypeSelect/);
   assert.match(source, /ujg-esi-confirm-child-enabled/);
   assert.match(source, /onDialogChildToggle/);
   assert.match(source, /ujg-esi-confirm-epic-warning/);

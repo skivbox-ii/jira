@@ -470,6 +470,58 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $wrap;
   }
 
+  function appendIssueTypePicker(className, target, value, state, disabled) {
+    var picker = state && state.issueTypePicker ? state.issueTypePicker : {};
+    var active = !disabled && picker.target === target;
+    var text = active ? picker.query || "" : value || "";
+    var $wrap = $("<div/>")
+      .addClass("ujg-esi-issue-type-picker")
+      .addClass(className || "")
+      .toggleClass("ujg-esi-issue-type-picker-active", active);
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .attr("autocomplete", "off")
+      .attr("placeholder", "Введите тип Jira")
+      .addClass("ujg-esi-issue-type-search")
+      .val(text);
+    if (disabled) $input.prop("disabled", true);
+    $input.on("focus click", function() {
+      if (!disabled && services && services.onIssueTypeFocus) services.onIssueTypeFocus(target);
+    });
+    $input.on("input", function() {
+      if (!disabled && services && services.onIssueTypeSearch) services.onIssueTypeSearch(target, $(this).val());
+    });
+    $wrap.append($input);
+    if (active) {
+      var $options = $("<div/>").addClass("ujg-esi-issue-type-options");
+      (picker.rows || []).forEach(function(row) {
+        var name = row && row.name != null ? String(row.name) : "";
+        if (!name) return;
+        $options.append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-issue-type-option")
+            .text(name)
+            .on("click", function() {
+              if (services && services.onIssueTypeSelect) services.onIssueTypeSelect(target, name);
+            })
+        );
+      });
+      if (!(picker.rows || []).length) {
+        $options.append($("<div/>").addClass("ujg-esi-issue-type-empty").text("Ничего не найдено"));
+      }
+      $wrap.append($options);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          var node = $input[0];
+          $input.trigger("focus");
+          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
+        }, 0);
+      }
+    }
+    return $wrap;
+  }
+
   function appendMappingBlock($parent, block, active) {
     var $button = $("<button/>")
       .attr("type", "button")
@@ -639,9 +691,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-code", role.role, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "role", value);
           })))
-          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-type", role.issueType, function(value) {
-            if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "issueType", value);
-          })))
+          .append($("<td/>").append(appendIssueTypePicker("ujg-esi-mapping-role-type", "mapping-role-type-" + index, role.issueType, state, false)))
           .append($("<td/>").append(appendAssigneePicker("ujg-esi-mapping-role-assignee", "mapping-role-" + index, role.assigneeId || "", role.assigneeLabel || "", state, false)))
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-original", role.originalEstimate, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "originalEstimate", value);
@@ -763,9 +813,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         $("<tr/>").toggleClass("ujg-esi-confirm-child-disabled", !enabled)
           .append($("<td/>").append($enabled))
           .append($("<td/>").text(task.role || ""))
-          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-type", task.issueType, function(value) {
-            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "issueType", value);
-          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendIssueTypePicker("ujg-esi-confirm-child-type", "child-type-" + index, task.issueType, state, !enabled)))
           .append($("<td/>").append(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled)))
@@ -797,9 +845,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     }), function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("projectKey", value);
     }));
-    appendConfirmControl($fields, "Тип Jira", appendTextInput("ujg-esi-confirm-issue-type", dialog.issueType || "Story", function(value) {
-      if (services && services.onDialogFieldChange) services.onDialogFieldChange("issueType", value);
-    }));
+    appendConfirmControl($fields, "Тип Jira", appendIssueTypePicker("ujg-esi-confirm-issue-type", "story-type", dialog.issueType || "Story", state, false));
     appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
       return { value: epic.key || "", label: epicLabel(epic) };
     })), function(value) {

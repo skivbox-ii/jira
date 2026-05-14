@@ -2376,6 +2376,58 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $wrap;
   }
 
+  function appendIssueTypePicker(className, target, value, state, disabled) {
+    var picker = state && state.issueTypePicker ? state.issueTypePicker : {};
+    var active = !disabled && picker.target === target;
+    var text = active ? picker.query || "" : value || "";
+    var $wrap = $("<div/>")
+      .addClass("ujg-esi-issue-type-picker")
+      .addClass(className || "")
+      .toggleClass("ujg-esi-issue-type-picker-active", active);
+    var $input = $("<input/>")
+      .attr("type", "text")
+      .attr("autocomplete", "off")
+      .attr("placeholder", "Введите тип Jira")
+      .addClass("ujg-esi-issue-type-search")
+      .val(text);
+    if (disabled) $input.prop("disabled", true);
+    $input.on("focus click", function() {
+      if (!disabled && services && services.onIssueTypeFocus) services.onIssueTypeFocus(target);
+    });
+    $input.on("input", function() {
+      if (!disabled && services && services.onIssueTypeSearch) services.onIssueTypeSearch(target, $(this).val());
+    });
+    $wrap.append($input);
+    if (active) {
+      var $options = $("<div/>").addClass("ujg-esi-issue-type-options");
+      (picker.rows || []).forEach(function(row) {
+        var name = row && row.name != null ? String(row.name) : "";
+        if (!name) return;
+        $options.append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-issue-type-option")
+            .text(name)
+            .on("click", function() {
+              if (services && services.onIssueTypeSelect) services.onIssueTypeSelect(target, name);
+            })
+        );
+      });
+      if (!(picker.rows || []).length) {
+        $options.append($("<div/>").addClass("ujg-esi-issue-type-empty").text("Ничего не найдено"));
+      }
+      $wrap.append($options);
+      if (typeof setTimeout === "function") {
+        setTimeout(function() {
+          var node = $input[0];
+          $input.trigger("focus");
+          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
+        }, 0);
+      }
+    }
+    return $wrap;
+  }
+
   function appendMappingBlock($parent, block, active) {
     var $button = $("<button/>")
       .attr("type", "button")
@@ -2545,9 +2597,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-code", role.role, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "role", value);
           })))
-          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-type", role.issueType, function(value) {
-            if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "issueType", value);
-          })))
+          .append($("<td/>").append(appendIssueTypePicker("ujg-esi-mapping-role-type", "mapping-role-type-" + index, role.issueType, state, false)))
           .append($("<td/>").append(appendAssigneePicker("ujg-esi-mapping-role-assignee", "mapping-role-" + index, role.assigneeId || "", role.assigneeLabel || "", state, false)))
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-role-original", role.originalEstimate, function(value) {
             if (services && services.onMappingRoleChange) services.onMappingRoleChange(index, "originalEstimate", value);
@@ -2669,9 +2719,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         $("<tr/>").toggleClass("ujg-esi-confirm-child-disabled", !enabled)
           .append($("<td/>").append($enabled))
           .append($("<td/>").text(task.role || ""))
-          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-type", task.issueType, function(value) {
-            if (services && services.onDialogChildChange) services.onDialogChildChange(index, "issueType", value);
-          }).prop("disabled", !enabled)))
+          .append($("<td/>").append(appendIssueTypePicker("ujg-esi-confirm-child-type", "child-type-" + index, task.issueType, state, !enabled)))
           .append($("<td/>").append(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled)))
@@ -2703,9 +2751,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     }), function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("projectKey", value);
     }));
-    appendConfirmControl($fields, "Тип Jira", appendTextInput("ujg-esi-confirm-issue-type", dialog.issueType || "Story", function(value) {
-      if (services && services.onDialogFieldChange) services.onDialogFieldChange("issueType", value);
-    }));
+    appendConfirmControl($fields, "Тип Jira", appendIssueTypePicker("ujg-esi-confirm-issue-type", "story-type", dialog.issueType || "Story", state, false));
     appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
       return { value: epic.key || "", label: epicLabel(epic) };
     })), function(value) {
@@ -3280,6 +3326,11 @@ define("_ujgESI_main", [
         error: "",
         seq: 0,
       },
+      issueTypePicker: {
+        target: "",
+        query: "",
+        rows: [],
+      },
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
 
@@ -3439,6 +3490,92 @@ define("_ujgESI_main", [
       node[ref.labelKey] = userRow.label || userLabel(raw) || userRow.id || "";
       node[ref.assigneeKey] = raw;
       return !!ref.mapping;
+    }
+
+    function normalizeIssueTypeName(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+
+    function issueTypeRows(projectKey) {
+      var rows = [];
+      var seen = {};
+
+      function add(value) {
+        var name = value != null ? String(value).trim() : "";
+        var key = normalizeIssueTypeName(name);
+        if (!name || seen[key]) return;
+        seen[key] = true;
+        rows.push({ name: name });
+      }
+
+      var key = projectKey != null ? String(projectKey) : "";
+      var data = key && hasOwn(state.createMetaByProject, key) ? state.createMetaByProject[key] : null;
+      (data && Array.isArray(data.projects) ? data.projects : []).forEach(function(project) {
+        (project && Array.isArray(project.issuetypes) ? project.issuetypes : []).forEach(function(issueType) {
+          add(issueType && issueType.name);
+        });
+      });
+      add(config && config.STORY_ISSUE_TYPE);
+      (state.mappingSettings && state.mappingSettings.roles || []).forEach(function(role) {
+        add(role && role.issueType);
+      });
+      (config && config.CREATE_TEMPLATE_ROLES || []).forEach(function(role) {
+        add(role && role.issueType);
+      });
+      if (state.createDialog) {
+        add(state.createDialog.issueType);
+        (state.createDialog.childTasks || []).forEach(function(task) {
+          add(task && task.issueType);
+        });
+      }
+      return rows;
+    }
+
+    function issueTypeTargetRef(target) {
+      var key = target != null ? String(target) : "";
+      var dialog = state.createDialog;
+      var match;
+      if (dialog && key === "story-type") return { node: dialog, key: "issueType", projectKey: dialog.projectKey, mapping: false, story: true };
+      match = /^child-type-(\d+)$/.exec(key);
+      if (dialog && match && dialog.childTasks && dialog.childTasks[Number(match[1])]) {
+        return { node: dialog.childTasks[Number(match[1])], key: "issueType", projectKey: dialog.projectKey, mapping: false, story: false };
+      }
+      match = /^mapping-role-type-(\d+)$/.exec(key);
+      if (match && state.mappingSettings && state.mappingSettings.roles && state.mappingSettings.roles[Number(match[1])]) {
+        return { node: state.mappingSettings.roles[Number(match[1])], key: "issueType", projectKey: state.projectKey, mapping: true, story: false };
+      }
+      return null;
+    }
+
+    function setTargetIssueType(target, value) {
+      var ref = issueTypeTargetRef(target);
+      if (!ref || !ref.node) return false;
+      ref.node[ref.key] = value != null ? String(value) : "";
+      if (ref.story && state.createDialog) {
+        state.createDialog.epicLinkAllowed = projectEpicLinkAllowed(state.createDialog.projectKey, state.createDialog.issueType);
+      }
+      return !!ref.mapping;
+    }
+
+    function openIssueTypePicker(target, query) {
+      var targetKey = target != null ? String(target) : "";
+      var ref = issueTypeTargetRef(targetKey);
+      if (!ref || !ref.node) return;
+      var q = query != null ? String(query) : String(ref.node[ref.key] || "");
+      var normalized = normalizeIssueTypeName(q);
+      state.issueTypePicker.target = targetKey;
+      state.issueTypePicker.query = q;
+      state.issueTypePicker.rows = issueTypeRows(ref.projectKey).filter(function(row) {
+        return !normalized || normalizeIssueTypeName(row && row.name).indexOf(normalized) !== -1;
+      }).slice(0, 20);
+      if (ref.projectKey && !hasOwn(state.createMetaByProject, ref.projectKey)) loadCreateMeta(ref.projectKey);
+      render();
+    }
+
+    function closeIssueTypePicker() {
+      state.issueTypePicker.target = "";
+      state.issueTypePicker.query = "";
+      state.issueTypePicker.rows = [];
     }
 
     function selectedProjectTextFor(projectKey) {
@@ -3682,6 +3819,15 @@ define("_ujgESI_main", [
           if (state.createDialog && state.createDialog.projectKey === key) {
             state.createDialog.epicLinkAllowed = projectEpicLinkAllowed(key, state.createDialog.issueType);
           }
+          if (state.issueTypePicker && state.issueTypePicker.target) {
+            var ref = issueTypeTargetRef(state.issueTypePicker.target);
+            if (ref && String(ref.projectKey || "") === key) {
+              var normalized = normalizeIssueTypeName(state.issueTypePicker.query);
+              state.issueTypePicker.rows = issueTypeRows(key).filter(function(row) {
+                return !normalized || normalizeIssueTypeName(row && row.name).indexOf(normalized) !== -1;
+              }).slice(0, 20);
+            }
+          }
           render();
         },
         function(err) {
@@ -3758,6 +3904,7 @@ define("_ujgESI_main", [
       state.error = "";
       state.createDialog = null;
       closeUserPicker();
+      closeIssueTypePicker();
       loadEpics(state.projectKey);
       loadCreateMeta(state.projectKey);
     }
@@ -3766,6 +3913,7 @@ define("_ujgESI_main", [
       state.epicKey = epicKey != null ? String(epicKey) : "";
       state.createDialog = null;
       closeUserPicker();
+      closeIssueTypePicker();
       render();
     }
 
@@ -3781,6 +3929,7 @@ define("_ujgESI_main", [
       state.createDialog = null;
       resetExportState();
       closeUserPicker();
+      closeIssueTypePicker();
       render();
       readInputWorkbook(file).then(function(result) {
         state.sourceFileBuffer = result.buffer;
@@ -3802,6 +3951,7 @@ define("_ujgESI_main", [
       state.createSubtasks = !!enabled;
       state.createDialog = null;
       closeUserPicker();
+      closeIssueTypePicker();
       render();
     }
 
@@ -3823,6 +3973,7 @@ define("_ujgESI_main", [
       state.createDialog = null;
       state.error = "";
       closeUserPicker();
+      closeIssueTypePicker();
       try {
         parseLoadedWorkbook();
       } catch (err) {
@@ -4254,6 +4405,26 @@ define("_ujgESI_main", [
       render();
     }
 
+    function onIssueTypeFocus(target) {
+      var targetKey = target != null ? String(target) : "";
+      var ref = issueTypeTargetRef(targetKey);
+      if (!ref || !ref.node) return;
+      openIssueTypePicker(targetKey, ref.node[ref.key]);
+    }
+
+    function onIssueTypeSearch(target, query) {
+      openIssueTypePicker(target, query);
+      var mappingTarget = setTargetIssueType(target, query);
+      if (mappingTarget) saveMappings();
+    }
+
+    function onIssueTypeSelect(target, name) {
+      var mappingTarget = setTargetIssueType(target, name);
+      closeIssueTypePicker();
+      if (mappingTarget) saveMappings();
+      render();
+    }
+
     function onConfirmCreate() {
       var dialog = state.createDialog;
       if (!dialog) return;
@@ -4263,6 +4434,7 @@ define("_ujgESI_main", [
     function onCancelCreate() {
       state.createDialog = null;
       closeUserPicker();
+      closeIssueTypePicker();
       render();
     }
 
@@ -4298,6 +4470,9 @@ define("_ujgESI_main", [
       onDialogAssigneeSearch: onDialogAssigneeSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,
       onDialogAssigneeClear: onDialogAssigneeClear,
+      onIssueTypeFocus: onIssueTypeFocus,
+      onIssueTypeSearch: onIssueTypeSearch,
+      onIssueTypeSelect: onIssueTypeSelect,
     });
 
     rendering.render(state);

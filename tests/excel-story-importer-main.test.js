@@ -784,6 +784,15 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
               }),
             }
           : null,
+        issueTypePicker: state.issueTypePicker
+          ? {
+              target: state.issueTypePicker.target || "",
+              query: state.issueTypePicker.query || "",
+              rows: (state.issueTypePicker.rows || []).map(function (row) {
+                return row.name;
+              }),
+            }
+          : null,
       });
     },
   };
@@ -849,7 +858,19 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
       return Promise.resolve([]);
     },
     getProjectCreateMeta: function () {
-      return Promise.resolve({ projects: [] });
+      return Promise.resolve({
+        projects: [
+          {
+            key: "EVOSCADA",
+            issuetypes: [
+              { name: "Story", fields: {} },
+              { name: "Задача разработки", fields: {} },
+              { name: "Задача аналитики", fields: {} },
+              { name: "QA", fields: {} },
+            ],
+          },
+        ],
+      });
     },
     searchUsers: function (query) {
       if (query === "lead") return Promise.resolve({ users: [{ accountId: "lead-acc", displayName: "Lead User" }] });
@@ -942,9 +963,15 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   callbacks.onDialogAssigneeSelect("mapping-role-1", "qa-user");
   assert.equal(savedMappings.roles[1].assigneeId, "qa-user");
   assert.equal(savedMappings.roles[1].assignee.displayName, "QA User");
-
   callbacks.onProjectChange("EVOSCADA");
   await flush();
+  await flush();
+  callbacks.onIssueTypeSearch("mapping-role-type-1", "разраб");
+  last = states[states.length - 1];
+  assert.equal(last.issueTypePicker.rows.join("|"), "Задача разработки");
+  callbacks.onIssueTypeSelect("mapping-role-type-1", "Задача разработки");
+  assert.equal(savedMappings.roles[1].issueType, "Задача разработки");
+
   callbacks.onFileChange({ name: "rows.xlsx" });
   await flush();
   await flush();
@@ -958,8 +985,12 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(last.createDialog.assigneeLabel, "Lead User");
   assert.deepEqual(last.createDialog.childTasks, [
     "SE:System Engineer:true:2h:2h:se-user:SE User",
-    "QA:QA:true:3h:3h:qa-user:QA User",
+    "QA:Задача разработки:true:3h:3h:qa-user:QA User",
   ]);
+  callbacks.onIssueTypeSearch("child-type-0", "аналит");
+  last = states[states.length - 1];
+  assert.equal(last.issueTypePicker.rows.join("|"), "Задача аналитики");
+  callbacks.onIssueTypeSelect("child-type-0", "Задача аналитики");
 
   callbacks.onConfirmCreate();
   await flush();
@@ -968,6 +999,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(creatorOptions.mappings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
   assert.equal(creatorOptions.mappings.priorityMap["Срочно"], "Highest");
   assert.equal(creatorOptions.assignee.accountId, "lead-acc");
+  assert.equal(creatorOptions.childTasks[0].issueType, "Задача аналитики");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[1].assignee.name, "qa-user");
 });

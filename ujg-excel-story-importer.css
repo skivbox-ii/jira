@@ -772,12 +772,14 @@
   color: #6b778c;
 }
 
-.ujg-esi-assignee-picker {
+.ujg-esi-assignee-picker,
+.ujg-esi-issue-type-picker {
   position: relative;
   width: 100%;
 }
 
-.ujg-esi-assignee-search {
+.ujg-esi-assignee-search,
+.ujg-esi-issue-type-search {
   padding-right: 28px !important;
 }
 
@@ -801,7 +803,8 @@
   color: #172b4d;
 }
 
-.ujg-esi-assignee-options {
+.ujg-esi-assignee-options,
+.ujg-esi-issue-type-options {
   position: absolute;
   top: calc(100% + 2px);
   left: 0;
@@ -815,7 +818,8 @@
   box-shadow: 0 8px 20px rgba(9, 30, 66, 0.18);
 }
 
-.ujg-esi-assignee-option {
+.ujg-esi-assignee-option,
+.ujg-esi-issue-type-option {
   display: block;
   width: 100%;
   padding: 7px 9px;
@@ -828,19 +832,22 @@
   cursor: pointer;
 }
 
-.ujg-esi-assignee-option:hover {
+.ujg-esi-assignee-option:hover,
+.ujg-esi-issue-type-option:hover {
   background: #f4f5f7;
 }
 
 .ujg-esi-assignee-loading,
 .ujg-esi-assignee-error,
-.ujg-esi-assignee-empty {
+.ujg-esi-assignee-empty,
+.ujg-esi-issue-type-empty {
   padding: 7px 9px;
   font-size: 12px;
 }
 
 .ujg-esi-assignee-loading,
-.ujg-esi-assignee-empty {
+.ujg-esi-assignee-empty,
+.ujg-esi-issue-type-empty {
   color: #5e6c84;
 }
 
