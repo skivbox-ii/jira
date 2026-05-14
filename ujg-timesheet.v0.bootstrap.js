@@ -4,7 +4,7 @@ define("_ujgTimesheet", [], function() {
   var widgetCssFile = "ujg-timesheet.v0.css";
   var widgetRuntimeFile = "ujg-timesheet.v0.runtime.js";
   var runtimeAmd = "_ujgTimesheetV0Runtime";
-  var releaseRef = "9fef642";
+  var releaseRef = "e5f03de";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
