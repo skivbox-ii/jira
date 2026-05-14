@@ -1041,6 +1041,24 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return out;
   }
 
+  function textSearchTokens(value) {
+    return String(value || "")
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/[^\w\u0400-\u04FF-]+/g, " ")
+      .split(/\s+/)
+      .map(function(word) { return String(word || "").trim(); })
+      .filter(function(word) { return word.length >= 3; })
+      .slice(0, 6);
+  }
+
+  function summaryTextJql(text) {
+    var tokens = textSearchTokens(text);
+    if (!tokens.length) return "summary ~ " + quoteJqlString(text);
+    return tokens.map(function(token) {
+      return "summary ~ " + quoteJqlString(token);
+    }).join(" AND ");
+  }
+
   return {
     baseUrl: config.baseUrl,
     getProjects: function() {
@@ -1141,7 +1159,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         contentType: "application/json",
         dataType: "json",
         data: JSON.stringify({
-          jql: "project = " + toJqlToken(projectKey) + " AND summary ~ " + quoteJqlString(text) + " ORDER BY updated DESC",
+          jql: "project = " + toJqlToken(projectKey) + " AND " + summaryTextJql(text) + " ORDER BY updated DESC",
           fields: fields,
           maxResults: 10,
         }),
@@ -3137,13 +3155,38 @@ define("_ujgESI_main", [
   }
 
   function summarySearchText(value) {
+    var candidates = summarySearchCandidates(value);
+    return candidates.length ? candidates[0] : "";
+  }
+
+  function summarySearchWords(value) {
     var words = String(value || "")
       .replace(/[\r\n\t]+/g, " ")
       .replace(/[^\w\u0400-\u04FF-]+/g, " ")
       .split(/\s+/)
       .map(function(word) { return String(word || "").trim(); })
       .filter(function(word) { return word.length >= 3; });
-    return words.slice(0, 10).join(" ");
+    return words;
+  }
+
+  function summarySearchCandidates(value) {
+    var seenWords = {};
+    var words = summarySearchWords(value).filter(function(word) {
+      var key = word.toLowerCase();
+      if (seenWords[key]) return false;
+      seenWords[key] = true;
+      return true;
+    });
+    var sizes = [10, 6, 4, 3];
+    var seen = {};
+    var out = [];
+    sizes.forEach(function(size) {
+      var text = words.slice(0, size).join(" ");
+      if (!text || seen[text]) return;
+      seen[text] = true;
+      out.push(text);
+    });
+    return out;
   }
 
   function issueProjectKey(value) {
@@ -3170,11 +3213,33 @@ define("_ujgESI_main", [
     );
   }
 
-  function bestSummaryIssueMatch(issues) {
+  function issueSummaryMatchScore(issue, sourceSummary) {
+    var issueWords = summarySearchWords(issueSummaryName(issue).replace(/^\s*\[[^\]]+\]\s*/, ""));
+    var sourceWords = summarySearchWords(sourceSummary);
+    var issueSet = {};
+    var hits = 0;
+    issueWords.forEach(function(word) {
+      issueSet[word.toLowerCase()] = true;
+    });
+    sourceWords.forEach(function(word) {
+      if (issueSet[word.toLowerCase()]) hits += 1;
+    });
+    return (isStoryIssue(issue) ? 1000 : 0) + hits * 10 + (sourceWords.length ? hits / sourceWords.length : 0);
+  }
+
+  function bestSummaryIssueMatch(issues, sourceSummary) {
     var list = normalizeIssues(issues);
+    var ranked;
     var storyIssues = list.filter(isStoryIssue);
     if (storyIssues.length === 1) return storyIssues[0];
     if (list.length === 1) return list[0];
+    ranked = list.map(function(issue, index) {
+      return { issue: issue, index: index, score: issueSummaryMatchScore(issue, sourceSummary) };
+    }).sort(function(a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.index - b.index;
+    });
+    if (ranked.length && ranked[0].score > 0 && (!ranked[1] || ranked[0].score > ranked[1].score)) return ranked[0].issue;
     return null;
   }
 
@@ -3522,15 +3587,24 @@ define("_ujgESI_main", [
       var projectKey = projectKeyForSummarySearch();
       var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
       var chain = Promise.resolve();
+
+      function matchByCandidates(row, candidates, index) {
+        if (index >= candidates.length) return Promise.resolve(null);
+        return promiseOf(api.searchIssueBySummary(projectKey, candidates[index])).then(function(data) {
+          var issue = bestSummaryIssueMatch(data, row.summary);
+          if (issue) return issue;
+          return matchByCandidates(row, candidates, index + 1);
+        });
+      }
+
       rows.forEach(function(row) {
         chain = chain.then(function() {
           var key = issueKeyFromRow(row);
-          var searchText;
+          var searchCandidates;
           if (key || !canSearch || !row || !row.summary) return;
-          searchText = summarySearchText(row.summary);
-          if (!searchText) return;
-          return promiseOf(api.searchIssueBySummary(projectKey, searchText)).then(function(data) {
-            var issue = bestSummaryIssueMatch(data);
+          searchCandidates = summarySearchCandidates(row.summary);
+          if (!searchCandidates.length) return;
+          return matchByCandidates(row, searchCandidates, 0).then(function(issue) {
             var foundKey = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
             if (!foundKey) return;
             row.jiraKey = foundKey;

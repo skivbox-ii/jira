@@ -22,6 +22,24 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return out;
   }
 
+  function textSearchTokens(value) {
+    return String(value || "")
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/[^\w\u0400-\u04FF-]+/g, " ")
+      .split(/\s+/)
+      .map(function(word) { return String(word || "").trim(); })
+      .filter(function(word) { return word.length >= 3; })
+      .slice(0, 6);
+  }
+
+  function summaryTextJql(text) {
+    var tokens = textSearchTokens(text);
+    if (!tokens.length) return "summary ~ " + quoteJqlString(text);
+    return tokens.map(function(token) {
+      return "summary ~ " + quoteJqlString(token);
+    }).join(" AND ");
+  }
+
   return {
     baseUrl: config.baseUrl,
     getProjects: function() {
@@ -122,7 +140,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         contentType: "application/json",
         dataType: "json",
         data: JSON.stringify({
-          jql: "project = " + toJqlToken(projectKey) + " AND summary ~ " + quoteJqlString(text) + " ORDER BY updated DESC",
+          jql: "project = " + toJqlToken(projectKey) + " AND " + summaryTextJql(text) + " ORDER BY updated DESC",
           fields: fields,
           maxResults: 10,
         }),
