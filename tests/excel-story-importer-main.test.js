@@ -631,6 +631,152 @@ test("sync from Jira does not blank existing sprint when issue has no sprint fie
   assert.equal(Object.prototype.hasOwnProperty.call(patchArgs.rows[0].values, "Jira"), false);
 });
 
+test("sync from Jira tries to find missing Jira key by summary in selected project", async function () {
+  const states = [];
+  let callbacks = null;
+  const searchCalls = [];
+  const issueKeyCalls = [];
+  let patchArgs = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        syncError: state.syncError || "",
+        syncSummary: state.syncSummary || "",
+        rows: (state.rows || []).map(function (row) {
+          return {
+            jira: row.sourceColumns && row.sourceColumns.Jira || "",
+            statusInJira: row.sourceColumns && row.sourceColumns["Статус в Jira"] || "",
+          };
+        }),
+      });
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    getProjectEpics: function () {
+      return Promise.resolve([]);
+    },
+    searchIssueBySummary: function (projectKey, summary) {
+      searchCalls.push([projectKey, summary]);
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-77",
+            fields: {
+              summary: "Test jira task",
+            },
+          },
+        ],
+      });
+    },
+    getIssuesByKeys: function (keys) {
+      issueKeyCalls.push(keys.slice());
+      return Promise.resolve({
+        issues: [
+          {
+            key: "EVOSCADA-77",
+            fields: {
+              status: { name: "In Progress" },
+              assignee: { displayName: "Иван" },
+            },
+          },
+        ],
+      });
+    },
+  };
+  const excelLoader = {
+    readFileBuffer: function () {
+      return Promise.resolve(new ArrayBuffer(12));
+    },
+    readWorkbookFromBuffer: function () {
+      return Promise.resolve({ SheetNames: ["Журнал"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Журнал",
+        headerRowNumber: 1,
+        headerColumns: {
+          Jira: 11,
+          "Статус в Jira": 15,
+        },
+        rows: [
+          {
+            excelRowNumber: 3,
+            summary: "Test jira task",
+            jiraKey: "",
+            sourceColumns: { Замечание: "Test jira task", Jira: "" },
+            sourceColumnIndexes: { Jira: 11 },
+            alreadyLinked: false,
+            status: "ready",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const xlsxPatcher = {
+    patchWorkbook: function (_buffer, patch) {
+      patchArgs = patch;
+      return Promise.resolve(new ArrayBuffer(8));
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": xlsxPatcher,
+    "_ujgESI_rendering": rendering,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  callbacks.onFileChange({ name: "test.xlsx" });
+  await flush();
+  await flush();
+
+  callbacks.onSyncJira();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(searchCalls.length, 1);
+  assert.equal(searchCalls[0][0], "EVOSCADA");
+  assert.equal(searchCalls[0][1], "Test jira task");
+  assert.deepEqual(issueKeyCalls, [["EVOSCADA-77"]]);
+  assert.equal(patchArgs.rows[0].values.Jira, "EVOSCADA-77");
+  assert.equal(patchArgs.rows[0].values["Статус в Jira"], "In Progress");
+  assert.equal(patchArgs.rows[0].values["Исполнитель в Jira"], "Иван");
+  const last = states[states.length - 1];
+  assert.equal(last.syncError, "");
+  assert.equal(last.syncSummary, "Синхронизировано 1 тикет");
+  assert.equal(last.rows[0].jira, "EVOSCADA-77");
+});
+
 test("column mapping changes reparse the loaded workbook before Jira sync export", async function () {
   const states = [];
   let callbacks = null;
