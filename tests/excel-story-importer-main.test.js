@@ -591,6 +591,36 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               ],
             },
           },
+          {
+            key: "EVOSCADA-13",
+            fields: {
+              status: { name: "Testing" },
+              assignee: { displayName: "Мария" },
+              customfield_10020: [],
+              issuelinks: [
+                {
+                  type: { name: "Hierarchy", inward: "is child of", outward: "has child" },
+                  outwardIssue: {
+                    key: "EVOSCADA-14",
+                    fields: {
+                      summary: "[BE] Existing",
+                      status: { name: "In Progress" },
+                    },
+                  },
+                },
+                {
+                  type: { name: "Hierarchy", inward: "is child of", outward: "has child" },
+                  outwardIssue: {
+                    key: "EVOSCADA-15",
+                    fields: {
+                      summary: "[QA] Existing",
+                      status: { name: "Open" },
+                    },
+                  },
+                },
+              ],
+            },
+          },
         ],
         ujgSprintField: "customfield_10020",
       });
@@ -621,6 +651,16 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
             summary: "Existing",
             jiraKey: "EVOSCADA-10",
             sourceColumns: { Замечание: "Existing", Jira: "EVOSCADA-10" },
+            sourceColumnIndexes: { Jira: 11 },
+            alreadyLinked: true,
+            status: "linked",
+            errors: [],
+          },
+          {
+            excelRowNumber: 13,
+            summary: "Existing with outward children",
+            jiraKey: "EVOSCADA-13",
+            sourceColumns: { Замечание: "Existing with outward children", Jira: "EVOSCADA-13" },
             sourceColumnIndexes: { Jira: 11 },
             alreadyLinked: true,
             status: "linked",
@@ -669,7 +709,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   await flush();
   await flush();
 
-  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10"], ["EVOSCADA-11", "EVOSCADA-12"]]);
+  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10", "EVOSCADA-13"], ["EVOSCADA-11", "EVOSCADA-12", "EVOSCADA-14", "EVOSCADA-15"]]);
   assert.equal(patchArgs.buffer, sourceBuffer);
   assert.equal(patchArgs.patch.sheetName, "Журнал");
   assert.equal(patchArgs.patch.headerRowNumber, 9);
@@ -688,7 +728,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
 
   const last = states[states.length - 1];
   assert.equal(last.syncError, "");
-  assert.equal(last.syncSummary, "Синхронизировано 1 тикет");
+  assert.equal(last.syncSummary, "Синхронизировано 2 тикет");
   assert.equal(last.exportReady, true);
   assert.equal(last.exportFileName, "test.synced.xlsx");
   assert.equal(last.rows[0].statusInJira, "In Review");
@@ -698,6 +738,11 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.deepEqual(last.rows[0].childStatuses, [
     "SE:EVOSCADA-11:Done:Сергей:open",
     "QA:EVOSCADA-12:Testing:Ольга:blocked",
+  ]);
+  assert.equal(last.rows[1].statusInJira, "Testing");
+  assert.deepEqual(last.rows[1].childStatuses, [
+    "BE:EVOSCADA-14:In Progress:Не назначен:open",
+    "QA:EVOSCADA-15:Open:Не назначен:open",
   ]);
 });
 

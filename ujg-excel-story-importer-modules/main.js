@@ -401,6 +401,9 @@ define("_ujgESI_main", [
       normalized === configured ||
       normalized === "child" ||
       normalized === "is_child" ||
+      normalized === "is_child_of" ||
+      normalized === "has_child" ||
+      normalized === "child_of" ||
       normalized === "child_of_story"
     );
   }
