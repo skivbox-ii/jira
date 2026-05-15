@@ -379,6 +379,31 @@ define("_ujgESI_main", [
     return status != null ? String(status) : "";
   }
 
+  function issueKey(issue) {
+    return issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
+  }
+
+  function resolveIssueByKey(issue, issueMap) {
+    var key = issueKey(issue);
+    return key && issueMap && issueMap[key] ? issueMap[key] : issue;
+  }
+
+  function issueIsDone(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var status = fields.status;
+    var category = status && status.statusCategory ? status.statusCategory : {};
+    var categoryText = [
+      category.key,
+      category.name,
+      category.colorName,
+    ].map(function(value) {
+      return value != null ? String(value).toLowerCase() : "";
+    }).join(" ");
+    var statusText = issueStatusName(issue).toLowerCase();
+    if (/\bdone\b|\bresolved\b|\bclosed\b|green|готов|закрыт|снят|выполнен|выполнена|выполнено|выполнены/.test(categoryText)) return true;
+    return /\bdone\b|\bresolved\b|\bclosed\b|\bcancelled\b|\bcanceled\b|готов|закрыт|снят|выполнен|выполнена|выполнено|выполнены/.test(statusText);
+  }
+
   function issueAssigneeName(issue) {
     var fields = issue && issue.fields ? issue.fields : {};
     var assignee = fields.assignee;
@@ -434,13 +459,16 @@ define("_ujgESI_main", [
     return normalized === "blocks" || normalized === "block";
   }
 
-  function issueIsBlocked(issue) {
+  function issueIsBlocked(issue, issueMap) {
     var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
     return links.some(function(link) {
       var type = link && link.type ? link.type : {};
-      if (link && link.inwardIssue && (isBlockedRelationName(type.inward) || isBlocksLinkTypeName(type.name))) return true;
-      if (link && link.outwardIssue && isBlockedRelationName(type.outward)) return true;
-      return false;
+      var blocker = null;
+      if (link && link.inwardIssue && (isBlockedRelationName(type.inward) || isBlocksLinkTypeName(type.name))) blocker = link.inwardIssue;
+      if (!blocker && link && link.outwardIssue && isBlockedRelationName(type.outward)) blocker = link.outwardIssue;
+      if (!blocker) return false;
+      blocker = resolveIssueByKey(blocker, issueMap);
+      return !issueIsDone(blocker);
     });
   }
 
@@ -484,8 +512,8 @@ define("_ujgESI_main", [
 
   function issueChildStatusRows(issue, childIssueMap) {
     return linkedChildIssues(issue).map(function(child) {
-      var key = child && child.key != null ? String(child.key).trim().toUpperCase() : "";
-      var resolved = key && childIssueMap && childIssueMap[key] ? childIssueMap[key] : child;
+      var key = issueKey(child);
+      var resolved = resolveIssueByKey(child, childIssueMap);
       var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
       var status = issueStatusName(resolved) || "Без статуса";
       var assignee = issueAssigneeName(resolved) || "Не назначен";
@@ -495,7 +523,7 @@ define("_ujgESI_main", [
         summary: summary,
         status: status,
         assignee: assignee,
-        blocked: issueIsBlocked(resolved),
+        blocked: issueIsBlocked(resolved, childIssueMap),
       };
     });
   }
