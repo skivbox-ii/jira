@@ -3813,7 +3813,6 @@ define("_ujgESI_main", [
       if (nonBlank(synced["Статус в Jira"])) values["Статус в Jira"] = synced["Статус в Jira"];
       if (nonBlank(synced["Исполнитель в Jira"])) values["Исполнитель в Jira"] = synced["Исполнитель в Jira"];
       if (nonBlank(synced["Спринт"])) values["Спринт"] = synced["Спринт"];
-      if (nonBlank(row && row.statusTitle)) comments["Статус в Jira"] = row.statusTitle;
       return {
         excelRowNumber: row && row.excelRowNumber,
         values: values,
