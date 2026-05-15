@@ -2398,6 +2398,54 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return summary + " | " + status + " | " + assignee;
   }
 
+  function createIconSvg(label, statusClass, isClosed, isBlocked) {
+    // Цвета строго по картинке
+    var bgColor = "#36B342"; // OPEN -> Green
+    if (statusClass === "ujg-esi-child-status-progress") {
+      bgColor = "#1378D8"; // IN PROGRESS -> Blue
+    }
+    if (isClosed) {
+      bgColor = "#3A414A"; // CLOSED -> Dark
+    }
+    
+    var textColor = "#ffffff";
+    var width = label.length > 2 ? 46 : 40;
+    var height = 26;
+    
+    if (isBlocked) {
+      bgColor = "#F4F5F7";
+      textColor = "#A5ADBA";
+    }
+
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+width+' '+height+'" style="display:block; overflow:visible;">';
+    
+    // Фоновый прямоугольник
+    svg += '<rect x="0" y="0" width="'+width+'" height="'+height+'" rx="4" fill="'+bgColor+'"/>';
+    
+    // Текст
+    svg += '<text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="'+textColor+'" font-family="-apple-system, BlinkMacSystemFont, Arial Black, Arial, sans-serif" font-weight="900" font-size="15" letter-spacing="0.5">' + label + '</text>';
+
+    // Перечеркивание (крест) для закрытых
+    if (isClosed && !isBlocked) {
+      svg += '<line x1="6" y1="4" x2="'+(width-6)+'" y2="22" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>';
+      svg += '<line x1="6" y1="22" x2="'+(width-6)+'" y2="4" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>';
+    }
+
+    // Замок для заблокированных
+    if (isBlocked) {
+      var cx = width / 2;
+      var cy = height - 4; // Замок свисает снизу
+      svg += '<g transform="translate('+(cx-5)+','+(cy-4)+')">';
+      svg += '<path d="M 2 4 V 2.5 A 3 3 0 0 1 8 2.5 V 4" fill="none" stroke="#A5ADBA" stroke-width="1.5"/>';
+      svg += '<rect x="0" y="4" width="10" height="7" rx="1.5" fill="#A5ADBA"/>';
+      svg += '<circle cx="5" cy="7.5" r="1" fill="#F4F5F7"/>';
+      svg += '</g>';
+    }
+
+    svg += '</svg>';
+    return svg;
+  }
+
   function appendStatusCell($tr, row, state, fallbackText) {
     var $td = $("<td/>").addClass("ujg-esi-status");
     var children = row && Array.isArray(row.childStatuses) ? row.childStatuses : [];
@@ -2412,14 +2460,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       children.forEach(function(item) {
         var key = item && item.key != null ? String(item.key).trim() : "";
         var label = childStatusLabel(item);
+        var statusClass = childStatusClass(item && item.status);
+        var isClosed = childStatusIsDone(item && item.status);
+        var isBlocked = !!(item && item.blocked);
         var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
+        
         $badge
           .addClass("ujg-esi-child-status-badge")
-          .addClass(childStatusClass(item && item.status))
-          .toggleClass("ujg-esi-child-status-blocked", !!(item && item.blocked))
-          .toggleClass("ujg-esi-child-status-closed", childStatusIsDone(item && item.status))
           .attr("title", childStatusTitle(item))
-          .text(label);
+          .html(createIconSvg(label, statusClass, isClosed, isBlocked));
+          
         $list.append($badge);
       });
       $td.append($list);
