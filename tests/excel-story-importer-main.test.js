@@ -1799,6 +1799,8 @@ test("column mapping changes reparse the loaded workbook before Jira sync export
   assert.equal(parserOptions[parserOptions.length - 1].columnMap.statusInJira, "Статус исполнителя");
   assert.equal(patchArgs.headerColumns["Статус в Jira"], 13);
   assert.equal(patchArgs.rows[0].values["Статус в Jira"], "Done");
+  assert.equal(patchArgs.rows[0].values["Статус исполнителя"], "Done");
+  assert.deepEqual(Object.keys(patchArgs.rows[0].comments), []);
   assert.equal(states[states.length - 1].rows[0].statusInJira, "Done");
 });
 

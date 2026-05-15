@@ -729,7 +729,28 @@ define("_ujgESI_main", [
       });
     }
 
-  function patchRowsForExport(rows) {
+  function exportColumnNames(settings, canonicalName, mappingKey) {
+    var out = [canonicalName];
+    var mapped = settings && settings.columnMap && settings.columnMap[mappingKey] != null
+      ? String(settings.columnMap[mappingKey]).trim()
+      : "";
+    if (mapped && out.indexOf(mapped) < 0) out.push(mapped);
+    return out;
+  }
+
+  function setExportValue(values, settings, canonicalName, mappingKey, value) {
+    if (!nonBlank(value)) return;
+    exportColumnNames(settings, canonicalName, mappingKey).forEach(function(columnName) {
+      values[columnName] = value;
+    });
+  }
+
+  function syncedValue(synced, canonicalName) {
+    if (nonBlank(synced[canonicalName])) return synced[canonicalName];
+    return "";
+  }
+
+  function patchRowsForExport(rows, settings) {
     return (rows || []).map(function(row) {
       var synced = row && row.syncedColumns ? row.syncedColumns : {};
       var values = {};
@@ -737,9 +758,9 @@ define("_ujgESI_main", [
       var createdKey = row && row.createdKey ? issueKeyFromRow(row) : "";
       if (createdKey) values[jiraColumnName()] = createdKey;
       if (nonBlank(synced[jiraColumnName()])) values[jiraColumnName()] = synced[jiraColumnName()];
-      if (nonBlank(synced["Статус в Jira"])) values["Статус в Jira"] = synced["Статус в Jira"];
-      if (nonBlank(synced["Исполнитель в Jira"])) values["Исполнитель в Jira"] = synced["Исполнитель в Jira"];
-      if (nonBlank(synced["Спринт"])) values["Спринт"] = synced["Спринт"];
+      setExportValue(values, settings, "Статус в Jira", "statusInJira", syncedValue(synced, "Статус в Jira"));
+      setExportValue(values, settings, "Исполнитель в Jira", "assigneeInJira", syncedValue(synced, "Исполнитель в Jira"));
+      setExportValue(values, settings, "Спринт", "sprintInJira", syncedValue(synced, "Спринт"));
       return {
         excelRowNumber: row && row.excelRowNumber,
         values: values,
@@ -1624,7 +1645,7 @@ define("_ujgESI_main", [
           sheetName: state.parseMeta && state.parseMeta.sheetName,
           headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
-          rows: patchRowsForExport(state.rows),
+          rows: patchRowsForExport(state.rows, state.mappingSettings),
         })).then(function(buffer) {
           state.exportBuffer = buffer;
           state.exportFileName = syncedFileName(state.sourceFileName);
