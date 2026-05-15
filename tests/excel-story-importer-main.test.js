@@ -901,7 +901,7 @@ test("sync from Jira tries to find missing Jira key by summary in selected proje
             excelRowNumber: 3,
             summary: "Test jira task",
             jiraKey: "",
-            sourceColumns: { Замечание: "Test jira task", Jira: "" },
+            sourceColumns: { Замечание: "Test jira task", Jira: "Обсудить" },
             sourceColumnIndexes: { Jira: 11 },
             alreadyLinked: false,
             status: "ready",

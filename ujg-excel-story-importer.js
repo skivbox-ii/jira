@@ -3624,11 +3624,17 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function normalizeIssueKey(value) {
+    var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
+    var text = value != null ? String(value).trim().toUpperCase() : "";
+    if (key) return key;
+    return /^[A-Z][A-Z0-9_]+-\d+$/.test(text) ? text : "";
+  }
+
   function issueKeyFromRow(row) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
     var value = row && row.createdKey ? row.createdKey : row && row.jiraKey ? row.jiraKey : cols[jiraColumnName()];
-    var key = parser && typeof parser.extractJiraKey === "function" ? parser.extractJiraKey(value) : "";
-    return key || (value != null ? String(value).trim().toUpperCase() : "");
+    return normalizeIssueKey(value);
   }
 
   function uniqueKeys(rows) {
