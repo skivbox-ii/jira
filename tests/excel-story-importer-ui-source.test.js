@@ -49,7 +49,7 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
 });
 
-test("importer CSS exposes linked child status badges and blocked lock overlay", function () {
+test("importer CSS exposes cropped linked child status icons sized to text", function () {
   const source = read("ujg-excel-story-importer.css");
 
   assert.match(source, /\.ujg-esi-story-status/);
@@ -57,13 +57,38 @@ test("importer CSS exposes linked child status badges and blocked lock overlay",
   assert.match(source, /\.ujg-esi-child-status-badge/);
   assert.match(source, /\.ujg-esi-child-status-done/);
   assert.match(source, /\.ujg-esi-child-status-progress/);
-  assert.match(source, /\.ujg-esi-child-status-blocked::after/);
-  assert.match(source, /text-decoration:\s*line-through/);
+  assert.match(source, /\.ujg-esi-child-status-blocked\.ujg-esi-child-role-qa/);
+  assert.match(source, /height:\s*1em/);
+  assert.match(source, /background-size:\s*contain/);
   assert.match(source, /\.ujg-esi-child-status-badge,\s*\n\.ujg-esi-child-status-badge:visited/);
-  assert.match(source, /color:\s*#006644\s*!important/);
-  assert.match(source, /color:\s*#0747A6\s*!important/);
-  assert.match(source, /color:\s*#42526E\s*!important/);
+  assert.match(source, /open-se\.png/);
+  assert.match(source, /progress-qa\.png/);
+  assert.match(source, /closed-dev\.png/);
+  assert.match(source, /blocked-qa\.png/);
   assert.match(source, /font-weight:\s*800/);
+});
+
+test("cropped child status icon assets are committed", function () {
+  [
+    "open-se.png",
+    "open-be.png",
+    "open-fe.png",
+    "open-qa.png",
+    "open-dev.png",
+    "progress-se.png",
+    "progress-be.png",
+    "progress-fe.png",
+    "progress-qa.png",
+    "progress-dev.png",
+    "closed-se.png",
+    "closed-be.png",
+    "closed-fe.png",
+    "closed-qa.png",
+    "closed-dev.png",
+    "blocked-qa.png",
+  ].forEach(function (fileName) {
+    assert.ok(fs.existsSync(path.join(ROOT, "ujg-excel-story-importer-status-icons", fileName)), fileName);
+  });
 });
 
 test("toolbar keeps the four Excel action icons together without subtasks toggle", function () {
@@ -88,7 +113,7 @@ test("preview status column prefers Jira sync status and falls back to Excel sta
   assert.match(source, /function appendStatusCell/);
   assert.match(source, /row\.childStatuses/);
   assert.match(source, /ujg-esi-story-status/);
-  assert.match(source, /childStatusIsDone/);
+  assert.match(source, /childStatusRoleClass/);
   assert.match(source, /previewStatusText\(cols\)/);
   assert.match(source, /ujg-esi-child-status-badge/);
   assert.match(source, /ujg-esi-child-status-blocked/);

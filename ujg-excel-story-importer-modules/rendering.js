@@ -436,10 +436,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return "ujg-esi-child-status-default";
   }
 
-  function childStatusIsDone(status) {
-    return childStatusClass(status) === "ujg-esi-child-status-done";
-  }
-
   function childStatusLabel(item) {
     var role = item && item.role != null ? String(item.role).trim() : "";
     var key = item && item.key != null ? String(item.key).trim() : "";
@@ -455,52 +451,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return summary + " | " + status + " | " + assignee;
   }
 
-  function createIconSvg(label, statusClass, isClosed, isBlocked) {
-    // Цвета строго по картинке
-    var bgColor = "#36B342"; // OPEN -> Green
-    if (statusClass === "ujg-esi-child-status-progress") {
-      bgColor = "#1378D8"; // IN PROGRESS -> Blue
-    }
-    if (isClosed) {
-      bgColor = "#3A414A"; // CLOSED -> Dark
-    }
-    
-    var textColor = "#ffffff";
-    var width = label.length > 2 ? 46 : 40;
-    var height = 26;
-    
-    if (isBlocked) {
-      bgColor = "#F4F5F7";
-      textColor = "#A5ADBA";
-    }
-
-    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+width+' '+height+'" style="display:block; overflow:visible;">';
-    
-    // Фоновый прямоугольник
-    svg += '<rect x="0" y="0" width="'+width+'" height="'+height+'" rx="4" fill="'+bgColor+'"/>';
-    
-    // Текст
-    svg += '<text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="'+textColor+'" font-family="-apple-system, BlinkMacSystemFont, Arial Black, Arial, sans-serif" font-weight="900" font-size="15" letter-spacing="0.5">' + label + '</text>';
-
-    // Перечеркивание (крест) для закрытых
-    if (isClosed && !isBlocked) {
-      svg += '<line x1="6" y1="4" x2="'+(width-6)+'" y2="22" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>';
-      svg += '<line x1="6" y1="22" x2="'+(width-6)+'" y2="4" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>';
-    }
-
-    // Замок для заблокированных
-    if (isBlocked) {
-      var cx = width / 2;
-      var cy = height - 4; // Замок свисает снизу
-      svg += '<g transform="translate('+(cx-5)+','+(cy-4)+')">';
-      svg += '<path d="M 2 4 V 2.5 A 3 3 0 0 1 8 2.5 V 4" fill="none" stroke="#A5ADBA" stroke-width="1.5"/>';
-      svg += '<rect x="0" y="4" width="10" height="7" rx="1.5" fill="#A5ADBA"/>';
-      svg += '<circle cx="5" cy="7.5" r="1" fill="#F4F5F7"/>';
-      svg += '</g>';
-    }
-
-    svg += '</svg>';
-    return svg;
+  function childStatusRoleClass(label) {
+    var value = String(label || "").trim().toLowerCase();
+    if (value === "se") return "ujg-esi-child-role-se";
+    if (value === "be") return "ujg-esi-child-role-be";
+    if (value === "fe") return "ujg-esi-child-role-fe";
+    if (value === "qa") return "ujg-esi-child-role-qa";
+    if (value === "dev" || value === "devops" || value === "do") return "ujg-esi-child-role-dev";
+    return "ujg-esi-child-role-default";
   }
 
   function appendStatusCell($tr, row, state, fallbackText) {
@@ -518,14 +476,17 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         var key = item && item.key != null ? String(item.key).trim() : "";
         var label = childStatusLabel(item);
         var statusClass = childStatusClass(item && item.status);
-        var isClosed = childStatusIsDone(item && item.status);
         var isBlocked = !!(item && item.blocked);
         var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
         
         $badge
           .addClass("ujg-esi-child-status-badge")
+          .addClass(statusClass)
+          .addClass(childStatusRoleClass(label))
+          .toggleClass("ujg-esi-child-status-blocked", isBlocked)
           .attr("title", childStatusTitle(item))
-          .html(createIconSvg(label, statusClass, isClosed, isBlocked));
+          .attr("aria-label", label)
+          .append($("<span/>").addClass("ujg-esi-child-status-label").text(label));
           
         $list.append($badge);
       });
