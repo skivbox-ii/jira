@@ -436,6 +436,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return "ujg-esi-child-status-default";
   }
 
+  function childStatusIsDone(status) {
+    return childStatusClass(status) === "ujg-esi-child-status-done";
+  }
+
   function childStatusLabel(item) {
     var role = item && item.role != null ? String(item.role).trim() : "";
     var key = item && item.key != null ? String(item.key).trim() : "";
@@ -455,7 +459,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $td = $("<td/>").addClass("ujg-esi-status");
     var children = row && Array.isArray(row.childStatuses) ? row.childStatuses : [];
     var base = state && state.baseUrl || "";
+    var storyStatus = fallbackText != null ? String(fallbackText) : "";
     if (row && row.statusTitle) $td.attr("title", row.statusTitle);
+    if (storyStatus) {
+      $td.append($("<div/>").addClass("ujg-esi-story-status").text(storyStatus));
+    }
     if (children.length) {
       var $list = $("<div/>").addClass("ujg-esi-child-status-list");
       children.forEach(function(item) {
@@ -465,6 +473,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .addClass("ujg-esi-child-status-badge")
           .addClass(childStatusClass(item && item.status))
           .toggleClass("ujg-esi-child-status-blocked", !!(item && item.blocked))
+          .toggleClass("ujg-esi-child-status-closed", childStatusIsDone(item && item.status))
           .attr("title", childStatusTitle(item))
           .text(childStatusLabel(item));
         $list.append($badge);

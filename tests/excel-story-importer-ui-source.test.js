@@ -52,11 +52,14 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
 test("importer CSS exposes linked child status badges and blocked lock overlay", function () {
   const source = read("ujg-excel-story-importer.css");
 
+  assert.match(source, /\.ujg-esi-story-status/);
   assert.match(source, /\.ujg-esi-child-status-list/);
   assert.match(source, /\.ujg-esi-child-status-badge/);
   assert.match(source, /\.ujg-esi-child-status-done/);
   assert.match(source, /\.ujg-esi-child-status-progress/);
   assert.match(source, /\.ujg-esi-child-status-blocked::after/);
+  assert.match(source, /text-decoration:\s*line-through/);
+  assert.match(source, /color:\s*#fff/);
 });
 
 test("toolbar keeps the four Excel action icons together without subtasks toggle", function () {
@@ -80,6 +83,8 @@ test("preview status column prefers Jira sync status and falls back to Excel sta
   assert.match(source, /cols\["Статус"\]/);
   assert.match(source, /function appendStatusCell/);
   assert.match(source, /row\.childStatuses/);
+  assert.match(source, /ujg-esi-story-status/);
+  assert.match(source, /childStatusIsDone/);
   assert.match(source, /previewStatusText\(cols\)/);
   assert.match(source, /ujg-esi-child-status-badge/);
   assert.match(source, /ujg-esi-child-status-blocked/);

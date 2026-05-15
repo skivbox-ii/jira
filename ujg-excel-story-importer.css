@@ -356,6 +356,13 @@
   font-size: 11px;
 }
 
+.ujg-esi-story-status {
+  margin-bottom: 5px;
+  color: #172b4d;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
 .ujg-esi-child-status-list {
   display: flex;
   flex-wrap: wrap;
@@ -386,27 +393,32 @@
 }
 
 .ujg-esi-child-status-done {
-  border-color: #abf5d1;
-  background: #e3fcef;
-  color: #006644;
+  border-color: #00875a;
+  background: #006644;
+  color: #fff;
+}
+
+.ujg-esi-child-status-closed,
+.ujg-esi-child-status-closed:hover {
+  text-decoration: line-through;
 }
 
 .ujg-esi-child-status-progress {
-  border-color: #b3d4ff;
-  background: #deebff;
-  color: #0052cc;
+  border-color: #0065ff;
+  background: #0052cc;
+  color: #fff;
 }
 
 .ujg-esi-child-status-todo {
-  border-color: #dfe1e6;
-  background: #f4f5f7;
-  color: #42526e;
+  border-color: #5e6c84;
+  background: #42526e;
+  color: #fff;
 }
 
 .ujg-esi-child-status-default {
-  border-color: #c1c7d0;
-  background: #fff;
-  color: #172b4d;
+  border-color: #172b4d;
+  background: #172b4d;
+  color: #fff;
 }
 
 .ujg-esi-child-status-blocked::after {
