@@ -468,14 +468,17 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       var $list = $("<div/>").addClass("ujg-esi-child-status-list");
       children.forEach(function(item) {
         var key = item && item.key != null ? String(item.key).trim() : "";
+        var label = childStatusLabel(item);
+        var roleClass = "ujg-esi-role-" + label.toLowerCase().replace(/[^a-z0-9]/g, "");
         var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
         $badge
           .addClass("ujg-esi-child-status-badge")
           .addClass(childStatusClass(item && item.status))
+          .addClass(roleClass)
           .toggleClass("ujg-esi-child-status-blocked", !!(item && item.blocked))
           .toggleClass("ujg-esi-child-status-closed", childStatusIsDone(item && item.status))
           .attr("title", childStatusTitle(item))
-          .text(childStatusLabel(item));
+          .text(label);
         $list.append($badge);
       });
       $td.append($list);
