@@ -386,7 +386,6 @@
   font-weight: 500;
   line-height: 1.2;
   color: #e2e8f0 !important;
-  background-color: #2d3748;
   text-decoration: none;
 }
 
@@ -420,8 +419,8 @@
 }
 
 .ujg-esi-child-status-default {
-  border-color: #172b4d;
-  background: #172b4d;
+  border-color: #2d3748;
+  background: #2d3748;
   color: #fff;
 }
 
