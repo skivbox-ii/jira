@@ -402,8 +402,9 @@
 }
 
 .ujg-esi-child-status-closed,
+.ujg-esi-child-status-closed:visited,
 .ujg-esi-child-status-closed:hover {
-  text-decoration: line-through;
+  text-decoration: line-through !important;
 }
 
 .ujg-esi-child-status-progress {
