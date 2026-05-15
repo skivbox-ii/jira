@@ -385,20 +385,18 @@
   font-size: 11px;
   font-weight: 800;
   line-height: 1.2;
-  color: #fff !important;
-  text-decoration: none;
+  text-decoration: none !important;
 }
 
 .ujg-esi-child-status-badge:hover {
-  color: #fff !important;
-  text-decoration: none;
+  text-decoration: none !important;
   filter: brightness(0.96);
 }
 
 .ujg-esi-child-status-done {
-  border-color: #00875a;
-  background: #006644;
-  color: #fff;
+  border-color: #E3FCEF !important;
+  background: #E3FCEF !important;
+  color: #006644 !important;
 }
 
 .ujg-esi-child-status-closed,
@@ -408,52 +406,21 @@
 }
 
 .ujg-esi-child-status-progress {
-  border-color: #0065ff;
-  background: #0052cc;
-  color: #fff;
-}
-
-.ujg-esi-child-status-todo {
-  border-color: #5e6c84;
-  background: #42526e;
-  color: #fff;
-}
-
-.ujg-esi-child-status-default {
-  border-color: #2d3748;
-  background: #2d3748;
-  color: #fff;
-}
-
-/* Специфичные двухцветные стили для ролей (плоский дизайн в цветах Jira) */
-.ujg-esi-child-status-badge.ujg-esi-role-se {
-  background: #EAE6FF !important;
-  border-color: #EAE6FF !important;
-  color: #403294 !important;
-}
-
-.ujg-esi-child-status-badge.ujg-esi-role-fe {
-  background: #DEEBFF !important;
   border-color: #DEEBFF !important;
+  background: #DEEBFF !important;
   color: #0747A6 !important;
 }
 
-.ujg-esi-child-status-badge.ujg-esi-role-be {
-  background: #E3FCEF !important;
-  border-color: #E3FCEF !important;
-  color: #006644 !important;
+.ujg-esi-child-status-todo {
+  border-color: #DFE1E6 !important;
+  background: #DFE1E6 !important;
+  color: #42526E !important;
 }
 
-.ujg-esi-child-status-badge.ujg-esi-role-qa {
-  background: #FFFAE6 !important;
-  border-color: #FFFAE6 !important;
-  color: #FF8B00 !important;
-}
-
-.ujg-esi-child-status-badge.ujg-esi-role-dev {
-  background: #E6FCFF !important;
-  border-color: #E6FCFF !important;
-  color: #008DA6 !important;
+.ujg-esi-child-status-default {
+  border-color: #EBECF0 !important;
+  background: #EBECF0 !important;
+  color: #172B4D !important;
 }
 
 .ujg-esi-child-status-blocked::after {
