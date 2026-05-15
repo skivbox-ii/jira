@@ -59,7 +59,9 @@ test("importer CSS exposes linked child status badges and blocked lock overlay",
   assert.match(source, /\.ujg-esi-child-status-progress/);
   assert.match(source, /\.ujg-esi-child-status-blocked::after/);
   assert.match(source, /text-decoration:\s*line-through/);
-  assert.match(source, /color:\s*#fff/);
+  assert.match(source, /\.ujg-esi-child-status-badge,\s*\n\.ujg-esi-child-status-badge:visited/);
+  assert.match(source, /color:\s*#fff\s*!important/);
+  assert.match(source, /font-weight:\s*800/);
 });
 
 test("toolbar keeps the four Excel action icons together without subtasks toggle", function () {
