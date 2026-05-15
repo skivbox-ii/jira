@@ -560,7 +560,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               key: "EVOSCADA-14",
               fields: {
                 summary: "[BE] Existing",
-                status: { name: "In Progress" },
+                status: { name: "Принято", statusCategory: { key: "done", name: "Done", colorName: "green" } },
               },
             },
             {
@@ -762,7 +762,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   ]);
   assert.equal(last.rows[1].statusInJira, "Testing");
   assert.deepEqual(last.rows[1].childStatuses, [
-    "BE:EVOSCADA-14:In Progress:Не назначен:open",
+    "BE:EVOSCADA-14:Принято:Не назначен:open",
     "QA:EVOSCADA-15:Open:Не назначен:blocked",
   ]);
 });

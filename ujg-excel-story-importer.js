@@ -3472,18 +3472,7 @@ define("_ujgESI_main", [
   }
 
   function issueIsDone(issue) {
-    var fields = issue && issue.fields ? issue.fields : {};
-    var status = fields.status;
-    var category = status && status.statusCategory ? status.statusCategory : {};
-    var categoryText = [
-      category.key,
-      category.name,
-      category.colorName,
-    ].map(function(value) {
-      return value != null ? String(value).toLowerCase() : "";
-    }).join(" ");
     var statusText = issueStatusName(issue).toLowerCase();
-    if (/\bdone\b|\bresolved\b|\bclosed\b|green|готов|закрыт|снят|выполнен|выполнена|выполнено|выполнены/.test(categoryText)) return true;
     return /\bdone\b|\bresolved\b|\bclosed\b|\bcancelled\b|\bcanceled\b|готов|закрыт|снят|выполнен|выполнена|выполнено|выполнены/.test(statusText);
   }
 
