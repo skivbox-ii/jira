@@ -49,6 +49,16 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
 });
 
+test("importer CSS exposes linked child status badges and blocked lock overlay", function () {
+  const source = read("ujg-excel-story-importer.css");
+
+  assert.match(source, /\.ujg-esi-child-status-list/);
+  assert.match(source, /\.ujg-esi-child-status-badge/);
+  assert.match(source, /\.ujg-esi-child-status-done/);
+  assert.match(source, /\.ujg-esi-child-status-progress/);
+  assert.match(source, /\.ujg-esi-child-status-blocked::after/);
+});
+
 test("toolbar keeps the four Excel action icons together without subtasks toggle", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
   const fileInputStart = source.indexOf("function appendFileInput($actions)");
@@ -68,7 +78,12 @@ test("preview status column prefers Jira sync status and falls back to Excel sta
   assert.match(source, /function previewStatusText/);
   assert.match(source, /cols\["Статус в Jira"\]/);
   assert.match(source, /cols\["Статус"\]/);
-  assert.match(source, /appendValue\(\$tr, previewStatusText\(cols\), "ujg-esi-status", row\.statusTitle \|\| ""\)/);
+  assert.match(source, /function appendStatusCell/);
+  assert.match(source, /row\.childStatuses/);
+  assert.match(source, /previewStatusText\(cols\)/);
+  assert.match(source, /ujg-esi-child-status-badge/);
+  assert.match(source, /ujg-esi-child-status-blocked/);
+  assert.match(source, /issueBrowseUrl\(item\.key, base\)/);
 });
 
 test("file name is rendered in parse metadata, not beside upload icon", function () {

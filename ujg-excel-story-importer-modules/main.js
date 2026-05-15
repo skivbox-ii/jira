@@ -411,6 +411,36 @@ define("_ujgESI_main", [
     return issue && issue.summary != null ? String(issue.summary).trim() : "";
   }
 
+  function childRoleFromSummary(summary) {
+    var match = String(summary || "").match(/^\s*\[([^\]]+)\]/);
+    return match && match[1] ? String(match[1]).trim() : "";
+  }
+
+  function isBlockedRelationName(name) {
+    var normalized = normalizeLinkName(name);
+    return !!normalized && (
+      normalized === "is_blocked_by" ||
+      normalized.indexOf("blocked_by") !== -1 ||
+      normalized.indexOf("blocker") !== -1 ||
+      normalized.indexOf("блокир") !== -1
+    );
+  }
+
+  function isBlocksLinkTypeName(name) {
+    var normalized = normalizeLinkName(name);
+    return normalized === "blocks" || normalized === "block";
+  }
+
+  function issueIsBlocked(issue) {
+    var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
+    return links.some(function(link) {
+      var type = link && link.type ? link.type : {};
+      if (link && link.inwardIssue && (isBlockedRelationName(type.inward) || isBlocksLinkTypeName(type.name))) return true;
+      if (link && link.outwardIssue && isBlockedRelationName(type.outward)) return true;
+      return false;
+    });
+  }
+
   function linkedChildIssues(issue) {
     var links = issue && issue.fields && Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
     var seen = {};
@@ -449,15 +479,35 @@ define("_ujgESI_main", [
     return out;
   }
 
-  function issueChildStatusTitle(issue, childIssueMap) {
+  function issueChildStatusRows(issue, childIssueMap) {
     return linkedChildIssues(issue).map(function(child) {
       var key = child && child.key != null ? String(child.key).trim().toUpperCase() : "";
       var resolved = key && childIssueMap && childIssueMap[key] ? childIssueMap[key] : child;
       var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
       var status = issueStatusName(resolved) || "Без статуса";
       var assignee = issueAssigneeName(resolved) || "Не назначен";
+      return {
+        role: childRoleFromSummary(summary),
+        key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
+        summary: summary,
+        status: status,
+        assignee: assignee,
+        blocked: issueIsBlocked(resolved),
+      };
+    });
+  }
+
+  function issueChildStatusTitleFromRows(rows) {
+    return (rows || []).map(function(row) {
+      var summary = row && row.summary ? row.summary : row && row.key ? row.key : "Без темы";
+      var status = row && row.status ? row.status : "Без статуса";
+      var assignee = row && row.assignee ? row.assignee : "Не назначен";
       return summary + " | " + status + " | " + assignee;
     }).join("\n");
+  }
+
+  function issueChildStatusTitle(issue, childIssueMap) {
+    return issueChildStatusTitleFromRows(issueChildStatusRows(issue, childIssueMap));
   }
 
   function sprintNameFromString(value) {
@@ -1532,6 +1582,8 @@ define("_ujgESI_main", [
         var childIssues = syncData.childIssues || {};
         var synced = 0;
         (state.rows || []).forEach(function(row) {
+          row.childStatuses = [];
+          row.statusTitle = "";
           var key = issueKeyFromRow(row);
           var issue = issues[key];
           if (!issue) return;
@@ -1543,8 +1595,9 @@ define("_ujgESI_main", [
           var statusName = issueStatusName(issue);
           var assigneeName = issueAssigneeName(issue);
           var sprintNameValue = issueSprintName(issue);
-          var statusTitle = issueChildStatusTitle(issue, childIssues);
-          row.statusTitle = statusTitle;
+          var childStatuses = issueChildStatusRows(issue, childIssues);
+          row.childStatuses = childStatuses;
+          row.statusTitle = issueChildStatusTitleFromRows(childStatuses);
           if (nonBlank(statusName)) {
             row.sourceColumns["Статус в Jira"] = statusName;
             row.syncedColumns["Статус в Jira"] = statusName;

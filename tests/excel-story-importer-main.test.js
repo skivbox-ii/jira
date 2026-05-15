@@ -510,6 +510,15 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
             assigneeInJira: row.sourceColumns && row.sourceColumns["Исполнитель в Jira"] || "",
             sprintInJira: row.sourceColumns && row.sourceColumns["Спринт"] || "",
             statusTitle: row.statusTitle || "",
+            childStatuses: Array.from(row.childStatuses || []).map(function (child) {
+              return [
+                child.role || "",
+                child.key || "",
+                child.status || "",
+                child.assignee || "",
+                child.blocked ? "blocked" : "open",
+              ].join(":");
+            }),
           };
         }),
       });
@@ -539,6 +548,12 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                 summary: "[QA] Existing",
                 status: { name: "Testing" },
                 assignee: { displayName: "Ольга" },
+                issuelinks: [
+                  {
+                    type: { name: "Blocks", inward: "is blocked by", outward: "blocks" },
+                    inwardIssue: { key: "EVOSCADA-11" },
+                  },
+                ],
               },
             },
           ],
@@ -680,6 +695,10 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(last.rows[0].assigneeInJira, "Иван Иванов");
   assert.equal(last.rows[0].sprintInJira, "Sprint 42");
   assert.equal(last.rows[0].statusTitle, "[SE] Existing | Done | Сергей\n[QA] Existing | Testing | Ольга");
+  assert.deepEqual(last.rows[0].childStatuses, [
+    "SE:EVOSCADA-11:Done:Сергей:open",
+    "QA:EVOSCADA-12:Testing:Ольга:blocked",
+  ]);
 });
 
 test("sync from Jira does not blank existing sprint when issue has no sprint field", async function () {

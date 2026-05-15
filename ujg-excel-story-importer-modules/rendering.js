@@ -428,6 +428,54 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return base ? base + path : path;
   }
 
+  function childStatusClass(status) {
+    var value = String(status || "").toLowerCase();
+    if (/done|resolved|closed|готов|закры|снят/.test(value)) return "ujg-esi-child-status-done";
+    if (/progress|review|testing|тест|работ|разработ|выполн/.test(value)) return "ujg-esi-child-status-progress";
+    if (/todo|open|backlog|нов|выдан|ожид/.test(value)) return "ujg-esi-child-status-todo";
+    return "ujg-esi-child-status-default";
+  }
+
+  function childStatusLabel(item) {
+    var role = item && item.role != null ? String(item.role).trim() : "";
+    var key = item && item.key != null ? String(item.key).trim() : "";
+    var summary = item && item.summary != null ? String(item.summary).trim() : "";
+    var match = !role && summary ? summary.match(/^\s*\[([^\]]+)\]/) : null;
+    return role || (match && match[1] ? String(match[1]).trim() : "") || key || "TASK";
+  }
+
+  function childStatusTitle(item) {
+    var summary = item && item.summary ? item.summary : item && item.key ? item.key : "Задача";
+    var status = item && item.status ? item.status : "Без статуса";
+    var assignee = item && item.assignee ? item.assignee : "Не назначен";
+    return summary + " | " + status + " | " + assignee;
+  }
+
+  function appendStatusCell($tr, row, state, fallbackText) {
+    var $td = $("<td/>").addClass("ujg-esi-status");
+    var children = row && Array.isArray(row.childStatuses) ? row.childStatuses : [];
+    var base = state && state.baseUrl || "";
+    if (row && row.statusTitle) $td.attr("title", row.statusTitle);
+    if (children.length) {
+      var $list = $("<div/>").addClass("ujg-esi-child-status-list");
+      children.forEach(function(item) {
+        var key = item && item.key != null ? String(item.key).trim() : "";
+        var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
+        $badge
+          .addClass("ujg-esi-child-status-badge")
+          .addClass(childStatusClass(item && item.status))
+          .toggleClass("ujg-esi-child-status-blocked", !!(item && item.blocked))
+          .attr("title", childStatusTitle(item))
+          .text(childStatusLabel(item));
+        $list.append($badge);
+      });
+      $td.append($list);
+    } else {
+      $td.text(fallbackText != null ? String(fallbackText) : "");
+    }
+    $tr.append($td);
+  }
+
   function appendJiraCell($tr, row, state) {
     var key = row.createdKey || row.jiraKey || "";
     var $td = $("<td/>");
@@ -1036,7 +1084,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
       appendValue($tr, row.summary || "", "ujg-esi-summary");
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendValue($tr, previewStatusText(cols), "ujg-esi-status", row.statusTitle || "");
+      appendStatusCell($tr, row, state, previewStatusText(cols));
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
       appendJiraCell($tr, row, state);
       appendActionCell($tr, row, state, index);
