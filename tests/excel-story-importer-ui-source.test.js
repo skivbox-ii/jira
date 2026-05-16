@@ -58,8 +58,9 @@ test("importer CSS renders story and child statuses as one compact block", funct
   assert.match(source, /\.ujg-esi-story-status-done \.ujg-esi-story-status/);
   assert.match(source, /\.ujg-esi-child-status-list/);
   assert.match(source, /\.ujg-esi-child-status-badge/);
-  assert.match(source, /\.ujg-esi-child-status-done/);
-  assert.match(source, /\.ujg-esi-child-status-progress/);
+  assert.match(source, /\.ujg-esi-child-status-done,\s*\n\.ujg-esi-child-status-done:visited/);
+  assert.match(source, /\.ujg-esi-child-status-progress,\s*\n\.ujg-esi-child-status-progress:visited/);
+  assert.match(source, /\.ujg-esi-child-status-blocked,\s*\n\.ujg-esi-child-status-blocked:visited/);
   assert.match(source, /\.ujg-esi-child-status-blocked::after/);
   assert.match(source, /\.ujg-esi-child-status-badge,\s*\n\.ujg-esi-child-status-badge:visited/);
   assert.match(source, /grid-template-columns:\s*repeat\(auto-fit, minmax\(13px, 1fr\)\)/);

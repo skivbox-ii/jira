@@ -439,15 +439,18 @@
   color: inherit;
 }
 
-.ujg-esi-child-status-progress {
+.ujg-esi-child-status-progress,
+.ujg-esi-child-status-progress:visited {
   background: #0c66e4;
 }
 
-.ujg-esi-child-status-done {
+.ujg-esi-child-status-done,
+.ujg-esi-child-status-done:visited {
   background: #00875a;
 }
 
-.ujg-esi-child-status-blocked {
+.ujg-esi-child-status-blocked,
+.ujg-esi-child-status-blocked:visited {
   background: #9bbff0;
   color: rgba(255, 255, 255, 0.94) !important;
 }
