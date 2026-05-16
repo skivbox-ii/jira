@@ -429,6 +429,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   }
 
   function childStatusClass(status, item) {
+    var state = String(item && item.statusState || "").toLowerCase();
+    if (state === "done") return "ujg-esi-child-status-done";
+    if (state === "progress") return "ujg-esi-child-status-progress";
+    if (state === "todo") return "ujg-esi-child-status-todo";
     var category = String(item && item.statusCategory || "").toLowerCase();
     if (/done|green|complete/.test(category)) return "ujg-esi-child-status-done";
     if (/indeterminate|yellow|progress/.test(category)) return "ujg-esi-child-status-progress";

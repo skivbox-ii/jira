@@ -389,6 +389,32 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function issueResolutionName(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var resolution = fields.resolution;
+    if (resolution && resolution.name != null) return String(resolution.name);
+    return resolution != null ? String(resolution) : "";
+  }
+
+  function issueStatusState(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var status = fields.status;
+    var category = status && status.statusCategory ? status.statusCategory : null;
+    var categoryKey = category && category.key != null ? String(category.key).toLowerCase() : "";
+    var categoryColor = category && category.colorName != null ? String(category.colorName).toLowerCase() : "";
+    var categoryName = category && category.name != null ? String(category.name).toLowerCase() : "";
+    var categoryId = category && category.id != null ? String(category.id) : "";
+    if (categoryKey === "done" || categoryColor === "green" || categoryId === "3") return "done";
+    if (issueResolutionName(issue)) return "done";
+    if (categoryKey === "indeterminate" || categoryColor === "yellow" || categoryId === "4") return "progress";
+    if (categoryKey === "new" || /blue|gray|grey/.test(categoryColor) || categoryId === "2") return "todo";
+    var statusText = issueStatusName(issue).toLowerCase();
+    if (/\bdone\b|\bresolved\b|\bclosed\b|\bcancelled\b|\bcanceled\b|готов|закрыт|снят|выполн|принят/.test(statusText)) return "done";
+    if (/progress|review|testing|тест|работ|разработ|исполн|провер|ревью/.test(statusText)) return "progress";
+    if (/todo|open|backlog|нов|выдан|ожид/.test(statusText)) return "todo";
+    return categoryName ? "" : "";
+  }
+
   function issueKey(issue) {
     return issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
   }
@@ -399,8 +425,7 @@ define("_ujgESI_main", [
   }
 
   function issueIsDone(issue) {
-    var statusText = issueStatusName(issue).toLowerCase();
-    return /\bdone\b|\bresolved\b|\bclosed\b|\bcancelled\b|\bcanceled\b|готов|закрыт|снят|выполнен|выполнена|выполнено|выполнены/.test(statusText);
+    return issueStatusState(issue) === "done";
   }
 
   function issueAssigneeName(issue) {
@@ -522,6 +547,7 @@ define("_ujgESI_main", [
         summary: summary,
         status: status,
         statusCategory: issueStatusCategoryKey(resolved),
+        statusState: issueStatusState(resolved),
         assignee: assignee,
         blocked: issueIsBlocked(resolved, childIssueMap),
       };
