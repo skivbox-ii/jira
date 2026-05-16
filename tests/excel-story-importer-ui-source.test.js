@@ -117,6 +117,9 @@ test("preview status column prefers Jira sync status and falls back to Excel sta
   assert.match(source, /storyStatusClass/);
   assert.match(source, /ujg-esi-story-status/);
   assert.match(source, /childStatusRoleClass/);
+  assert.match(source, /item && item\.statusCategory/);
+  assert.match(source, /выполн\|принят/);
+  assert.match(source, /работ\|разработ\|исполн\|провер/);
   assert.match(source, /previewStatusText\(cols\)/);
   assert.match(source, /ujg-esi-child-status-badge/);
   assert.match(source, /ujg-esi-child-status-blocked/);

@@ -379,6 +379,16 @@ define("_ujgESI_main", [
     return status != null ? String(status) : "";
   }
 
+  function issueStatusCategoryKey(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var status = fields.status;
+    var category = status && status.statusCategory ? status.statusCategory : null;
+    if (category && category.key != null) return String(category.key);
+    if (category && category.colorName != null) return String(category.colorName);
+    if (category && category.name != null) return String(category.name);
+    return "";
+  }
+
   function issueKey(issue) {
     return issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
   }
@@ -511,6 +521,7 @@ define("_ujgESI_main", [
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
         summary: summary,
         status: status,
+        statusCategory: issueStatusCategoryKey(resolved),
         assignee: assignee,
         blocked: issueIsBlocked(resolved, childIssueMap),
       };

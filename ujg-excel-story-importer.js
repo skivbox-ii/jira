@@ -2371,10 +2371,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return base ? base + path : path;
   }
 
-  function childStatusClass(status) {
+  function childStatusClass(status, item) {
+    var category = String(item && item.statusCategory || "").toLowerCase();
+    if (/done|green|complete/.test(category)) return "ujg-esi-child-status-done";
+    if (/indeterminate|yellow|progress/.test(category)) return "ujg-esi-child-status-progress";
+    if (/new|blue-gray|grey|gray|todo/.test(category)) return "ujg-esi-child-status-todo";
     var value = String(status || "").toLowerCase();
-    if (/done|resolved|closed|готов|закры|снят/.test(value)) return "ujg-esi-child-status-done";
-    if (/progress|review|testing|тест|работ|разработ|выполн/.test(value)) return "ujg-esi-child-status-progress";
+    if (/done|resolved|closed|готов|закры|снят|выполн|принят/.test(value)) return "ujg-esi-child-status-done";
+    if (/progress|review|testing|тест|работ|разработ|исполн|провер|ревью/.test(value)) return "ujg-esi-child-status-progress";
     if (/todo|open|backlog|нов|выдан|ожид/.test(value)) return "ujg-esi-child-status-todo";
     return "ujg-esi-child-status-default";
   }
@@ -2432,7 +2436,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         children.forEach(function(item) {
           var key = item && item.key != null ? String(item.key).trim() : "";
           var label = childStatusLabel(item);
-          var statusClass = childStatusClass(item && item.status);
+          var statusClass = childStatusClass(item && item.status, item);
           var isBlocked = !!(item && item.blocked);
           var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
 
@@ -3491,6 +3495,16 @@ define("_ujgESI_main", [
     return status != null ? String(status) : "";
   }
 
+  function issueStatusCategoryKey(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    var status = fields.status;
+    var category = status && status.statusCategory ? status.statusCategory : null;
+    if (category && category.key != null) return String(category.key);
+    if (category && category.colorName != null) return String(category.colorName);
+    if (category && category.name != null) return String(category.name);
+    return "";
+  }
+
   function issueKey(issue) {
     return issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
   }
@@ -3623,6 +3637,7 @@ define("_ujgESI_main", [
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
         summary: summary,
         status: status,
+        statusCategory: issueStatusCategoryKey(resolved),
         assignee: assignee,
         blocked: issueIsBlocked(resolved, childIssueMap),
       };
