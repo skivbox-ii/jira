@@ -250,6 +250,7 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /\/rest\/api\/2\/issue\/createmeta/);
   assert.match(source, /getIssuesByKeys/);
   assert.match(source, /issuelinks/);
+  assert.match(source, /resolutiondate/);
   assert.match(source, /key in/);
   assert.match(source, /description/);
   assert.match(source, /description ~ /);

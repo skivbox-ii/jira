@@ -541,7 +541,6 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               key: "EVOSCADA-11",
               fields: {
                 summary: "[SE] Existing",
-                status: { name: "Любой закрытый статус", statusCategory: { key: "done", name: "Done", colorName: "green" } },
                 assignee: { displayName: "Сергей" },
               },
             },
@@ -563,7 +562,8 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               key: "EVOSCADA-14",
               fields: {
                 summary: "[BE] Existing",
-                status: { name: "Принято", statusCategory: { key: "done", name: "Done", colorName: "green" } },
+                status: { name: "Workflow final state" },
+                resolutiondate: "2026-05-16T10:00:00.000+0300",
               },
             },
             {
@@ -597,7 +597,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                     key: "EVOSCADA-11",
                     fields: {
                       summary: "[SE] Existing",
-                      status: { name: "Done" },
+                      status: { name: "Любой закрытый статус", statusCategory: { key: "done", name: "Done", colorName: "green" } },
                     },
                   },
                 },
@@ -765,7 +765,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   ]);
   assert.equal(last.rows[1].statusInJira, "Testing");
   assert.deepEqual(last.rows[1].childStatuses, [
-    "BE:EVOSCADA-14:Принято:done:done:doneFlag:Не назначен:open",
+    "BE:EVOSCADA-14:Workflow final state::done:doneFlag:Не назначен:open",
     "QA:EVOSCADA-15:Open::todo:openFlag:Не назначен:open",
   ]);
 });

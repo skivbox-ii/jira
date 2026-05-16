@@ -1129,7 +1129,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys) {
       var list = uniqueIssueKeys(keys);
-      var fields = ["summary", "status", "resolution", "assignee", "issuelinks"];
+      var fields = ["summary", "status", "resolution", "resolutiondate", "assignee", "issuelinks"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -1148,7 +1148,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     searchIssueBySummary: function(projectKey, summaryText) {
       var text = summaryText != null ? String(summaryText).trim() : "";
-      var fields = ["summary", "description", "status", "resolution", "assignee", "issuelinks", "issuetype"];
+      var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "issuetype"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -3517,6 +3517,11 @@ define("_ujgESI_main", [
     return resolution != null ? String(resolution) : "";
   }
 
+  function issueResolutionDate(issue) {
+    var fields = issue && issue.fields ? issue.fields : {};
+    return fields.resolutiondate != null ? String(fields.resolutiondate) : "";
+  }
+
   function issueStatusState(issue) {
     var fields = issue && issue.fields ? issue.fields : {};
     var status = fields.status;
@@ -3526,7 +3531,7 @@ define("_ujgESI_main", [
     var categoryName = category && category.name != null ? String(category.name).toLowerCase() : "";
     var categoryId = category && category.id != null ? String(category.id) : "";
     if (categoryKey === "done" || categoryColor === "green" || categoryId === "3") return "done";
-    if (issueResolutionName(issue)) return "done";
+    if (issueResolutionName(issue) || issueResolutionDate(issue)) return "done";
     if (categoryKey === "indeterminate" || categoryColor === "yellow" || categoryId === "4") return "progress";
     if (categoryKey === "new" || /blue|gray|grey/.test(categoryColor) || categoryId === "2") return "todo";
     var statusText = issueStatusName(issue).toLowerCase();
@@ -3542,7 +3547,27 @@ define("_ujgESI_main", [
 
   function resolveIssueByKey(issue, issueMap) {
     var key = issueKey(issue);
-    return key && issueMap && issueMap[key] ? issueMap[key] : issue;
+    var resolved = key && issueMap && issueMap[key] ? issueMap[key] : null;
+    var out;
+    var fields;
+    if (!resolved) return issue;
+    if (!issue) return resolved;
+    out = {};
+    Object.keys(issue || {}).forEach(function(field) {
+      out[field] = issue[field];
+    });
+    Object.keys(resolved || {}).forEach(function(field) {
+      if (field !== "fields" || resolved[field] != null) out[field] = resolved[field];
+    });
+    fields = {};
+    Object.keys(issue.fields || {}).forEach(function(field) {
+      fields[field] = issue.fields[field];
+    });
+    Object.keys(resolved.fields || {}).forEach(function(field) {
+      if (resolved.fields[field] != null) fields[field] = resolved.fields[field];
+    });
+    if (Object.keys(fields).length) out.fields = fields;
+    return out;
   }
 
   function issueIsDone(issue) {
@@ -3656,9 +3681,18 @@ define("_ujgESI_main", [
   }
 
   function issueChildStatusRows(issue, childIssueMap) {
-    return linkedChildIssues(issue).map(function(child) {
+    var children = linkedChildIssues(issue);
+    var mergedIssueMap = {};
+    Object.keys(childIssueMap || {}).forEach(function(key) {
+      mergedIssueMap[key] = childIssueMap[key];
+    });
+    children.forEach(function(child) {
       var key = issueKey(child);
-      var resolved = resolveIssueByKey(child, childIssueMap);
+      if (key) mergedIssueMap[key] = resolveIssueByKey(child, childIssueMap);
+    });
+    return children.map(function(child) {
+      var key = issueKey(child);
+      var resolved = key && mergedIssueMap[key] ? mergedIssueMap[key] : resolveIssueByKey(child, childIssueMap);
       var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
       var status = issueStatusName(resolved) || "Без статуса";
       var assignee = issueAssigneeName(resolved) || "Не назначен";
@@ -3672,7 +3706,7 @@ define("_ujgESI_main", [
         statusState: done ? "done" : issueStatusState(resolved),
         done: done,
         assignee: assignee,
-        blocked: issueIsBlocked(resolved, childIssueMap),
+        blocked: issueIsBlocked(resolved, mergedIssueMap),
       };
     });
   }
