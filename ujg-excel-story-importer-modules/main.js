@@ -493,6 +493,16 @@ define("_ujgESI_main", [
     return match && match[1] ? String(match[1]).trim() : "";
   }
 
+  function childRoleSortIndex(role) {
+    var value = String(role || "").trim().toLowerCase();
+    if (value === "se") return 0;
+    if (value === "fe") return 1;
+    if (value === "be") return 2;
+    if (value === "qa") return 3;
+    if (value === "dev" || value === "devops" || value === "do") return 4;
+    return 99;
+  }
+
   function isBlockedRelationName(name) {
     var normalized = normalizeLinkName(name);
     return !!normalized && (
@@ -569,7 +579,7 @@ define("_ujgESI_main", [
       var key = issueKey(child);
       if (key) mergedIssueMap[key] = resolveIssueByKey(child, childIssueMap);
     });
-    return children.map(function(child) {
+    return children.map(function(child, index) {
       var key = issueKey(child);
       var resolved = key && mergedIssueMap[key] ? mergedIssueMap[key] : resolveIssueByKey(child, childIssueMap);
       var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
@@ -586,7 +596,16 @@ define("_ujgESI_main", [
         done: done,
         assignee: assignee,
         blocked: issueIsBlocked(resolved, mergedIssueMap),
+        sourceIndex: index,
       };
+    }).sort(function(a, b) {
+      var left = childRoleSortIndex(a && a.role);
+      var right = childRoleSortIndex(b && b.role);
+      if (left !== right) return left - right;
+      return (a && a.sourceIndex || 0) - (b && b.sourceIndex || 0);
+    }).map(function(row) {
+      delete row.sourceIndex;
+      return row;
     });
   }
 

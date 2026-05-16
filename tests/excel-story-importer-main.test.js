@@ -594,20 +594,20 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                 {
                   type: { name: "Child", inward: "child" },
                   inwardIssue: {
-                    key: "EVOSCADA-11",
+                    key: "EVOSCADA-12",
                     fields: {
-                      summary: "[SE] Existing",
-                      status: { name: "Любой закрытый статус", statusCategory: { key: "done", name: "Done", colorName: "green" } },
+                      summary: "[QA] Existing",
+                      status: { name: "Testing" },
                     },
                   },
                 },
                 {
                   type: { name: "Child", inward: "child" },
                   inwardIssue: {
-                    key: "EVOSCADA-12",
+                    key: "EVOSCADA-11",
                     fields: {
-                      summary: "[QA] Existing",
-                      status: { name: "Testing" },
+                      summary: "[SE] Existing",
+                      status: { name: "Любой закрытый статус", statusCategory: { key: "done", name: "Done", colorName: "green" } },
                     },
                   },
                 },
@@ -732,7 +732,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   await flush();
   await flush();
 
-  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10", "EVOSCADA-13"], ["EVOSCADA-11", "EVOSCADA-12", "EVOSCADA-14", "EVOSCADA-15"]]);
+  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10", "EVOSCADA-13"], ["EVOSCADA-12", "EVOSCADA-11", "EVOSCADA-14", "EVOSCADA-15"]]);
   assert.equal(patchArgs.buffer, sourceBuffer);
   assert.equal(patchArgs.patch.sheetName, "Журнал");
   assert.equal(patchArgs.patch.headerRowNumber, 9);
