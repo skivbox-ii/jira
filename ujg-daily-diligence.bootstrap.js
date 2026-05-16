@@ -4,7 +4,7 @@ define("_ujgDailyDiligence", [], function() {
   var widgetCssFile = "ujg-daily-diligence.css";
   var widgetRuntimeFile = "ujg-daily-diligence.runtime.js";
   var runtimeAmd = "_ujgDailyDiligenceRuntime";
-  var releaseRef = "8ddd85b";
+  var releaseRef = "8d52a5e";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
