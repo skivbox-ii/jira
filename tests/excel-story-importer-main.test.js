@@ -517,6 +517,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                 child.status || "",
                 child.statusCategory || "",
                 child.statusState || "",
+                child.done ? "doneFlag" : "openFlag",
                 child.assignee || "",
                 child.blocked ? "blocked" : "open",
               ].join(":");
@@ -759,13 +760,13 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(last.rows[0].sprintInJira, "Sprint 42");
   assert.equal(last.rows[0].statusTitle, "[SE] Existing | Любой закрытый статус | Сергей\n[QA] Existing | Testing | Ольга");
   assert.deepEqual(last.rows[0].childStatuses, [
-    "SE:EVOSCADA-11:Любой закрытый статус:done:done:Сергей:open",
-    "QA:EVOSCADA-12:Testing::progress:Ольга:open",
+    "SE:EVOSCADA-11:Любой закрытый статус:done:done:doneFlag:Сергей:open",
+    "QA:EVOSCADA-12:Testing::progress:openFlag:Ольга:open",
   ]);
   assert.equal(last.rows[1].statusInJira, "Testing");
   assert.deepEqual(last.rows[1].childStatuses, [
-    "BE:EVOSCADA-14:Принято:done:done:Не назначен:open",
-    "QA:EVOSCADA-15:Open::todo:Не назначен:open",
+    "BE:EVOSCADA-14:Принято:done:done:doneFlag:Не назначен:open",
+    "QA:EVOSCADA-15:Open::todo:openFlag:Не назначен:open",
   ]);
 });
 

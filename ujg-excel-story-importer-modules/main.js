@@ -541,13 +541,15 @@ define("_ujgESI_main", [
       var summary = issueSummaryName(resolved) || (resolved && resolved.key) || (child && child.key) || "Без темы";
       var status = issueStatusName(resolved) || "Без статуса";
       var assignee = issueAssigneeName(resolved) || "Не назначен";
+      var done = issueIsDone(resolved);
       return {
         role: childRoleFromSummary(summary),
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
         summary: summary,
         status: status,
         statusCategory: issueStatusCategoryKey(resolved),
-        statusState: issueStatusState(resolved),
+        statusState: done ? "done" : issueStatusState(resolved),
+        done: done,
         assignee: assignee,
         blocked: issueIsBlocked(resolved, childIssueMap),
       };
