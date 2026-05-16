@@ -451,24 +451,14 @@
 
 .ujg-esi-child-status-blocked,
 .ujg-esi-child-status-blocked:visited {
-  background: #9bbff0;
-  color: rgba(255, 255, 255, 0.94) !important;
+  opacity: 0.5;
 }
 
 .ujg-esi-child-status-blocked::after {
-  content: "\1F512";
-  position: absolute;
-  right: -4px;
-  top: -5px;
-  width: 8px;
-  height: 8px;
-  border: 1px solid rgba(191, 38, 0, 0.45);
-  border-radius: 50%;
-  background: #ffebe6;
-  color: #172b4d;
+  content: "\00a0\1F512\FE0E";
+  color: #fff;
   font-size: 6px;
-  line-height: 7px;
-  text-align: center;
+  line-height: 1;
 }
 
 .ujg-esi-row-errors {
