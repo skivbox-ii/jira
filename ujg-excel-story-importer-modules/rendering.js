@@ -436,6 +436,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return "ujg-esi-child-status-default";
   }
 
+  function storyStatusClass(status) {
+    var value = String(status || "").toLowerCase();
+    if (/done|resolved|closed|готов|закры|снят/.test(value)) return "ujg-esi-story-status-done";
+    if (/progress|review|testing|тест|работ|разработ|выполн/.test(value)) return "ujg-esi-story-status-progress";
+    if (/todo|open|backlog|нов|выдан|ожид|принят/.test(value)) return "ujg-esi-story-status-todo";
+    return "ujg-esi-story-status-default";
+  }
+
   function childStatusLabel(item) {
     var role = item && item.role != null ? String(item.role).trim() : "";
     var key = item && item.key != null ? String(item.key).trim() : "";
@@ -467,33 +475,43 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var base = state && state.baseUrl || "";
     var storyStatus = fallbackText != null ? String(fallbackText) : "";
     if (row && row.statusTitle) $td.attr("title", row.statusTitle);
-    if (storyStatus) {
-      $td.append($("<div/>").addClass("ujg-esi-story-status").text(storyStatus));
+    if (storyStatus || children.length) {
+      var $block = $("<div/>")
+        .addClass("ujg-esi-status-block")
+        .addClass(storyStatusClass(storyStatus));
+
+      if (storyStatus) {
+        $block.append($("<div/>").addClass("ujg-esi-story-status").text(storyStatus));
+      }
+
+      if (children.length) {
+        var $list = $("<div/>").addClass("ujg-esi-child-status-list");
+        children.forEach(function(item) {
+          var key = item && item.key != null ? String(item.key).trim() : "";
+          var label = childStatusLabel(item);
+          var statusClass = childStatusClass(item && item.status);
+          var isBlocked = !!(item && item.blocked);
+          var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
+
+          $badge
+            .addClass("ujg-esi-child-status-badge")
+            .addClass(statusClass)
+            .addClass(childStatusRoleClass(label))
+            .toggleClass("ujg-esi-child-status-blocked", isBlocked)
+            .attr("title", childStatusTitle(item))
+            .attr("aria-label", label)
+            .append($("<span/>").addClass("ujg-esi-child-status-label").text(label));
+
+          $list.append($badge);
+        });
+        $block.append($list);
+      }
+
+      $td.append($block);
+      $tr.append($td);
+      return;
     }
-    if (children.length) {
-      var $list = $("<div/>").addClass("ujg-esi-child-status-list");
-      children.forEach(function(item) {
-        var key = item && item.key != null ? String(item.key).trim() : "";
-        var label = childStatusLabel(item);
-        var statusClass = childStatusClass(item && item.status);
-        var isBlocked = !!(item && item.blocked);
-        var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
-        
-        $badge
-          .addClass("ujg-esi-child-status-badge")
-          .addClass(statusClass)
-          .addClass(childStatusRoleClass(label))
-          .toggleClass("ujg-esi-child-status-blocked", isBlocked)
-          .attr("title", childStatusTitle(item))
-          .attr("aria-label", label)
-          .append($("<span/>").addClass("ujg-esi-child-status-label").text(label));
-          
-        $list.append($badge);
-      });
-      $td.append($list);
-    } else {
-      $td.text(fallbackText != null ? String(fallbackText) : "");
-    }
+    $td.text(fallbackText != null ? String(fallbackText) : "");
     $tr.append($td);
   }
 

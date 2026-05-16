@@ -49,22 +49,23 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
 });
 
-test("importer CSS exposes cropped linked child status icons sized to text", function () {
+test("importer CSS renders story and child statuses as one compact block", function () {
   const source = read("ujg-excel-story-importer.css");
 
+  assert.match(source, /\.ujg-esi-status-block/);
   assert.match(source, /\.ujg-esi-story-status/);
+  assert.match(source, /\.ujg-esi-story-status-progress \.ujg-esi-story-status/);
+  assert.match(source, /\.ujg-esi-story-status-done \.ujg-esi-story-status/);
   assert.match(source, /\.ujg-esi-child-status-list/);
   assert.match(source, /\.ujg-esi-child-status-badge/);
   assert.match(source, /\.ujg-esi-child-status-done/);
   assert.match(source, /\.ujg-esi-child-status-progress/);
-  assert.match(source, /\.ujg-esi-child-status-blocked\.ujg-esi-child-role-qa/);
-  assert.match(source, /height:\s*1em/);
-  assert.match(source, /background-size:\s*contain/);
+  assert.match(source, /\.ujg-esi-child-status-blocked::after/);
   assert.match(source, /\.ujg-esi-child-status-badge,\s*\n\.ujg-esi-child-status-badge:visited/);
-  assert.match(source, /open-se\.png/);
-  assert.match(source, /progress-qa\.png/);
-  assert.match(source, /closed-dev\.png/);
-  assert.match(source, /blocked-qa\.png/);
+  assert.match(source, /grid-template-columns:\s*repeat\(auto-fit, minmax\(26px, 1fr\)\)/);
+  assert.match(source, /height:\s*20px/);
+  assert.match(source, /background:\s*#0c66e4/);
+  assert.match(source, /background:\s*#00875a/);
   assert.match(source, /font-weight:\s*800/);
 });
 
@@ -112,6 +113,8 @@ test("preview status column prefers Jira sync status and falls back to Excel sta
   assert.match(source, /cols\["Статус"\]/);
   assert.match(source, /function appendStatusCell/);
   assert.match(source, /row\.childStatuses/);
+  assert.match(source, /ujg-esi-status-block/);
+  assert.match(source, /storyStatusClass/);
   assert.match(source, /ujg-esi-story-status/);
   assert.match(source, /childStatusRoleClass/);
   assert.match(source, /previewStatusText\(cols\)/);

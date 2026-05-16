@@ -356,19 +356,47 @@
   font-size: 11px;
 }
 
+.ujg-esi-status-block {
+  display: inline-flex;
+  flex-direction: column;
+  width: min(100%, 168px);
+  min-width: 112px;
+  overflow: visible;
+  border-radius: 5px;
+}
+
 .ujg-esi-story-status {
-  margin-bottom: 5px;
-  color: #172b4d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: #7a828d;
+  color: #fff;
   font-size: 12px;
-  line-height: 1.2;
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ujg-esi-story-status-progress .ujg-esi-story-status {
+  background: #0c66e4;
+}
+
+.ujg-esi-story-status-done .ujg-esi-story-status {
+  background: #00875a;
 }
 
 .ujg-esi-child-status-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(26px, 1fr));
+  gap: 2px;
   align-items: center;
-  min-width: 90px;
+  width: 100%;
+  margin-top: 2px;
 }
 
 .ujg-esi-child-status-badge,
@@ -377,15 +405,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.24em;
-  height: 1em;
-  min-width: 1.24em;
-  min-height: 1em;
-  overflow: hidden;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
+  min-width: 0;
+  height: 20px;
+  padding: 0 5px;
+  overflow: visible;
+  border-radius: 4px;
+  background: #7a828d;
+  color: #fff !important;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
   text-decoration: none !important;
+  text-transform: uppercase;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
 .ujg-esi-child-status-badge:hover {
@@ -394,52 +426,46 @@
 }
 
 .ujg-esi-child-status-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+  display: block;
+  color: inherit;
   white-space: nowrap;
 }
 
 .ujg-esi-child-role-default {
-  width: auto;
-  min-width: 1.6em;
-  padding: 0 0.25em;
-  border-radius: 0.25em;
-  background: #ebecf0;
-  color: #172b4d !important;
-  font-weight: 800;
-  line-height: 1;
+  min-width: 2em;
 }
 
 .ujg-esi-child-role-default .ujg-esi-child-status-label {
-  position: static;
-  width: auto;
-  height: auto;
-  clip: auto;
+  color: inherit;
 }
 
-.ujg-esi-child-status-todo.ujg-esi-child-role-se { background-image: url("ujg-excel-story-importer-status-icons/open-se.png"); }
-.ujg-esi-child-status-todo.ujg-esi-child-role-be { background-image: url("ujg-excel-story-importer-status-icons/open-be.png"); }
-.ujg-esi-child-status-todo.ujg-esi-child-role-fe { background-image: url("ujg-excel-story-importer-status-icons/open-fe.png"); }
-.ujg-esi-child-status-todo.ujg-esi-child-role-qa { background-image: url("ujg-excel-story-importer-status-icons/open-qa.png"); }
-.ujg-esi-child-status-todo.ujg-esi-child-role-dev { background-image: url("ujg-excel-story-importer-status-icons/open-dev.png"); }
+.ujg-esi-child-status-progress {
+  background: #0c66e4;
+}
 
-.ujg-esi-child-status-progress.ujg-esi-child-role-se { background-image: url("ujg-excel-story-importer-status-icons/progress-se.png"); }
-.ujg-esi-child-status-progress.ujg-esi-child-role-be { background-image: url("ujg-excel-story-importer-status-icons/progress-be.png"); }
-.ujg-esi-child-status-progress.ujg-esi-child-role-fe { background-image: url("ujg-excel-story-importer-status-icons/progress-fe.png"); }
-.ujg-esi-child-status-progress.ujg-esi-child-role-qa { background-image: url("ujg-excel-story-importer-status-icons/progress-qa.png"); }
-.ujg-esi-child-status-progress.ujg-esi-child-role-dev { background-image: url("ujg-excel-story-importer-status-icons/progress-dev.png"); }
+.ujg-esi-child-status-done {
+  background: #00875a;
+}
 
-.ujg-esi-child-status-done.ujg-esi-child-role-se { background-image: url("ujg-excel-story-importer-status-icons/closed-se.png"); }
-.ujg-esi-child-status-done.ujg-esi-child-role-be { background-image: url("ujg-excel-story-importer-status-icons/closed-be.png"); }
-.ujg-esi-child-status-done.ujg-esi-child-role-fe { background-image: url("ujg-excel-story-importer-status-icons/closed-fe.png"); }
-.ujg-esi-child-status-done.ujg-esi-child-role-qa { background-image: url("ujg-excel-story-importer-status-icons/closed-qa.png"); }
-.ujg-esi-child-status-done.ujg-esi-child-role-dev { background-image: url("ujg-excel-story-importer-status-icons/closed-dev.png"); }
+.ujg-esi-child-status-blocked {
+  background: #9bbff0;
+  color: rgba(255, 255, 255, 0.94) !important;
+}
 
-.ujg-esi-child-status-blocked.ujg-esi-child-role-qa {
-  background-image: url("ujg-excel-story-importer-status-icons/blocked-qa.png") !important;
+.ujg-esi-child-status-blocked::after {
+  content: "\1F512";
+  position: absolute;
+  right: -6px;
+  top: -7px;
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgba(191, 38, 0, 0.45);
+  border-radius: 50%;
+  background: #ffebe6;
+  color: #172b4d;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
 }
 
 .ujg-esi-row-errors {
