@@ -427,11 +427,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($td);
   }
 
-  function appendSummaryCell($tr, row, index, state) {
+  function appendRowAiButton(row, state, index) {
+    var text = row && row.summary != null ? String(row.summary) : "";
     var target = "row-remark-" + index;
     var isBusy = state && state.llmLoadingTarget === target;
-    var text = row && row.summary != null ? String(row.summary) : "";
-    var $button = $("<button/>")
+    return $("<button/>")
       .attr("type", "button")
       .addClass("ujg-esi-row-ai")
       .prop("disabled", isBusy || !text.trim())
@@ -439,12 +439,13 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .on("click", function() {
         if (services && services.onRowImproveRemark) services.onRowImproveRemark(index);
       });
+  }
+
+  function appendSummaryCell($tr, row) {
+    var text = row && row.summary != null ? String(row.summary) : "";
     var $td = $("<td/>")
       .addClass("ujg-esi-summary")
-      .append(
-        $("<div/>").addClass("ujg-esi-summary-text").text(text),
-        $("<div/>").addClass("ujg-esi-summary-actions").append($button)
-      );
+      .append($("<div/>").addClass("ujg-esi-summary-text").text(text));
     $tr.append($td);
   }
 
@@ -582,7 +583,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $button.on("click", function() {
       if (services && services.onCreateRow) services.onCreateRow(index);
     });
-    $td.append($button, $("<div/>").addClass("ujg-esi-row-status").text(actionStatus));
+    $td.append(
+      $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index), $button),
+      $("<div/>").addClass("ujg-esi-row-status").text(actionStatus)
+    );
     if (row.errors && row.errors.length) {
       $td.append($("<div/>").addClass("ujg-esi-row-errors").text(row.errors.join(" · ")));
     }
@@ -1358,7 +1362,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-row-" + String(row.status || "ready"))
         .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
-      appendSummaryCell($tr, row, index, state);
+      appendSummaryCell($tr, row);
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
       appendStatusCell($tr, row, state, previewStatusText(cols));
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");

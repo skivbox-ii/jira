@@ -37,6 +37,8 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-create-row/);
   assert.match(source, /ujg-esi-row-ai/);
   assert.match(source, /onRowImproveRemark/);
+  assert.match(source, /function appendActionCell[\s\S]*appendRowAiButton/);
+  assert.doesNotMatch(source.match(/function appendSummaryCell[\s\S]*?function issueBrowseUrl/)?.[0] || "", /ujg-esi-row-ai/);
   assert.match(source, /ujg-esi-remark-ai-overlay/);
   assert.match(source, /ujg-esi-remark-ai-before/);
   assert.match(source, /ujg-esi-remark-ai-after/);

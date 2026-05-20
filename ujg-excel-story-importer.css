@@ -327,10 +327,6 @@
   white-space: pre-wrap;
 }
 
-.ujg-esi-summary-actions {
-  margin-top: 6px;
-}
-
 .ujg-esi-row-ai {
   min-height: 24px;
   padding: 2px 8px;
@@ -356,7 +352,14 @@
 }
 
 .ujg-esi-action-cell {
-  width: 150px;
+  width: 210px;
+}
+
+.ujg-esi-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 .ujg-esi-create-row {
