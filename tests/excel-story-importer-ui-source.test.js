@@ -202,11 +202,25 @@ test("rendering module exposes daily-diligence style mapping settings overlay", 
   assert.match(source, /ujg-esi-mapping-story-assignee/);
   assert.match(source, /ujg-esi-mapping-role-assignee/);
   assert.match(source, /ujg-esi-mapping-role-type/);
+  assert.match(source, /ujg-esi-mapping-priority-select/);
+  assert.match(source, /priorityOptionRows/);
   assert.match(source, /ujg-esi-issue-type-picker/);
   assert.match(source, /ujg-esi-issue-type-search/);
   assert.match(source, /ujg-esi-issue-type-options/);
   assert.match(source, /onIssueTypeSearch/);
   assert.match(source, /onIssueTypeSelect/);
+});
+
+test("mapping settings layout gives child task editor wider controls", function () {
+  const source = read("ujg-excel-story-importer.css");
+
+  assert.match(source, /max-width:\s*1280px/);
+  assert.match(source, /\.ujg-esi-mapping-right\s*\{[\s\S]*overflow-x:\s*auto/);
+  assert.match(source, /\.ujg-esi-mapping-roles\s*\{[\s\S]*min-width:\s*920px/);
+  assert.match(source, /\.ujg-esi-mapping-roles th:nth-child\(3\),/);
+  assert.match(source, /\.ujg-esi-mapping-roles th:nth-child\(4\),/);
+  assert.match(source, /width:\s*240px/);
+  assert.match(source, /\.ujg-esi-mapping-table input\[type="text"\],\s*\n\.ujg-esi-mapping-table select/);
 });
 
 test("rendering module exposes create confirmation modal", function () {

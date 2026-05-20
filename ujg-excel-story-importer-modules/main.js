@@ -191,6 +191,35 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function defaultPriorityOptions() {
+    var seen = {};
+    var out = [];
+    Object.keys(config.PRIORITY_MAP || {}).forEach(function(key) {
+      var name = config.PRIORITY_MAP[key] != null ? String(config.PRIORITY_MAP[key]).trim() : "";
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      out.push({ name: name });
+    });
+    return out;
+  }
+
+  function priorityOptionsFromCreateMeta(data) {
+    var seen = {};
+    var out = [];
+    (data && Array.isArray(data.projects) ? data.projects : []).forEach(function(project) {
+      (project && Array.isArray(project.issuetypes) ? project.issuetypes : []).forEach(function(issueType) {
+        var field = issueType && issueType.fields && issueType.fields.priority ? issueType.fields.priority : null;
+        (field && Array.isArray(field.allowedValues) ? field.allowedValues : []).forEach(function(priority) {
+          var name = priority && priority.name != null ? String(priority.name).trim() : "";
+          if (!name || seen[name]) return;
+          seen[name] = true;
+          out.push({ name: name });
+        });
+      });
+    });
+    return out;
+  }
+
   function projectLabel(project) {
     var key = project && project.key != null ? String(project.key) : "";
     var name = project && project.name != null ? String(project.name) : "";
@@ -730,6 +759,7 @@ define("_ujgESI_main", [
       createMetaByProject: {},
       createMetaLoading: false,
       createMetaError: "",
+      priorityOptions: defaultPriorityOptions(),
       mappingSettings: defaultMappingSettings(),
       mappingEditorOpen: false,
       activeMappingBlock: "modules",
@@ -1341,7 +1371,9 @@ define("_ujgESI_main", [
       render();
       return promiseOf(api.getProjectCreateMeta(key)).then(
         function(data) {
+          var priorities = priorityOptionsFromCreateMeta(data);
           state.createMetaByProject[key] = data;
+          state.priorityOptions = priorities.length ? priorities : defaultPriorityOptions();
           state.createMetaLoading = false;
           state.createMetaError = "";
           if (state.createDialog && state.createDialog.projectKey === key) {
@@ -1360,6 +1392,7 @@ define("_ujgESI_main", [
         },
         function(err) {
           state.createMetaByProject[key] = null;
+          state.priorityOptions = defaultPriorityOptions();
           state.createMetaLoading = false;
           state.createMetaError = "Не удалось загрузить create metadata: " + (err && err.statusText ? err.statusText : "request failed");
           render();
@@ -1581,11 +1614,15 @@ define("_ujgESI_main", [
       var base = "Новое значение";
       var name = base;
       var index = 2;
+      var jira = "";
       while (state.mappingSettings[key] && Object.prototype.hasOwnProperty.call(state.mappingSettings[key], name)) {
         name = base + " " + index;
         index += 1;
       }
-      entries.push({ excel: name, jira: "" });
+      if (key === "priorityMap") {
+        jira = (state.priorityOptions && state.priorityOptions[0] && state.priorityOptions[0].name) || "";
+      }
+      entries.push({ excel: name, jira: jira });
       state.mappingSettings[key] = mapFromEntries(entries);
       saveMappings();
     }
@@ -1596,9 +1633,21 @@ define("_ujgESI_main", [
       var entries = mappingEntries(state.mappingSettings[key]);
       var name = field != null ? String(field) : "";
       if (!entries[i]) return;
-      if (name === "excel") entries[i].excel = value != null ? String(value) : "";
+      if (name === "excel") {
+        var excel = value != null ? String(value) : "";
+        var duplicate = excel && entries.some(function(entry, idx) {
+          return idx !== i && entry && String(entry.excel || "").trim() === excel.trim();
+        });
+        if (duplicate) {
+          state.mappingError = "Excel значение \"" + excel + "\" уже есть в этом блоке мапинга.";
+          render();
+          return;
+        }
+        entries[i].excel = excel;
+      }
       if (name === "jira") entries[i].jira = value != null ? String(value) : "";
       state.mappingSettings[key] = mapFromEntries(entries);
+      state.mappingError = "";
       saveMappings({ render: false });
     }
 

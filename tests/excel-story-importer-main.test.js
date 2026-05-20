@@ -2093,6 +2093,10 @@ test("mapping text input changes save without rerendering the focused editor", a
       states.push({
         mappingEditorOpen: !!state.mappingEditorOpen,
         activeMappingBlock: state.activeMappingBlock || "",
+        mappingError: state.mappingError || "",
+        priorityOptions: (state.priorityOptions || []).map(function (row) {
+          return row.name;
+        }),
         priorityMap: state.mappingSettings ? Object.assign({}, state.mappingSettings.priorityMap) : null,
       });
     },
@@ -2138,7 +2142,33 @@ test("mapping text input changes save without rerendering the focused editor", a
     "_ujgESI_api": {
       baseUrl: "https://jira.example.com",
       getProjects: function () {
+        return Promise.resolve([{ key: "EVOSCADA" }]);
+      },
+      getProjectEpics: function () {
         return Promise.resolve([]);
+      },
+      getProjectCreateMeta: function () {
+        return Promise.resolve({
+          projects: [
+            {
+              key: "EVOSCADA",
+              issuetypes: [
+                {
+                  name: "Story",
+                  fields: {
+                    priority: {
+                      allowedValues: [
+                        { name: "Критический" },
+                        { name: "Высокий" },
+                        { name: "Средний" },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        });
       },
     },
     "_ujgESI_excel-loader": {},
@@ -2162,12 +2192,21 @@ test("mapping text input changes save without rerendering the focused editor", a
   await flush();
   await flush();
 
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  await flush();
+  await flush();
+
   callbacks.onOpenMappings();
   callbacks.onMappingBlockSelect("priorities");
   callbacks.onMappingPairAdd("priorities");
   await flush();
   await flush();
   const renderCountBeforeTyping = states.length;
+  let last = states[states.length - 1];
+
+  assert.deepEqual(Array.from(last.priorityOptions), ["Критический", "Высокий", "Средний"]);
+  assert.equal(savedMappings.priorityMap["Новое значение"], "Критический");
 
   callbacks.onMappingPairChange("priorities", 0, "jira", "High");
   await flush();
@@ -2209,6 +2248,21 @@ test("mapping text input changes save without rerendering the focused editor", a
   await flush();
   assert.equal(savedMappings.roles[0].issueType, "Task");
   assert.equal(states.length, renderCountBeforeIssueTypeTyping + 1);
+
+  callbacks.onMappingBlockSelect("modules");
+  callbacks.onMappingPairAdd("modules");
+  await flush();
+  await flush();
+  callbacks.onMappingPairAdd("modules");
+  await flush();
+  await flush();
+  callbacks.onMappingPairChange("modules", 1, "excel", "Новое значение");
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(savedMappings.moduleComponentMap["Новое значение"], "");
+  assert.equal(savedMappings.moduleComponentMap["Новое значение 2"], "");
+  assert.match(last.mappingError, /уже есть/i);
 });
 
 test("meta sheet picker saves selected sheet and reparses current workbook", async function () {

@@ -594,6 +594,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $select;
   }
 
+  function priorityOptionRows(value, state) {
+    var selected = value != null ? String(value) : "";
+    var seen = {};
+    var rows = [];
+    (state && Array.isArray(state.priorityOptions) ? state.priorityOptions : []).forEach(function(row) {
+      var name = row && row.name != null ? String(row.name).trim() : "";
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      rows.push({ value: name, label: name });
+    });
+    if (selected && !seen[selected]) rows.unshift({ value: selected, label: selected });
+    return rows;
+  }
+
   function appendAssigneePicker(className, target, selectedId, selectedLabel, state, disabled) {
     var picker = state && state.userPicker ? state.userPicker : {};
     var active = !disabled && picker.target === target;
@@ -727,7 +741,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($button);
   }
 
-  function appendMappingPairs($parent, blockKey, title, entries) {
+  function appendMappingPairs($parent, blockKey, title, entries, state) {
+    var isPriority = blockKey === "priorities";
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append(
@@ -756,9 +771,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendTextInput("ujg-esi-mapping-entry-excel", entry.excel, function(value) {
             if (services && services.onMappingPairChange) services.onMappingPairChange(blockKey, index, "excel", value);
           })))
-          .append($("<td/>").append(appendTextInput("ujg-esi-mapping-entry-jira", entry.jira, function(value) {
-            if (services && services.onMappingPairChange) services.onMappingPairChange(blockKey, index, "jira", value);
-          })))
+          .append($("<td/>").append(isPriority
+            ? appendSelect("ujg-esi-mapping-entry-jira ujg-esi-mapping-priority-select", entry.jira, priorityOptionRows(entry.jira, state), function(value) {
+              if (services && services.onMappingPairChange) services.onMappingPairChange(blockKey, index, "jira", value);
+            })
+            : appendTextInput("ujg-esi-mapping-entry-jira", entry.jira, function(value) {
+              if (services && services.onMappingPairChange) services.onMappingPairChange(blockKey, index, "jira", value);
+            })
+          ))
           .append($("<td/>").append(
             $("<button/>")
               .attr("type", "button")
@@ -936,7 +956,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendMappingBlock($left, block, active === block.key);
     });
     if (active === "priorities") {
-      appendMappingPairs($right, "priorities", "Приоритет → Priority", mapEntries(settings.priorityMap));
+      appendMappingPairs($right, "priorities", "Приоритет → Priority", mapEntries(settings.priorityMap), state);
     } else if (active === "columns") {
       appendColumnMappings($right, settings);
     } else if (active === "tableStart") {
@@ -944,7 +964,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     } else if (active === "roles") {
       appendMappingRoles($right, settings, state);
     } else {
-      appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap));
+      appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap), state);
     }
     if (state.mappingLoading) $right.append($("<div/>").addClass("ujg-esi-mapping-note").text("Загрузка мапинга..."));
     if (state.mappingError) $right.append($("<div/>").addClass("ujg-esi-mapping-error").text(state.mappingError));
