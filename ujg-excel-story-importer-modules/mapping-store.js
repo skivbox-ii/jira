@@ -91,6 +91,22 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyLlmDescriptionPrompts(input) {
+    var defaults = config.LLM_DESCRIPTION_PROMPTS || {};
+    var source = input && typeof input === "object" ? input : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) {
+        out[key] = source[key] != null ? String(source[key]).trim() : "";
+      }
+    });
+    return out;
+  }
+
   function copyLlmProjectPrompt(value) {
     var text = value != null ? String(value).trim() : "";
     return text || String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -115,6 +131,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
       llmRemarkPrompt: copyLlmRemarkPrompt(config.LLM_REMARK_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
+      llmDescriptionPrompts: copyLlmDescriptionPrompts(config.LLM_DESCRIPTION_PROMPTS),
     };
   }
 
@@ -146,6 +163,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       llmPrompts: hasInput && input.llmPrompts && typeof input.llmPrompts === "object"
         ? copyLlmPrompts(input.llmPrompts)
         : defaults.llmPrompts,
+      llmDescriptionPrompts: hasInput && input.llmDescriptionPrompts && typeof input.llmDescriptionPrompts === "object"
+        ? copyLlmDescriptionPrompts(input.llmDescriptionPrompts)
+        : defaults.llmDescriptionPrompts,
     };
   }
 

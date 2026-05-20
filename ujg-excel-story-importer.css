@@ -731,6 +731,14 @@
   min-height: 110px;
 }
 
+.ujg-esi-llm-description-head {
+  margin-top: 18px;
+}
+
+.ujg-esi-llm-description-prompt {
+  min-height: 110px;
+}
+
 .ujg-esi-llm-prompt-row {
   display: grid;
   gap: 6px;
@@ -886,24 +894,30 @@
   position: fixed;
   inset: 0;
   z-index: 9999;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 48px 20px;
+  padding: 0;
   background: rgba(9, 30, 66, 0.42);
 }
 
+.ujg-esi-confirm-shell {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #f7f8fa;
+}
+
 .ujg-esi-confirm-modal {
-  width: min(920px, 100%);
-  max-height: calc(100vh - 96px);
+  width: 100%;
+  height: 100vh;
+  max-height: none;
   overflow: auto;
-  border-radius: 4px;
+  border-radius: 0;
   background: #fff;
-  box-shadow: 0 18px 48px rgba(9, 30, 66, 0.28);
+  box-shadow: none;
 }
 
 .ujg-esi-remark-ai-overlay,
-.ujg-esi-summary-review-overlay {
+.ujg-esi-summary-review-overlay,
+.ujg-esi-description-review-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -915,7 +929,8 @@
 }
 
 .ujg-esi-remark-ai-modal,
-.ujg-esi-summary-review-modal {
+.ujg-esi-summary-review-modal,
+.ujg-esi-description-review-modal {
   width: min(1120px, calc(100vw - 64px));
   max-height: calc(100vh - 64px);
   overflow: auto;
@@ -926,7 +941,8 @@
 }
 
 .ujg-esi-remark-ai-head,
-.ujg-esi-summary-review-head {
+.ujg-esi-summary-review-head,
+.ujg-esi-description-review-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -935,14 +951,16 @@
 }
 
 .ujg-esi-remark-ai-head h3,
-.ujg-esi-summary-review-head h3 {
+.ujg-esi-summary-review-head h3,
+.ujg-esi-description-review-head h3 {
   margin: 0;
   color: #172b4d;
   font-size: 18px;
 }
 
 .ujg-esi-remark-ai-close,
-.ujg-esi-summary-review-close {
+.ujg-esi-summary-review-close,
+.ujg-esi-description-review-close {
   border: 0;
   background: transparent;
   color: #5e6c84;
@@ -952,7 +970,8 @@
 }
 
 .ujg-esi-remark-ai-grid,
-.ujg-esi-summary-review-grid {
+.ujg-esi-summary-review-grid,
+.ujg-esi-description-review-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
@@ -1010,6 +1029,120 @@
 .ujg-esi-remark-ai-prompt,
 .ujg-esi-summary-review-prompt {
   min-height: 120px;
+}
+
+.ujg-esi-description-review-grid {
+  align-items: stretch;
+}
+
+.ujg-esi-description-review-grid label,
+.ujg-esi-description-review-after-panel {
+  display: grid;
+  gap: 6px;
+}
+
+.ujg-esi-description-review-grid span,
+.ujg-esi-description-review-after-panel > span {
+  color: #5e6c84;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ujg-esi-description-review-before,
+.ujg-esi-description-review-after {
+  width: 100%;
+  min-height: 360px;
+  resize: vertical;
+  padding: 10px;
+  border: 0;
+  background: #fff;
+  color: #172b4d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ujg-esi-description-editor {
+  border: 1px solid #c1c7d0;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.ujg-esi-description-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #dfe1e6;
+  background: #fff;
+}
+
+.ujg-esi-description-editor-toolbar button {
+  min-width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #172b4d;
+  font-size: 13px;
+  cursor: default;
+}
+
+.ujg-esi-description-editor-footer {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid #dfe1e6;
+  background: #fff;
+}
+
+.ujg-esi-description-editor-footer button {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  background: #f4f5f7;
+  color: #172b4d;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ujg-esi-description-editor-footer .ujg-esi-description-mode-active {
+  border-color: #344563;
+  background: #344563;
+  color: #fff;
+}
+
+.ujg-esi-jira-wiki-preview {
+  min-height: 360px;
+  padding: 10px;
+  color: #172b4d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ujg-esi-jira-wiki-preview p,
+.ujg-esi-jira-wiki-preview h4 {
+  margin: 0 0 8px;
+}
+
+.ujg-esi-wiki-list {
+  position: relative;
+  margin: 0 0 6px 18px;
+}
+
+.ujg-esi-wiki-list::before {
+  content: "•";
+  position: absolute;
+  left: -14px;
+}
+
+.ujg-esi-wiki-ordered::before {
+  content: "1.";
+  left: -18px;
+}
+
+.ujg-esi-wiki-strike {
+  text-decoration: line-through;
 }
 
 .ujg-esi-remark-ai-actions,
@@ -1128,6 +1261,34 @@
   background: #fff;
   color: #172b4d;
   font-size: 12px;
+}
+
+.ujg-esi-confirm-child-description {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid #c1c7d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #0052cc;
+  font-size: 16px;
+  font-weight: 650;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.ujg-esi-confirm-child-description:hover:not(:disabled) {
+  background: #f4f5f7;
+}
+
+.ujg-esi-confirm-child-description:disabled {
+  background: #f4f5f7;
+  color: #6b778c;
+  cursor: default;
 }
 
 .ujg-esi-summary-ai-row {

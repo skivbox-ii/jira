@@ -421,6 +421,39 @@ define("_ujgESI_config", [], function() {
     ].join("\n")
   };
 
+  var LLM_DESCRIPTION_PROMPTS = {
+    SE: [
+      "Ты системный аналитик. Подготовь Jira wiki-описание для SE-задачи по замечанию приемки.",
+      "Опиши цель, контекст, что нужно уточнить и ожидаемый результат анализа.",
+      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Не добавляй фактов, которых нет во входных данных."
+    ].join("\n"),
+    FE: [
+      "Ты frontend-разработчик. Подготовь Jira wiki-описание для FE-задачи по замечанию приемки.",
+      "Опиши экран, пользовательское поведение, UI-состояния и критерии готовности.",
+      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Не добавляй фактов, которых нет во входных данных."
+    ].join("\n"),
+    BE: [
+      "Ты backend-разработчик. Подготовь Jira wiki-описание для BE-задачи по замечанию приемки.",
+      "Опиши серверную логику, данные, API, проверки и критерии готовности.",
+      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Не добавляй фактов, которых нет во входных данных."
+    ].join("\n"),
+    QA: [
+      "Ты QA-инженер. Подготовь Jira wiki-описание для QA-задачи по замечанию приемки.",
+      "Опиши сценарии проверки, регрессию, тестовые данные и ожидаемый результат.",
+      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Не добавляй фактов, которых нет во входных данных."
+    ].join("\n"),
+    DevOps: [
+      "Ты DevOps-инженер. Подготовь Jira wiki-описание для DevOps-задачи по замечанию приемки.",
+      "Опиши окружение, конфигурацию, pipeline, деплой и проверки после выкладки.",
+      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Не добавляй фактов, которых нет во входных данных."
+    ].join("\n")
+  };
+
   var LLM_PROJECT_PROMPT = [
     "Общий системный prompt проекта для Jira-задач из журнала замечаний.",
     "Учитывай, что задачи создаются в рамках проекта с иерархией Epic → Story → связанные дочерние задачи.",
@@ -476,6 +509,7 @@ define("_ujgESI_config", [], function() {
     LLM_PROJECT_PROMPT: LLM_PROJECT_PROMPT,
     LLM_REMARK_PROMPT: LLM_REMARK_PROMPT,
     LLM_SUMMARY_PROMPTS: LLM_SUMMARY_PROMPTS,
+    LLM_DESCRIPTION_PROMPTS: LLM_DESCRIPTION_PROMPTS,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
     MODULE_COMPONENT_MAP: MODULE_COMPONENT_MAP,
@@ -579,6 +613,22 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyLlmDescriptionPrompts(input) {
+    var defaults = config.LLM_DESCRIPTION_PROMPTS || {};
+    var source = input && typeof input === "object" ? input : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) {
+        out[key] = source[key] != null ? String(source[key]).trim() : "";
+      }
+    });
+    return out;
+  }
+
   function copyLlmProjectPrompt(value) {
     var text = value != null ? String(value).trim() : "";
     return text || String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -603,6 +653,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
       llmRemarkPrompt: copyLlmRemarkPrompt(config.LLM_REMARK_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
+      llmDescriptionPrompts: copyLlmDescriptionPrompts(config.LLM_DESCRIPTION_PROMPTS),
     };
   }
 
@@ -634,6 +685,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       llmPrompts: hasInput && input.llmPrompts && typeof input.llmPrompts === "object"
         ? copyLlmPrompts(input.llmPrompts)
         : defaults.llmPrompts,
+      llmDescriptionPrompts: hasInput && input.llmDescriptionPrompts && typeof input.llmDescriptionPrompts === "object"
+        ? copyLlmDescriptionPrompts(input.llmDescriptionPrompts)
+        : defaults.llmDescriptionPrompts,
     };
   }
 
@@ -1123,7 +1177,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       project: { key: String(projectKey || "") },
       summary: limitSummary(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
       issuetype: { name: String((role && role.issueType) || "") },
-      description: "Создано автоматически из журнала замечаний.",
+      description: role && role.description != null && String(role.description).trim() ? String(role.description) : "Создано автоматически из журнала замечаний.",
     };
     appendAssignee(fields, role && role.assignee);
     appendTimetracking(fields, role && role.originalEstimate, role && role.remainingEstimate);
@@ -2455,6 +2509,45 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return cols && (cols["Статус в Jira"] || cols["Статус"] || "") || "";
   }
 
+  function wikiInline($parent, text) {
+    String(text || "").split(/(\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-|\+[^\+\n]+\+)/g).forEach(function(part) {
+      var node;
+      if (!part) return;
+      if (/^\*[^*\n]+\*$/.test(part)) node = $("<strong/>").text(part.slice(1, -1));
+      else if (/^_[^_\n]+_$/.test(part)) node = $("<em/>").text(part.slice(1, -1));
+      else if (/^-[^-\n]+-$/.test(part)) node = $("<span/>").addClass("ujg-esi-wiki-strike").text(part.slice(1, -1));
+      else if (/^\+[^\+\n]+\+$/.test(part)) node = $("<u/>").text(part.slice(1, -1));
+      else node = document.createTextNode(part);
+      $parent.append(node);
+    });
+  }
+
+  function renderJiraWiki(text) {
+    var $wrap = $("<div/>").addClass("ujg-esi-jira-wiki-preview");
+    String(text || "").split(/\n/).forEach(function(line) {
+      var trimmed = line.trim();
+      var $line;
+      if (!trimmed) {
+        $wrap.append($("<div/>").addClass("ujg-esi-wiki-blank").html("&nbsp;"));
+        return;
+      }
+      if (/^h[1-6]\.\s+/.test(trimmed)) {
+        $line = $("<h4/>").text(trimmed.replace(/^h[1-6]\.\s+/, ""));
+      } else if (/^#\s+/.test(trimmed)) {
+        $line = $("<div/>").addClass("ujg-esi-wiki-list ujg-esi-wiki-ordered");
+        wikiInline($line, trimmed.replace(/^#\s+/, ""));
+      } else if (/^\*\s+/.test(trimmed)) {
+        $line = $("<div/>").addClass("ujg-esi-wiki-list");
+        wikiInline($line, trimmed.replace(/^\*\s+/, ""));
+      } else {
+        $line = $("<p/>");
+        wikiInline($line, line);
+      }
+      $wrap.append($line);
+    });
+    return $wrap;
+  }
+
   function appendProjectSelect($toolbar, state) {
     var $field = $("<label/>").addClass("ujg-esi-field");
     var $select = $("<select/>").addClass("ujg-esi-project-select");
@@ -3334,8 +3427,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendLlmPromptMappings($parent, settings) {
     var prompts = settings && settings.llmPrompts ? settings.llmPrompts : {};
+    var descriptionPrompts = settings && settings.llmDescriptionPrompts ? settings.llmDescriptionPrompts : {};
     var order = ["story", "SE", "FE", "BE", "QA", "DevOps"];
     var seen = {};
+    var seenDescriptions = {};
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append($("<h2/>").text("AI промпты для названий"));
@@ -3370,7 +3465,25 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           )
       );
     });
-    $parent.append($head, $project, $remark, $wrap);
+    var $descriptionHead = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head ujg-esi-llm-description-head")
+      .append($("<h2/>").text("Описания дочерних задач"));
+    var $descriptionWrap = $("<div/>").addClass("ujg-esi-llm-prompts ujg-esi-llm-description-prompts");
+    order.filter(function(key) { return key !== "story"; }).concat(Object.keys(descriptionPrompts || {})).forEach(function(key) {
+      if (!key || seenDescriptions[key]) return;
+      seenDescriptions[key] = true;
+      $descriptionWrap.append(
+        $("<label/>")
+          .addClass("ujg-esi-llm-prompt-row")
+          .append(
+            $("<span/>").text(key),
+            appendTextarea("ujg-esi-llm-prompt ujg-esi-llm-description-prompt", descriptionPrompts[key] || "", function(value) {
+              if (services && services.onMappingLlmDescriptionPromptChange) services.onMappingLlmDescriptionPromptChange(key, value);
+            })
+          )
+      );
+    });
+    $parent.append($head, $project, $remark, $wrap, $descriptionHead, $descriptionWrap);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -3457,6 +3570,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<th/>").text("Роль"))
           .append($("<th/>").text("Тип Jira"))
           .append($("<th/>").text("Название"))
+          .append($("<th/>").text("Описание"))
           .append($("<th/>").text("Исполнитель"))
           .append($("<th/>").text("Первоначальная оценка"))
           .append($("<th/>").text("Оставшееся время"))
@@ -3480,6 +3594,18 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled), "child-" + index, state.llmLoadingTarget).toggleClass("ujg-esi-summary-ai-disabled", !enabled)))
+          .append($("<td/>").append(
+            $("<button/>")
+              .attr("type", "button")
+              .addClass("ujg-esi-confirm-child-description")
+              .attr("title", "Редактировать описание")
+              .attr("aria-label", "Редактировать описание")
+              .prop("disabled", !enabled)
+              .html("&#9776;")
+              .on("click", function() {
+                if (services && services.onDialogImproveDescription) services.onDialogImproveDescription("child-" + index);
+              })
+          ))
           .append($("<td/>").append(appendAssigneePicker("ujg-esi-confirm-child-assignee", "child-" + index, task.assigneeId || "", task.assigneeLabel || "", state, !enabled)))
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
@@ -3497,6 +3623,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var dialog = state && state.createDialog ? state.createDialog : null;
     if (!dialog) return;
     var $overlay = $("<div/>").addClass("ujg-esi-confirm-overlay");
+    var $shell = $("<div/>").addClass("ujg-esi-confirm-shell");
     var $modal = $("<div/>")
       .addClass("ujg-esi-confirm-modal")
       .attr("role", "dialog")
@@ -3572,7 +3699,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             })
         )
     );
-    $overlay.append($modal);
+    $shell.append($modal);
+    $overlay.append($shell);
     $parent.append($overlay);
   }
 
@@ -3694,6 +3822,132 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
+  function appendDescriptionReviewDialog($parent, state) {
+    var dialog = state && state.descriptionDialog;
+    if (!dialog) return;
+    var target = "description-dialog-" + (dialog.target || "");
+    var isBusy = !!(state && state.llmLoadingTarget === target);
+    var viewMode = dialog.viewMode === "preview" ? "preview" : "edit";
+    var $overlay = $("<div/>").addClass("ujg-esi-description-review-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-description-review-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    function change(field, value) {
+      if (services && services.onDescriptionDialogFieldChange) services.onDescriptionDialogFieldChange(field, value);
+    }
+    function call(name) {
+      if (services && services[name]) services[name]();
+    }
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-description-review-head")
+        .append(
+          $("<h3/>").text("Описание " + (dialog.role || "задачи")),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-description-review-close")
+            .attr("aria-label", "Закрыть")
+            .text("×")
+            .on("click", function() {
+              call("onDescriptionDialogCancel");
+            })
+        )
+    );
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-description-review-grid")
+        .append(
+          $("<label/>").append(
+            $("<span/>").text("До LLM"),
+            appendTextarea("ujg-esi-description-review-before", dialog.beforeText || "", function(value) {
+              change("beforeText", value);
+            })
+          ),
+          $("<div/>")
+            .addClass("ujg-esi-description-review-after-panel")
+            .append(
+              $("<span/>").text("После LLM"),
+              $("<div/>")
+                .addClass("ujg-esi-description-editor")
+                .append(
+                  $("<div/>")
+                    .addClass("ujg-esi-description-editor-toolbar")
+                    .append(
+                      $("<button/>").attr("type", "button").text("Стиль"),
+                      $("<button/>").attr("type", "button").html("<b>B</b>"),
+                      $("<button/>").attr("type", "button").html("<i>I</i>"),
+                      $("<button/>").attr("type", "button").html("<u>U</u>"),
+                      $("<button/>").attr("type", "button").text("🔗"),
+                      $("<button/>").attr("type", "button").text("•"),
+                      $("<button/>").attr("type", "button").text("1."),
+                      $("<button/>").attr("type", "button").text("+")
+                    ),
+                  viewMode === "preview"
+                    ? renderJiraWiki(dialog.afterText || "")
+                    : appendTextarea("ujg-esi-description-review-after", dialog.afterText || "", function(value) {
+                        change("afterText", value);
+                      }),
+                  $("<div/>")
+                    .addClass("ujg-esi-description-editor-footer")
+                    .append(
+                      $("<button/>")
+                        .attr("type", "button")
+                        .addClass(viewMode === "preview" ? "ujg-esi-description-mode-active" : "")
+                        .text("Визуальный")
+                        .on("click", function() {
+                          if (services && services.onDescriptionDialogViewModeChange) services.onDescriptionDialogViewModeChange("preview");
+                        }),
+                      $("<button/>")
+                        .attr("type", "button")
+                        .addClass(viewMode === "edit" ? "ujg-esi-description-mode-active" : "")
+                        .text("Текст")
+                        .on("click", function() {
+                          if (services && services.onDescriptionDialogViewModeChange) services.onDescriptionDialogViewModeChange("edit");
+                        })
+                    )
+                )
+            )
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-summary-review-comment-row")
+        .append(
+          $("<span/>").text("Что сделал LLM"),
+          $("<div/>").addClass("ujg-esi-summary-review-comment").text(dialog.comment || "LLM не вернул комментарий.")
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-summary-review-prompt-row")
+        .append(
+          $("<span/>").text("Prompt"),
+          appendTextarea("ujg-esi-summary-review-prompt", dialog.prompt || "", function(value) {
+            change("prompt", value);
+          })
+        )
+    );
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-actions")
+        .append(
+          $("<button/>").attr("type", "button").addClass("ujg-esi-summary-review-cancel").text("Отмена").on("click", function() {
+            call("onDescriptionDialogCancel");
+          }),
+          $("<button/>").attr("type", "button").addClass("ujg-esi-summary-review-improve").prop("disabled", isBusy).text(isBusy ? "Улучшаю..." : "Улучшить").on("click", function() {
+            call("onDescriptionDialogImprove");
+          }),
+          $("<button/>").attr("type", "button").addClass("ujg-esi-summary-review-apply").prop("disabled", isBusy || !String(dialog.afterText || "").trim()).text("Применить").on("click", function() {
+            call("onDescriptionDialogApply");
+          })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -3760,6 +4014,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendConfirmModal($root, s);
     appendLlmReviewDialog($root, s, "summary");
     appendLlmReviewDialog($root, s, "remark");
+    appendDescriptionReviewDialog($root, s);
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
   }
@@ -3925,6 +4180,20 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function copyLlmDescriptionPrompts(input) {
+    var defaults = config.LLM_DESCRIPTION_PROMPTS || {};
+    var source = input && typeof input === "object" ? input : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = source[key] != null ? String(source[key]).trim() : "";
+    });
+    return out;
+  }
+
   function copyLlmProjectPrompt(value) {
     var text = value != null ? String(value).trim() : "";
     return text || String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -3952,6 +4221,7 @@ define("_ujgESI_main", [
       llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
       llmRemarkPrompt: copyLlmRemarkPrompt(config.LLM_REMARK_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
+      llmDescriptionPrompts: copyLlmDescriptionPrompts(config.LLM_DESCRIPTION_PROMPTS),
     };
   }
 
@@ -3982,6 +4252,7 @@ define("_ujgESI_main", [
       llmProjectPrompt: source.llmProjectPrompt != null ? copyLlmProjectPrompt(source.llmProjectPrompt) : copyLlmProjectPrompt(defaults.llmProjectPrompt),
       llmRemarkPrompt: source.llmRemarkPrompt != null ? copyLlmRemarkPrompt(source.llmRemarkPrompt) : copyLlmRemarkPrompt(defaults.llmRemarkPrompt),
       llmPrompts: source.llmPrompts && typeof source.llmPrompts === "object" ? copyLlmPrompts(source.llmPrompts) : copyLlmPrompts(defaults.llmPrompts),
+      llmDescriptionPrompts: source.llmDescriptionPrompts && typeof source.llmDescriptionPrompts === "object" ? copyLlmDescriptionPrompts(source.llmDescriptionPrompts) : copyLlmDescriptionPrompts(defaults.llmDescriptionPrompts),
     };
   }
 
@@ -4565,6 +4836,7 @@ define("_ujgESI_main", [
       createDialog: null,
       remarkDialog: null,
       summaryDialog: null,
+      descriptionDialog: null,
       llmLoadingTarget: "",
       llmError: "",
       users: [],
@@ -5000,6 +5272,10 @@ define("_ujgESI_main", [
       return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
     }
 
+    function defaultChildDescription() {
+      return "Создано автоматически из журнала замечаний.";
+    }
+
     function llmPromptKeyForTarget(target, task) {
       var key = target === "story" ? "story" : task && task.role != null ? String(task.role).trim() : "";
       var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
@@ -5012,6 +5288,13 @@ define("_ujgESI_main", [
       var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
       var key = llmPromptKeyForTarget(target, task);
       return prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+    }
+
+    function llmDescriptionPrompt(task) {
+      var prompts = state.mappingSettings && state.mappingSettings.llmDescriptionPrompts ? state.mappingSettings.llmDescriptionPrompts : {};
+      var key = task && task.role != null ? String(task.role).trim() : "";
+      if (/^devops$/i.test(key)) key = "DevOps";
+      return prompts[key] || prompts.SE || (config.LLM_DESCRIPTION_PROMPTS && config.LLM_DESCRIPTION_PROMPTS.SE) || "";
     }
 
     function llmSystemPrompt(target, task) {
@@ -5118,6 +5401,30 @@ define("_ujgESI_main", [
       ].filter(Boolean).join("\n\n");
     }
 
+    function llmDescriptionDialogSystemPrompt(dialog) {
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var prompt = dialog && dialog.prompt != null ? String(dialog.prompt).trim() : "";
+      return [projectPrompt, prompt].filter(Boolean).join("\n\n");
+    }
+
+    function llmDescriptionDialogUserPrompt(dialog) {
+      var createDialog = state.createDialog;
+      var source = (createDialog && createDialog.sourceRows || []).map(function(row) {
+        var name = row && row.name != null ? String(row.name).trim() : "";
+        var value = row && row.value != null ? String(row.value).trim() : "";
+        return name && value ? name + ": " + value : "";
+      }).filter(Boolean).join("\n");
+      return [
+        "Роль дочерней задачи: " + (dialog && dialog.role || ""),
+        "Название задачи: " + (dialog && dialog.summary || ""),
+        "Текущее описание:\n" + (dialog && dialog.beforeText || ""),
+        source ? "Поля строки Excel:\n" + source : "",
+        "Верни только JSON без markdown: {\"description\":\"итоговое описание в Jira wiki syntax\", \"comment\":\"кратко что именно было изменено\"}."
+      ].filter(Boolean).join("\n\n");
+    }
+
     function cleanupLlmSummary(value) {
       var text = value != null ? String(value).trim() : "";
       text = stripWrappingQuotes(text).replace(/\s+/g, " ").trim();
@@ -5182,6 +5489,32 @@ define("_ujgESI_main", [
       }
       return {
         text: cleanupLlmRemark(text),
+        comment: "",
+      };
+    }
+
+    function cleanupLlmDescription(value) {
+      var text = value != null ? String(value).trim() : "";
+      text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      return stripWrappingQuotes(text);
+    }
+
+    function parseLlmDescriptionResponse(value) {
+      var text = stripJsonFence(value);
+      var parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
+        parsed = null;
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return {
+          description: cleanupLlmDescription(parsed.description || parsed.text || parsed.result || ""),
+          comment: parsed.comment != null ? String(parsed.comment).trim() : parsed.explanation != null ? String(parsed.explanation).trim() : "",
+        };
+      }
+      return {
+        description: cleanupLlmDescription(text),
         comment: "",
       };
     }
@@ -5270,6 +5603,7 @@ define("_ujgESI_main", [
             assignee: assigneeFromSettings(role && role.assigneeId, role && role.assignee),
             originalEstimate: role && role.originalEstimate != null ? String(role.originalEstimate) : "1h",
             remainingEstimate: role && role.remainingEstimate != null ? String(role.remainingEstimate) : "1h",
+            description: role && role.description != null && String(role.description).trim() ? String(role.description) : defaultChildDescription(),
           };
         }) : [],
         sourceRows: sourceRows(row),
@@ -5746,6 +6080,14 @@ define("_ujgESI_main", [
       saveMappings({ render: false });
     }
 
+    function onMappingLlmDescriptionPromptChange(key, value) {
+      var name = key != null ? String(key).trim() : "";
+      if (!name) return;
+      state.mappingSettings.llmDescriptionPrompts = copyLlmDescriptionPrompts(state.mappingSettings.llmDescriptionPrompts);
+      state.mappingSettings.llmDescriptionPrompts[name] = value != null ? String(value) : "";
+      saveMappings({ render: false });
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       if (row.createdKey) {
@@ -5905,6 +6247,7 @@ define("_ujgESI_main", [
       row.errors = [];
       state.createDialog = null;
       state.summaryDialog = null;
+      state.descriptionDialog = null;
       closeUserPicker();
       render();
       promiseOf(
@@ -6027,6 +6370,8 @@ define("_ujgESI_main", [
         task.originalEstimate = value != null ? String(value) : "";
       } else if (key === "remainingEstimate") {
         task.remainingEstimate = value != null ? String(value) : "";
+      } else if (key === "description") {
+        task.description = value != null ? String(value) : "";
       }
     }
 
@@ -6075,6 +6420,10 @@ define("_ujgESI_main", [
       var targetKey = target != null ? String(target) : "";
       var match = targetKey.match(/^child-(\d+)$/);
       return match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+    }
+
+    function descriptionDialogTask(target) {
+      return summaryDialogTask(target);
     }
 
     function fullStorySummarySource(dialog) {
@@ -6170,6 +6519,97 @@ define("_ujgESI_main", [
 
     function onSummaryDialogCancel() {
       state.summaryDialog = null;
+      state.llmError = "";
+      render();
+    }
+
+    function requestDescriptionDialogImprove() {
+      var dialog = state.descriptionDialog;
+      var llmConfig;
+      var targetKey = dialog ? "description-dialog-" + dialog.target : "";
+      if (!dialog || state.llmLoadingTarget || !String(dialog.beforeText || "").trim()) return;
+      llmConfig = ensureLlmConfig();
+      if (!llmConfig) {
+        state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
+        render();
+        return;
+      }
+      state.llmError = "";
+      state.llmLoadingTarget = targetKey;
+      render();
+      promiseOf(llmClient.requestText(llmConfig, {
+        systemPrompt: llmDescriptionDialogSystemPrompt(dialog),
+        userPrompt: llmDescriptionDialogUserPrompt(dialog),
+        temperature: 0.1,
+      })).then(
+        function(result) {
+          var response = parseLlmDescriptionResponse(result && result.text);
+          if (state.descriptionDialog && response.description) {
+            state.descriptionDialog.afterText = response.description;
+            state.descriptionDialog.comment = response.comment || "";
+          }
+          state.llmLoadingTarget = "";
+          state.llmError = "";
+          render();
+        },
+        function(err) {
+          state.llmLoadingTarget = "";
+          state.llmError = "Не удалось улучшить описание: " + (err && err.message ? err.message : "request failed");
+          render();
+        }
+      );
+    }
+
+    function onDialogImproveDescription(target) {
+      var targetKey = target != null ? String(target) : "";
+      var task = descriptionDialogTask(targetKey);
+      if (!task || state.llmLoadingTarget) return;
+      state.descriptionDialog = {
+        target: targetKey,
+        role: task.role || "",
+        summary: task.summary || "",
+        beforeText: task.description || defaultChildDescription(),
+        afterText: "",
+        comment: "",
+        prompt: llmDescriptionPrompt(task),
+        viewMode: "edit",
+      };
+      state.llmError = "";
+      requestDescriptionDialogImprove();
+    }
+
+    function onDescriptionDialogFieldChange(field, value) {
+      var dialog = state.descriptionDialog;
+      var key = field != null ? String(field) : "";
+      if (!dialog) return;
+      if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
+      if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+    }
+
+    function onDescriptionDialogViewModeChange(value) {
+      if (!state.descriptionDialog) return;
+      state.descriptionDialog.viewMode = value === "preview" ? "preview" : "edit";
+      render();
+    }
+
+    function onDescriptionDialogImprove() {
+      requestDescriptionDialogImprove();
+    }
+
+    function onDescriptionDialogApply() {
+      var dialog = state.descriptionDialog;
+      var task = dialog ? descriptionDialogTask(dialog.target) : null;
+      var cleaned = cleanupLlmDescription(dialog && dialog.afterText);
+      if (!dialog || !task || !cleaned) return;
+      task.description = cleaned;
+      state.descriptionDialog = null;
+      state.llmError = "";
+      render();
+    }
+
+    function onDescriptionDialogCancel() {
+      state.descriptionDialog = null;
       state.llmError = "";
       render();
     }
@@ -6358,6 +6798,7 @@ define("_ujgESI_main", [
     function onCancelCreate() {
       state.createDialog = null;
       state.summaryDialog = null;
+      state.descriptionDialog = null;
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -6387,6 +6828,7 @@ define("_ujgESI_main", [
       onMappingLlmPromptChange: onMappingLlmPromptChange,
       onMappingLlmProjectPromptChange: onMappingLlmProjectPromptChange,
       onMappingLlmRemarkPromptChange: onMappingLlmRemarkPromptChange,
+      onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
@@ -6401,6 +6843,12 @@ define("_ujgESI_main", [
       onSummaryDialogImprove: onSummaryDialogImprove,
       onSummaryDialogApply: onSummaryDialogApply,
       onSummaryDialogCancel: onSummaryDialogCancel,
+      onDialogImproveDescription: onDialogImproveDescription,
+      onDescriptionDialogFieldChange: onDescriptionDialogFieldChange,
+      onDescriptionDialogViewModeChange: onDescriptionDialogViewModeChange,
+      onDescriptionDialogImprove: onDescriptionDialogImprove,
+      onDescriptionDialogApply: onDescriptionDialogApply,
+      onDescriptionDialogCancel: onDescriptionDialogCancel,
       onDialogImproveRemark: onDialogImproveRemark,
       onRowImproveRemark: onRowImproveRemark,
       onRemarkDialogFieldChange: onRemarkDialogFieldChange,

@@ -18,6 +18,13 @@ const CONFIG = {
     QA: "QA prompt",
     DevOps: "DevOps prompt",
   },
+  LLM_DESCRIPTION_PROMPTS: {
+    SE: "SE description prompt",
+    FE: "FE description prompt",
+    BE: "BE description prompt",
+    QA: "QA description prompt",
+    DevOps: "DevOps description prompt",
+  },
   CREATE_TEMPLATE_ROLES: [
     { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
     { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
@@ -314,7 +321,7 @@ test("row create opens confirmation before creating without Epic", async functio
                 return row.name + ":" + row.value;
               }),
               childTasks: state.createDialog.childTasks.map(function (task) {
-                return task.role + ":" + task.issueType + ":" + task.summary + ":" + task.enabled + ":" + (task.assigneeId || "") + ":" + (task.assigneeLabel || "");
+                return task.role + ":" + task.issueType + ":" + task.summary + ":" + task.enabled + ":" + (task.assigneeId || "") + ":" + (task.assigneeLabel || "") + ":" + (task.description || "");
               }),
             }
           : null,
@@ -334,6 +341,16 @@ test("row create opens confirmation before creating without Epic", async functio
               afterText: state.summaryDialog.afterText || "",
               comment: state.summaryDialog.comment || "",
               prompt: state.summaryDialog.prompt || "",
+            }
+          : null,
+        descriptionDialog: state.descriptionDialog
+          ? {
+              target: state.descriptionDialog.target || "",
+              beforeText: state.descriptionDialog.beforeText || "",
+              afterText: state.descriptionDialog.afterText || "",
+              comment: state.descriptionDialog.comment || "",
+              prompt: state.descriptionDialog.prompt || "",
+              viewMode: state.descriptionDialog.viewMode || "",
             }
           : null,
         rows: (state.rows || []).map(function (row) {
@@ -423,6 +440,8 @@ test("row create opens confirmation before creating without Epic", async functio
       return Promise.resolve({
         text: /remark prompt/i.test(request.systemPrompt)
           ? JSON.stringify({ text: "Corrected remark text", comment: "Исправил орфографию и сохранил смысл замечания." })
+          : request.systemPrompt.indexOf("SE description prompt") >= 0
+            ? JSON.stringify({ description: "*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки", comment: "Собрал описание для SE в Jira wiki." })
           : request.systemPrompt.indexOf("SE prompt") >= 0
             ? JSON.stringify({ summary: "[SE] Проверить индикатор \"Гаечный ключ\"", comment: "Добавил префикс SE и уточнил формулировку." })
             : JSON.stringify({ summary: "Improved story", comment: "Сократил и выровнял название Story." }),
@@ -473,11 +492,11 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.epicText, "Без Epic");
   assert.equal(last.createDialog.epicLinkAllowed, false);
   assert.deepEqual(last.createDialog.childTasks, [
-    "SE:System Engineer:[SE] Test jira task:true::",
-    "FE:Frontend Task:[FE] Test jira task:true::",
-    "BE:Backend Task:[BE] Test jira task:true::",
-    "QA:QA:[QA] Test jira task:true::",
-    "DevOps:DevOps:[DevOps] Test jira task:true::",
+    "SE:System Engineer:[SE] Test jira task:true:::Создано автоматически из журнала замечаний.",
+    "FE:Frontend Task:[FE] Test jira task:true:::Создано автоматически из журнала замечаний.",
+    "BE:Backend Task:[BE] Test jira task:true:::Создано автоматически из журнала замечаний.",
+    "QA:QA:[QA] Test jira task:true:::Создано автоматически из журнала замечаний.",
+    "DevOps:DevOps:[DevOps] Test jira task:true:::Создано автоматически из журнала замечаний.",
   ]);
   assert.equal(last.rows[0].status, "ready");
 
@@ -569,7 +588,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   await flush();
   last = states[states.length - 1];
-  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Edited story:true::");
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Edited story:true:::Создано автоматически из журнала замечаний.");
   assert.equal(last.summaryDialog.target, "child-0");
   assert.equal(last.summaryDialog.beforeText, "[SE] Edited story");
   assert.equal(last.summaryDialog.afterText, "[SE] Проверить индикатор \"Гаечный ключ\"");
@@ -582,7 +601,26 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.summaryDialog, null);
-  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Проверить индикатор \"Гаечный ключ\":true::");
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Проверить индикатор \"Гаечный ключ\":true:::Создано автоматически из журнала замечаний.");
+  callbacks.onDialogImproveDescription("child-0");
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.descriptionDialog.target, "child-0");
+  assert.equal(last.descriptionDialog.beforeText, "Создано автоматически из журнала замечаний.");
+  assert.equal(last.descriptionDialog.afterText, "*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки");
+  assert.equal(last.descriptionDialog.comment, "Собрал описание для SE в Jira wiki.");
+  assert.equal(last.descriptionDialog.prompt, "SE description prompt");
+  assert.equal(last.descriptionDialog.viewMode, "edit");
+  assert.equal(llmRequests[5].systemPrompt, "Project prompt\n\nSE description prompt");
+  callbacks.onDescriptionDialogViewModeChange("preview");
+  last = states[states.length - 1];
+  assert.equal(last.descriptionDialog.viewMode, "preview");
+  callbacks.onDescriptionDialogApply();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.descriptionDialog, null);
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Проверить индикатор \"Гаечный ключ\":true:::*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -605,6 +643,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.remainingEstimate, "1h");
   assert.equal(creatorOptions.sourceRows[0].value, "Applied corrected remark");
   assert.equal(creatorOptions.childTasks[0].summary, "[SE] Проверить индикатор \"Гаечный ключ\"");
+  assert.equal(creatorOptions.childTasks[0].description, "*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");
   assert.equal(creatorOptions.childTasks[0].remainingEstimate, "4h");

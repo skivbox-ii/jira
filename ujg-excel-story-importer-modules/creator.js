@@ -139,7 +139,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       project: { key: String(projectKey || "") },
       summary: limitSummary(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
       issuetype: { name: String((role && role.issueType) || "") },
-      description: "Создано автоматически из журнала замечаний.",
+      description: role && role.description != null && String(role.description).trim() ? String(role.description) : "Создано автоматически из журнала замечаний.",
     };
     appendAssignee(fields, role && role.assignee);
     appendTimetracking(fields, role && role.originalEstimate, role && role.remainingEstimate);

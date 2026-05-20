@@ -240,6 +240,7 @@ test("rendering module exposes create confirmation modal", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
 
   assert.match(source, /ujg-esi-confirm-overlay/);
+  assert.match(source, /ujg-esi-confirm-shell/);
   assert.match(source, /ujg-esi-confirm-create/);
   assert.match(source, /ujg-esi-confirm-cancel/);
   assert.match(source, /Создать в Jira/);
@@ -275,6 +276,14 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /onIssueTypeSelect/);
   assert.match(source, /ujg-esi-confirm-child-enabled/);
   assert.match(source, /onDialogChildToggle/);
+  assert.match(source, /ujg-esi-confirm-child-description/);
+  assert.match(source, /onDialogImproveDescription/);
+  assert.match(source, /descriptionDialog/);
+  assert.match(source, /ujg-esi-description-review-overlay/);
+  assert.match(source, /ujg-esi-description-editor-toolbar/);
+  assert.match(source, /Визуальный/);
+  assert.match(source, /Текст/);
+  assert.match(source, /renderJiraWiki/);
   assert.match(source, /ujg-esi-confirm-epic-warning/);
   assert.match(source, /задача будет создана без Epic/);
   assert.match(source, /captureScrollState/);
@@ -289,13 +298,17 @@ test("mapping settings exposes editable AI prompts", function () {
   assert.match(source, /AI промпты/);
   assert.match(source, /Общий prompt проекта/);
   assert.match(source, /Текст замечания/);
+  assert.match(source, /Описания дочерних задач/);
   assert.match(source, /ujg-esi-llm-prompt/);
+  assert.match(source, /ujg-esi-llm-description-prompt/);
   assert.match(source, /onMappingLlmProjectPromptChange/);
   assert.match(source, /onMappingLlmRemarkPromptChange/);
   assert.match(source, /onMappingLlmPromptChange/);
+  assert.match(source, /onMappingLlmDescriptionPromptChange/);
   assert.match(css, /\.ujg-esi-llm-prompts/);
   assert.match(css, /\.ujg-esi-llm-project-prompt/);
   assert.match(css, /\.ujg-esi-llm-remark-prompt/);
+  assert.match(css, /\.ujg-esi-llm-description-prompt/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

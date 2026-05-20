@@ -126,6 +126,45 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return cols && (cols["Статус в Jira"] || cols["Статус"] || "") || "";
   }
 
+  function wikiInline($parent, text) {
+    String(text || "").split(/(\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-|\+[^\+\n]+\+)/g).forEach(function(part) {
+      var node;
+      if (!part) return;
+      if (/^\*[^*\n]+\*$/.test(part)) node = $("<strong/>").text(part.slice(1, -1));
+      else if (/^_[^_\n]+_$/.test(part)) node = $("<em/>").text(part.slice(1, -1));
+      else if (/^-[^-\n]+-$/.test(part)) node = $("<span/>").addClass("ujg-esi-wiki-strike").text(part.slice(1, -1));
+      else if (/^\+[^\+\n]+\+$/.test(part)) node = $("<u/>").text(part.slice(1, -1));
+      else node = document.createTextNode(part);
+      $parent.append(node);
+    });
+  }
+
+  function renderJiraWiki(text) {
+    var $wrap = $("<div/>").addClass("ujg-esi-jira-wiki-preview");
+    String(text || "").split(/\n/).forEach(function(line) {
+      var trimmed = line.trim();
+      var $line;
+      if (!trimmed) {
+        $wrap.append($("<div/>").addClass("ujg-esi-wiki-blank").html("&nbsp;"));
+        return;
+      }
+      if (/^h[1-6]\.\s+/.test(trimmed)) {
+        $line = $("<h4/>").text(trimmed.replace(/^h[1-6]\.\s+/, ""));
+      } else if (/^#\s+/.test(trimmed)) {
+        $line = $("<div/>").addClass("ujg-esi-wiki-list ujg-esi-wiki-ordered");
+        wikiInline($line, trimmed.replace(/^#\s+/, ""));
+      } else if (/^\*\s+/.test(trimmed)) {
+        $line = $("<div/>").addClass("ujg-esi-wiki-list");
+        wikiInline($line, trimmed.replace(/^\*\s+/, ""));
+      } else {
+        $line = $("<p/>");
+        wikiInline($line, line);
+      }
+      $wrap.append($line);
+    });
+    return $wrap;
+  }
+
   function appendProjectSelect($toolbar, state) {
     var $field = $("<label/>").addClass("ujg-esi-field");
     var $select = $("<select/>").addClass("ujg-esi-project-select");
@@ -1005,8 +1044,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendLlmPromptMappings($parent, settings) {
     var prompts = settings && settings.llmPrompts ? settings.llmPrompts : {};
+    var descriptionPrompts = settings && settings.llmDescriptionPrompts ? settings.llmDescriptionPrompts : {};
     var order = ["story", "SE", "FE", "BE", "QA", "DevOps"];
     var seen = {};
+    var seenDescriptions = {};
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append($("<h2/>").text("AI промпты для названий"));
@@ -1041,7 +1082,25 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           )
       );
     });
-    $parent.append($head, $project, $remark, $wrap);
+    var $descriptionHead = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head ujg-esi-llm-description-head")
+      .append($("<h2/>").text("Описания дочерних задач"));
+    var $descriptionWrap = $("<div/>").addClass("ujg-esi-llm-prompts ujg-esi-llm-description-prompts");
+    order.filter(function(key) { return key !== "story"; }).concat(Object.keys(descriptionPrompts || {})).forEach(function(key) {
+      if (!key || seenDescriptions[key]) return;
+      seenDescriptions[key] = true;
+      $descriptionWrap.append(
+        $("<label/>")
+          .addClass("ujg-esi-llm-prompt-row")
+          .append(
+            $("<span/>").text(key),
+            appendTextarea("ujg-esi-llm-prompt ujg-esi-llm-description-prompt", descriptionPrompts[key] || "", function(value) {
+              if (services && services.onMappingLlmDescriptionPromptChange) services.onMappingLlmDescriptionPromptChange(key, value);
+            })
+          )
+      );
+    });
+    $parent.append($head, $project, $remark, $wrap, $descriptionHead, $descriptionWrap);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -1128,6 +1187,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<th/>").text("Роль"))
           .append($("<th/>").text("Тип Jira"))
           .append($("<th/>").text("Название"))
+          .append($("<th/>").text("Описание"))
           .append($("<th/>").text("Исполнитель"))
           .append($("<th/>").text("Первоначальная оценка"))
           .append($("<th/>").text("Оставшееся время"))
@@ -1151,6 +1211,18 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append(appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
           }).prop("disabled", !enabled), "child-" + index, state.llmLoadingTarget).toggleClass("ujg-esi-summary-ai-disabled", !enabled)))
+          .append($("<td/>").append(
+            $("<button/>")
+              .attr("type", "button")
+              .addClass("ujg-esi-confirm-child-description")
+              .attr("title", "Редактировать описание")
+              .attr("aria-label", "Редактировать описание")
+              .prop("disabled", !enabled)
+              .html("&#9776;")
+              .on("click", function() {
+                if (services && services.onDialogImproveDescription) services.onDialogImproveDescription("child-" + index);
+              })
+          ))
           .append($("<td/>").append(appendAssigneePicker("ujg-esi-confirm-child-assignee", "child-" + index, task.assigneeId || "", task.assigneeLabel || "", state, !enabled)))
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
@@ -1168,6 +1240,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var dialog = state && state.createDialog ? state.createDialog : null;
     if (!dialog) return;
     var $overlay = $("<div/>").addClass("ujg-esi-confirm-overlay");
+    var $shell = $("<div/>").addClass("ujg-esi-confirm-shell");
     var $modal = $("<div/>")
       .addClass("ujg-esi-confirm-modal")
       .attr("role", "dialog")
@@ -1243,7 +1316,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             })
         )
     );
-    $overlay.append($modal);
+    $shell.append($modal);
+    $overlay.append($shell);
     $parent.append($overlay);
   }
 
@@ -1365,6 +1439,132 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
+  function appendDescriptionReviewDialog($parent, state) {
+    var dialog = state && state.descriptionDialog;
+    if (!dialog) return;
+    var target = "description-dialog-" + (dialog.target || "");
+    var isBusy = !!(state && state.llmLoadingTarget === target);
+    var viewMode = dialog.viewMode === "preview" ? "preview" : "edit";
+    var $overlay = $("<div/>").addClass("ujg-esi-description-review-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-description-review-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    function change(field, value) {
+      if (services && services.onDescriptionDialogFieldChange) services.onDescriptionDialogFieldChange(field, value);
+    }
+    function call(name) {
+      if (services && services[name]) services[name]();
+    }
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-description-review-head")
+        .append(
+          $("<h3/>").text("Описание " + (dialog.role || "задачи")),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-description-review-close")
+            .attr("aria-label", "Закрыть")
+            .text("×")
+            .on("click", function() {
+              call("onDescriptionDialogCancel");
+            })
+        )
+    );
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-description-review-grid")
+        .append(
+          $("<label/>").append(
+            $("<span/>").text("До LLM"),
+            appendTextarea("ujg-esi-description-review-before", dialog.beforeText || "", function(value) {
+              change("beforeText", value);
+            })
+          ),
+          $("<div/>")
+            .addClass("ujg-esi-description-review-after-panel")
+            .append(
+              $("<span/>").text("После LLM"),
+              $("<div/>")
+                .addClass("ujg-esi-description-editor")
+                .append(
+                  $("<div/>")
+                    .addClass("ujg-esi-description-editor-toolbar")
+                    .append(
+                      $("<button/>").attr("type", "button").text("Стиль"),
+                      $("<button/>").attr("type", "button").html("<b>B</b>"),
+                      $("<button/>").attr("type", "button").html("<i>I</i>"),
+                      $("<button/>").attr("type", "button").html("<u>U</u>"),
+                      $("<button/>").attr("type", "button").text("🔗"),
+                      $("<button/>").attr("type", "button").text("•"),
+                      $("<button/>").attr("type", "button").text("1."),
+                      $("<button/>").attr("type", "button").text("+")
+                    ),
+                  viewMode === "preview"
+                    ? renderJiraWiki(dialog.afterText || "")
+                    : appendTextarea("ujg-esi-description-review-after", dialog.afterText || "", function(value) {
+                        change("afterText", value);
+                      }),
+                  $("<div/>")
+                    .addClass("ujg-esi-description-editor-footer")
+                    .append(
+                      $("<button/>")
+                        .attr("type", "button")
+                        .addClass(viewMode === "preview" ? "ujg-esi-description-mode-active" : "")
+                        .text("Визуальный")
+                        .on("click", function() {
+                          if (services && services.onDescriptionDialogViewModeChange) services.onDescriptionDialogViewModeChange("preview");
+                        }),
+                      $("<button/>")
+                        .attr("type", "button")
+                        .addClass(viewMode === "edit" ? "ujg-esi-description-mode-active" : "")
+                        .text("Текст")
+                        .on("click", function() {
+                          if (services && services.onDescriptionDialogViewModeChange) services.onDescriptionDialogViewModeChange("edit");
+                        })
+                    )
+                )
+            )
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-summary-review-comment-row")
+        .append(
+          $("<span/>").text("Что сделал LLM"),
+          $("<div/>").addClass("ujg-esi-summary-review-comment").text(dialog.comment || "LLM не вернул комментарий.")
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-summary-review-prompt-row")
+        .append(
+          $("<span/>").text("Prompt"),
+          appendTextarea("ujg-esi-summary-review-prompt", dialog.prompt || "", function(value) {
+            change("prompt", value);
+          })
+        )
+    );
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-actions")
+        .append(
+          $("<button/>").attr("type", "button").addClass("ujg-esi-summary-review-cancel").text("Отмена").on("click", function() {
+            call("onDescriptionDialogCancel");
+          }),
+          $("<button/>").attr("type", "button").addClass("ujg-esi-summary-review-improve").prop("disabled", isBusy).text(isBusy ? "Улучшаю..." : "Улучшить").on("click", function() {
+            call("onDescriptionDialogImprove");
+          }),
+          $("<button/>").attr("type", "button").addClass("ujg-esi-summary-review-apply").prop("disabled", isBusy || !String(dialog.afterText || "").trim()).text("Применить").on("click", function() {
+            call("onDescriptionDialogApply");
+          })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -1431,6 +1631,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendConfirmModal($root, s);
     appendLlmReviewDialog($root, s, "summary");
     appendLlmReviewDialog($root, s, "remark");
+    appendDescriptionReviewDialog($root, s);
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
   }
