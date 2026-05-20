@@ -4384,19 +4384,21 @@ define("_ujgESI_main", [
       );
     }
 
-    function saveMappings() {
+    function saveMappings(options) {
+      var opts = options || {};
+      var shouldRender = opts.render !== false;
       state.mappingSettings = normalizeMappingSettings(state.mappingSettings);
       if (!mappingStoreInstance || typeof mappingStoreInstance.save !== "function") {
-        render();
+        if (shouldRender) render();
         return Promise.resolve(state.mappingSettings);
       }
       state.mappingError = "";
-      render();
+      if (shouldRender) render();
       return promiseOf(mappingStoreInstance.save(state.mappingSettings)).then(
         function(settings) {
           state.mappingSettings = normalizeMappingSettings(settings);
           state.mappingError = "";
-          render();
+          if (shouldRender) render();
           return state.mappingSettings;
         },
         function(err) {
@@ -4721,7 +4723,7 @@ define("_ujgESI_main", [
       if (name === "excel") entries[i].excel = value != null ? String(value) : "";
       if (name === "jira") entries[i].jira = value != null ? String(value) : "";
       state.mappingSettings[key] = mapFromEntries(entries);
-      saveMappings();
+      saveMappings({ render: false });
     }
 
     function onMappingPairRemove(block, index) {

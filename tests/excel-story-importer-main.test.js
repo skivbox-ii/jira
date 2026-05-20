@@ -2081,6 +2081,88 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(creatorOptions.childTasks[1].assignee.name, "qa-user");
 });
 
+test("mapping pair input changes save without rerendering the focused editor", async function () {
+  const states = [];
+  let callbacks = null;
+  let savedMappings = null;
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        mappingEditorOpen: !!state.mappingEditorOpen,
+        activeMappingBlock: state.activeMappingBlock || "",
+        priorityMap: state.mappingSettings ? Object.assign({}, state.mappingSettings.priorityMap) : null,
+      });
+    },
+  };
+  const mappingStore = {
+    create: function () {
+      return {
+        load: function () {
+          return Promise.resolve({
+            moduleComponentMap: {},
+            priorityMap: {},
+            columnMap: {},
+            tableStart: {},
+            roles: [],
+          });
+        },
+        save: function (settings) {
+          savedMappings = settings;
+          return Promise.resolve(settings);
+        },
+      };
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": {
+      baseUrl: "https://jira.example.com",
+      getProjects: function () {
+        return Promise.resolve([]);
+      },
+    },
+    "_ujgESI_excel-loader": {},
+    "_ujgESI_parser": {},
+    "_ujgESI_creator": {},
+    "_ujgESI_rendering": rendering,
+    "_ujgESI_mappingStore": mappingStore,
+    "_ujgESI_xlsxPatcher": null,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+  await flush();
+
+  callbacks.onOpenMappings();
+  callbacks.onMappingBlockSelect("priorities");
+  callbacks.onMappingPairAdd("priorities");
+  await flush();
+  await flush();
+  const renderCountBeforeTyping = states.length;
+
+  callbacks.onMappingPairChange("priorities", 0, "jira", "High");
+  await flush();
+  await flush();
+
+  assert.equal(savedMappings.priorityMap["Новое значение"], "High");
+  assert.equal(states.length, renderCountBeforeTyping);
+});
+
 test("meta sheet picker saves selected sheet and reparses current workbook", async function () {
   const states = [];
   let callbacks = null;
