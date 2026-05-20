@@ -130,3 +130,25 @@ test("mapping store loads and saves mappings only in localStorage", async functi
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assigneeId, "se-name");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assignee.displayName, "SE User");
 });
+
+test("mapping store keeps draft mapping rows with empty Jira value", async function () {
+  const localStorage = createLocalStorage();
+  const module = loadStore({}, localStorage, { location: { search: "" } });
+  const store = module.create();
+
+  await store.save({
+    moduleComponentMap: { "Новый модуль": "" },
+    priorityMap: { "Новое значение": "" },
+    columnMap: {},
+    tableStart: {},
+    roles: [],
+  });
+
+  const saved = JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings;
+  assert.deepEqual(saved.moduleComponentMap, { "Новый модуль": "" });
+  assert.deepEqual(saved.priorityMap, { "Новое значение": "" });
+
+  const loaded = await store.load();
+  assert.deepEqual(Object.assign({}, loaded.moduleComponentMap), { "Новый модуль": "" });
+  assert.deepEqual(Object.assign({}, loaded.priorityMap), { "Новое значение": "" });
+});

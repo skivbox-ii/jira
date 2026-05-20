@@ -149,7 +149,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     Object.keys(map || {}).forEach(function(key) {
       var source = key != null ? String(key).trim() : "";
       var target = map[key] != null ? String(map[key]).trim() : "";
-      if (source && target) out[source] = target;
+      if (source || target) out[source] = target;
     });
     return out;
   }
