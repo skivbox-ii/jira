@@ -249,6 +249,8 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /ujg-esi-summary-review-overlay/);
   assert.match(source, /ujg-esi-summary-review-before/);
   assert.match(source, /ujg-esi-summary-review-after/);
+  assert.match(source, /ujg-esi-summary-review-comment/);
+  assert.match(source, /Что сделал LLM/);
   assert.match(source, /ujg-esi-source-ai/);
   assert.match(source, /Улучшить/);
   assert.match(source, /Исправить/);

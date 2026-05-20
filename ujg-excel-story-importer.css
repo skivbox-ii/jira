@@ -961,6 +961,7 @@
 .ujg-esi-remark-ai-grid label,
 .ujg-esi-remark-ai-prompt-row,
 .ujg-esi-summary-review-grid label,
+.ujg-esi-summary-review-comment-row,
 .ujg-esi-summary-review-prompt-row {
   display: grid;
   gap: 6px;
@@ -969,6 +970,7 @@
 .ujg-esi-remark-ai-grid span,
 .ujg-esi-remark-ai-prompt-row span,
 .ujg-esi-summary-review-grid span,
+.ujg-esi-summary-review-comment-row span,
 .ujg-esi-summary-review-prompt-row span {
   color: #5e6c84;
   font-size: 12px;
@@ -980,6 +982,7 @@
 .ujg-esi-remark-ai-prompt,
 .ujg-esi-summary-review-before,
 .ujg-esi-summary-review-after,
+.ujg-esi-summary-review-comment,
 .ujg-esi-summary-review-prompt {
   width: 100%;
   min-height: 260px;
@@ -994,8 +997,13 @@
 }
 
 .ujg-esi-remark-ai-prompt-row,
+.ujg-esi-summary-review-comment-row,
 .ujg-esi-summary-review-prompt-row {
   margin-top: 12px;
+}
+
+.ujg-esi-summary-review-comment {
+  min-height: 82px;
 }
 
 .ujg-esi-remark-ai-prompt,

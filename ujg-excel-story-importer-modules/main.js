@@ -1335,7 +1335,7 @@ define("_ujgESI_main", [
         "Текущий тип: " + (dialog && dialog.target === "story" ? "Story" : (dialog && dialog.role || "Child")),
         "Текущее название: " + (dialog && dialog.beforeText || ""),
         source ? "Поля строки Excel:\n" + source : "",
-        "Верни только итоговое название Jira Summary."
+        "Верни только JSON без markdown: {\"summary\":\"итоговое название Jira Summary\", \"comment\":\"кратко что именно было изменено\"}."
       ].filter(Boolean).join("\n\n");
     }
 
@@ -1343,6 +1343,32 @@ define("_ujgESI_main", [
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/^["'«]+|["'»]+$/g, "").replace(/\s+/g, " ").trim();
       return limitSummary(text);
+    }
+
+    function stripJsonFence(value) {
+      var text = value != null ? String(value).trim() : "";
+      var match = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+      return match ? match[1].trim() : text;
+    }
+
+    function parseLlmSummaryResponse(value) {
+      var text = stripJsonFence(value);
+      var parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
+        parsed = null;
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return {
+          summary: cleanupLlmSummary(parsed.summary || parsed.title || parsed.result || ""),
+          comment: parsed.comment != null ? String(parsed.comment).trim() : parsed.explanation != null ? String(parsed.explanation).trim() : "",
+        };
+      }
+      return {
+        summary: cleanupLlmSummary(text),
+        comment: "",
+      };
     }
 
     function cleanupLlmRemark(value) {
@@ -2263,8 +2289,11 @@ define("_ujgESI_main", [
         temperature: 0.1,
       })).then(
         function(result) {
-          var cleaned = cleanupLlmSummary(result && result.text);
-          if (state.summaryDialog && cleaned) state.summaryDialog.afterText = cleaned;
+          var response = parseLlmSummaryResponse(result && result.text);
+          if (state.summaryDialog && response.summary) {
+            state.summaryDialog.afterText = response.summary;
+            state.summaryDialog.comment = response.comment || "";
+          }
           state.llmLoadingTarget = "";
           state.llmError = "";
           render();
@@ -2290,6 +2319,7 @@ define("_ujgESI_main", [
         role: targetKey === "story" ? "Story" : task.role || "",
         beforeText: beforeText || "",
         afterText: "",
+        comment: "",
         prompt: llmSummaryPrompt(targetKey, task),
       };
       state.llmError = "";
@@ -2302,6 +2332,7 @@ define("_ujgESI_main", [
       if (!dialog) return;
       if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
       if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
     }
 

@@ -1380,6 +1380,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     );
     $modal.append(
       $("<label/>")
+        .addClass("ujg-esi-summary-review-comment-row")
+        .append(
+          $("<span/>").text("Что сделал LLM"),
+          appendTextarea("ujg-esi-summary-review-comment", dialog.comment || "", function(value) {
+            if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("comment", value);
+          })
+        )
+    );
+    $modal.append(
+      $("<label/>")
         .addClass("ujg-esi-summary-review-prompt-row")
         .append(
           $("<span/>").text("Prompt"),

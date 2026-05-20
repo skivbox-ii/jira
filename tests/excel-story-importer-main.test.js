@@ -330,6 +330,7 @@ test("row create opens confirmation before creating without Epic", async functio
               target: state.summaryDialog.target || "",
               beforeText: state.summaryDialog.beforeText || "",
               afterText: state.summaryDialog.afterText || "",
+              comment: state.summaryDialog.comment || "",
               prompt: state.summaryDialog.prompt || "",
             }
           : null,
@@ -421,8 +422,8 @@ test("row create opens confirmation before creating without Epic", async functio
         text: /remark prompt/i.test(request.systemPrompt)
           ? "Corrected remark text"
           : request.systemPrompt.indexOf("SE prompt") >= 0
-            ? "[SE] Improved story"
-            : "Improved story",
+            ? JSON.stringify({ summary: "[SE] Improved story", comment: "Добавил префикс SE и уточнил формулировку." })
+            : JSON.stringify({ summary: "Improved story", comment: "Сократил и выровнял название Story." }),
       });
     },
   };
@@ -489,9 +490,12 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.summaryDialog.target, "story");
   assert.equal(last.summaryDialog.beforeText, "Edited story");
   assert.equal(last.summaryDialog.afterText, "Improved story");
+  assert.equal(last.summaryDialog.comment, "Сократил и выровнял название Story.");
   assert.equal(last.summaryDialog.prompt, "Story prompt");
   assert.equal(llmRequests[0].systemPrompt, "Project prompt\n\nStory prompt");
   assert.match(llmRequests[0].userPrompt, /Test jira task/);
+  assert.match(llmRequests[0].userPrompt, /summary/);
+  assert.match(llmRequests[0].userPrompt, /comment/);
   callbacks.onSummaryDialogFieldChange("afterText", "Applied story title");
   callbacks.onSummaryDialogApply();
   await flush();
@@ -563,6 +567,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.summaryDialog.target, "child-0");
   assert.equal(last.summaryDialog.beforeText, "[SE] Edited story");
   assert.equal(last.summaryDialog.afterText, "[SE] Improved story");
+  assert.equal(last.summaryDialog.comment, "Добавил префикс SE и уточнил формулировку.");
   assert.equal(last.summaryDialog.prompt, "SE prompt");
   assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nRemark prompt");
   assert.match(llmRequests[1].userPrompt, /Corrected|Edited story from modal|Test jira task/);
