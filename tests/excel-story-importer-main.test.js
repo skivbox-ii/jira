@@ -8,6 +8,7 @@ const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules"
 const CONFIG = {
   STORY_ISSUE_TYPE: "Story",
   LLM_CONFIG_STORAGE_KEY: "ujg-test-llm",
+  SUMMARY_MAX_LENGTH: 255,
   LLM_PROJECT_PROMPT: "Project prompt",
   LLM_REMARK_PROMPT: "Remark prompt",
   LLM_SUMMARY_PROMPTS: {
@@ -276,6 +277,123 @@ test("epic picker search opens filtered epic choices and select stores epic key"
   last = states[states.length - 1];
   assert.equal(last.epicKey, "EVOSCADA-10");
   assert.equal(last.epicPicker.open, false);
+});
+
+test("story summary LLM dialog uses full Excel remark when mapped summary is truncated", async function () {
+  const states = [];
+  const llmRequests = [];
+  let callbacks = null;
+  const fullRemarkText = "Присутствует возможность вывода в ремонт объектов, которые не должны выводиться в ремонт (колодцы, КППСОД, емкости и т.п.). При этом объект раскрашивается коричневым цветом, появляется индикация \"Гаечный ключ\"(в дереве ВТОР объект не отображается, скрыт). Дополнительное уточнение должно остаться в поле До LLM целиком.";
+  const rendering = {
+    init: function (_container, services) {
+      callbacks = services;
+    },
+    render: function (state) {
+      states.push({
+        createDialog: state.createDialog
+          ? {
+              summary: state.createDialog.summary || "",
+            }
+          : null,
+        summaryDialog: state.summaryDialog
+          ? {
+              beforeText: state.summaryDialog.beforeText || "",
+              afterText: state.summaryDialog.afterText || "",
+            }
+          : null,
+      });
+    },
+  };
+  const api = {
+    baseUrl: "https://jira.example.com",
+    getProjects: function () {
+      return Promise.resolve([{ key: "EVOSCADA" }]);
+    },
+    getProjectEpics: function () {
+      return Promise.resolve([]);
+    },
+    getProjectCreateMeta: function () {
+      return Promise.resolve({ projects: [] });
+    },
+    getIssuesByKeys: function () {
+      return Promise.resolve({ issues: [] });
+    },
+  };
+  const excelLoader = {
+    readWorkbook: function () {
+      return Promise.resolve({ SheetNames: ["Замечания"] });
+    },
+  };
+  const parser = {
+    parseWorkbook: function () {
+      return {
+        sheetName: "Замечания",
+        headerRowNumber: 1,
+        rows: [
+          {
+            summary: fullRemarkText.slice(0, 255),
+            sourceColumns: { "Содержание замечания": fullRemarkText },
+            status: "ready",
+            errors: [],
+          },
+        ],
+      };
+    },
+  };
+  const llmClient = {
+    readStoredConfig: function () {
+      return { apiBase: "https://llm.example/v1", model: "model", apiKey: "key" };
+    },
+    requestText: function (_config, request) {
+      llmRequests.push(request);
+      return Promise.resolve({
+        text: JSON.stringify({ summary: "Улучшенное название", comment: "Сократил название." }),
+      });
+    },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () {
+      return { length: 0 };
+    },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": excelLoader,
+    "_ujgESI_parser": parser,
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": null,
+    "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": llmClient,
+  });
+
+  new Gadget({
+    getGadgetContentEl: function () {
+      return {
+        find: function () {
+          return { length: 1 };
+        },
+      };
+    },
+    resize: function () {},
+  });
+  await flush();
+
+  callbacks.onProjectChange("EVOSCADA");
+  await flush();
+  callbacks.onFileChange({ name: "remarks.xlsx" });
+  await flush();
+  await flush();
+  callbacks.onCreateRow(0);
+  await flush();
+  callbacks.onDialogImproveSummary("story");
+  await flush();
+  await flush();
+
+  const last = states[states.length - 1];
+  assert.equal(last.createDialog.summary, fullRemarkText.slice(0, 255));
+  assert.equal(last.summaryDialog.beforeText, fullRemarkText);
+  assert.equal(last.summaryDialog.afterText, "Улучшенное название");
+  assert.equal(llmRequests.length, 1);
 });
 
 test("row create opens confirmation before creating without Epic", async function () {

@@ -1227,7 +1227,7 @@ define("_ujgESI_main", [
     }
 
     function limitSummary(value) {
-      var max = Number(config && config.SUMMARY_MAX_LENGTH) || 250;
+      var max = Number(config && config.SUMMARY_MAX_LENGTH) || 255;
       var text = value != null ? String(value).trim() : "";
       return text.length > max ? text.slice(0, max) : text;
     }
@@ -2392,14 +2392,44 @@ define("_ujgESI_main", [
       return summaryDialogTask(target);
     }
 
+    function normalizedSourceName(value) {
+      return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+    }
+
+    function compactSourceText(value) {
+      return String(value || "").replace(/\s+/g, " ").trim();
+    }
+
+    function longestSourceCandidate(candidates) {
+      var sorted = candidates.slice().sort(function(a, b) {
+        return String(b.value || "").length - String(a.value || "").length;
+      });
+      return sorted[0] || null;
+    }
+
     function fullStorySummarySource(dialog) {
-      var name = summaryColumnName();
       var rows = dialog && dialog.sourceRows ? dialog.sourceRows : [];
-      var found = rows.filter(function(row) {
-        return row && String(row.name || "").trim() === name;
+      var summary = dialog && dialog.summary != null ? String(dialog.summary).trim() : "";
+      var summaryCompact = compactSourceText(summary);
+      var names = [summaryColumnName(), config && config.SUMMARY_COLUMN, "Замечание", "Содержание замечания"].map(normalizedSourceName);
+      var candidates = rows.map(function(row) {
+        return {
+          name: normalizedSourceName(row && row.name),
+          value: row && row.value != null ? String(row.value).trim() : "",
+        };
+      }).filter(function(row) {
+        return !!row.value;
+      });
+      var exact = candidates.filter(function(row) {
+        return names.indexOf(row.name) !== -1;
       })[0];
-      var value = found && found.value != null ? String(found.value).trim() : "";
-      return value || (dialog && dialog.summary) || "";
+      var likely = longestSourceCandidate(candidates.filter(function(row) {
+        return row.name.indexOf("замеч") !== -1 || row.name.indexOf("содерж") !== -1;
+      }));
+      var bySummary = longestSourceCandidate(candidates.filter(function(row) {
+        return summaryCompact && compactSourceText(row.value).indexOf(summaryCompact) === 0;
+      }));
+      return (exact && exact.value) || (likely && likely.value) || (bySummary && bySummary.value) || summary;
     }
 
     function requestSummaryDialogImprove() {
@@ -2464,7 +2494,7 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       if (!dialog) return;
       if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
-      if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "afterText") dialog.afterText = limitSummary(value);
       if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
     }

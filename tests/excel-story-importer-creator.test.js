@@ -112,7 +112,7 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   );
 });
 
-test("createRow limits story and child summaries to 250 characters", async function () {
+test("createRow limits story and child summaries to 255 characters", async function () {
   const creator = loadCreator();
   const calls = [];
   const links = [];
@@ -139,11 +139,11 @@ test("createRow limits story and child summaries to 250 characters", async funct
   );
 
   assert.equal(result.ok, true);
-  assert.equal(calls[0].fields.summary.length, 250);
-  assert.equal(calls[0].fields.summary, longSummary.slice(0, 250));
-  assert.equal(calls[1].fields.summary.length, 250);
+  assert.equal(calls[0].fields.summary.length, 255);
+  assert.equal(calls[0].fields.summary, longSummary.slice(0, 255));
+  assert.equal(calls[1].fields.summary.length, 255);
   assert.equal(calls[1].fields.summary.startsWith("[SE] "), true);
-  assert.equal(calls[1].fields.summary, ("[SE] " + longSummary).slice(0, 250));
+  assert.equal(calls[1].fields.summary, ("[SE] " + longSummary).slice(0, 255));
 });
 
 test("createRow retries without Epic Link when Jira rejects the epic field", async function () {

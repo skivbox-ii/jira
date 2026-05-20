@@ -23,7 +23,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   }
 
   function limitSummary(value) {
-    var max = Number(config.SUMMARY_MAX_LENGTH) || 250;
+    var max = Number(config.SUMMARY_MAX_LENGTH) || 255;
     var text = value != null ? String(value).trim() : "";
     return text.length > max ? text.slice(0, max) : text;
   }

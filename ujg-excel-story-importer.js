@@ -307,7 +307,7 @@ define("_ujgESI_config", [], function() {
   var STORAGE_KEY = "ujg-esi-state";
   var MAPPING_STORAGE_KEY = "ujg-esi-mapping-settings";
   var SUMMARY_COLUMN = "Замечание";
-  var SUMMARY_MAX_LENGTH = 250;
+  var SUMMARY_MAX_LENGTH = 255;
   var JIRA_COLUMN = "Jira";
   var SPRINT_FIELD = "customfield_10020";
   var STORY_ISSUE_TYPE = "Story";
@@ -392,32 +392,32 @@ define("_ujgESI_config", [], function() {
       "Сократи и переформулируй исходное замечание в понятный Jira Summary.",
       "Сохрани смысл, объект и важные условия. Не добавляй фактов, которых нет во входном тексте.",
       "Не добавляй префиксы ролей вроде [SE], [FE], [BE], [QA], [DevOps].",
-      "Верни только один заголовок без кавычек, markdown и пояснений. Максимум 250 символов."
+      "Верни только один заголовок без кавычек, markdown и пояснений. Максимум 255 символов."
     ].join("\n"),
     SE: [
       "Ты системный аналитик. Сформулируй Jira Summary для задачи SE внутри истории по замечанию приемки.",
       "Название должно начинаться с [SE]. Опиши анализ, уточнение требований или постановку решения.",
-      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 250 символов."
+      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 255 символов."
     ].join("\n"),
     FE: [
       "Ты frontend-разработчик. Сформулируй Jira Summary для задачи FE внутри истории по замечанию приемки.",
       "Название должно начинаться с [FE]. Опиши UI, экран, форму, отображение или клиентское поведение, если это применимо.",
-      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 250 символов."
+      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 255 символов."
     ].join("\n"),
     BE: [
       "Ты backend-разработчик. Сформулируй Jira Summary для задачи BE внутри истории по замечанию приемки.",
       "Название должно начинаться с [BE]. Опиши серверную логику, данные, API или интеграцию, если это применимо.",
-      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 250 символов."
+      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 255 символов."
     ].join("\n"),
     QA: [
       "Ты QA-инженер. Сформулируй Jira Summary для задачи QA внутри истории по замечанию приемки.",
       "Название должно начинаться с [QA]. Опиши проверку исправления, регрессию или тест-кейс по замечанию.",
-      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 250 символов."
+      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 255 символов."
     ].join("\n"),
     DevOps: [
       "Ты DevOps-инженер. Сформулируй Jira Summary для задачи DevOps внутри истории по замечанию приемки.",
       "Название должно начинаться с [DevOps]. Опиши окружение, конфигурацию, сборку, деплой или pipeline, если это применимо.",
-      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 250 символов."
+      "Сохрани предмет замечания, не добавляй новых фактов. Верни только заголовок, максимум 255 символов."
     ].join("\n")
   };
 
@@ -1061,7 +1061,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   }
 
   function limitSummary(value) {
-    var max = Number(config.SUMMARY_MAX_LENGTH) || 250;
+    var max = Number(config.SUMMARY_MAX_LENGTH) || 255;
     var text = value != null ? String(value).trim() : "";
     return text.length > max ? text.slice(0, max) : text;
   }
@@ -2386,7 +2386,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   var $root;
   var services;
-  var SUMMARY_MAX_LENGTH = 250;
+  var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
 
   function init(container, svc) {
@@ -3065,10 +3065,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $input;
   }
 
-  function appendTextarea(className, value, onChange) {
+  function appendTextarea(className, value, onChange, options) {
+    options = options || {};
     var $textarea = $("<textarea/>")
       .addClass(className || "")
       .val(value != null ? String(value) : "");
+    if (options.maxLength) $textarea.attr("maxlength", String(options.maxLength));
     $textarea.on("input", function() {
       onChange($(this).val());
     });
@@ -3077,6 +3079,17 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendSummaryInput(className, value, onChange) {
     return appendTextInput(className, value, onChange).attr("maxlength", String(SUMMARY_MAX_LENGTH));
+  }
+
+  function appendLlmReviewLabel(label, value, maxLength) {
+    var count = String(value || "").length;
+    var suffix = maxLength ? count + "/" + maxLength : String(count);
+    return $("<span/>")
+      .addClass("ujg-esi-summary-review-label")
+      .append(
+        $("<span/>").text(label),
+        $("<span/>").addClass("ujg-esi-summary-review-count").text(suffix)
+      );
   }
 
   function appendSelect(className, value, rows, onChange) {
@@ -3755,16 +3768,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-summary-review-grid")
         .append(
           $("<label/>").append(
-            $("<span/>").text("До LLM"),
+            appendLlmReviewLabel("До LLM", dialog.beforeText || "", null),
             appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
             })
           ),
           $("<label/>").append(
-            $("<span/>").text("После LLM"),
+            appendLlmReviewLabel("После LLM", dialog.afterText || "", isRemark ? null : SUMMARY_MAX_LENGTH),
             appendTextarea("ujg-esi-summary-review-after", dialog.afterText || "", function(value) {
               change("afterText", value);
-            })
+            }, { maxLength: isRemark ? null : SUMMARY_MAX_LENGTH })
           )
         )
     );
@@ -5261,7 +5274,7 @@ define("_ujgESI_main", [
     }
 
     function limitSummary(value) {
-      var max = Number(config && config.SUMMARY_MAX_LENGTH) || 250;
+      var max = Number(config && config.SUMMARY_MAX_LENGTH) || 255;
       var text = value != null ? String(value).trim() : "";
       return text.length > max ? text.slice(0, max) : text;
     }
@@ -6426,14 +6439,44 @@ define("_ujgESI_main", [
       return summaryDialogTask(target);
     }
 
+    function normalizedSourceName(value) {
+      return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+    }
+
+    function compactSourceText(value) {
+      return String(value || "").replace(/\s+/g, " ").trim();
+    }
+
+    function longestSourceCandidate(candidates) {
+      var sorted = candidates.slice().sort(function(a, b) {
+        return String(b.value || "").length - String(a.value || "").length;
+      });
+      return sorted[0] || null;
+    }
+
     function fullStorySummarySource(dialog) {
-      var name = summaryColumnName();
       var rows = dialog && dialog.sourceRows ? dialog.sourceRows : [];
-      var found = rows.filter(function(row) {
-        return row && String(row.name || "").trim() === name;
+      var summary = dialog && dialog.summary != null ? String(dialog.summary).trim() : "";
+      var summaryCompact = compactSourceText(summary);
+      var names = [summaryColumnName(), config && config.SUMMARY_COLUMN, "Замечание", "Содержание замечания"].map(normalizedSourceName);
+      var candidates = rows.map(function(row) {
+        return {
+          name: normalizedSourceName(row && row.name),
+          value: row && row.value != null ? String(row.value).trim() : "",
+        };
+      }).filter(function(row) {
+        return !!row.value;
+      });
+      var exact = candidates.filter(function(row) {
+        return names.indexOf(row.name) !== -1;
       })[0];
-      var value = found && found.value != null ? String(found.value).trim() : "";
-      return value || (dialog && dialog.summary) || "";
+      var likely = longestSourceCandidate(candidates.filter(function(row) {
+        return row.name.indexOf("замеч") !== -1 || row.name.indexOf("содерж") !== -1;
+      }));
+      var bySummary = longestSourceCandidate(candidates.filter(function(row) {
+        return summaryCompact && compactSourceText(row.value).indexOf(summaryCompact) === 0;
+      }));
+      return (exact && exact.value) || (likely && likely.value) || (bySummary && bySummary.value) || summary;
     }
 
     function requestSummaryDialogImprove() {
@@ -6498,7 +6541,7 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       if (!dialog) return;
       if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
-      if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "afterText") dialog.afterText = limitSummary(value);
       if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
     }

@@ -43,6 +43,10 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-summary-review-overlay/);
   assert.match(source, /ujg-esi-summary-review-before/);
   assert.match(source, /ujg-esi-summary-review-after/);
+  assert.match(source, /ujg-esi-summary-review-count/);
+  assert.match(source, /SUMMARY_MAX_LENGTH = 255/);
+  assert.match(source, /\.attr\("maxlength", String\(options\.maxLength\)\)/);
+  assert.match(source, /maxLength: isRemark \? null : SUMMARY_MAX_LENGTH/);
   assert.match(source, /ujg-esi-summary-review-comment/);
   assert.match(source, /ujg-esi-summary-review-prompt/);
   assert.match(source, /onRemarkDialogApply/);
@@ -289,6 +293,11 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /captureScrollState/);
   assert.match(source, /restoreScrollState/);
   assert.match(source, /ujg-esi-confirm-scroll/);
+});
+
+test("summary limit is 255 characters across config and rendering", function () {
+  assert.match(read("ujg-excel-story-importer-modules/config.js"), /SUMMARY_MAX_LENGTH = 255/);
+  assert.match(read("ujg-excel-story-importer-modules/rendering.js"), /SUMMARY_MAX_LENGTH = 255/);
 });
 
 test("mapping settings exposes editable AI prompts", function () {

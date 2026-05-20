@@ -996,6 +996,18 @@
   font-weight: 700;
 }
 
+.ujg-esi-summary-review-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ujg-esi-summary-review-count {
+  color: #8993a4;
+  font-weight: 600;
+}
+
 .ujg-esi-remark-ai-before,
 .ujg-esi-remark-ai-after,
 .ujg-esi-remark-ai-prompt,

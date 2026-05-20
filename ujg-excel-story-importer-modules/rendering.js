@@ -3,7 +3,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   var $root;
   var services;
-  var SUMMARY_MAX_LENGTH = 250;
+  var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
 
   function init(container, svc) {
@@ -682,10 +682,12 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return $input;
   }
 
-  function appendTextarea(className, value, onChange) {
+  function appendTextarea(className, value, onChange, options) {
+    options = options || {};
     var $textarea = $("<textarea/>")
       .addClass(className || "")
       .val(value != null ? String(value) : "");
+    if (options.maxLength) $textarea.attr("maxlength", String(options.maxLength));
     $textarea.on("input", function() {
       onChange($(this).val());
     });
@@ -694,6 +696,17 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function appendSummaryInput(className, value, onChange) {
     return appendTextInput(className, value, onChange).attr("maxlength", String(SUMMARY_MAX_LENGTH));
+  }
+
+  function appendLlmReviewLabel(label, value, maxLength) {
+    var count = String(value || "").length;
+    var suffix = maxLength ? count + "/" + maxLength : String(count);
+    return $("<span/>")
+      .addClass("ujg-esi-summary-review-label")
+      .append(
+        $("<span/>").text(label),
+        $("<span/>").addClass("ujg-esi-summary-review-count").text(suffix)
+      );
   }
 
   function appendSelect(className, value, rows, onChange) {
@@ -1372,16 +1385,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-summary-review-grid")
         .append(
           $("<label/>").append(
-            $("<span/>").text("До LLM"),
+            appendLlmReviewLabel("До LLM", dialog.beforeText || "", null),
             appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
             })
           ),
           $("<label/>").append(
-            $("<span/>").text("После LLM"),
+            appendLlmReviewLabel("После LLM", dialog.afterText || "", isRemark ? null : SUMMARY_MAX_LENGTH),
             appendTextarea("ujg-esi-summary-review-after", dialog.afterText || "", function(value) {
               change("afterText", value);
-            })
+            }, { maxLength: isRemark ? null : SUMMARY_MAX_LENGTH })
           )
         )
     );
