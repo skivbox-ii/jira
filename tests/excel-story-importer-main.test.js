@@ -485,6 +485,7 @@ test("row create opens confirmation before creating without Epic", async functio
               afterText: state.summaryDialog.afterText || "",
               comment: state.summaryDialog.comment || "",
               prompt: state.summaryDialog.prompt || "",
+              useSystemPrompt: state.summaryDialog.useSystemPrompt !== false,
             }
           : null,
         descriptionDialog: state.descriptionDialog
@@ -494,6 +495,7 @@ test("row create opens confirmation before creating without Epic", async functio
               afterText: state.descriptionDialog.afterText || "",
               comment: state.descriptionDialog.comment || "",
               prompt: state.descriptionDialog.prompt || "",
+              useSystemPrompt: state.descriptionDialog.useSystemPrompt !== false,
               viewMode: state.descriptionDialog.viewMode || "",
             }
           : null,
@@ -657,10 +659,16 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.summaryDialog.afterText, "Improved story");
   assert.equal(last.summaryDialog.comment, "Сократил и выровнял название Story.");
   assert.equal(last.summaryDialog.prompt, "Story prompt");
+  assert.equal(last.summaryDialog.useSystemPrompt, true);
   assert.equal(llmRequests[0].systemPrompt, "Project prompt\n\nStory prompt");
   assert.match(llmRequests[0].userPrompt, new RegExp(fullRemarkText.slice(-80)));
   assert.match(llmRequests[0].userPrompt, /summary/);
   assert.match(llmRequests[0].userPrompt, /comment/);
+  callbacks.onSummaryDialogFieldChange("useSystemPrompt", false);
+  callbacks.onSummaryDialogImprove();
+  await flush();
+  await flush();
+  assert.equal(llmRequests[1].systemPrompt, "");
   callbacks.onSummaryDialogFieldChange("afterText", "Applied story title");
   callbacks.onSummaryDialogApply();
   await flush();
@@ -698,19 +706,20 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.remarkDialog.beforeText, "Corrected remark text");
   assert.equal(last.remarkDialog.afterText, "Corrected remark text");
   assert.equal(last.remarkDialog.comment, "Исправил орфографию и сохранил смысл замечания.");
-  assert.equal(llmRequests[2].systemPrompt, "Project prompt\n\nRemark prompt");
-  assert.match(llmRequests[2].userPrompt, /text/);
-  assert.match(llmRequests[2].userPrompt, /comment/);
+  assert.equal(llmRequests[3].systemPrompt, "Project prompt\n\nRemark prompt");
+  assert.match(llmRequests[3].userPrompt, /text/);
+  assert.match(llmRequests[3].userPrompt, /comment/);
   callbacks.onRemarkDialogFieldChange("beforeText", "Remark before second pass");
   callbacks.onRemarkDialogFieldChange("prompt", "Custom remark prompt");
+  callbacks.onRemarkDialogFieldChange("useSystemPrompt", false);
   callbacks.onRemarkDialogImprove();
   await flush();
   await flush();
   last = states[states.length - 1];
   assert.equal(last.remarkDialog.afterText, "Corrected remark text");
   assert.equal(last.remarkDialog.comment, "Исправил орфографию и сохранил смысл замечания.");
-  assert.equal(llmRequests[3].systemPrompt, "Project prompt\n\nCustom remark prompt");
-  assert.match(llmRequests[3].userPrompt, /Remark before second pass/);
+  assert.equal(llmRequests[4].systemPrompt, "");
+  assert.match(llmRequests[4].userPrompt, /Remark before second pass/);
   callbacks.onRemarkDialogFieldChange("afterText", "Applied corrected remark");
   callbacks.onRemarkDialogApply();
   await flush();
@@ -738,9 +747,9 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.summaryDialog.afterText, "[SE] Проверить индикатор \"Гаечный ключ\"");
   assert.equal(last.summaryDialog.comment, "Добавил префикс SE и уточнил формулировку.");
   assert.equal(last.summaryDialog.prompt, "SE prompt");
-  assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nRemark prompt");
-  assert.match(llmRequests[1].userPrompt, /Corrected|Edited story from modal|Test jira task/);
-  assert.equal(llmRequests[4].systemPrompt, "Project prompt\n\nSE prompt");
+  assert.equal(llmRequests[2].systemPrompt, "Project prompt\n\nRemark prompt");
+  assert.match(llmRequests[2].userPrompt, /Corrected|Edited story from modal|Test jira task/);
+  assert.equal(llmRequests[5].systemPrompt, "Project prompt\n\nSE prompt");
   callbacks.onSummaryDialogApply();
   await flush();
   last = states[states.length - 1];
@@ -757,10 +766,16 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.descriptionDialog.comment, "Собрал описание для SE в Jira wiki.");
   assert.equal(last.descriptionDialog.prompt, "SE description prompt");
   assert.equal(last.descriptionDialog.viewMode, "edit");
-  assert.equal(llmRequests[5].systemPrompt, "Project prompt\n\nSE description prompt");
-  assert.match(llmRequests[5].userPrompt, /Исходные данные:/);
-  assert.match(llmRequests[5].userPrompt, /Jira wiki-синтаксисе/);
-  assert.match(llmRequests[5].userPrompt, /Не используй жирный, курсив, подч[её]ркивание/);
+  assert.equal(last.descriptionDialog.useSystemPrompt, true);
+  assert.equal(llmRequests[6].systemPrompt, "Project prompt\n\nSE description prompt");
+  assert.match(llmRequests[6].userPrompt, /Исходные данные:/);
+  assert.match(llmRequests[6].userPrompt, /Jira wiki-синтаксисе/);
+  assert.match(llmRequests[6].userPrompt, /Не используй жирный, курсив, подч[её]ркивание/);
+  callbacks.onDescriptionDialogFieldChange("useSystemPrompt", false);
+  callbacks.onDescriptionDialogImprove();
+  await flush();
+  await flush();
+  assert.equal(llmRequests[7].systemPrompt, "");
   callbacks.onDescriptionDialogViewModeChange("preview");
   last = states[states.length - 1];
   assert.equal(last.descriptionDialog.viewMode, "preview");

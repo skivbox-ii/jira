@@ -1330,6 +1330,7 @@ define("_ujgESI_main", [
     }
 
     function llmRemarkDialogSystemPrompt(dialog) {
+      if (dialog && dialog.useSystemPrompt === false) return "";
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -1345,6 +1346,7 @@ define("_ujgESI_main", [
     }
 
     function llmSummaryDialogSystemPrompt(dialog) {
+      if (dialog && dialog.useSystemPrompt === false) return "";
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -1368,6 +1370,7 @@ define("_ujgESI_main", [
     }
 
     function llmDescriptionDialogSystemPrompt(dialog) {
+      if (dialog && dialog.useSystemPrompt === false) return "";
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -2518,6 +2521,7 @@ define("_ujgESI_main", [
         afterText: "",
         comment: "",
         prompt: llmSummaryPrompt(targetKey, task),
+        useSystemPrompt: true,
       };
       state.llmError = "";
       requestSummaryDialogImprove();
@@ -2531,6 +2535,7 @@ define("_ujgESI_main", [
       if (key === "afterText") dialog.afterText = limitSummary(value);
       if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+      if (key === "useSystemPrompt") dialog.useSystemPrompt = value !== false && value !== "false" && value !== "0";
     }
 
     function onSummaryDialogImprove() {
@@ -2602,6 +2607,7 @@ define("_ujgESI_main", [
         afterText: "",
         comment: "",
         prompt: llmDescriptionPrompt(task),
+        useSystemPrompt: true,
         viewMode: "edit",
       };
       state.llmError = "";
@@ -2615,6 +2621,7 @@ define("_ujgESI_main", [
       if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
       if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+      if (key === "useSystemPrompt") dialog.useSystemPrompt = value !== false && value !== "false" && value !== "0";
     }
 
     function onDescriptionDialogViewModeChange(value) {
@@ -2729,6 +2736,7 @@ define("_ujgESI_main", [
         afterText: "",
         comment: "",
         prompt: remarkDialogPrompt(),
+        useSystemPrompt: true,
       };
       state.llmError = "";
       requestRemarkDialogImprove();
@@ -2742,6 +2750,7 @@ define("_ujgESI_main", [
       if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
       if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+      if (key === "useSystemPrompt") dialog.useSystemPrompt = value !== false && value !== "false" && value !== "0";
     }
 
     function onRemarkDialogImprove() {

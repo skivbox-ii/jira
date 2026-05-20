@@ -3110,6 +3110,20 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     };
   }
 
+  function appendSystemPromptToggle(dialog, onChange) {
+    return $("<label/>")
+      .addClass("ujg-esi-summary-review-system-prompt")
+      .append(
+        $("<input/>")
+          .attr("type", "checkbox")
+          .prop("checked", !dialog || dialog.useSystemPrompt !== false)
+          .on("change", function() {
+            onChange($(this).prop("checked"));
+          }),
+        $("<span/>").text("Использовать системный prompt")
+      );
+  }
+
   function appendSelect(className, value, rows, onChange) {
     var $select = $("<select/>").addClass(className || "");
     (rows || []).forEach(function(row) {
@@ -3812,6 +3826,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         )
     );
     $modal.append(
+      appendSystemPromptToggle(dialog, function(value) {
+        change("useSystemPrompt", value);
+      })
+    );
+    $modal.append(
       $("<label/>")
         .addClass("ujg-esi-summary-review-prompt-row")
         .append(
@@ -3950,6 +3969,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           $("<span/>").text("Что сделал LLM"),
           $("<div/>").addClass("ujg-esi-summary-review-comment").text(dialog.comment || "LLM не вернул комментарий.")
         )
+    );
+    $modal.append(
+      appendSystemPromptToggle(dialog, function(value) {
+        change("useSystemPrompt", value);
+      })
     );
     $modal.append(
       $("<label/>")
@@ -5397,6 +5421,7 @@ define("_ujgESI_main", [
     }
 
     function llmRemarkDialogSystemPrompt(dialog) {
+      if (dialog && dialog.useSystemPrompt === false) return "";
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -5412,6 +5437,7 @@ define("_ujgESI_main", [
     }
 
     function llmSummaryDialogSystemPrompt(dialog) {
+      if (dialog && dialog.useSystemPrompt === false) return "";
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -5435,6 +5461,7 @@ define("_ujgESI_main", [
     }
 
     function llmDescriptionDialogSystemPrompt(dialog) {
+      if (dialog && dialog.useSystemPrompt === false) return "";
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
@@ -6585,6 +6612,7 @@ define("_ujgESI_main", [
         afterText: "",
         comment: "",
         prompt: llmSummaryPrompt(targetKey, task),
+        useSystemPrompt: true,
       };
       state.llmError = "";
       requestSummaryDialogImprove();
@@ -6598,6 +6626,7 @@ define("_ujgESI_main", [
       if (key === "afterText") dialog.afterText = limitSummary(value);
       if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+      if (key === "useSystemPrompt") dialog.useSystemPrompt = value !== false && value !== "false" && value !== "0";
     }
 
     function onSummaryDialogImprove() {
@@ -6669,6 +6698,7 @@ define("_ujgESI_main", [
         afterText: "",
         comment: "",
         prompt: llmDescriptionPrompt(task),
+        useSystemPrompt: true,
         viewMode: "edit",
       };
       state.llmError = "";
@@ -6682,6 +6712,7 @@ define("_ujgESI_main", [
       if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
       if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+      if (key === "useSystemPrompt") dialog.useSystemPrompt = value !== false && value !== "false" && value !== "0";
     }
 
     function onDescriptionDialogViewModeChange(value) {
@@ -6796,6 +6827,7 @@ define("_ujgESI_main", [
         afterText: "",
         comment: "",
         prompt: remarkDialogPrompt(),
+        useSystemPrompt: true,
       };
       state.llmError = "";
       requestRemarkDialogImprove();
@@ -6809,6 +6841,7 @@ define("_ujgESI_main", [
       if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
       if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+      if (key === "useSystemPrompt") dialog.useSystemPrompt = value !== false && value !== "false" && value !== "0";
     }
 
     function onRemarkDialogImprove() {

@@ -49,6 +49,9 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /maxLength: isRemark \? null : SUMMARY_MAX_LENGTH/);
   assert.match(source, /ujg-esi-summary-review-comment/);
   assert.match(source, /ujg-esi-summary-review-prompt/);
+  assert.match(source, /ujg-esi-summary-review-system-prompt/);
+  assert.match(source, /Использовать системный prompt/);
+  assert.match(source, /change\("useSystemPrompt"/);
   assert.match(source, /onRemarkDialogApply/);
 });
 

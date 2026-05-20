@@ -981,6 +981,7 @@
 .ujg-esi-remark-ai-prompt-row,
 .ujg-esi-summary-review-grid label,
 .ujg-esi-summary-review-comment-row,
+.ujg-esi-summary-review-system-prompt,
 .ujg-esi-summary-review-prompt-row {
   display: grid;
   gap: 6px;
@@ -990,6 +991,7 @@
 .ujg-esi-remark-ai-prompt-row span,
 .ujg-esi-summary-review-grid span,
 .ujg-esi-summary-review-comment-row span,
+.ujg-esi-summary-review-system-prompt span,
 .ujg-esi-summary-review-prompt-row span {
   color: #5e6c84;
   font-size: 12px;
@@ -1029,8 +1031,21 @@
 
 .ujg-esi-remark-ai-prompt-row,
 .ujg-esi-summary-review-comment-row,
+.ujg-esi-summary-review-system-prompt,
 .ujg-esi-summary-review-prompt-row {
   margin-top: 12px;
+}
+
+.ujg-esi-summary-review-system-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ujg-esi-summary-review-system-prompt input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 .ujg-esi-summary-review-comment {
