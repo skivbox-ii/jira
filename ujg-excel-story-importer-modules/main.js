@@ -1284,7 +1284,7 @@ define("_ujgESI_main", [
         "Исправь текст замечания из Excel.",
         name ? "Колонка Excel: " + name : "",
         "Текущий текст:\n" + value,
-        "Верни только исправленный полный текст замечания."
+        "Верни только JSON без markdown: {\"text\":\"исправленный полный текст замечания\", \"comment\":\"кратко что именно было изменено\"}."
       ].filter(Boolean).join("\n\n");
     }
 
@@ -1376,6 +1376,26 @@ define("_ujgESI_main", [
       text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
       text = text.replace(/^["'«]+|["'»]+$/g, "").trim();
       return text;
+    }
+
+    function parseLlmRemarkResponse(value) {
+      var text = stripJsonFence(value);
+      var parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
+        parsed = null;
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return {
+          text: cleanupLlmRemark(parsed.text || parsed.remark || parsed.result || ""),
+          comment: parsed.comment != null ? String(parsed.comment).trim() : parsed.explanation != null ? String(parsed.explanation).trim() : "",
+        };
+      }
+      return {
+        text: cleanupLlmRemark(text),
+        comment: "",
+      };
     }
 
     function estimateHours(value) {
@@ -2257,7 +2277,7 @@ define("_ujgESI_main", [
 
     function applyImprovedRemark(index, text) {
       var dialog = state.createDialog;
-      var cleaned = cleanupLlmRemark(text);
+      var cleaned = parseLlmRemarkResponse(text).text;
       if (!dialog || !cleaned) return;
       applyDialogSourceValue(dialog, index, cleaned);
     }
@@ -2422,8 +2442,11 @@ define("_ujgESI_main", [
         temperature: 0.1,
       })).then(
         function(result) {
-          var cleaned = cleanupLlmRemark(result && result.text);
-          if (state.remarkDialog && cleaned) state.remarkDialog.afterText = cleaned;
+          var response = parseLlmRemarkResponse(result && result.text);
+          if (state.remarkDialog && response.text) {
+            state.remarkDialog.afterText = response.text;
+            state.remarkDialog.comment = response.comment || "";
+          }
           state.llmLoadingTarget = "";
           state.llmError = "";
           render();
@@ -2446,6 +2469,7 @@ define("_ujgESI_main", [
         rowIndex: i,
         beforeText: text,
         afterText: "",
+        comment: "",
         prompt: remarkDialogPrompt(),
       };
       state.llmError = "";
@@ -2458,6 +2482,7 @@ define("_ujgESI_main", [
       if (!dialog) return;
       if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
       if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "comment") dialog.comment = value != null ? String(value) : "";
       if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
     }
 

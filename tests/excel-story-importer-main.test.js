@@ -323,6 +323,7 @@ test("row create opens confirmation before creating without Epic", async functio
               rowIndex: state.remarkDialog.rowIndex,
               beforeText: state.remarkDialog.beforeText || "",
               afterText: state.remarkDialog.afterText || "",
+              comment: state.remarkDialog.comment || "",
               prompt: state.remarkDialog.prompt || "",
             }
           : null,
@@ -421,7 +422,7 @@ test("row create opens confirmation before creating without Epic", async functio
       llmRequests.push(request);
       return Promise.resolve({
         text: /remark prompt/i.test(request.systemPrompt)
-          ? "Corrected remark text"
+          ? JSON.stringify({ text: "Corrected remark text", comment: "Исправил орфографию и сохранил смысл замечания." })
           : request.systemPrompt.indexOf("SE prompt") >= 0
             ? JSON.stringify({ summary: "[SE] Improved story", comment: "Добавил префикс SE и уточнил формулировку." })
             : JSON.stringify({ summary: "Improved story", comment: "Сократил и выровнял название Story." }),
@@ -533,7 +534,10 @@ test("row create opens confirmation before creating without Epic", async functio
   last = states[states.length - 1];
   assert.equal(last.remarkDialog.beforeText, "Corrected remark text");
   assert.equal(last.remarkDialog.afterText, "Corrected remark text");
+  assert.equal(last.remarkDialog.comment, "Исправил орфографию и сохранил смысл замечания.");
   assert.equal(llmRequests[2].systemPrompt, "Project prompt\n\nRemark prompt");
+  assert.match(llmRequests[2].userPrompt, /text/);
+  assert.match(llmRequests[2].userPrompt, /comment/);
   callbacks.onRemarkDialogFieldChange("beforeText", "Remark before second pass");
   callbacks.onRemarkDialogFieldChange("prompt", "Custom remark prompt");
   callbacks.onRemarkDialogImprove();
@@ -541,6 +545,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.remarkDialog.afterText, "Corrected remark text");
+  assert.equal(last.remarkDialog.comment, "Исправил орфографию и сохранил смысл замечания.");
   assert.equal(llmRequests[3].systemPrompt, "Project prompt\n\nCustom remark prompt");
   assert.match(llmRequests[3].userPrompt, /Remark before second pass/);
   callbacks.onRemarkDialogFieldChange("afterText", "Applied corrected remark");

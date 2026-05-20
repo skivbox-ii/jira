@@ -39,10 +39,12 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /onRowImproveRemark/);
   assert.match(source, /function appendActionCell[\s\S]*appendRowAiButton/);
   assert.doesNotMatch(source.match(/function appendSummaryCell[\s\S]*?function issueBrowseUrl/)?.[0] || "", /ujg-esi-row-ai/);
-  assert.match(source, /ujg-esi-remark-ai-overlay/);
-  assert.match(source, /ujg-esi-remark-ai-before/);
-  assert.match(source, /ujg-esi-remark-ai-after/);
-  assert.match(source, /ujg-esi-remark-ai-prompt/);
+  assert.match(source, /appendLlmReviewDialog/);
+  assert.match(source, /ujg-esi-summary-review-overlay/);
+  assert.match(source, /ujg-esi-summary-review-before/);
+  assert.match(source, /ujg-esi-summary-review-after/);
+  assert.match(source, /ujg-esi-summary-review-comment/);
+  assert.match(source, /ujg-esi-summary-review-prompt/);
   assert.match(source, /onRemarkDialogApply/);
 });
 
@@ -260,6 +262,9 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /onSummaryDialogImprove/);
   assert.match(source, /onSummaryDialogApply/);
   assert.match(source, /onDialogImproveRemark/);
+  assert.match(source, /appendLlmReviewDialog/);
+  assert.doesNotMatch(source, /function appendRemarkDialog/);
+  assert.doesNotMatch(source, /function appendSummaryReviewDialog/);
   assert.match(source, /ujg-esi-assignee-picker/);
   assert.match(source, /ujg-esi-assignee-search/);
   assert.match(source, /ujg-esi-assignee-options/);

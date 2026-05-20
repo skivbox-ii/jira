@@ -1247,98 +1247,31 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
-  function appendRemarkDialog($parent, state) {
-    var dialog = state && state.remarkDialog ? state.remarkDialog : null;
-    var target = dialog ? "row-remark-" + dialog.rowIndex : "";
+  function appendLlmReviewDialog($parent, state, mode) {
+    var isRemark = mode === "remark";
+    var dialog = isRemark ? state && state.remarkDialog : state && state.summaryDialog;
+    var target = isRemark ? dialog ? "row-remark-" + dialog.rowIndex : "" : dialog ? "summary-dialog-" + dialog.target : "";
     var isBusy = !!(state && state.llmLoadingTarget === target);
-    if (!dialog) return;
-    var $overlay = $("<div/>").addClass("ujg-esi-remark-ai-overlay");
-    var $modal = $("<div/>")
-      .addClass("ujg-esi-remark-ai-modal")
-      .attr("role", "dialog")
-      .attr("aria-modal", "true");
-    $modal.append(
-      $("<div/>")
-        .addClass("ujg-esi-remark-ai-head")
-        .append(
-          $("<h3/>").text("Улучшение текста замечания"),
-          $("<button/>")
-            .attr("type", "button")
-            .addClass("ujg-esi-remark-ai-close")
-            .attr("aria-label", "Закрыть")
-            .text("×")
-            .on("click", function() {
-              if (services && services.onRemarkDialogCancel) services.onRemarkDialogCancel();
-            })
-        )
-    );
-    $modal.append(
-      $("<div/>")
-        .addClass("ujg-esi-remark-ai-grid")
-        .append(
-          $("<label/>").append(
-            $("<span/>").text("До LLM"),
-            appendTextarea("ujg-esi-remark-ai-before", dialog.beforeText || "", function(value) {
-              if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("beforeText", value);
-            })
-          ),
-          $("<label/>").append(
-            $("<span/>").text("После LLM"),
-            appendTextarea("ujg-esi-remark-ai-after", dialog.afterText || "", function(value) {
-              if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("afterText", value);
-            })
-          )
-        )
-    );
-    $modal.append(
-      $("<label/>")
-        .addClass("ujg-esi-remark-ai-prompt-row")
-        .append(
-          $("<span/>").text("Prompt"),
-          appendTextarea("ujg-esi-remark-ai-prompt", dialog.prompt || "", function(value) {
-            if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("prompt", value);
-          })
-        )
-    );
-    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
-    $modal.append(
-      $("<div/>")
-        .addClass("ujg-esi-remark-ai-actions")
-        .append(
-          $("<button/>")
-            .attr("type", "button")
-            .addClass("ujg-esi-remark-ai-cancel")
-            .text("Отмена")
-            .on("click", function() {
-              if (services && services.onRemarkDialogCancel) services.onRemarkDialogCancel();
-            }),
-          $("<button/>")
-            .attr("type", "button")
-            .addClass("ujg-esi-remark-ai-improve")
-            .prop("disabled", isBusy)
-            .text(isBusy ? "Улучшаю..." : "Улучшить")
-            .on("click", function() {
-              if (services && services.onRemarkDialogImprove) services.onRemarkDialogImprove();
-            }),
-          $("<button/>")
-            .attr("type", "button")
-            .addClass("ujg-esi-remark-ai-apply")
-            .prop("disabled", isBusy || !String(dialog.afterText || "").trim())
-            .text("Применить")
-            .on("click", function() {
-              if (services && services.onRemarkDialogApply) services.onRemarkDialogApply();
-            })
-        )
-    );
-    $overlay.append($modal);
-    $parent.append($overlay);
-  }
-
-  function appendSummaryReviewDialog($parent, state) {
-    var dialog = state && state.summaryDialog ? state.summaryDialog : null;
-    var target = dialog ? "summary-dialog-" + dialog.target : "";
-    var isBusy = !!(state && state.llmLoadingTarget === target);
-    var title = dialog && dialog.target === "story" ? "Улучшение названия Story" : "Улучшение названия задачи";
+    var title = isRemark ? "Улучшение текста замечания" : dialog && dialog.target === "story" ? "Улучшение названия Story" : "Улучшение названия задачи";
+    var callbacks = isRemark
+      ? {
+          cancel: "onRemarkDialogCancel",
+          field: "onRemarkDialogFieldChange",
+          improve: "onRemarkDialogImprove",
+          apply: "onRemarkDialogApply",
+        }
+      : {
+          cancel: "onSummaryDialogCancel",
+          field: "onSummaryDialogFieldChange",
+          improve: "onSummaryDialogImprove",
+          apply: "onSummaryDialogApply",
+        };
+    function call(name) {
+      if (services && services[name]) services[name]();
+    }
+    function change(field, value) {
+      if (services && services[callbacks.field]) services[callbacks.field](field, value);
+    }
     if (!dialog) return;
     var $overlay = $("<div/>").addClass("ujg-esi-summary-review-overlay");
     var $modal = $("<div/>")
@@ -1356,7 +1289,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             .attr("aria-label", "Закрыть")
             .text("×")
             .on("click", function() {
-              if (services && services.onSummaryDialogCancel) services.onSummaryDialogCancel();
+              call(callbacks.cancel);
             })
         )
     );
@@ -1367,13 +1300,13 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           $("<label/>").append(
             $("<span/>").text("До LLM"),
             appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
-              if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("beforeText", value);
+              change("beforeText", value);
             })
           ),
           $("<label/>").append(
             $("<span/>").text("После LLM"),
             appendTextarea("ujg-esi-summary-review-after", dialog.afterText || "", function(value) {
-              if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("afterText", value);
+              change("afterText", value);
             })
           )
         )
@@ -1394,7 +1327,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .append(
           $("<span/>").text("Prompt"),
           appendTextarea("ujg-esi-summary-review-prompt", dialog.prompt || "", function(value) {
-            if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("prompt", value);
+            change("prompt", value);
           })
         )
     );
@@ -1408,7 +1341,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             .addClass("ujg-esi-summary-review-cancel")
             .text("Отмена")
             .on("click", function() {
-              if (services && services.onSummaryDialogCancel) services.onSummaryDialogCancel();
+              call(callbacks.cancel);
             }),
           $("<button/>")
             .attr("type", "button")
@@ -1416,7 +1349,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             .prop("disabled", isBusy)
             .text(isBusy ? "Улучшаю..." : "Улучшить")
             .on("click", function() {
-              if (services && services.onSummaryDialogImprove) services.onSummaryDialogImprove();
+              call(callbacks.improve);
             }),
           $("<button/>")
             .attr("type", "button")
@@ -1424,7 +1357,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
             .prop("disabled", isBusy || !String(dialog.afterText || "").trim())
             .text("Применить")
             .on("click", function() {
-              if (services && services.onSummaryDialogApply) services.onSummaryDialogApply();
+              call(callbacks.apply);
             })
         )
     );
@@ -1496,8 +1429,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
-    appendSummaryReviewDialog($root, s);
-    appendRemarkDialog($root, s);
+    appendLlmReviewDialog($root, s, "summary");
+    appendLlmReviewDialog($root, s, "remark");
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
   }
