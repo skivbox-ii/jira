@@ -37,6 +37,11 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-create-row/);
   assert.match(source, /ujg-esi-row-ai/);
   assert.match(source, /onRowImproveRemark/);
+  assert.match(source, /ujg-esi-remark-ai-overlay/);
+  assert.match(source, /ujg-esi-remark-ai-before/);
+  assert.match(source, /ujg-esi-remark-ai-after/);
+  assert.match(source, /ujg-esi-remark-ai-prompt/);
+  assert.match(source, /onRemarkDialogApply/);
 });
 
 test("importer CSS uses one icon button style for toolbar actions", function () {

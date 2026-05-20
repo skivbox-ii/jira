@@ -3572,6 +3572,93 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
+  function appendRemarkDialog($parent, state) {
+    var dialog = state && state.remarkDialog ? state.remarkDialog : null;
+    var target = dialog ? "row-remark-" + dialog.rowIndex : "";
+    var isBusy = !!(state && state.llmLoadingTarget === target);
+    if (!dialog) return;
+    var $overlay = $("<div/>").addClass("ujg-esi-remark-ai-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-remark-ai-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-remark-ai-head")
+        .append(
+          $("<h3/>").text("Улучшение текста замечания"),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-close")
+            .attr("aria-label", "Закрыть")
+            .text("×")
+            .on("click", function() {
+              if (services && services.onRemarkDialogCancel) services.onRemarkDialogCancel();
+            })
+        )
+    );
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-remark-ai-grid")
+        .append(
+          $("<label/>").append(
+            $("<span/>").text("До LLM"),
+            appendTextarea("ujg-esi-remark-ai-before", dialog.beforeText || "", function(value) {
+              if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("beforeText", value);
+            })
+          ),
+          $("<label/>").append(
+            $("<span/>").text("После LLM"),
+            appendTextarea("ujg-esi-remark-ai-after", dialog.afterText || "", function(value) {
+              if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("afterText", value);
+            })
+          )
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-remark-ai-prompt-row")
+        .append(
+          $("<span/>").text("Prompt"),
+          appendTextarea("ujg-esi-remark-ai-prompt", dialog.prompt || "", function(value) {
+            if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("prompt", value);
+          })
+        )
+    );
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-remark-ai-actions")
+        .append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-cancel")
+            .text("Отмена")
+            .on("click", function() {
+              if (services && services.onRemarkDialogCancel) services.onRemarkDialogCancel();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-improve")
+            .prop("disabled", isBusy)
+            .text(isBusy ? "Улучшаю..." : "Улучшить")
+            .on("click", function() {
+              if (services && services.onRemarkDialogImprove) services.onRemarkDialogImprove();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-apply")
+            .prop("disabled", isBusy || !String(dialog.afterText || "").trim())
+            .text("Применить")
+            .on("click", function() {
+              if (services && services.onRemarkDialogApply) services.onRemarkDialogApply();
+            })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -3636,6 +3723,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
+    appendRemarkDialog($root, s);
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
   }
@@ -4439,6 +4527,7 @@ define("_ujgESI_main", [
       error: "",
       parseMeta: null,
       createDialog: null,
+      remarkDialog: null,
       llmLoadingTarget: "",
       llmError: "",
       users: [],
@@ -4942,6 +5031,27 @@ define("_ujgESI_main", [
       var cols = row && row.sourceColumns ? row.sourceColumns : {};
       var value = Object.prototype.hasOwnProperty.call(cols, name) ? cols[name] : row && row.summary;
       return { name: name, value: value };
+    }
+
+    function remarkDialogPrompt() {
+      return state.mappingSettings && state.mappingSettings.llmRemarkPrompt != null
+        ? String(state.mappingSettings.llmRemarkPrompt).trim()
+        : String(config.LLM_REMARK_PROMPT || "").trim();
+    }
+
+    function llmRemarkDialogSystemPrompt(dialog) {
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var prompt = dialog && dialog.prompt != null ? String(dialog.prompt).trim() : remarkDialogPrompt();
+      return [projectPrompt, prompt].filter(Boolean).join("\n\n");
+    }
+
+    function remarkDialogSourceRow(dialog) {
+      return {
+        name: summaryColumnName(),
+        value: dialog && dialog.beforeText != null ? dialog.beforeText : "",
+      };
     }
 
     function cleanupLlmSummary(value) {
@@ -5911,13 +6021,12 @@ define("_ujgESI_main", [
       );
     }
 
-    function onRowImproveRemark(index) {
-      var i = Number(index);
-      var row = state.rows && state.rows[i] ? state.rows[i] : null;
-      var sourceRow = row ? rowRemarkSourceRow(row) : null;
+    function requestRemarkDialogImprove() {
+      var dialog = state.remarkDialog;
+      var sourceRow = remarkDialogSourceRow(dialog);
       var llmConfig;
-      var targetKey = "row-remark-" + i;
-      if (!row || state.llmLoadingTarget || !sourceRow || !String(sourceRow.value || "").trim()) return;
+      var targetKey = dialog ? "row-remark-" + dialog.rowIndex : "";
+      if (!dialog || state.llmLoadingTarget || !String(sourceRow.value || "").trim()) return;
       llmConfig = ensureLlmConfig();
       if (!llmConfig) {
         state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
@@ -5928,18 +6037,13 @@ define("_ujgESI_main", [
       state.llmLoadingTarget = targetKey;
       render();
       promiseOf(llmClient.requestText(llmConfig, {
-        systemPrompt: llmRemarkSystemPrompt(),
+        systemPrompt: llmRemarkDialogSystemPrompt(dialog),
         userPrompt: llmRemarkUserPrompt(sourceRow),
         temperature: 0.1,
       })).then(
         function(result) {
           var cleaned = cleanupLlmRemark(result && result.text);
-          if (cleaned) {
-            row.summary = cleaned;
-            row.sourceColumns = row.sourceColumns || {};
-            row.sourceColumns[summaryColumnName()] = cleaned;
-            resetExportState();
-          }
+          if (state.remarkDialog && cleaned) state.remarkDialog.afterText = cleaned;
           state.llmLoadingTarget = "";
           state.llmError = "";
           render();
@@ -5950,6 +6054,55 @@ define("_ujgESI_main", [
           render();
         }
       );
+    }
+
+    function onRowImproveRemark(index) {
+      var i = Number(index);
+      var row = state.rows && state.rows[i] ? state.rows[i] : null;
+      var sourceRow = row ? rowRemarkSourceRow(row) : null;
+      var text = sourceRow && sourceRow.value != null ? String(sourceRow.value) : "";
+      if (!row || state.llmLoadingTarget || !text.trim()) return;
+      state.remarkDialog = {
+        rowIndex: i,
+        beforeText: text,
+        afterText: "",
+        prompt: remarkDialogPrompt(),
+      };
+      state.llmError = "";
+      requestRemarkDialogImprove();
+    }
+
+    function onRemarkDialogFieldChange(field, value) {
+      var dialog = state.remarkDialog;
+      var key = field != null ? String(field) : "";
+      if (!dialog) return;
+      if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
+      if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+    }
+
+    function onRemarkDialogImprove() {
+      requestRemarkDialogImprove();
+    }
+
+    function onRemarkDialogApply() {
+      var dialog = state.remarkDialog;
+      var row = dialog && state.rows ? state.rows[dialog.rowIndex] : null;
+      var cleaned = cleanupLlmRemark(dialog && dialog.afterText);
+      if (!dialog || !row || !cleaned) return;
+      row.summary = cleaned;
+      row.sourceColumns = row.sourceColumns || {};
+      row.sourceColumns[summaryColumnName()] = cleaned;
+      resetExportState();
+      state.remarkDialog = null;
+      state.llmError = "";
+      render();
+    }
+
+    function onRemarkDialogCancel() {
+      state.remarkDialog = null;
+      state.llmError = "";
+      render();
     }
 
     function onDialogAssigneeFocus(target) {
@@ -6052,6 +6205,10 @@ define("_ujgESI_main", [
       onDialogImproveSummary: onDialogImproveSummary,
       onDialogImproveRemark: onDialogImproveRemark,
       onRowImproveRemark: onRowImproveRemark,
+      onRemarkDialogFieldChange: onRemarkDialogFieldChange,
+      onRemarkDialogImprove: onRemarkDialogImprove,
+      onRemarkDialogApply: onRemarkDialogApply,
+      onRemarkDialogCancel: onRemarkDialogCancel,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,

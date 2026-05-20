@@ -1243,6 +1243,93 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
+  function appendRemarkDialog($parent, state) {
+    var dialog = state && state.remarkDialog ? state.remarkDialog : null;
+    var target = dialog ? "row-remark-" + dialog.rowIndex : "";
+    var isBusy = !!(state && state.llmLoadingTarget === target);
+    if (!dialog) return;
+    var $overlay = $("<div/>").addClass("ujg-esi-remark-ai-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-remark-ai-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-remark-ai-head")
+        .append(
+          $("<h3/>").text("Улучшение текста замечания"),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-close")
+            .attr("aria-label", "Закрыть")
+            .text("×")
+            .on("click", function() {
+              if (services && services.onRemarkDialogCancel) services.onRemarkDialogCancel();
+            })
+        )
+    );
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-remark-ai-grid")
+        .append(
+          $("<label/>").append(
+            $("<span/>").text("До LLM"),
+            appendTextarea("ujg-esi-remark-ai-before", dialog.beforeText || "", function(value) {
+              if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("beforeText", value);
+            })
+          ),
+          $("<label/>").append(
+            $("<span/>").text("После LLM"),
+            appendTextarea("ujg-esi-remark-ai-after", dialog.afterText || "", function(value) {
+              if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("afterText", value);
+            })
+          )
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-remark-ai-prompt-row")
+        .append(
+          $("<span/>").text("Prompt"),
+          appendTextarea("ujg-esi-remark-ai-prompt", dialog.prompt || "", function(value) {
+            if (services && services.onRemarkDialogFieldChange) services.onRemarkDialogFieldChange("prompt", value);
+          })
+        )
+    );
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-remark-ai-actions")
+        .append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-cancel")
+            .text("Отмена")
+            .on("click", function() {
+              if (services && services.onRemarkDialogCancel) services.onRemarkDialogCancel();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-improve")
+            .prop("disabled", isBusy)
+            .text(isBusy ? "Улучшаю..." : "Улучшить")
+            .on("click", function() {
+              if (services && services.onRemarkDialogImprove) services.onRemarkDialogImprove();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-remark-ai-apply")
+            .prop("disabled", isBusy || !String(dialog.afterText || "").trim())
+            .text("Применить")
+            .on("click", function() {
+              if (services && services.onRemarkDialogApply) services.onRemarkDialogApply();
+            })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -1307,6 +1394,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
+    appendRemarkDialog($root, s);
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
   }

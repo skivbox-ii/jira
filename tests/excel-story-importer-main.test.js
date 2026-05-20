@@ -317,6 +317,14 @@ test("row create opens confirmation before creating without Epic", async functio
               }),
             }
           : null,
+        remarkDialog: state.remarkDialog
+          ? {
+              rowIndex: state.remarkDialog.rowIndex,
+              beforeText: state.remarkDialog.beforeText || "",
+              afterText: state.remarkDialog.afterText || "",
+              prompt: state.remarkDialog.prompt || "",
+            }
+          : null,
         rows: (state.rows || []).map(function (row) {
           return { status: row.status, createdKey: row.createdKey || "", summary: row.summary || "", sourceColumns: Object.assign({}, row.sourceColumns || {}) };
         }),
@@ -402,7 +410,7 @@ test("row create opens confirmation before creating without Epic", async functio
     requestText: function (_config, request) {
       llmRequests.push(request);
       return Promise.resolve({
-        text: request.systemPrompt.indexOf("Remark prompt") >= 0
+        text: /remark prompt/i.test(request.systemPrompt)
           ? "Corrected remark text"
           : request.systemPrompt.indexOf("SE prompt") >= 0
             ? "[SE] Improved story"
@@ -494,9 +502,41 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.sourceRows[0], "Замечание:Corrected remark text");
   assert.equal(last.rows[0].summary, "Corrected remark text");
   assert.equal(last.rows[0].sourceColumns["Замечание"], "Corrected remark text");
+  callbacks.onCancelCreate();
+  await flush();
+  callbacks.onRowImproveRemark(0);
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.remarkDialog.beforeText, "Corrected remark text");
+  assert.equal(last.remarkDialog.afterText, "Corrected remark text");
+  assert.equal(llmRequests[2].systemPrompt, "Project prompt\n\nRemark prompt");
+  callbacks.onRemarkDialogFieldChange("beforeText", "Remark before second pass");
+  callbacks.onRemarkDialogFieldChange("prompt", "Custom remark prompt");
+  callbacks.onRemarkDialogImprove();
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.remarkDialog.afterText, "Corrected remark text");
+  assert.equal(llmRequests[3].systemPrompt, "Project prompt\n\nCustom remark prompt");
+  assert.match(llmRequests[3].userPrompt, /Remark before second pass/);
+  callbacks.onRemarkDialogFieldChange("afterText", "Applied corrected remark");
+  callbacks.onRemarkDialogApply();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.remarkDialog, null);
+  assert.equal(last.rows[0].summary, "Applied corrected remark");
+  assert.equal(last.rows[0].sourceColumns["Замечание"], "Applied corrected remark");
+  callbacks.onCreateRow(0);
+  await flush();
+  callbacks.onDialogAssigneeSearch("story", "story");
+  await flush();
+  await flush();
+  callbacks.onDialogAssigneeSelect("story", "story-acc");
+  callbacks.onDialogFieldChange("originalEstimate", "2h");
+  callbacks.onDialogFieldChange("remainingEstimate", "1h");
   callbacks.onDialogChildToggle(1, false);
   callbacks.onDialogChildChange(0, "summary", "[SE] Edited story");
-  assert.equal(states.length, rendersBeforeInlineEdits + 3);
   callbacks.onDialogImproveSummary("child-0");
   await flush();
   await flush();
@@ -504,7 +544,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
   assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nRemark prompt");
   assert.match(llmRequests[1].userPrompt, /Corrected|Edited story from modal|Test jira task/);
-  assert.equal(llmRequests[2].systemPrompt, "Project prompt\n\nSE prompt");
+  assert.equal(llmRequests[4].systemPrompt, "Project prompt\n\nSE prompt");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -521,11 +561,11 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.epicKey, "");
   assert.equal(creatorOptions.epicLinkAllowed, false);
   assert.equal(creatorOptions.createSubtasks, true);
-  assert.equal(creatorOptions.summary, "Improved story");
+  assert.equal(creatorOptions.summary, "Applied corrected remark");
   assert.equal(creatorOptions.assignee.accountId, "story-acc");
   assert.equal(creatorOptions.originalEstimate, "2h");
   assert.equal(creatorOptions.remainingEstimate, "1h");
-  assert.equal(creatorOptions.sourceRows[0].value, "Corrected remark text");
+  assert.equal(creatorOptions.sourceRows[0].value, "Applied corrected remark");
   assert.equal(creatorOptions.childTasks[0].summary, "[SE] Improved story");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");

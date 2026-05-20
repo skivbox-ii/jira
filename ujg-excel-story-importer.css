@@ -899,6 +899,128 @@
   box-shadow: 0 18px 48px rgba(9, 30, 66, 0.28);
 }
 
+.ujg-esi-remark-ai-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(9, 30, 66, 0.42);
+}
+
+.ujg-esi-remark-ai-modal {
+  width: min(1120px, calc(100vw - 64px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  padding: 16px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(9, 30, 66, 0.28);
+}
+
+.ujg-esi-remark-ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.ujg-esi-remark-ai-head h3 {
+  margin: 0;
+  color: #172b4d;
+  font-size: 18px;
+}
+
+.ujg-esi-remark-ai-close {
+  border: 0;
+  background: transparent;
+  color: #5e6c84;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ujg-esi-remark-ai-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.ujg-esi-remark-ai-grid label,
+.ujg-esi-remark-ai-prompt-row {
+  display: grid;
+  gap: 6px;
+}
+
+.ujg-esi-remark-ai-grid span,
+.ujg-esi-remark-ai-prompt-row span {
+  color: #5e6c84;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ujg-esi-remark-ai-before,
+.ujg-esi-remark-ai-after,
+.ujg-esi-remark-ai-prompt {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid #c1c7d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #172b4d;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ujg-esi-remark-ai-prompt-row {
+  margin-top: 12px;
+}
+
+.ujg-esi-remark-ai-prompt {
+  min-height: 120px;
+}
+
+.ujg-esi-remark-ai-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ujg-esi-remark-ai-cancel,
+.ujg-esi-remark-ai-improve,
+.ujg-esi-remark-ai-apply {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid #c1c7d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #172b4d;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.ujg-esi-remark-ai-improve,
+.ujg-esi-remark-ai-apply {
+  border-color: #0052cc;
+  background: #0052cc;
+  color: #fff;
+}
+
+.ujg-esi-remark-ai-improve:disabled,
+.ujg-esi-remark-ai-apply:disabled {
+  border-color: #dfe1e6;
+  background: #f4f5f7;
+  color: #6b778c;
+  cursor: default;
+}
+
 .ujg-esi-confirm-head {
   position: sticky;
   top: 0;
