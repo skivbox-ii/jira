@@ -325,6 +325,14 @@ test("row create opens confirmation before creating without Epic", async functio
               prompt: state.remarkDialog.prompt || "",
             }
           : null,
+        summaryDialog: state.summaryDialog
+          ? {
+              target: state.summaryDialog.target || "",
+              beforeText: state.summaryDialog.beforeText || "",
+              afterText: state.summaryDialog.afterText || "",
+              prompt: state.summaryDialog.prompt || "",
+            }
+          : null,
         rows: (state.rows || []).map(function (row) {
           return { status: row.status, createdKey: row.createdKey || "", summary: row.summary || "", sourceColumns: Object.assign({}, row.sourceColumns || {}) };
         }),
@@ -477,9 +485,19 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   await flush();
   last = states[states.length - 1];
-  assert.equal(last.createDialog.summary, "Improved story");
+  assert.equal(last.createDialog.summary, "Edited story");
+  assert.equal(last.summaryDialog.target, "story");
+  assert.equal(last.summaryDialog.beforeText, "Edited story");
+  assert.equal(last.summaryDialog.afterText, "Improved story");
+  assert.equal(last.summaryDialog.prompt, "Story prompt");
   assert.equal(llmRequests[0].systemPrompt, "Project prompt\n\nStory prompt");
   assert.match(llmRequests[0].userPrompt, /Test jira task/);
+  callbacks.onSummaryDialogFieldChange("afterText", "Applied story title");
+  callbacks.onSummaryDialogApply();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.summaryDialog, null);
+  assert.equal(last.createDialog.summary, "Applied story title");
   callbacks.onDialogAssigneeSearch("story", "story");
   await flush();
   await flush();
@@ -541,10 +559,19 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   await flush();
   last = states[states.length - 1];
-  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Edited story:true::");
+  assert.equal(last.summaryDialog.target, "child-0");
+  assert.equal(last.summaryDialog.beforeText, "[SE] Edited story");
+  assert.equal(last.summaryDialog.afterText, "[SE] Improved story");
+  assert.equal(last.summaryDialog.prompt, "SE prompt");
   assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nRemark prompt");
   assert.match(llmRequests[1].userPrompt, /Corrected|Edited story from modal|Test jira task/);
   assert.equal(llmRequests[4].systemPrompt, "Project prompt\n\nSE prompt");
+  callbacks.onSummaryDialogApply();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.summaryDialog, null);
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();

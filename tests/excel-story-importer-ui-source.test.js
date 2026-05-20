@@ -246,10 +246,16 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /child of Story/);
   assert.match(source, /ujg-esi-confirm-summary/);
   assert.match(source, /ujg-esi-summary-ai/);
+  assert.match(source, /ujg-esi-summary-review-overlay/);
+  assert.match(source, /ujg-esi-summary-review-before/);
+  assert.match(source, /ujg-esi-summary-review-after/);
   assert.match(source, /ujg-esi-source-ai/);
   assert.match(source, /Улучшить/);
   assert.match(source, /Исправить/);
   assert.match(source, /onDialogImproveSummary/);
+  assert.match(source, /onSummaryDialogFieldChange/);
+  assert.match(source, /onSummaryDialogImprove/);
+  assert.match(source, /onSummaryDialogApply/);
   assert.match(source, /onDialogImproveRemark/);
   assert.match(source, /ujg-esi-assignee-picker/);
   assert.match(source, /ujg-esi-assignee-search/);

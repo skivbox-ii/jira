@@ -785,6 +785,7 @@ define("_ujgESI_main", [
       parseMeta: null,
       createDialog: null,
       remarkDialog: null,
+      summaryDialog: null,
       llmLoadingTarget: "",
       llmError: "",
       users: [],
@@ -1228,13 +1229,17 @@ define("_ujgESI_main", [
       return key || "story";
     }
 
-    function llmSystemPrompt(target, task) {
+    function llmSummaryPrompt(target, task) {
       var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
       var key = llmPromptKeyForTarget(target, task);
+      return prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+    }
+
+    function llmSystemPrompt(target, task) {
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
-      var typePrompt = prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+      var typePrompt = llmSummaryPrompt(target, task);
       return [projectPrompt, typePrompt].filter(Boolean).join("\n\n");
     }
 
@@ -1309,6 +1314,29 @@ define("_ujgESI_main", [
         name: summaryColumnName(),
         value: dialog && dialog.beforeText != null ? dialog.beforeText : "",
       };
+    }
+
+    function llmSummaryDialogSystemPrompt(dialog) {
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var prompt = dialog && dialog.prompt != null ? String(dialog.prompt).trim() : "";
+      return [projectPrompt, prompt].filter(Boolean).join("\n\n");
+    }
+
+    function llmSummaryDialogUserPrompt(dialog) {
+      var createDialog = state.createDialog;
+      var source = (createDialog && createDialog.sourceRows || []).map(function(row) {
+        var name = row && row.name != null ? String(row.name).trim() : "";
+        var value = row && row.value != null ? String(row.value).trim() : "";
+        return name && value ? name + ": " + value : "";
+      }).filter(Boolean).join("\n");
+      return [
+        "Текущий тип: " + (dialog && dialog.target === "story" ? "Story" : (dialog && dialog.role || "Child")),
+        "Текущее название: " + (dialog && dialog.beforeText || ""),
+        source ? "Поля строки Excel:\n" + source : "",
+        "Верни только итоговое название Jira Summary."
+      ].filter(Boolean).join("\n\n");
     }
 
     function cleanupLlmSummary(value) {
@@ -2042,6 +2070,7 @@ define("_ujgESI_main", [
       row.status = "creating";
       row.errors = [];
       state.createDialog = null;
+      state.summaryDialog = null;
       closeUserPicker();
       render();
       promiseOf(
@@ -2207,14 +2236,18 @@ define("_ujgESI_main", [
       applyDialogSourceValue(dialog, index, cleaned);
     }
 
-    function onDialogImproveSummary(target) {
+    function summaryDialogTask(target) {
       var dialog = state.createDialog;
       var targetKey = target != null ? String(target) : "";
       var match = targetKey.match(/^child-(\d+)$/);
-      var task = match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+      return match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+    }
+
+    function requestSummaryDialogImprove() {
+      var dialog = state.summaryDialog;
       var llmConfig;
-      if (!dialog || state.llmLoadingTarget) return;
-      if (targetKey !== "story" && !task) return;
+      var targetKey = dialog ? "summary-dialog-" + dialog.target : "";
+      if (!dialog || state.llmLoadingTarget || !String(dialog.beforeText || "").trim()) return;
       llmConfig = ensureLlmConfig();
       if (!llmConfig) {
         state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
@@ -2225,12 +2258,13 @@ define("_ujgESI_main", [
       state.llmLoadingTarget = targetKey;
       render();
       promiseOf(llmClient.requestText(llmConfig, {
-        systemPrompt: llmSystemPrompt(targetKey, task),
-        userPrompt: llmUserPrompt(dialog, targetKey, task),
+        systemPrompt: llmSummaryDialogSystemPrompt(dialog),
+        userPrompt: llmSummaryDialogUserPrompt(dialog),
         temperature: 0.1,
       })).then(
         function(result) {
-          applyImprovedSummary(targetKey, result && result.text);
+          var cleaned = cleanupLlmSummary(result && result.text);
+          if (state.summaryDialog && cleaned) state.summaryDialog.afterText = cleaned;
           state.llmLoadingTarget = "";
           state.llmError = "";
           render();
@@ -2241,6 +2275,54 @@ define("_ujgESI_main", [
           render();
         }
       );
+    }
+
+    function onDialogImproveSummary(target) {
+      var dialog = state.createDialog;
+      var targetKey = target != null ? String(target) : "";
+      var task = summaryDialogTask(targetKey);
+      var beforeText;
+      if (!dialog || state.llmLoadingTarget) return;
+      if (targetKey !== "story" && !task) return;
+      beforeText = targetKey === "story" ? dialog.summary : task.summary;
+      state.summaryDialog = {
+        target: targetKey,
+        role: targetKey === "story" ? "Story" : task.role || "",
+        beforeText: beforeText || "",
+        afterText: "",
+        prompt: llmSummaryPrompt(targetKey, task),
+      };
+      state.llmError = "";
+      requestSummaryDialogImprove();
+    }
+
+    function onSummaryDialogFieldChange(field, value) {
+      var dialog = state.summaryDialog;
+      var key = field != null ? String(field) : "";
+      if (!dialog) return;
+      if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
+      if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+    }
+
+    function onSummaryDialogImprove() {
+      requestSummaryDialogImprove();
+    }
+
+    function onSummaryDialogApply() {
+      var dialog = state.summaryDialog;
+      var cleaned = cleanupLlmSummary(dialog && dialog.afterText);
+      if (!dialog || !cleaned) return;
+      applyImprovedSummary(dialog.target, cleaned);
+      state.summaryDialog = null;
+      state.llmError = "";
+      render();
+    }
+
+    function onSummaryDialogCancel() {
+      state.summaryDialog = null;
+      state.llmError = "";
+      render();
     }
 
     function onDialogImproveRemark(index) {
@@ -2421,6 +2503,7 @@ define("_ujgESI_main", [
 
     function onCancelCreate() {
       state.createDialog = null;
+      state.summaryDialog = null;
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -2460,6 +2543,10 @@ define("_ujgESI_main", [
       onDialogChildToggle: onDialogChildToggle,
       onDialogChildChange: onDialogChildChange,
       onDialogImproveSummary: onDialogImproveSummary,
+      onSummaryDialogFieldChange: onSummaryDialogFieldChange,
+      onSummaryDialogImprove: onSummaryDialogImprove,
+      onSummaryDialogApply: onSummaryDialogApply,
+      onSummaryDialogCancel: onSummaryDialogCancel,
       onDialogImproveRemark: onDialogImproveRemark,
       onRowImproveRemark: onRowImproveRemark,
       onRemarkDialogFieldChange: onRemarkDialogFieldChange,

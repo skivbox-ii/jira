@@ -3663,6 +3663,94 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
+  function appendSummaryReviewDialog($parent, state) {
+    var dialog = state && state.summaryDialog ? state.summaryDialog : null;
+    var target = dialog ? "summary-dialog-" + dialog.target : "";
+    var isBusy = !!(state && state.llmLoadingTarget === target);
+    var title = dialog && dialog.target === "story" ? "Улучшение названия Story" : "Улучшение названия задачи";
+    if (!dialog) return;
+    var $overlay = $("<div/>").addClass("ujg-esi-summary-review-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-summary-review-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-head")
+        .append(
+          $("<h3/>").text(title),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-close")
+            .attr("aria-label", "Закрыть")
+            .text("×")
+            .on("click", function() {
+              if (services && services.onSummaryDialogCancel) services.onSummaryDialogCancel();
+            })
+        )
+    );
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-grid")
+        .append(
+          $("<label/>").append(
+            $("<span/>").text("До LLM"),
+            appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
+              if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("beforeText", value);
+            })
+          ),
+          $("<label/>").append(
+            $("<span/>").text("После LLM"),
+            appendTextarea("ujg-esi-summary-review-after", dialog.afterText || "", function(value) {
+              if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("afterText", value);
+            })
+          )
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-summary-review-prompt-row")
+        .append(
+          $("<span/>").text("Prompt"),
+          appendTextarea("ujg-esi-summary-review-prompt", dialog.prompt || "", function(value) {
+            if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("prompt", value);
+          })
+        )
+    );
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-actions")
+        .append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-cancel")
+            .text("Отмена")
+            .on("click", function() {
+              if (services && services.onSummaryDialogCancel) services.onSummaryDialogCancel();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-improve")
+            .prop("disabled", isBusy)
+            .text(isBusy ? "Улучшаю..." : "Улучшить")
+            .on("click", function() {
+              if (services && services.onSummaryDialogImprove) services.onSummaryDialogImprove();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-apply")
+            .prop("disabled", isBusy || !String(dialog.afterText || "").trim())
+            .text("Применить")
+            .on("click", function() {
+              if (services && services.onSummaryDialogApply) services.onSummaryDialogApply();
+            })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -3727,6 +3815,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
+    appendSummaryReviewDialog($root, s);
     appendRemarkDialog($root, s);
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
@@ -4532,6 +4621,7 @@ define("_ujgESI_main", [
       parseMeta: null,
       createDialog: null,
       remarkDialog: null,
+      summaryDialog: null,
       llmLoadingTarget: "",
       llmError: "",
       users: [],
@@ -4975,13 +5065,17 @@ define("_ujgESI_main", [
       return key || "story";
     }
 
-    function llmSystemPrompt(target, task) {
+    function llmSummaryPrompt(target, task) {
       var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
       var key = llmPromptKeyForTarget(target, task);
+      return prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+    }
+
+    function llmSystemPrompt(target, task) {
       var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
         ? String(state.mappingSettings.llmProjectPrompt).trim()
         : String(config.LLM_PROJECT_PROMPT || "").trim();
-      var typePrompt = prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+      var typePrompt = llmSummaryPrompt(target, task);
       return [projectPrompt, typePrompt].filter(Boolean).join("\n\n");
     }
 
@@ -5056,6 +5150,29 @@ define("_ujgESI_main", [
         name: summaryColumnName(),
         value: dialog && dialog.beforeText != null ? dialog.beforeText : "",
       };
+    }
+
+    function llmSummaryDialogSystemPrompt(dialog) {
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var prompt = dialog && dialog.prompt != null ? String(dialog.prompt).trim() : "";
+      return [projectPrompt, prompt].filter(Boolean).join("\n\n");
+    }
+
+    function llmSummaryDialogUserPrompt(dialog) {
+      var createDialog = state.createDialog;
+      var source = (createDialog && createDialog.sourceRows || []).map(function(row) {
+        var name = row && row.name != null ? String(row.name).trim() : "";
+        var value = row && row.value != null ? String(row.value).trim() : "";
+        return name && value ? name + ": " + value : "";
+      }).filter(Boolean).join("\n");
+      return [
+        "Текущий тип: " + (dialog && dialog.target === "story" ? "Story" : (dialog && dialog.role || "Child")),
+        "Текущее название: " + (dialog && dialog.beforeText || ""),
+        source ? "Поля строки Excel:\n" + source : "",
+        "Верни только итоговое название Jira Summary."
+      ].filter(Boolean).join("\n\n");
     }
 
     function cleanupLlmSummary(value) {
@@ -5789,6 +5906,7 @@ define("_ujgESI_main", [
       row.status = "creating";
       row.errors = [];
       state.createDialog = null;
+      state.summaryDialog = null;
       closeUserPicker();
       render();
       promiseOf(
@@ -5954,14 +6072,18 @@ define("_ujgESI_main", [
       applyDialogSourceValue(dialog, index, cleaned);
     }
 
-    function onDialogImproveSummary(target) {
+    function summaryDialogTask(target) {
       var dialog = state.createDialog;
       var targetKey = target != null ? String(target) : "";
       var match = targetKey.match(/^child-(\d+)$/);
-      var task = match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+      return match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+    }
+
+    function requestSummaryDialogImprove() {
+      var dialog = state.summaryDialog;
       var llmConfig;
-      if (!dialog || state.llmLoadingTarget) return;
-      if (targetKey !== "story" && !task) return;
+      var targetKey = dialog ? "summary-dialog-" + dialog.target : "";
+      if (!dialog || state.llmLoadingTarget || !String(dialog.beforeText || "").trim()) return;
       llmConfig = ensureLlmConfig();
       if (!llmConfig) {
         state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
@@ -5972,12 +6094,13 @@ define("_ujgESI_main", [
       state.llmLoadingTarget = targetKey;
       render();
       promiseOf(llmClient.requestText(llmConfig, {
-        systemPrompt: llmSystemPrompt(targetKey, task),
-        userPrompt: llmUserPrompt(dialog, targetKey, task),
+        systemPrompt: llmSummaryDialogSystemPrompt(dialog),
+        userPrompt: llmSummaryDialogUserPrompt(dialog),
         temperature: 0.1,
       })).then(
         function(result) {
-          applyImprovedSummary(targetKey, result && result.text);
+          var cleaned = cleanupLlmSummary(result && result.text);
+          if (state.summaryDialog && cleaned) state.summaryDialog.afterText = cleaned;
           state.llmLoadingTarget = "";
           state.llmError = "";
           render();
@@ -5988,6 +6111,54 @@ define("_ujgESI_main", [
           render();
         }
       );
+    }
+
+    function onDialogImproveSummary(target) {
+      var dialog = state.createDialog;
+      var targetKey = target != null ? String(target) : "";
+      var task = summaryDialogTask(targetKey);
+      var beforeText;
+      if (!dialog || state.llmLoadingTarget) return;
+      if (targetKey !== "story" && !task) return;
+      beforeText = targetKey === "story" ? dialog.summary : task.summary;
+      state.summaryDialog = {
+        target: targetKey,
+        role: targetKey === "story" ? "Story" : task.role || "",
+        beforeText: beforeText || "",
+        afterText: "",
+        prompt: llmSummaryPrompt(targetKey, task),
+      };
+      state.llmError = "";
+      requestSummaryDialogImprove();
+    }
+
+    function onSummaryDialogFieldChange(field, value) {
+      var dialog = state.summaryDialog;
+      var key = field != null ? String(field) : "";
+      if (!dialog) return;
+      if (key === "beforeText") dialog.beforeText = value != null ? String(value) : "";
+      if (key === "afterText") dialog.afterText = value != null ? String(value) : "";
+      if (key === "prompt") dialog.prompt = value != null ? String(value) : "";
+    }
+
+    function onSummaryDialogImprove() {
+      requestSummaryDialogImprove();
+    }
+
+    function onSummaryDialogApply() {
+      var dialog = state.summaryDialog;
+      var cleaned = cleanupLlmSummary(dialog && dialog.afterText);
+      if (!dialog || !cleaned) return;
+      applyImprovedSummary(dialog.target, cleaned);
+      state.summaryDialog = null;
+      state.llmError = "";
+      render();
+    }
+
+    function onSummaryDialogCancel() {
+      state.summaryDialog = null;
+      state.llmError = "";
+      render();
     }
 
     function onDialogImproveRemark(index) {
@@ -6168,6 +6339,7 @@ define("_ujgESI_main", [
 
     function onCancelCreate() {
       state.createDialog = null;
+      state.summaryDialog = null;
       closeUserPicker();
       closeIssueTypePicker();
       render();
@@ -6207,6 +6379,10 @@ define("_ujgESI_main", [
       onDialogChildToggle: onDialogChildToggle,
       onDialogChildChange: onDialogChildChange,
       onDialogImproveSummary: onDialogImproveSummary,
+      onSummaryDialogFieldChange: onSummaryDialogFieldChange,
+      onSummaryDialogImprove: onSummaryDialogImprove,
+      onSummaryDialogApply: onSummaryDialogApply,
+      onSummaryDialogCancel: onSummaryDialogCancel,
       onDialogImproveRemark: onDialogImproveRemark,
       onRowImproveRemark: onRowImproveRemark,
       onRemarkDialogFieldChange: onRemarkDialogFieldChange,

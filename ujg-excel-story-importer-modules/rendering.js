@@ -1334,6 +1334,94 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
+  function appendSummaryReviewDialog($parent, state) {
+    var dialog = state && state.summaryDialog ? state.summaryDialog : null;
+    var target = dialog ? "summary-dialog-" + dialog.target : "";
+    var isBusy = !!(state && state.llmLoadingTarget === target);
+    var title = dialog && dialog.target === "story" ? "Улучшение названия Story" : "Улучшение названия задачи";
+    if (!dialog) return;
+    var $overlay = $("<div/>").addClass("ujg-esi-summary-review-overlay");
+    var $modal = $("<div/>")
+      .addClass("ujg-esi-summary-review-modal")
+      .attr("role", "dialog")
+      .attr("aria-modal", "true");
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-head")
+        .append(
+          $("<h3/>").text(title),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-close")
+            .attr("aria-label", "Закрыть")
+            .text("×")
+            .on("click", function() {
+              if (services && services.onSummaryDialogCancel) services.onSummaryDialogCancel();
+            })
+        )
+    );
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-grid")
+        .append(
+          $("<label/>").append(
+            $("<span/>").text("До LLM"),
+            appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
+              if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("beforeText", value);
+            })
+          ),
+          $("<label/>").append(
+            $("<span/>").text("После LLM"),
+            appendTextarea("ujg-esi-summary-review-after", dialog.afterText || "", function(value) {
+              if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("afterText", value);
+            })
+          )
+        )
+    );
+    $modal.append(
+      $("<label/>")
+        .addClass("ujg-esi-summary-review-prompt-row")
+        .append(
+          $("<span/>").text("Prompt"),
+          appendTextarea("ujg-esi-summary-review-prompt", dialog.prompt || "", function(value) {
+            if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("prompt", value);
+          })
+        )
+    );
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
+    $modal.append(
+      $("<div/>")
+        .addClass("ujg-esi-summary-review-actions")
+        .append(
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-cancel")
+            .text("Отмена")
+            .on("click", function() {
+              if (services && services.onSummaryDialogCancel) services.onSummaryDialogCancel();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-improve")
+            .prop("disabled", isBusy)
+            .text(isBusy ? "Улучшаю..." : "Улучшить")
+            .on("click", function() {
+              if (services && services.onSummaryDialogImprove) services.onSummaryDialogImprove();
+            }),
+          $("<button/>")
+            .attr("type", "button")
+            .addClass("ujg-esi-summary-review-apply")
+            .prop("disabled", isBusy || !String(dialog.afterText || "").trim())
+            .text("Применить")
+            .on("click", function() {
+              if (services && services.onSummaryDialogApply) services.onSummaryDialogApply();
+            })
+        )
+    );
+    $overlay.append($modal);
+    $parent.append($overlay);
+  }
+
   function appendPreview($parent, state) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
@@ -1398,6 +1486,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
+    appendSummaryReviewDialog($root, s);
     appendRemarkDialog($root, s);
     appendMappingOverlay($root, s);
     restoreScrollState(scrollState);
