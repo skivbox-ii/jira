@@ -15,6 +15,7 @@ var TEMP_OUTPUT_FILE = OUTPUT_FILE + ".tmp";
 var MODULE_ORDER = [
     { dir: SHARED_DIR, file: "team-store.js" },
     { dir: SHARED_DIR, file: "team-picker.js" },
+    { dir: SHARED_DIR, file: "llm-client.js" },
     { dir: MODULES_DIR, file: "config.js" },
     { dir: MODULES_DIR, file: "utils.js" },
     { dir: MODULES_DIR, file: "request-cache.js" },

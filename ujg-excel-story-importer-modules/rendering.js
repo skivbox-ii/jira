@@ -341,7 +341,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
 
   function activeMappingBlock(state) {
     var block = state && state.activeMappingBlock ? String(state.activeMappingBlock) : "";
-    if (block === "priorities" || block === "roles" || block === "columns" || block === "tableStart") return block;
+    if (block === "priorities" || block === "roles" || block === "columns" || block === "tableStart" || block === "llmPrompts") return block;
     return "modules";
   }
 
@@ -385,6 +385,11 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         key: "roles",
         title: "Дочерние задачи",
         subtitle: String((maps.roles || []).length) + " ролей",
+      },
+      {
+        key: "llmPrompts",
+        title: "AI промпты",
+        subtitle: String(Object.keys(maps.llmPrompts || {}).length) + " шаблонов",
       },
     ];
   }
@@ -567,6 +572,23 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $list.append($("<dt/>").text(label), $("<dd/>").append($control));
   }
 
+  function appendImproveSummaryControl(input, target, busyTarget) {
+    var isBusy = busyTarget === target;
+    return $("<div/>")
+      .addClass("ujg-esi-summary-ai-row")
+      .append(
+        input,
+        $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-summary-ai")
+          .prop("disabled", isBusy)
+          .text(isBusy ? "Улучшаю..." : "Улучшить")
+          .on("click", function() {
+            if (services && services.onDialogImproveSummary) services.onDialogImproveSummary(target);
+          })
+      );
+  }
+
   function appendTextInput(className, value, onChange) {
     var $input = $("<input/>")
       .attr("type", "text")
@@ -576,6 +598,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       onChange($(this).val());
     });
     return $input;
+  }
+
+  function appendTextarea(className, value, onChange) {
+    var $textarea = $("<textarea/>")
+      .addClass(className || "")
+      .val(value != null ? String(value) : "");
+    $textarea.on("input", function() {
+      onChange($(this).val());
+    });
+    return $textarea;
   }
 
   function appendSummaryInput(className, value, onChange) {
@@ -928,6 +960,31 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($head, $storyAssignee, $table);
   }
 
+  function appendLlmPromptMappings($parent, settings) {
+    var prompts = settings && settings.llmPrompts ? settings.llmPrompts : {};
+    var order = ["story", "SE", "FE", "BE", "QA", "DevOps"];
+    var seen = {};
+    var $head = $("<div/>")
+      .addClass("ujg-esi-mapping-editor-head")
+      .append($("<h2/>").text("AI промпты для названий"));
+    var $wrap = $("<div/>").addClass("ujg-esi-llm-prompts");
+    order.concat(Object.keys(prompts || {})).forEach(function(key) {
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      $wrap.append(
+        $("<label/>")
+          .addClass("ujg-esi-llm-prompt-row")
+          .append(
+            $("<span/>").text(key === "story" ? "Story" : key),
+            appendTextarea("ujg-esi-llm-prompt", prompts[key] || "", function(value) {
+              if (services && services.onMappingLlmPromptChange) services.onMappingLlmPromptChange(key, value);
+            })
+          )
+      );
+    });
+    $parent.append($head, $wrap);
+  }
+
   function appendMappingOverlay($parent, state) {
     if (!state || !state.mappingEditorOpen) return;
     var settings = state.mappingSettings || {};
@@ -963,6 +1020,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       appendTableStartMapping($right, settings);
     } else if (active === "roles") {
       appendMappingRoles($right, settings, state);
+    } else if (active === "llmPrompts") {
+      appendLlmPromptMappings($right, settings);
     } else {
       appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap), state);
     }
@@ -1024,9 +1083,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           .append($("<td/>").append($enabled))
           .append($("<td/>").text(task.role || ""))
           .append($("<td/>").append(appendIssueTypePicker("ujg-esi-confirm-child-type", "child-type-" + index, task.issueType, state, !enabled)))
-          .append($("<td/>").append(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
+          .append($("<td/>").append(appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-child-summary", task.summary, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "summary", value);
-          }).prop("disabled", !enabled)))
+          }).prop("disabled", !enabled), "child-" + index, state.llmLoadingTarget).toggleClass("ujg-esi-summary-ai-disabled", !enabled)))
           .append($("<td/>").append(appendAssigneePicker("ujg-esi-confirm-child-assignee", "child-" + index, task.assigneeId || "", task.assigneeLabel || "", state, !enabled)))
           .append($("<td/>").append(appendTextInput("ujg-esi-confirm-child-original", task.originalEstimate, function(value) {
             if (services && services.onDialogChildChange) services.onDialogChildChange(index, "originalEstimate", value);
@@ -1061,9 +1120,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     })), function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
-    appendConfirmControl($fields, "Название", appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
+    appendConfirmControl($fields, "Название", appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
-    }));
+    }), "story", state.llmLoadingTarget));
     appendConfirmControl($fields, "Исполнитель", appendAssigneePicker("ujg-esi-confirm-assignee", "story", dialog.assigneeId || "", dialog.assigneeLabel || "", state, false));
     appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);
@@ -1094,6 +1153,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       );
     }
     if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
+    if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
     $modal.append($("<h4/>").text("Описание"));
     appendConfirmSourceRows($modal, dialog.sourceRows);
     $modal.append($("<h4/>").text("Дочерние задачи"));

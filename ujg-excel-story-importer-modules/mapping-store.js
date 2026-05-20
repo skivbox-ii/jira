@@ -75,6 +75,22 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return value != null ? String(value).trim() : "";
   }
 
+  function copyLlmPrompts(input) {
+    var defaults = config.LLM_SUMMARY_PROMPTS || {};
+    var source = input && typeof input === "object" ? input : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) {
+        out[key] = source[key] != null ? String(source[key]).trim() : "";
+      }
+    });
+    return out;
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
@@ -86,6 +102,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       storyAssigneeLabel: "",
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
+      llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
 
@@ -112,6 +129,9 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,
+      llmPrompts: hasInput && input.llmPrompts && typeof input.llmPrompts === "object"
+        ? copyLlmPrompts(input.llmPrompts)
+        : defaults.llmPrompts,
     };
   }
 

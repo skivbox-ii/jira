@@ -7,6 +7,15 @@ const loadAmdModule = require("./helpers/load-amd-module");
 const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules");
 const CONFIG = {
   STORY_ISSUE_TYPE: "Story",
+  LLM_CONFIG_STORAGE_KEY: "ujg-test-llm",
+  LLM_SUMMARY_PROMPTS: {
+    story: "Story prompt",
+    SE: "SE prompt",
+    FE: "FE prompt",
+    BE: "BE prompt",
+    QA: "QA prompt",
+    DevOps: "DevOps prompt",
+  },
   CREATE_TEMPLATE_ROLES: [
     { role: "SE", issueType: "System Engineer", summary: "Анализ и описание функционала" },
     { role: "FE", issueType: "Frontend Task", summary: "Вёрстка / UI" },
@@ -79,6 +88,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": null,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -148,6 +158,7 @@ test("project selection is stored in localStorage and restored on next load", as
       "_ujgESI_mappingStore": null,
       "_ujgESI_xlsxPatcher": null,
       "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
     }, { localStorage: storage });
     new Gadget({
       getGadgetContentEl: function () {
@@ -229,6 +240,7 @@ test("epic picker search opens filtered epic choices and select stores epic key"
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": null,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -261,6 +273,7 @@ test("row create opens confirmation before creating without Epic", async functio
   const states = [];
   let callbacks = null;
   let creatorOptions = null;
+  const llmRequests = [];
   const rendering = {
     init: function (_container, services) {
       callbacks = services;
@@ -380,6 +393,15 @@ test("row create opens confirmation before creating without Epic", async functio
       return Promise.resolve(new ArrayBuffer(1));
     },
   };
+  const llmClient = {
+    readStoredConfig: function () {
+      return { apiBase: "https://llm.example/v1", model: "model", apiKey: "key" };
+    },
+    requestText: function (_config, request) {
+      llmRequests.push(request);
+      return Promise.resolve({ text: request.systemPrompt === "SE prompt" ? "[SE] Improved story" : "Improved story" });
+    },
+  };
   const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
     jquery: function () {
       return { length: 0 };
@@ -392,6 +414,7 @@ test("row create opens confirmation before creating without Epic", async functio
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": llmClient,
   });
 
   new Gadget({
@@ -434,6 +457,13 @@ test("row create opens confirmation before creating without Epic", async functio
   const rendersBeforeTextEdit = states.length;
   callbacks.onDialogFieldChange("summary", "Edited story");
   assert.equal(states.length, rendersBeforeTextEdit);
+  callbacks.onDialogImproveSummary("story");
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.createDialog.summary, "Improved story");
+  assert.equal(llmRequests[0].systemPrompt, "Story prompt");
+  assert.match(llmRequests[0].userPrompt, /Test jira task/);
   callbacks.onDialogAssigneeSearch("story", "story");
   await flush();
   await flush();
@@ -451,6 +481,12 @@ test("row create opens confirmation before creating without Epic", async functio
   callbacks.onDialogChildToggle(1, false);
   callbacks.onDialogChildChange(0, "summary", "[SE] Edited story");
   assert.equal(states.length, rendersBeforeInlineEdits + 1);
+  callbacks.onDialogImproveSummary("child-0");
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
+  assert.equal(llmRequests[1].systemPrompt, "SE prompt");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -467,12 +503,12 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.epicKey, "");
   assert.equal(creatorOptions.epicLinkAllowed, false);
   assert.equal(creatorOptions.createSubtasks, true);
-  assert.equal(creatorOptions.summary, "Edited story");
+  assert.equal(creatorOptions.summary, "Improved story");
   assert.equal(creatorOptions.assignee.accountId, "story-acc");
   assert.equal(creatorOptions.originalEstimate, "2h");
   assert.equal(creatorOptions.remainingEstimate, "1h");
   assert.equal(creatorOptions.sourceRows[0].value, "Edited story from modal");
-  assert.equal(creatorOptions.childTasks[0].summary, "[SE] Edited story");
+  assert.equal(creatorOptions.childTasks[0].summary, "[SE] Improved story");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");
   assert.equal(creatorOptions.childTasks[0].remainingEstimate, "4h");
@@ -711,6 +747,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -863,6 +900,7 @@ test("sync from Jira does not blank existing sprint when issue has no sprint fie
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -998,6 +1036,7 @@ test("sync from Jira tries to find missing Jira key by summary in selected proje
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1144,6 +1183,7 @@ test("sync from Jira finds missing key by summary using project inferred from ex
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1282,6 +1322,7 @@ test("sync from Jira picks the story when summary search also returns linked chi
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1409,6 +1450,7 @@ test("sync from Jira retries shorter summary searches when the long Russian quer
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1544,6 +1586,7 @@ test("sync from Jira picks the closest story when text search returns several st
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1678,6 +1721,7 @@ test("sync from Jira prefers exact remark text found in issue description over s
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1795,6 +1839,7 @@ test("column mapping changes reparse the loaded workbook before Jira sync export
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
   });
 
   new Gadget({
@@ -1997,6 +2042,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
     "_ujgESI_parser": parser,
     "_ujgESI_creator": creator,
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
     "_ujgESI_mappingStore": mappingStore,
     "_ujgESI_xlsxPatcher": null,
   });
@@ -2021,6 +2067,11 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(last.activeMappingBlock, "modules");
   assert.equal(last.mappingSettings.moduleComponentMap["Примитивы (tnWP)"], "Primitive Component");
   assert.equal(last.mappingSettings.storyAssigneeId, "story-acc");
+
+  callbacks.onMappingBlockSelect("llmPrompts");
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.activeMappingBlock, "llmPrompts");
 
   callbacks.onMappingBlockSelect("roles");
   callbacks.onMappingRoleChange(1, "enabled", true);
@@ -2179,6 +2230,7 @@ test("mapping text input changes save without rerendering the focused editor", a
     "_ujgESI_parser": {},
     "_ujgESI_creator": {},
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
     "_ujgESI_mappingStore": mappingStore,
     "_ujgESI_xlsxPatcher": null,
   });
@@ -2368,6 +2420,7 @@ test("meta sheet picker saves selected sheet and reparses current workbook", asy
     "_ujgESI_parser": parser,
     "_ujgESI_creator": {},
     "_ujgESI_rendering": rendering,
+    "_ujgShared_llmClient": null,
     "_ujgESI_mappingStore": mappingStore,
     "_ujgESI_xlsxPatcher": null,
   });

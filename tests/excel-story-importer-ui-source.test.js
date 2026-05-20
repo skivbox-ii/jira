@@ -234,6 +234,9 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /Тип Jira/);
   assert.match(source, /child of Story/);
   assert.match(source, /ujg-esi-confirm-summary/);
+  assert.match(source, /ujg-esi-summary-ai/);
+  assert.match(source, /Улучшить/);
+  assert.match(source, /onDialogImproveSummary/);
   assert.match(source, /ujg-esi-assignee-picker/);
   assert.match(source, /ujg-esi-assignee-search/);
   assert.match(source, /ujg-esi-assignee-options/);
@@ -249,6 +252,16 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /captureScrollState/);
   assert.match(source, /restoreScrollState/);
   assert.match(source, /ujg-esi-confirm-scroll/);
+});
+
+test("mapping settings exposes editable AI prompts", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+  const css = read("ujg-excel-story-importer.css");
+
+  assert.match(source, /AI промпты/);
+  assert.match(source, /ujg-esi-llm-prompt/);
+  assert.match(source, /onMappingLlmPromptChange/);
+  assert.match(css, /\.ujg-esi-llm-prompts/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

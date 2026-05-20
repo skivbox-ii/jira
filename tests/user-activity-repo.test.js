@@ -295,7 +295,8 @@ function loadAiReport(extraGlobals) {
             icon: function(name) {
                 return "[" + name + "]";
             }
-        }
+        },
+        _ujgShared_llmClient: loadAmdModule(path.join(__dirname, "..", "ujg-shared-modules", "llm-client.js"), {})
     }, extraGlobals || {});
 }
 

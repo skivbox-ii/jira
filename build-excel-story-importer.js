@@ -4,9 +4,11 @@ var fs = require("fs");
 var path = require("path");
 
 var MODULES_DIR = path.join(__dirname, "ujg-excel-story-importer-modules");
+var SHARED_DIR = path.join(__dirname, "ujg-shared-modules");
 var OUTPUT_FILE = path.join(__dirname, "ujg-excel-story-importer.js");
 
 var MODULE_ORDER = [
+  { dir: SHARED_DIR, file: "llm-client.js" },
   "config.js",
   "mapping-store.js",
   "description.js",
@@ -19,8 +21,10 @@ var MODULE_ORDER = [
   "main.js",
 ];
 
-function readModule(fileName) {
-  var filePath = path.join(MODULES_DIR, fileName);
+function readModule(entry) {
+  var dir = typeof entry === "object" && entry.dir ? entry.dir : MODULES_DIR;
+  var fileName = typeof entry === "object" && entry.file ? entry.file : entry;
+  var filePath = path.join(dir, fileName);
   if (!fs.existsSync(filePath)) throw new Error("Module not found: " + fileName);
   return fs.readFileSync(filePath, "utf8");
 }
@@ -33,9 +37,10 @@ function build() {
     "// To modify, edit files in ujg-excel-story-importer-modules/ and rebuild",
     "",
   ];
-  MODULE_ORDER.forEach(function(fileName) {
+  MODULE_ORDER.forEach(function(entry) {
+    var fileName = typeof entry === "object" && entry.file ? entry.file : entry;
     parts.push("/* === Module: " + fileName + " === */");
-    parts.push(readModule(fileName).trim());
+    parts.push(readModule(entry).trim());
     parts.push("");
   });
   parts.push('define("_ujgExcelStoryImporter", ["_ujgESI_main"], function(G) {');
@@ -46,7 +51,9 @@ function build() {
   fs.writeFileSync(OUTPUT_FILE, parts.join("\n"), "utf8");
 }
 
-build.MODULE_ORDER = MODULE_ORDER.slice();
+build.MODULE_ORDER = MODULE_ORDER.map(function(entry) {
+  return typeof entry === "object" && entry.file ? entry.file : entry;
+});
 
 if (require.main === module) build();
 

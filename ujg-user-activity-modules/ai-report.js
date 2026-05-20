@@ -1,4 +1,4 @@
-define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
+define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils", "_ujgShared_llmClient"], function($, utils, llmClient) {
     "use strict";
 
     var STORAGE_KEY = "ujg-ua-ai-report-config";
@@ -189,6 +189,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function normalizeConfig(input) {
+        if (llmClient && typeof llmClient.normalizeConfig === "function") return llmClient.normalizeConfig(input);
         if (!input || typeof input !== "object") return null;
         var apiBaseParts = normalizeApiBaseParts(input.apiBase || input.url || input.endpoint);
         var model = trimString(input.model);
@@ -208,6 +209,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function readStoredConfig(storage) {
+        if (llmClient && typeof llmClient.readStoredConfig === "function") return llmClient.readStoredConfig(storage, STORAGE_KEY);
         if (!storage || typeof storage.getItem !== "function") return null;
         try {
             return normalizeConfig(JSON.parse(storage.getItem(STORAGE_KEY) || "null"));
@@ -217,7 +219,9 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function writeStoredConfig(storage, config) {
-        var normalized = normalizeConfig(config);
+        var normalized;
+        if (llmClient && typeof llmClient.writeStoredConfig === "function") return llmClient.writeStoredConfig(storage, config, STORAGE_KEY);
+        normalized = normalizeConfig(config);
         if (!normalized) return null;
         if (storage && typeof storage.setItem === "function") {
             storage.setItem(STORAGE_KEY, JSON.stringify(normalized));
@@ -226,6 +230,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function promptForConfig(promptFn, existing) {
+        if (llmClient && typeof llmClient.promptForConfig === "function") return llmClient.promptForConfig(promptFn, existing);
         if (typeof promptFn !== "function") return null;
         var current = existing || {};
         var apiBase = promptFn(
@@ -346,6 +351,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function buildRequestUrl(config, forceLegacy) {
+        if (llmClient && typeof llmClient.buildRequestUrl === "function") return llmClient.buildRequestUrl(config, forceLegacy);
         var normalized = normalizeConfig(config);
         if (!normalized) throw new Error("AI config is invalid");
         var useLegacy = forceLegacy == null
@@ -355,6 +361,15 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function buildRequestBody(config, context, forceLegacy) {
+        if (llmClient && typeof llmClient.buildRequestBody === "function") {
+            var normalizedForShared = normalizeConfig(config);
+            if (!normalizedForShared) throw new Error("AI config is invalid");
+            return llmClient.buildRequestBody(normalizedForShared, {
+                systemPrompt: normalizedForShared.basePrompt,
+                userPrompt: buildUserPrompt(context),
+                temperature: 0.2
+            }, forceLegacy);
+        }
         var normalized = normalizeConfig(config);
         var visiblePrompt;
         if (!normalized) throw new Error("AI config is invalid");
@@ -382,6 +397,7 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     }
 
     function extractResponseText(payload) {
+        if (llmClient && typeof llmClient.extractResponseText === "function") return llmClient.extractResponseText(payload);
         if (!payload) return "";
         if (typeof payload === "string") return trimString(payload);
         if (typeof payload.output_text === "string") return trimString(payload.output_text);
@@ -682,53 +698,11 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils"], function($, utils) {
     function requestReport(config, context, fetchImpl) {
         var normalized = normalizeConfig(config);
         if (!normalized) return Promise.reject(new Error("AI config is invalid"));
-        var callFetch = typeof fetchImpl === "function" ? fetchImpl : (typeof fetch === "function" ? fetch : null);
-        if (!callFetch) return Promise.reject(new Error("fetch is unavailable"));
-
-        function performRequest(forceLegacy, allowFallback) {
-            var requestUrl = buildRequestUrl(normalized, forceLegacy);
-            return Promise.resolve(callFetch(requestUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: "Bearer " + normalized.apiKey
-                },
-                body: JSON.stringify(buildRequestBody(normalized, context, forceLegacy))
-            })).then(function(resp) {
-                return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
-                    if ((!resp || !resp.ok) && allowFallback && !forceLegacy && resp && (resp.status === 404 || resp.status === 405)) {
-                        return performRequest(true, false);
-                    }
-                    if (!resp || !resp.ok) {
-                        throw new Error(
-                            "AI API " +
-                            (resp && resp.status != null ? resp.status : "error") +
-                            " (" + requestUrl + "): " +
-                            trimString(text)
-                        );
-                    }
-                    var payload = {};
-                    if (trimString(text)) {
-                        try {
-                            payload = JSON.parse(text);
-                        } catch (err) {
-                            throw new Error("AI API вернул не-JSON ответ");
-                        }
-                    }
-                    var reportText = extractResponseText(payload);
-                    if (!reportText) {
-                        throw new Error("AI API вернул пустой ответ");
-                    }
-                    return {
-                        text: reportText,
-                        payload: payload,
-                        url: requestUrl
-                    };
-                });
-            });
-        }
-
-        return performRequest(!!normalized.useLegacyCompletionsEndpoint, !normalized.useLegacyCompletionsEndpoint);
+        return llmClient.requestText(normalized, {
+            systemPrompt: normalized.basePrompt,
+            userPrompt: buildUserPrompt(context),
+            temperature: 0.2
+        }, fetchImpl);
     }
 
     function getWindowRef() {

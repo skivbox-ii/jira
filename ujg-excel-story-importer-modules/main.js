@@ -8,7 +8,8 @@ define("_ujgESI_main", [
   "_ujgESI_mappingStore",
   "_ujgESI_xlsxPatcher",
   "_ujgESI_rendering",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering) {
+  "_ujgShared_llmClient",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient) {
   "use strict";
 
   function copyRow(row) {
@@ -131,6 +132,20 @@ define("_ujgESI_main", [
     return value != null ? String(value).trim() : "";
   }
 
+  function copyLlmPrompts(input) {
+    var defaults = config.LLM_SUMMARY_PROMPTS || {};
+    var source = input && typeof input === "object" ? input : {};
+    var out = {};
+    Object.keys(defaults).forEach(function(key) {
+      var value = source[key] != null ? String(source[key]).trim() : "";
+      out[key] = value || String(defaults[key] || "").trim();
+    });
+    Object.keys(source).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = source[key] != null ? String(source[key]).trim() : "";
+    });
+    return out;
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -145,6 +160,7 @@ define("_ujgESI_main", [
       storyAssigneeLabel: "",
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
+      llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
 
@@ -172,6 +188,7 @@ define("_ujgESI_main", [
       storyAssigneeLabel: source.storyAssigneeLabel != null ? String(source.storyAssigneeLabel).trim() : defaults.storyAssigneeLabel,
       storyAssignee: source.storyAssignee != null ? copyAssignee(source.storyAssignee) : defaults.storyAssignee,
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
+      llmPrompts: source.llmPrompts && typeof source.llmPrompts === "object" ? copyLlmPrompts(source.llmPrompts) : copyLlmPrompts(defaults.llmPrompts),
     };
   }
 
@@ -753,6 +770,8 @@ define("_ujgESI_main", [
       error: "",
       parseMeta: null,
       createDialog: null,
+      llmLoadingTarget: "",
+      llmError: "",
       users: [],
       usersLoading: false,
       usersError: "",
@@ -797,6 +816,26 @@ define("_ujgESI_main", [
 
     function hasOwn(obj, key) {
       return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
+    }
+
+    function getWindowRef() {
+      return typeof window !== "undefined" && window ? window : null;
+    }
+
+    function getStorageRef() {
+      var win = getWindowRef();
+      return win && win.localStorage ? win.localStorage : null;
+    }
+
+    function getPromptRef() {
+      var win = getWindowRef();
+      if (win && typeof win.prompt === "function") {
+        return function(message, value) {
+          return win.prompt(message, value);
+        };
+      }
+      if (typeof prompt === "function") return prompt;
+      return null;
     }
 
     function selectedProjectText() {
@@ -1164,6 +1203,40 @@ define("_ujgESI_main", [
       var prefix = role && role.role != null ? String(role.role).trim() : "";
       var summary = storySummary != null ? String(storySummary).trim() : "";
       return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
+    }
+
+    function llmPromptKeyForTarget(target, task) {
+      var key = target === "story" ? "story" : task && task.role != null ? String(task.role).trim() : "";
+      var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
+      if (key && Object.prototype.hasOwnProperty.call(prompts, key)) return key;
+      if (/^devops$/i.test(key)) return "DevOps";
+      return key || "story";
+    }
+
+    function llmSystemPrompt(target, task) {
+      var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
+      var key = llmPromptKeyForTarget(target, task);
+      return prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+    }
+
+    function llmUserPrompt(dialog, target, task) {
+      var source = (dialog && dialog.sourceRows || []).map(function(row) {
+        var name = row && row.name != null ? String(row.name).trim() : "";
+        var value = row && row.value != null ? String(row.value).trim() : "";
+        return name && value ? name + ": " + value : "";
+      }).filter(Boolean).join("\n");
+      return [
+        "Текущий тип: " + (target === "story" ? "Story" : (task && task.role || "Child")),
+        "Текущее название: " + (target === "story" ? dialog && dialog.summary : task && task.summary),
+        source ? "Поля строки Excel:\n" + source : "",
+        "Верни только итоговое название Jira Summary."
+      ].filter(Boolean).join("\n\n");
+    }
+
+    function cleanupLlmSummary(value) {
+      var text = value != null ? String(value).trim() : "";
+      text = text.replace(/^["'«]+|["'»]+$/g, "").replace(/\s+/g, " ").trim();
+      return limitSummary(text);
     }
 
     function estimateHours(value) {
@@ -1589,7 +1662,7 @@ define("_ujgESI_main", [
 
     function onMappingBlockSelect(block) {
       var key = block != null ? String(block) : "";
-      state.activeMappingBlock = key === "priorities" || key === "roles" || key === "columns" || key === "tableStart" ? key : "modules";
+      state.activeMappingBlock = key === "priorities" || key === "roles" || key === "columns" || key === "tableStart" || key === "llmPrompts" ? key : "modules";
       render();
     }
 
@@ -1706,6 +1779,14 @@ define("_ujgESI_main", [
       roles.splice(i, 1);
       state.mappingSettings.roles = roles;
       saveMappings();
+    }
+
+    function onMappingLlmPromptChange(key, value) {
+      var name = key != null ? String(key).trim() : "";
+      if (!name) return;
+      state.mappingSettings.llmPrompts = copyLlmPrompts(state.mappingSettings.llmPrompts);
+      state.mappingSettings.llmPrompts[name] = value != null ? String(value) : "";
+      saveMappings({ render: false });
     }
 
     function completeCreate(row, result) {
@@ -1976,6 +2057,75 @@ define("_ujgESI_main", [
       }
     }
 
+    function ensureLlmConfig() {
+      var storage = getStorageRef();
+      var stored = llmClient && typeof llmClient.readStoredConfig === "function"
+        ? llmClient.readStoredConfig(storage, config.LLM_CONFIG_STORAGE_KEY)
+        : null;
+      var prompted;
+      if (stored) return stored;
+      if (!llmClient || typeof llmClient.promptForConfig !== "function") return null;
+      prompted = llmClient.promptForConfig(getPromptRef(), {});
+      if (!prompted) return null;
+      return llmClient.writeStoredConfig(storage, prompted, config.LLM_CONFIG_STORAGE_KEY);
+    }
+
+    function applyImprovedSummary(target, text) {
+      var dialog = state.createDialog;
+      var cleaned = cleanupLlmSummary(text);
+      var match;
+      var idx;
+      if (!dialog || !cleaned) return;
+      if (target === "story") {
+        dialog.summary = cleaned;
+        (dialog.childTasks || []).forEach(function(task) {
+          task.summary = childSummary(task, dialog.summary);
+        });
+        return;
+      }
+      match = String(target || "").match(/^child-(\d+)$/);
+      idx = match ? Number(match[1]) : -1;
+      if (idx >= 0 && dialog.childTasks && dialog.childTasks[idx]) {
+        dialog.childTasks[idx].summary = cleaned;
+      }
+    }
+
+    function onDialogImproveSummary(target) {
+      var dialog = state.createDialog;
+      var targetKey = target != null ? String(target) : "";
+      var match = targetKey.match(/^child-(\d+)$/);
+      var task = match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
+      var llmConfig;
+      if (!dialog || state.llmLoadingTarget) return;
+      if (targetKey !== "story" && !task) return;
+      llmConfig = ensureLlmConfig();
+      if (!llmConfig) {
+        state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
+        render();
+        return;
+      }
+      state.llmError = "";
+      state.llmLoadingTarget = targetKey;
+      render();
+      promiseOf(llmClient.requestText(llmConfig, {
+        systemPrompt: llmSystemPrompt(targetKey, task),
+        userPrompt: llmUserPrompt(dialog, targetKey, task),
+        temperature: 0.1,
+      })).then(
+        function(result) {
+          applyImprovedSummary(targetKey, result && result.text);
+          state.llmLoadingTarget = "";
+          state.llmError = "";
+          render();
+        },
+        function(err) {
+          state.llmLoadingTarget = "";
+          state.llmError = "Не удалось улучшить название: " + (err && err.message ? err.message : "request failed");
+          render();
+        }
+      );
+    }
+
     function onDialogAssigneeFocus(target) {
       var targetKey = target != null ? String(target) : "";
       if (!userTargetNode(targetKey)) return;
@@ -2061,6 +2211,7 @@ define("_ujgESI_main", [
       onMappingRoleAdd: onMappingRoleAdd,
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,
+      onMappingLlmPromptChange: onMappingLlmPromptChange,
       onSyncJira: onSyncJira,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
@@ -2070,6 +2221,7 @@ define("_ujgESI_main", [
       onDialogSourceChange: onDialogSourceChange,
       onDialogChildToggle: onDialogChildToggle,
       onDialogChildChange: onDialogChildChange,
+      onDialogImproveSummary: onDialogImproveSummary,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,
