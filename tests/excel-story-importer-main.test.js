@@ -2085,9 +2085,13 @@ test("mapping text input changes save without rerendering the focused editor", a
   const states = [];
   let callbacks = null;
   let savedMappings = null;
+  let clearMappingErrorCount = 0;
   const rendering = {
     init: function (_container, services) {
       callbacks = services;
+    },
+    clearMappingError: function () {
+      clearMappingErrorCount += 1;
     },
     render: function (state) {
       states.push({
@@ -2263,6 +2267,18 @@ test("mapping text input changes save without rerendering the focused editor", a
   assert.equal(savedMappings.moduleComponentMap["Новое значение"], "");
   assert.equal(savedMappings.moduleComponentMap["Новое значение 2"], "");
   assert.match(last.mappingError, /уже есть/i);
+
+  callbacks.onMappingPairChange("modules", 1, "excel", "Уникальное значение");
+  await flush();
+  await flush();
+  assert.equal(savedMappings.moduleComponentMap["Уникальное значение"], "");
+  assert.equal(clearMappingErrorCount > 0, true);
+
+  callbacks.onMappingPairRemove("modules", 1);
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.mappingError, "");
 });
 
 test("meta sheet picker saves selected sheet and reparses current workbook", async function () {

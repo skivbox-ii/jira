@@ -3132,9 +3132,15 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     restoreScrollState(scrollState);
   }
 
+  function clearMappingError() {
+    if (!$root || !$root.length) return;
+    $root.find(".ujg-esi-mapping-error").remove();
+  }
+
   return {
     init: init,
     render: render,
+    clearMappingError: clearMappingError,
   };
 });
 
@@ -4402,6 +4408,13 @@ define("_ujgESI_main", [
       if (API && typeof API.resize === "function") API.resize();
     }
 
+    function clearMappingErrorWithoutRender() {
+      state.mappingError = "";
+      if (rendering && typeof rendering.clearMappingError === "function") {
+        rendering.clearMappingError();
+      }
+    }
+
     function setError(message) {
       state.error = message ? String(message) : "";
       state.loading = false;
@@ -4774,6 +4787,7 @@ define("_ujgESI_main", [
       var entries = mappingEntries(state.mappingSettings[key]);
       var name = field != null ? String(field) : "";
       if (!entries[i]) return;
+      var hadMappingError = !!state.mappingError;
       if (name === "excel") {
         var excel = value != null ? String(value) : "";
         var duplicate = excel && entries.some(function(entry, idx) {
@@ -4788,7 +4802,11 @@ define("_ujgESI_main", [
       }
       if (name === "jira") entries[i].jira = value != null ? String(value) : "";
       state.mappingSettings[key] = mapFromEntries(entries);
-      state.mappingError = "";
+      if (hadMappingError) {
+        clearMappingErrorWithoutRender();
+      } else {
+        state.mappingError = "";
+      }
       saveMappings({ render: false });
     }
 

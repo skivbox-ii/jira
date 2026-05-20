@@ -1189,8 +1189,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     restoreScrollState(scrollState);
   }
 
+  function clearMappingError() {
+    if (!$root || !$root.length) return;
+    $root.find(".ujg-esi-mapping-error").remove();
+  }
+
   return {
     init: init,
     render: render,
+    clearMappingError: clearMappingError,
   };
 });
