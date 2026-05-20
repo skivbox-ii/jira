@@ -4,7 +4,7 @@ define("_ujgSprintHealth", [], function() {
   var widgetCssFile = "ujg-sprint-health.css";
   var widgetRuntimeFile = "ujg-sprint-health.runtime.js";
   var runtimeAmd = "_ujgSprintHealthRuntime";
-  var releaseRef = "79fd5d1";
+  var releaseRef = "8365c8b";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
