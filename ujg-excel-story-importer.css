@@ -1004,6 +1004,7 @@
 
 .ujg-esi-summary-review-comment {
   min-height: 82px;
+  white-space: pre-wrap;
 }
 
 .ujg-esi-remark-ai-prompt,

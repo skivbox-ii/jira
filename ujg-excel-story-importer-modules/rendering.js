@@ -1383,9 +1383,9 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-summary-review-comment-row")
         .append(
           $("<span/>").text("Что сделал LLM"),
-          appendTextarea("ujg-esi-summary-review-comment", dialog.comment || "", function(value) {
-            if (services && services.onSummaryDialogFieldChange) services.onSummaryDialogFieldChange("comment", value);
-          })
+          $("<div/>")
+            .addClass("ujg-esi-summary-review-comment")
+            .text(dialog.comment || "LLM не вернул комментарий.")
         )
     );
     $modal.append(
