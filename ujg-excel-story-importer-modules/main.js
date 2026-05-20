@@ -2269,6 +2269,16 @@ define("_ujgESI_main", [
       return match && dialog && dialog.childTasks ? dialog.childTasks[Number(match[1])] : null;
     }
 
+    function fullStorySummarySource(dialog) {
+      var name = summaryColumnName();
+      var rows = dialog && dialog.sourceRows ? dialog.sourceRows : [];
+      var found = rows.filter(function(row) {
+        return row && String(row.name || "").trim() === name;
+      })[0];
+      var value = found && found.value != null ? String(found.value).trim() : "";
+      return value || (dialog && dialog.summary) || "";
+    }
+
     function requestSummaryDialogImprove() {
       var dialog = state.summaryDialog;
       var llmConfig;
@@ -2313,7 +2323,7 @@ define("_ujgESI_main", [
       var beforeText;
       if (!dialog || state.llmLoadingTarget) return;
       if (targetKey !== "story" && !task) return;
-      beforeText = targetKey === "story" ? dialog.summary : task.summary;
+      beforeText = targetKey === "story" ? fullStorySummarySource(dialog) : task.summary;
       state.summaryDialog = {
         target: targetKey,
         role: targetKey === "story" ? "Story" : task.role || "",

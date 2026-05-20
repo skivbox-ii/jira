@@ -276,6 +276,7 @@ test("row create opens confirmation before creating without Epic", async functio
   let callbacks = null;
   let creatorOptions = null;
   const llmRequests = [];
+  const fullRemarkText = "Test jira task " + Array(70).fill("полный текст замечания").join(" ");
   const rendering = {
     init: function (_container, services) {
       callbacks = services;
@@ -393,7 +394,7 @@ test("row create opens confirmation before creating without Epic", async functio
         rows: [
           {
             summary: "Test jira task",
-            sourceColumns: { "Замечание": "Test jira task" },
+            sourceColumns: { "Замечание": fullRemarkText },
             status: "ready",
             errors: [],
           },
@@ -488,12 +489,12 @@ test("row create opens confirmation before creating without Epic", async functio
   last = states[states.length - 1];
   assert.equal(last.createDialog.summary, "Edited story");
   assert.equal(last.summaryDialog.target, "story");
-  assert.equal(last.summaryDialog.beforeText, "Edited story");
+  assert.equal(last.summaryDialog.beforeText, fullRemarkText);
   assert.equal(last.summaryDialog.afterText, "Improved story");
   assert.equal(last.summaryDialog.comment, "Сократил и выровнял название Story.");
   assert.equal(last.summaryDialog.prompt, "Story prompt");
   assert.equal(llmRequests[0].systemPrompt, "Project prompt\n\nStory prompt");
-  assert.match(llmRequests[0].userPrompt, /Test jira task/);
+  assert.match(llmRequests[0].userPrompt, new RegExp(fullRemarkText.slice(-80)));
   assert.match(llmRequests[0].userPrompt, /summary/);
   assert.match(llmRequests[0].userPrompt, /comment/);
   callbacks.onSummaryDialogFieldChange("afterText", "Applied story title");
