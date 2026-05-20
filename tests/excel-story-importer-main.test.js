@@ -725,12 +725,15 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.descriptionDialog.target, "child-0");
-  assert.equal(last.descriptionDialog.beforeText, "Создано автоматически из журнала замечаний.");
-  assert.equal(last.descriptionDialog.afterText, "*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки");
+  assert.match(last.descriptionDialog.beforeText, /Исходное описание:\nСоздано автоматически из журнала замечаний\./);
+  assert.match(last.descriptionDialog.beforeText, /Поля строки Excel:\nЗамечание: Applied corrected remark/);
+  assert.equal(last.descriptionDialog.afterText, "Цель: проверить сохранение состояния панели.\nУточнить условия перезагрузки");
   assert.equal(last.descriptionDialog.comment, "Собрал описание для SE в Jira wiki.");
   assert.equal(last.descriptionDialog.prompt, "SE description prompt");
   assert.equal(last.descriptionDialog.viewMode, "edit");
   assert.equal(llmRequests[5].systemPrompt, "Project prompt\n\nSE description prompt");
+  assert.match(llmRequests[5].userPrompt, /Исходные данные:/);
+  assert.doesNotMatch(llmRequests[5].userPrompt, /Jira wiki syntax/);
   callbacks.onDescriptionDialogViewModeChange("preview");
   last = states[states.length - 1];
   assert.equal(last.descriptionDialog.viewMode, "preview");
@@ -738,7 +741,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.descriptionDialog, null);
-  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Проверить индикатор \"Гаечный ключ\":true:::*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки");
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Проверить индикатор \"Гаечный ключ\":true:::Цель: проверить сохранение состояния панели.\nУточнить условия перезагрузки");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -761,7 +764,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.remainingEstimate, "1h");
   assert.equal(creatorOptions.sourceRows[0].value, "Applied corrected remark");
   assert.equal(creatorOptions.childTasks[0].summary, "[SE] Проверить индикатор \"Гаечный ключ\"");
-  assert.equal(creatorOptions.childTasks[0].description, "*Цель:* проверить сохранение состояния панели.\n\n# Уточнить условия перезагрузки");
+  assert.equal(creatorOptions.childTasks[0].description, "Цель: проверить сохранение состояния панели.\nУточнить условия перезагрузки");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");
   assert.equal(creatorOptions.childTasks[0].remainingEstimate, "4h");

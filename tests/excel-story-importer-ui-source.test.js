@@ -285,6 +285,8 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /descriptionDialog/);
   assert.match(source, /ujg-esi-description-review-overlay/);
   assert.match(source, /ujg-esi-description-editor-toolbar/);
+  assert.match(source, /Исходные данные, на основании которых создано/);
+  assert.doesNotMatch(source, /До LLM/);
   assert.match(source, /Визуальный/);
   assert.match(source, /Текст/);
   assert.match(source, /renderJiraWiki/);
@@ -318,6 +320,16 @@ test("mapping settings exposes editable AI prompts", function () {
   assert.match(css, /\.ujg-esi-llm-project-prompt/);
   assert.match(css, /\.ujg-esi-llm-remark-prompt/);
   assert.match(css, /\.ujg-esi-llm-description-prompt/);
+});
+
+test("description LLM prompts request plain text instead of Jira wiki syntax", function () {
+  const config = read("ujg-excel-story-importer-modules/config.js");
+  const main = read("ujg-excel-story-importer-modules/main.js");
+
+  assert.match(config, /Подготовь обычное текстовое описание/);
+  assert.match(main, /итоговое описание обычным текстом/);
+  assert.doesNotMatch(config, /Jira wiki-описание|Jira wiki-синтаксис/);
+  assert.doesNotMatch(main, /Jira wiki syntax/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

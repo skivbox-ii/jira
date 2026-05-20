@@ -1375,19 +1375,31 @@ define("_ujgESI_main", [
       return [projectPrompt, prompt].filter(Boolean).join("\n\n");
     }
 
-    function llmDescriptionDialogUserPrompt(dialog) {
-      var createDialog = state.createDialog;
-      var source = (createDialog && createDialog.sourceRows || []).map(function(row) {
+    function sourceRowsText(rows) {
+      return (rows || []).map(function(row) {
         var name = row && row.name != null ? String(row.name).trim() : "";
         var value = row && row.value != null ? String(row.value).trim() : "";
         return name && value ? name + ": " + value : "";
       }).filter(Boolean).join("\n");
+    }
+
+    function descriptionSourceText(task) {
+      var createDialog = state.createDialog;
+      var source = sourceRowsText(createDialog && createDialog.sourceRows);
       return [
-        "Роль дочерней задачи: " + (dialog && dialog.role || ""),
-        "Название задачи: " + (dialog && dialog.summary || ""),
-        "Текущее описание:\n" + (dialog && dialog.beforeText || ""),
-        source ? "Поля строки Excel:\n" + source : "",
-        "Верни только JSON без markdown: {\"description\":\"итоговое описание в Jira wiki syntax\", \"comment\":\"кратко что именно было изменено\"}."
+        "Роль дочерней задачи: " + (task && task.role || ""),
+        "Название задачи: " + (task && task.summary || ""),
+        "Исходное описание:\n" + (task && task.description || defaultChildDescription()),
+        source ? "Поля строки Excel:\n" + source : ""
+      ].filter(Boolean).join("\n\n");
+    }
+
+    function llmDescriptionDialogUserPrompt(dialog) {
+      return [
+        "Исходные данные:\n" + (dialog && dialog.beforeText || ""),
+        "Сформируй описание задачи обычным текстом.",
+        "Не используй markdown, HTML, спецразметку, декоративные заголовки и форматирование.",
+        "Верни только JSON без markdown: {\"description\":\"итоговое описание обычным текстом\", \"comment\":\"кратко что именно было изменено\"}."
       ].filter(Boolean).join("\n\n");
     }
 
@@ -1462,7 +1474,15 @@ define("_ujgESI_main", [
     function cleanupLlmDescription(value) {
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-      return stripWrappingQuotes(text);
+      text = stripWrappingQuotes(text);
+      text = text
+        .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+        .replace(/^\s{0,3}\*\s+/gm, "- ")
+        .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+        .replace(/\*([^*\n]+)\*/g, "$1")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      return text;
     }
 
     function parseLlmDescriptionResponse(value) {
@@ -2564,7 +2584,7 @@ define("_ujgESI_main", [
         target: targetKey,
         role: task.role || "",
         summary: task.summary || "",
-        beforeText: task.description || defaultChildDescription(),
+        beforeText: descriptionSourceText(task),
         afterText: "",
         comment: "",
         prompt: llmDescriptionPrompt(task),

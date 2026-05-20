@@ -1385,7 +1385,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-summary-review-grid")
         .append(
           $("<label/>").append(
-            appendLlmReviewLabel("До LLM", dialog.beforeText || "", null),
+            appendLlmReviewLabel("Исходные данные, на основании которых создано", dialog.beforeText || "", null),
             appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
             })
@@ -1489,7 +1489,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-description-review-grid")
         .append(
           $("<label/>").append(
-            $("<span/>").text("До LLM"),
+            $("<span/>").text("Исходные данные, на основании которых создано"),
             appendTextarea("ujg-esi-description-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
             })
