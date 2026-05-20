@@ -9,6 +9,7 @@ const CONFIG = {
   STORY_ISSUE_TYPE: "Story",
   LLM_CONFIG_STORAGE_KEY: "ujg-test-llm",
   LLM_PROJECT_PROMPT: "Project prompt",
+  LLM_REMARK_PROMPT: "Remark prompt",
   LLM_SUMMARY_PROMPTS: {
     story: "Story prompt",
     SE: "SE prompt",
@@ -317,7 +318,7 @@ test("row create opens confirmation before creating without Epic", async functio
             }
           : null,
         rows: (state.rows || []).map(function (row) {
-          return { status: row.status, createdKey: row.createdKey || "" };
+          return { status: row.status, createdKey: row.createdKey || "", summary: row.summary || "", sourceColumns: Object.assign({}, row.sourceColumns || {}) };
         }),
       });
     },
@@ -400,7 +401,13 @@ test("row create opens confirmation before creating without Epic", async functio
     },
     requestText: function (_config, request) {
       llmRequests.push(request);
-      return Promise.resolve({ text: request.systemPrompt.indexOf("SE prompt") >= 0 ? "[SE] Improved story" : "Improved story" });
+      return Promise.resolve({
+        text: request.systemPrompt.indexOf("Remark prompt") >= 0
+          ? "Corrected remark text"
+          : request.systemPrompt.indexOf("SE prompt") >= 0
+            ? "[SE] Improved story"
+            : "Improved story",
+      });
     },
   };
   const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
@@ -479,15 +486,25 @@ test("row create opens confirmation before creating without Epic", async functio
   const rendersBeforeInlineEdits = states.length;
   callbacks.onDialogSourceChange(0, "Edited story from modal");
   assert.equal(states.length, rendersBeforeInlineEdits);
+  assert.equal(states[states.length - 1].rows[0].summary, "Test jira task");
+  callbacks.onDialogImproveRemark(0);
+  await flush();
+  await flush();
+  last = states[states.length - 1];
+  assert.equal(last.createDialog.sourceRows[0], "Замечание:Corrected remark text");
+  assert.equal(last.rows[0].summary, "Corrected remark text");
+  assert.equal(last.rows[0].sourceColumns["Замечание"], "Corrected remark text");
   callbacks.onDialogChildToggle(1, false);
   callbacks.onDialogChildChange(0, "summary", "[SE] Edited story");
-  assert.equal(states.length, rendersBeforeInlineEdits + 1);
+  assert.equal(states.length, rendersBeforeInlineEdits + 3);
   callbacks.onDialogImproveSummary("child-0");
   await flush();
   await flush();
   last = states[states.length - 1];
   assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
-  assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nSE prompt");
+  assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nRemark prompt");
+  assert.match(llmRequests[1].userPrompt, /Corrected|Edited story from modal|Test jira task/);
+  assert.equal(llmRequests[2].systemPrompt, "Project prompt\n\nSE prompt");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -508,7 +525,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.assignee.accountId, "story-acc");
   assert.equal(creatorOptions.originalEstimate, "2h");
   assert.equal(creatorOptions.remainingEstimate, "1h");
-  assert.equal(creatorOptions.sourceRows[0].value, "Edited story from modal");
+  assert.equal(creatorOptions.sourceRows[0].value, "Corrected remark text");
   assert.equal(creatorOptions.childTasks[0].summary, "[SE] Improved story");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");
@@ -1892,6 +1909,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
               moduleComponentMap: Object.assign({}, state.mappingSettings.moduleComponentMap),
               priorityMap: Object.assign({}, state.mappingSettings.priorityMap),
               llmProjectPrompt: state.mappingSettings.llmProjectPrompt || "",
+              llmRemarkPrompt: state.mappingSettings.llmRemarkPrompt || "",
               llmPrompts: Object.assign({}, state.mappingSettings.llmPrompts || {}),
               storyAssigneeId: state.mappingSettings.storyAssigneeId || "",
               storyAssigneeLabel: state.mappingSettings.storyAssigneeLabel || "",
@@ -2076,9 +2094,12 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   last = states[states.length - 1];
   assert.equal(last.activeMappingBlock, "llmPrompts");
   assert.equal(last.mappingSettings.llmProjectPrompt, "Project prompt");
+  assert.equal(last.mappingSettings.llmRemarkPrompt, "Remark prompt");
   callbacks.onMappingLlmProjectPromptChange("Dashboard project context");
+  callbacks.onMappingLlmRemarkPromptChange("Dashboard remark prompt");
   callbacks.onMappingLlmPromptChange("story", "Dashboard story prompt");
   assert.equal(savedMappings.llmProjectPrompt, "Dashboard project context");
+  assert.equal(savedMappings.llmRemarkPrompt, "Dashboard remark prompt");
   assert.equal(savedMappings.llmPrompts.story, "Dashboard story prompt");
 
   callbacks.onMappingBlockSelect("roles");

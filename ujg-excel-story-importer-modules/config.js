@@ -126,6 +126,14 @@ define("_ujgESI_config", [], function() {
     "Сохраняй терминологию проекта, не выдумывай новые сущности и не меняй смысл исходного замечания."
   ].join("\n");
 
+  var LLM_REMARK_PROMPT = [
+    "Ты редактор текста замечаний приемки.",
+    "Исправь орфографию, пунктуацию, синтаксис и явные опечатки в исходном замечании.",
+    "Сохрани исходный смысл, факты, номера, Jira-ключи, названия модулей, имена, технические термины и важные детали.",
+    "Не превращай текст в Jira Summary, не сокращай до заголовка и не добавляй новых требований.",
+    "Верни только исправленный текст без markdown, кавычек и пояснений."
+  ].join("\n");
+
   function trimSlash(s) {
     return String(s || "").replace(/\/+$/, "");
   }
@@ -164,6 +172,7 @@ define("_ujgESI_config", [], function() {
     DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     LLM_CONFIG_STORAGE_KEY: LLM_CONFIG_STORAGE_KEY,
     LLM_PROJECT_PROMPT: LLM_PROJECT_PROMPT,
+    LLM_REMARK_PROMPT: LLM_REMARK_PROMPT,
     LLM_SUMMARY_PROMPTS: LLM_SUMMARY_PROMPTS,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,

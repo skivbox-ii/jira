@@ -589,6 +589,24 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       );
   }
 
+  function appendImproveRemarkControl(input, index, busyTarget) {
+    var target = "remark-" + index;
+    var isBusy = busyTarget === target;
+    return $("<div/>")
+      .addClass("ujg-esi-source-ai-row")
+      .append(
+        input,
+        $("<button/>")
+          .attr("type", "button")
+          .addClass("ujg-esi-source-ai")
+          .prop("disabled", isBusy)
+          .text(isBusy ? "Исправляю..." : "Исправить")
+          .on("click", function() {
+            if (services && services.onDialogImproveRemark) services.onDialogImproveRemark(index);
+          })
+      );
+  }
+
   function appendTextInput(className, value, onChange) {
     var $input = $("<input/>")
       .attr("type", "text")
@@ -975,6 +993,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           if (services && services.onMappingLlmProjectPromptChange) services.onMappingLlmProjectPromptChange(value);
         })
       );
+    var $remark = $("<label/>")
+      .addClass("ujg-esi-llm-prompt-row ujg-esi-llm-remark-prompt-row")
+      .append(
+        $("<span/>").text("Текст замечания"),
+        appendTextarea("ujg-esi-llm-prompt ujg-esi-llm-remark-prompt", settings && settings.llmRemarkPrompt || "", function(value) {
+          if (services && services.onMappingLlmRemarkPromptChange) services.onMappingLlmRemarkPromptChange(value);
+        })
+      );
     var $wrap = $("<div/>").addClass("ujg-esi-llm-prompts");
     order.concat(Object.keys(prompts || {})).forEach(function(key) {
       if (!key || seen[key]) return;
@@ -990,7 +1016,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           )
       );
     });
-    $parent.append($head, $project, $wrap);
+    $parent.append($head, $project, $remark, $wrap);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -1041,16 +1067,22 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $parent.append($overlay);
   }
 
-  function appendConfirmSourceRows($parent, rows) {
+  function appendConfirmSourceRows($parent, rows, state) {
     var $table = $("<table/>").addClass("ujg-esi-confirm-source");
     var $tbody = $("<tbody/>");
+    var settings = state && state.mappingSettings ? state.mappingSettings : {};
+    var columnMap = settings.columnMap || {};
+    var summaryColumn = String(columnMap.summary || "Замечание").trim();
     (rows || []).forEach(function(row, index) {
+      var name = row && row.name != null ? String(row.name) : "";
+      var $input = appendTextInput("ujg-esi-confirm-source-value", row.value, function(value) {
+        if (services && services.onDialogSourceChange) services.onDialogSourceChange(index, value);
+      });
+      var $control = name.trim() === summaryColumn ? appendImproveRemarkControl($input, index, state && state.llmLoadingTarget) : $input;
       $tbody.append(
         $("<tr/>")
-          .append($("<th/>").text(row.name != null ? String(row.name) : ""))
-          .append($("<td/>").append(appendTextInput("ujg-esi-confirm-source-value", row.value, function(value) {
-            if (services && services.onDialogSourceChange) services.onDialogSourceChange(index, value);
-          })))
+          .append($("<th/>").text(name))
+          .append($("<td/>").append($control))
       );
     });
     $table.append($tbody);
@@ -1163,7 +1195,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
     $modal.append($("<h4/>").text("Описание"));
-    appendConfirmSourceRows($modal, dialog.sourceRows);
+    appendConfirmSourceRows($modal, dialog.sourceRows, state);
     $modal.append($("<h4/>").text("Дочерние задачи"));
     appendConfirmChildTasks($modal, dialog.childTasks, state);
     $modal.append(

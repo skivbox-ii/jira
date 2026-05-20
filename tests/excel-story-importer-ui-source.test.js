@@ -235,8 +235,11 @@ test("rendering module exposes create confirmation modal", function () {
   assert.match(source, /child of Story/);
   assert.match(source, /ujg-esi-confirm-summary/);
   assert.match(source, /ujg-esi-summary-ai/);
+  assert.match(source, /ujg-esi-source-ai/);
   assert.match(source, /Улучшить/);
+  assert.match(source, /Исправить/);
   assert.match(source, /onDialogImproveSummary/);
+  assert.match(source, /onDialogImproveRemark/);
   assert.match(source, /ujg-esi-assignee-picker/);
   assert.match(source, /ujg-esi-assignee-search/);
   assert.match(source, /ujg-esi-assignee-options/);
@@ -260,11 +263,14 @@ test("mapping settings exposes editable AI prompts", function () {
 
   assert.match(source, /AI промпты/);
   assert.match(source, /Общий prompt проекта/);
+  assert.match(source, /Текст замечания/);
   assert.match(source, /ujg-esi-llm-prompt/);
   assert.match(source, /onMappingLlmProjectPromptChange/);
+  assert.match(source, /onMappingLlmRemarkPromptChange/);
   assert.match(source, /onMappingLlmPromptChange/);
   assert.match(css, /\.ujg-esi-llm-prompts/);
   assert.match(css, /\.ujg-esi-llm-project-prompt/);
+  assert.match(css, /\.ujg-esi-llm-remark-prompt/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

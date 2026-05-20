@@ -151,6 +151,11 @@ define("_ujgESI_main", [
     return text || String(config.LLM_PROJECT_PROMPT || "").trim();
   }
 
+  function copyLlmRemarkPrompt(value) {
+    var text = value != null ? String(value).trim() : "";
+    return text || String(config.LLM_REMARK_PROMPT || "").trim();
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -166,6 +171,7 @@ define("_ujgESI_main", [
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
       llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
+      llmRemarkPrompt: copyLlmRemarkPrompt(config.LLM_REMARK_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
@@ -195,6 +201,7 @@ define("_ujgESI_main", [
       storyAssignee: source.storyAssignee != null ? copyAssignee(source.storyAssignee) : defaults.storyAssignee,
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
       llmProjectPrompt: source.llmProjectPrompt != null ? copyLlmProjectPrompt(source.llmProjectPrompt) : copyLlmProjectPrompt(defaults.llmProjectPrompt),
+      llmRemarkPrompt: source.llmRemarkPrompt != null ? copyLlmRemarkPrompt(source.llmRemarkPrompt) : copyLlmRemarkPrompt(defaults.llmRemarkPrompt),
       llmPrompts: source.llmPrompts && typeof source.llmPrompts === "object" ? copyLlmPrompts(source.llmPrompts) : copyLlmPrompts(defaults.llmPrompts),
     };
   }
@@ -1230,6 +1237,26 @@ define("_ujgESI_main", [
       return [projectPrompt, typePrompt].filter(Boolean).join("\n\n");
     }
 
+    function summaryColumnName() {
+      var map = state.mappingSettings && state.mappingSettings.columnMap ? state.mappingSettings.columnMap : {};
+      return String(map.summary || config.SUMMARY_COLUMN || "Замечание").trim();
+    }
+
+    function isRemarkSourceRow(row) {
+      var name = row && row.name != null ? String(row.name).trim() : "";
+      return !!name && name === summaryColumnName();
+    }
+
+    function llmRemarkSystemPrompt() {
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var remarkPrompt = state.mappingSettings && state.mappingSettings.llmRemarkPrompt != null
+        ? String(state.mappingSettings.llmRemarkPrompt).trim()
+        : String(config.LLM_REMARK_PROMPT || "").trim();
+      return [projectPrompt, remarkPrompt].filter(Boolean).join("\n\n");
+    }
+
     function llmUserPrompt(dialog, target, task) {
       var source = (dialog && dialog.sourceRows || []).map(function(row) {
         var name = row && row.name != null ? String(row.name).trim() : "";
@@ -1244,10 +1271,28 @@ define("_ujgESI_main", [
       ].filter(Boolean).join("\n\n");
     }
 
+    function llmRemarkUserPrompt(row) {
+      var name = row && row.name != null ? String(row.name).trim() : "";
+      var value = row && row.value != null ? String(row.value).trim() : "";
+      return [
+        "Исправь текст замечания из Excel.",
+        name ? "Колонка Excel: " + name : "",
+        "Текущий текст:\n" + value,
+        "Верни только исправленный полный текст замечания."
+      ].filter(Boolean).join("\n\n");
+    }
+
     function cleanupLlmSummary(value) {
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/^["'«]+|["'»]+$/g, "").replace(/\s+/g, " ").trim();
       return limitSummary(text);
+    }
+
+    function cleanupLlmRemark(value) {
+      var text = value != null ? String(value).trim() : "";
+      text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      text = text.replace(/^["'«]+|["'»]+$/g, "").trim();
+      return text;
     }
 
     function estimateHours(value) {
@@ -1805,6 +1850,11 @@ define("_ujgESI_main", [
       saveMappings({ render: false });
     }
 
+    function onMappingLlmRemarkPromptChange(value) {
+      state.mappingSettings.llmRemarkPrompt = value != null ? String(value) : "";
+      saveMappings({ render: false });
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       if (row.createdKey) {
@@ -2041,7 +2091,22 @@ define("_ujgESI_main", [
       var dialog = state.createDialog;
       var i = Number(index);
       if (!dialog || !dialog.sourceRows || !dialog.sourceRows[i]) return;
-      dialog.sourceRows[i].value = value != null ? String(value) : "";
+      applyDialogSourceValue(dialog, i, value);
+    }
+
+    function applyDialogSourceValue(dialog, index, value) {
+      var i = Number(index);
+      var sourceRow = dialog && dialog.sourceRows ? dialog.sourceRows[i] : null;
+      var row = dialog ? state.rows[dialog.rowIndex] : null;
+      var text = value != null ? String(value) : "";
+      var name = sourceRow && sourceRow.name != null ? String(sourceRow.name) : "";
+      if (!sourceRow) return;
+      sourceRow.value = text;
+      if (row && row.sourceColumns && Object.prototype.hasOwnProperty.call(row.sourceColumns, name)) {
+        row.sourceColumns[name] = text;
+        if (isRemarkSourceRow(sourceRow)) row.summary = text;
+        resetExportState();
+      }
     }
 
     function onDialogChildToggle(index, enabled) {
@@ -2106,6 +2171,13 @@ define("_ujgESI_main", [
       }
     }
 
+    function applyImprovedRemark(index, text) {
+      var dialog = state.createDialog;
+      var cleaned = cleanupLlmRemark(text);
+      if (!dialog || !cleaned) return;
+      applyDialogSourceValue(dialog, index, cleaned);
+    }
+
     function onDialogImproveSummary(target) {
       var dialog = state.createDialog;
       var targetKey = target != null ? String(target) : "";
@@ -2137,6 +2209,41 @@ define("_ujgESI_main", [
         function(err) {
           state.llmLoadingTarget = "";
           state.llmError = "Не удалось улучшить название: " + (err && err.message ? err.message : "request failed");
+          render();
+        }
+      );
+    }
+
+    function onDialogImproveRemark(index) {
+      var dialog = state.createDialog;
+      var i = Number(index);
+      var sourceRow = dialog && dialog.sourceRows ? dialog.sourceRows[i] : null;
+      var llmConfig;
+      var targetKey = "remark-" + i;
+      if (!dialog || state.llmLoadingTarget || !sourceRow || !isRemarkSourceRow(sourceRow)) return;
+      llmConfig = ensureLlmConfig();
+      if (!llmConfig) {
+        state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
+        render();
+        return;
+      }
+      state.llmError = "";
+      state.llmLoadingTarget = targetKey;
+      render();
+      promiseOf(llmClient.requestText(llmConfig, {
+        systemPrompt: llmRemarkSystemPrompt(),
+        userPrompt: llmRemarkUserPrompt(sourceRow),
+        temperature: 0.1,
+      })).then(
+        function(result) {
+          applyImprovedRemark(i, result && result.text);
+          state.llmLoadingTarget = "";
+          state.llmError = "";
+          render();
+        },
+        function(err) {
+          state.llmLoadingTarget = "";
+          state.llmError = "Не удалось исправить замечание: " + (err && err.message ? err.message : "request failed");
           render();
         }
       );
@@ -2229,6 +2336,7 @@ define("_ujgESI_main", [
       onMappingRoleRemove: onMappingRoleRemove,
       onMappingLlmPromptChange: onMappingLlmPromptChange,
       onMappingLlmProjectPromptChange: onMappingLlmProjectPromptChange,
+      onMappingLlmRemarkPromptChange: onMappingLlmRemarkPromptChange,
       onSyncJira: onSyncJira,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
@@ -2239,6 +2347,7 @@ define("_ujgESI_main", [
       onDialogChildToggle: onDialogChildToggle,
       onDialogChildChange: onDialogChildChange,
       onDialogImproveSummary: onDialogImproveSummary,
+      onDialogImproveRemark: onDialogImproveRemark,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,

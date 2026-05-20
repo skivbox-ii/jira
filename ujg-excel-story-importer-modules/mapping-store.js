@@ -96,6 +96,11 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return text || String(config.LLM_PROJECT_PROMPT || "").trim();
   }
 
+  function copyLlmRemarkPrompt(value) {
+    var text = value != null ? String(value).trim() : "";
+    return text || String(config.LLM_REMARK_PROMPT || "").trim();
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
@@ -108,6 +113,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
       llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
+      llmRemarkPrompt: copyLlmRemarkPrompt(config.LLM_REMARK_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
@@ -136,6 +142,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         ? copyRoles(input.roles)
         : defaults.roles,
       llmProjectPrompt: hasInput ? copyLlmProjectPrompt(input.llmProjectPrompt) : defaults.llmProjectPrompt,
+      llmRemarkPrompt: hasInput ? copyLlmRemarkPrompt(input.llmRemarkPrompt) : defaults.llmRemarkPrompt,
       llmPrompts: hasInput && input.llmPrompts && typeof input.llmPrompts === "object"
         ? copyLlmPrompts(input.llmPrompts)
         : defaults.llmPrompts,
