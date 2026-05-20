@@ -302,6 +302,16 @@ test("summary limit is 255 characters across config and rendering", function () 
   assert.match(read("ujg-excel-story-importer-modules/rendering.js"), /SUMMARY_MAX_LENGTH = 255/);
 });
 
+test("LLM review character counter updates in-place on textarea input", function () {
+  const source = read("ujg-excel-story-importer-modules/rendering.js");
+
+  assert.match(source, /function updateLlmReviewCount/);
+  assert.match(source, /options\.countNode/);
+  assert.match(source, /updateLlmReviewCount\(options\.countNode,\s*\$\(this\)\.val\(\),\s*options\.maxLength\)/);
+  assert.match(source, /countNode:\s*beforeLabel\.count/);
+  assert.match(source, /countNode:\s*afterLabel\.count/);
+});
+
 test("mapping settings exposes editable AI prompts", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
   const css = read("ujg-excel-story-importer.css");

@@ -3072,6 +3072,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .val(value != null ? String(value) : "");
     if (options.maxLength) $textarea.attr("maxlength", String(options.maxLength));
     $textarea.on("input", function() {
+      updateLlmReviewCount(options.countNode, $(this).val(), options.maxLength);
       onChange($(this).val());
     });
     return $textarea;
@@ -3081,15 +3082,27 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return appendTextInput(className, value, onChange).attr("maxlength", String(SUMMARY_MAX_LENGTH));
   }
 
-  function appendLlmReviewLabel(label, value, maxLength) {
+  function llmReviewCountText(value, maxLength) {
     var count = String(value || "").length;
-    var suffix = maxLength ? count + "/" + maxLength : String(count);
-    return $("<span/>")
-      .addClass("ujg-esi-summary-review-label")
-      .append(
-        $("<span/>").text(label),
-        $("<span/>").addClass("ujg-esi-summary-review-count").text(suffix)
-      );
+    return maxLength ? count + "/" + maxLength : String(count);
+  }
+
+  function updateLlmReviewCount($node, value, maxLength) {
+    if ($node && $node.length) $node.text(llmReviewCountText(value, maxLength));
+  }
+
+  function appendLlmReviewLabel(label, value, maxLength) {
+    var $count = $("<span/>").addClass("ujg-esi-summary-review-count");
+    updateLlmReviewCount($count, value, maxLength);
+    return {
+      label: $("<span/>")
+        .addClass("ujg-esi-summary-review-label")
+        .append(
+          $("<span/>").text(label),
+          $count
+        ),
+      count: $count,
+    };
   }
 
   function appendSelect(className, value, rows, onChange) {
@@ -3748,6 +3761,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-summary-review-modal")
       .attr("role", "dialog")
       .attr("aria-modal", "true");
+    var beforeLabel = appendLlmReviewLabel("Исходные данные, на основании которых создано", dialog.beforeText || "", null);
+    var afterLabel = appendLlmReviewLabel("После LLM", dialog.afterText || "", isRemark ? null : SUMMARY_MAX_LENGTH);
     $modal.append(
       $("<div/>")
         .addClass("ujg-esi-summary-review-head")
@@ -3768,16 +3783,16 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-summary-review-grid")
         .append(
           $("<label/>").append(
-            appendLlmReviewLabel("Исходные данные, на основании которых создано", dialog.beforeText || "", null),
+            beforeLabel.label,
             appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
-            })
+            }, { countNode: beforeLabel.count })
           ),
           $("<label/>").append(
-            appendLlmReviewLabel("После LLM", dialog.afterText || "", isRemark ? null : SUMMARY_MAX_LENGTH),
+            afterLabel.label,
             appendTextarea("ujg-esi-summary-review-after", dialog.afterText || "", function(value) {
               change("afterText", value);
-            }, { maxLength: isRemark ? null : SUMMARY_MAX_LENGTH })
+            }, { maxLength: isRemark ? null : SUMMARY_MAX_LENGTH, countNode: afterLabel.count })
           )
         )
     );
