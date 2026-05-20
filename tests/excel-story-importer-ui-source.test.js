@@ -259,9 +259,12 @@ test("mapping settings exposes editable AI prompts", function () {
   const css = read("ujg-excel-story-importer.css");
 
   assert.match(source, /AI промпты/);
+  assert.match(source, /Общий prompt проекта/);
   assert.match(source, /ujg-esi-llm-prompt/);
+  assert.match(source, /onMappingLlmProjectPromptChange/);
   assert.match(source, /onMappingLlmPromptChange/);
   assert.match(css, /\.ujg-esi-llm-prompts/);
+  assert.match(css, /\.ujg-esi-llm-project-prompt/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {

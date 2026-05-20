@@ -146,6 +146,11 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function copyLlmProjectPrompt(value) {
+    var text = value != null ? String(value).trim() : "";
+    return text || String(config.LLM_PROJECT_PROMPT || "").trim();
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -160,6 +165,7 @@ define("_ujgESI_main", [
       storyAssigneeLabel: "",
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
+      llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
@@ -188,6 +194,7 @@ define("_ujgESI_main", [
       storyAssigneeLabel: source.storyAssigneeLabel != null ? String(source.storyAssigneeLabel).trim() : defaults.storyAssigneeLabel,
       storyAssignee: source.storyAssignee != null ? copyAssignee(source.storyAssignee) : defaults.storyAssignee,
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
+      llmProjectPrompt: source.llmProjectPrompt != null ? copyLlmProjectPrompt(source.llmProjectPrompt) : copyLlmProjectPrompt(defaults.llmProjectPrompt),
       llmPrompts: source.llmPrompts && typeof source.llmPrompts === "object" ? copyLlmPrompts(source.llmPrompts) : copyLlmPrompts(defaults.llmPrompts),
     };
   }
@@ -1216,7 +1223,11 @@ define("_ujgESI_main", [
     function llmSystemPrompt(target, task) {
       var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
       var key = llmPromptKeyForTarget(target, task);
-      return prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var typePrompt = prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+      return [projectPrompt, typePrompt].filter(Boolean).join("\n\n");
     }
 
     function llmUserPrompt(dialog, target, task) {
@@ -1789,6 +1800,11 @@ define("_ujgESI_main", [
       saveMappings({ render: false });
     }
 
+    function onMappingLlmProjectPromptChange(value) {
+      state.mappingSettings.llmProjectPrompt = value != null ? String(value) : "";
+      saveMappings({ render: false });
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       if (row.createdKey) {
@@ -2212,6 +2228,7 @@ define("_ujgESI_main", [
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,
       onMappingLlmPromptChange: onMappingLlmPromptChange,
+      onMappingLlmProjectPromptChange: onMappingLlmProjectPromptChange,
       onSyncJira: onSyncJira,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,

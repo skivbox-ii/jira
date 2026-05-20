@@ -119,6 +119,13 @@ define("_ujgESI_config", [], function() {
     ].join("\n")
   };
 
+  var LLM_PROJECT_PROMPT = [
+    "Общий системный prompt проекта для Jira-задач из журнала замечаний.",
+    "Учитывай, что задачи создаются в рамках проекта с иерархией Epic → Story → связанные дочерние задачи.",
+    "Story описывает бизнес-замечание целиком, а SE/FE/BE/QA/DevOps задачи являются обычными Jira-задачами, связанными с историей.",
+    "Сохраняй терминологию проекта, не выдумывай новые сущности и не меняй смысл исходного замечания."
+  ].join("\n");
+
   function trimSlash(s) {
     return String(s || "").replace(/\/+$/, "");
   }
@@ -156,6 +163,7 @@ define("_ujgESI_config", [], function() {
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     LLM_CONFIG_STORAGE_KEY: LLM_CONFIG_STORAGE_KEY,
+    LLM_PROJECT_PROMPT: LLM_PROJECT_PROMPT,
     LLM_SUMMARY_PROMPTS: LLM_SUMMARY_PROMPTS,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,

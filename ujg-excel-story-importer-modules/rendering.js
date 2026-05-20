@@ -389,7 +389,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       {
         key: "llmPrompts",
         title: "AI промпты",
-        subtitle: String(Object.keys(maps.llmPrompts || {}).length) + " шаблонов",
+        subtitle: String(Object.keys(maps.llmPrompts || {}).length) + " шаблонов + проект",
       },
     ];
   }
@@ -967,6 +967,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append($("<h2/>").text("AI промпты для названий"));
+    var $project = $("<label/>")
+      .addClass("ujg-esi-llm-prompt-row ujg-esi-llm-project-prompt-row")
+      .append(
+        $("<span/>").text("Общий prompt проекта"),
+        appendTextarea("ujg-esi-llm-prompt ujg-esi-llm-project-prompt", settings && settings.llmProjectPrompt || "", function(value) {
+          if (services && services.onMappingLlmProjectPromptChange) services.onMappingLlmProjectPromptChange(value);
+        })
+      );
     var $wrap = $("<div/>").addClass("ujg-esi-llm-prompts");
     order.concat(Object.keys(prompts || {})).forEach(function(key) {
       if (!key || seen[key]) return;
@@ -982,7 +990,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           )
       );
     });
-    $parent.append($head, $wrap);
+    $parent.append($head, $project, $wrap);
   }
 
   function appendMappingOverlay($parent, state) {

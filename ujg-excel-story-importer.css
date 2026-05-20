@@ -683,6 +683,15 @@
   max-width: 920px;
 }
 
+.ujg-esi-llm-project-prompt-row {
+  max-width: 920px;
+  margin-bottom: 12px;
+}
+
+.ujg-esi-llm-project-prompt {
+  min-height: 120px;
+}
+
 .ujg-esi-llm-prompt-row {
   display: grid;
   gap: 6px;

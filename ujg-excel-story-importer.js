@@ -421,6 +421,13 @@ define("_ujgESI_config", [], function() {
     ].join("\n")
   };
 
+  var LLM_PROJECT_PROMPT = [
+    "Общий системный prompt проекта для Jira-задач из журнала замечаний.",
+    "Учитывай, что задачи создаются в рамках проекта с иерархией Epic → Story → связанные дочерние задачи.",
+    "Story описывает бизнес-замечание целиком, а SE/FE/BE/QA/DevOps задачи являются обычными Jira-задачами, связанными с историей.",
+    "Сохраняй терминологию проекта, не выдумывай новые сущности и не меняй смысл исходного замечания."
+  ].join("\n");
+
   function trimSlash(s) {
     return String(s || "").replace(/\/+$/, "");
   }
@@ -458,6 +465,7 @@ define("_ujgESI_config", [], function() {
     DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
     DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     LLM_CONFIG_STORAGE_KEY: LLM_CONFIG_STORAGE_KEY,
+    LLM_PROJECT_PROMPT: LLM_PROJECT_PROMPT,
     LLM_SUMMARY_PROMPTS: LLM_SUMMARY_PROMPTS,
     KNOWN_COLUMNS: KNOWN_COLUMNS,
     CREATE_TEMPLATE_ROLES: CREATE_TEMPLATE_ROLES,
@@ -562,6 +570,11 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyLlmProjectPrompt(value) {
+    var text = value != null ? String(value).trim() : "";
+    return text || String(config.LLM_PROJECT_PROMPT || "").trim();
+  }
+
   function defaultSettings() {
     return {
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
@@ -573,6 +586,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       storyAssigneeLabel: "",
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
+      llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
@@ -600,6 +614,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       roles: hasInput && Array.isArray(input.roles)
         ? copyRoles(input.roles)
         : defaults.roles,
+      llmProjectPrompt: hasInput ? copyLlmProjectPrompt(input.llmProjectPrompt) : defaults.llmProjectPrompt,
       llmPrompts: hasInput && input.llmPrompts && typeof input.llmPrompts === "object"
         ? copyLlmPrompts(input.llmPrompts)
         : defaults.llmPrompts,
@@ -2687,7 +2702,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       {
         key: "llmPrompts",
         title: "AI промпты",
-        subtitle: String(Object.keys(maps.llmPrompts || {}).length) + " шаблонов",
+        subtitle: String(Object.keys(maps.llmPrompts || {}).length) + " шаблонов + проект",
       },
     ];
   }
@@ -3265,6 +3280,14 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var $head = $("<div/>")
       .addClass("ujg-esi-mapping-editor-head")
       .append($("<h2/>").text("AI промпты для названий"));
+    var $project = $("<label/>")
+      .addClass("ujg-esi-llm-prompt-row ujg-esi-llm-project-prompt-row")
+      .append(
+        $("<span/>").text("Общий prompt проекта"),
+        appendTextarea("ujg-esi-llm-prompt ujg-esi-llm-project-prompt", settings && settings.llmProjectPrompt || "", function(value) {
+          if (services && services.onMappingLlmProjectPromptChange) services.onMappingLlmProjectPromptChange(value);
+        })
+      );
     var $wrap = $("<div/>").addClass("ujg-esi-llm-prompts");
     order.concat(Object.keys(prompts || {})).forEach(function(key) {
       if (!key || seen[key]) return;
@@ -3280,7 +3303,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
           )
       );
     });
-    $parent.append($head, $wrap);
+    $parent.append($head, $project, $wrap);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -3708,6 +3731,11 @@ define("_ujgESI_main", [
     return out;
   }
 
+  function copyLlmProjectPrompt(value) {
+    var text = value != null ? String(value).trim() : "";
+    return text || String(config.LLM_PROJECT_PROMPT || "").trim();
+  }
+
   function defaultMappingSettings() {
     if (mappingStore && typeof mappingStore.defaultSettings === "function") {
       return mappingStore.defaultSettings();
@@ -3722,6 +3750,7 @@ define("_ujgESI_main", [
       storyAssigneeLabel: "",
       storyAssignee: null,
       roles: copyRoles(config.CREATE_TEMPLATE_ROLES),
+      llmProjectPrompt: copyLlmProjectPrompt(config.LLM_PROJECT_PROMPT),
       llmPrompts: copyLlmPrompts(config.LLM_SUMMARY_PROMPTS),
     };
   }
@@ -3750,6 +3779,7 @@ define("_ujgESI_main", [
       storyAssigneeLabel: source.storyAssigneeLabel != null ? String(source.storyAssigneeLabel).trim() : defaults.storyAssigneeLabel,
       storyAssignee: source.storyAssignee != null ? copyAssignee(source.storyAssignee) : defaults.storyAssignee,
       roles: Array.isArray(source.roles) ? copyRoles(source.roles) : copyRoles(defaults.roles),
+      llmProjectPrompt: source.llmProjectPrompt != null ? copyLlmProjectPrompt(source.llmProjectPrompt) : copyLlmProjectPrompt(defaults.llmProjectPrompt),
       llmPrompts: source.llmPrompts && typeof source.llmPrompts === "object" ? copyLlmPrompts(source.llmPrompts) : copyLlmPrompts(defaults.llmPrompts),
     };
   }
@@ -4778,7 +4808,11 @@ define("_ujgESI_main", [
     function llmSystemPrompt(target, task) {
       var prompts = state.mappingSettings && state.mappingSettings.llmPrompts ? state.mappingSettings.llmPrompts : {};
       var key = llmPromptKeyForTarget(target, task);
-      return prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+      var projectPrompt = state.mappingSettings && state.mappingSettings.llmProjectPrompt != null
+        ? String(state.mappingSettings.llmProjectPrompt).trim()
+        : String(config.LLM_PROJECT_PROMPT || "").trim();
+      var typePrompt = prompts[key] || prompts.story || (config.LLM_SUMMARY_PROMPTS && config.LLM_SUMMARY_PROMPTS.story) || "";
+      return [projectPrompt, typePrompt].filter(Boolean).join("\n\n");
     }
 
     function llmUserPrompt(dialog, target, task) {
@@ -5351,6 +5385,11 @@ define("_ujgESI_main", [
       saveMappings({ render: false });
     }
 
+    function onMappingLlmProjectPromptChange(value) {
+      state.mappingSettings.llmProjectPrompt = value != null ? String(value) : "";
+      saveMappings({ render: false });
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       if (row.createdKey) {
@@ -5774,6 +5813,7 @@ define("_ujgESI_main", [
       onMappingRoleChange: onMappingRoleChange,
       onMappingRoleRemove: onMappingRoleRemove,
       onMappingLlmPromptChange: onMappingLlmPromptChange,
+      onMappingLlmProjectPromptChange: onMappingLlmProjectPromptChange,
       onSyncJira: onSyncJira,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,

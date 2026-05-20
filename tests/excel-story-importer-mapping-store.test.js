@@ -31,6 +31,11 @@ function loadStore($, localStorage, window) {
     PRIORITY_MAP: {
       "Высокий": "High",
     },
+    LLM_PROJECT_PROMPT: "Default project prompt",
+    LLM_SUMMARY_PROMPTS: {
+      story: "Story prompt",
+      SE: "SE prompt",
+    },
   };
   return loadAmdModule(
     path.join(MODULE_DIR, "mapping-store.js"),
@@ -65,6 +70,8 @@ test("mapping store loads and saves mappings only in localStorage", async functi
       storyAssigneeId: "story-acc",
       storyAssigneeLabel: "Story User",
       storyAssignee: { accountId: "story-acc", displayName: "Story User" },
+      llmProjectPrompt: "Saved project prompt",
+      llmPrompts: { story: "Saved story prompt", SE: "Saved SE prompt" },
       roles: [
         {
           role: "QA",
@@ -95,6 +102,8 @@ test("mapping store loads and saves mappings only in localStorage", async functi
   assert.equal(loaded.roles[0].assigneeId, "qa-name");
   assert.equal(loaded.roles[0].assignee.name, "qa-name");
   assert.equal(loaded.roles[0].assignee.displayName, "QA User");
+  assert.equal(loaded.llmProjectPrompt, "Saved project prompt");
+  assert.equal(loaded.llmPrompts.story, "Saved story prompt");
   assert.equal(ajaxCalls.length, 0);
 
   await store.save({
@@ -106,6 +115,8 @@ test("mapping store loads and saves mappings only in localStorage", async functi
     storyAssigneeId: "lead-acc",
     storyAssigneeLabel: "Lead User",
     storyAssignee: { accountId: "lead-acc", displayName: "Lead User" },
+    llmProjectPrompt: "Updated project prompt",
+    llmPrompts: { story: "Updated story prompt", SE: "Updated SE prompt" },
     roles: [
       {
         role: "SE",
@@ -127,6 +138,8 @@ test("mapping store loads and saves mappings only in localStorage", async functi
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.tableStart.headerMarker, "Замечание");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.sheetName, "Журнал приемки");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.storyAssigneeId, "lead-acc");
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.llmProjectPrompt, "Updated project prompt");
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.llmPrompts.story, "Updated story prompt");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assigneeId, "se-name");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assignee.displayName, "SE User");
 });

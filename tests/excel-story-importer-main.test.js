@@ -8,6 +8,7 @@ const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules"
 const CONFIG = {
   STORY_ISSUE_TYPE: "Story",
   LLM_CONFIG_STORAGE_KEY: "ujg-test-llm",
+  LLM_PROJECT_PROMPT: "Project prompt",
   LLM_SUMMARY_PROMPTS: {
     story: "Story prompt",
     SE: "SE prompt",
@@ -399,7 +400,7 @@ test("row create opens confirmation before creating without Epic", async functio
     },
     requestText: function (_config, request) {
       llmRequests.push(request);
-      return Promise.resolve({ text: request.systemPrompt === "SE prompt" ? "[SE] Improved story" : "Improved story" });
+      return Promise.resolve({ text: request.systemPrompt.indexOf("SE prompt") >= 0 ? "[SE] Improved story" : "Improved story" });
     },
   };
   const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
@@ -462,7 +463,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.createDialog.summary, "Improved story");
-  assert.equal(llmRequests[0].systemPrompt, "Story prompt");
+  assert.equal(llmRequests[0].systemPrompt, "Project prompt\n\nStory prompt");
   assert.match(llmRequests[0].userPrompt, /Test jira task/);
   callbacks.onDialogAssigneeSearch("story", "story");
   await flush();
@@ -486,7 +487,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
-  assert.equal(llmRequests[1].systemPrompt, "SE prompt");
+  assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nSE prompt");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -1890,6 +1891,8 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
           ? {
               moduleComponentMap: Object.assign({}, state.mappingSettings.moduleComponentMap),
               priorityMap: Object.assign({}, state.mappingSettings.priorityMap),
+              llmProjectPrompt: state.mappingSettings.llmProjectPrompt || "",
+              llmPrompts: Object.assign({}, state.mappingSettings.llmPrompts || {}),
               storyAssigneeId: state.mappingSettings.storyAssigneeId || "",
               storyAssigneeLabel: state.mappingSettings.storyAssigneeLabel || "",
               roles: state.mappingSettings.roles.map(function (role) {
@@ -2072,6 +2075,11 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   await flush();
   last = states[states.length - 1];
   assert.equal(last.activeMappingBlock, "llmPrompts");
+  assert.equal(last.mappingSettings.llmProjectPrompt, "Project prompt");
+  callbacks.onMappingLlmProjectPromptChange("Dashboard project context");
+  callbacks.onMappingLlmPromptChange("story", "Dashboard story prompt");
+  assert.equal(savedMappings.llmProjectPrompt, "Dashboard project context");
+  assert.equal(savedMappings.llmPrompts.story, "Dashboard story prompt");
 
   callbacks.onMappingBlockSelect("roles");
   callbacks.onMappingRoleChange(1, "enabled", true);
