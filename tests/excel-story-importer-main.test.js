@@ -424,7 +424,7 @@ test("row create opens confirmation before creating without Epic", async functio
         text: /remark prompt/i.test(request.systemPrompt)
           ? JSON.stringify({ text: "Corrected remark text", comment: "Исправил орфографию и сохранил смысл замечания." })
           : request.systemPrompt.indexOf("SE prompt") >= 0
-            ? JSON.stringify({ summary: "[SE] Improved story", comment: "Добавил префикс SE и уточнил формулировку." })
+            ? JSON.stringify({ summary: "[SE] Проверить индикатор \"Гаечный ключ\"", comment: "Добавил префикс SE и уточнил формулировку." })
             : JSON.stringify({ summary: "Improved story", comment: "Сократил и выровнял название Story." }),
       });
     },
@@ -572,7 +572,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Edited story:true::");
   assert.equal(last.summaryDialog.target, "child-0");
   assert.equal(last.summaryDialog.beforeText, "[SE] Edited story");
-  assert.equal(last.summaryDialog.afterText, "[SE] Improved story");
+  assert.equal(last.summaryDialog.afterText, "[SE] Проверить индикатор \"Гаечный ключ\"");
   assert.equal(last.summaryDialog.comment, "Добавил префикс SE и уточнил формулировку.");
   assert.equal(last.summaryDialog.prompt, "SE prompt");
   assert.equal(llmRequests[1].systemPrompt, "Project prompt\n\nRemark prompt");
@@ -582,7 +582,7 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   last = states[states.length - 1];
   assert.equal(last.summaryDialog, null);
-  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Improved story:true::");
+  assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Проверить индикатор \"Гаечный ключ\":true::");
   callbacks.onDialogAssigneeSearch("child-0", "se");
   await flush();
   await flush();
@@ -604,7 +604,7 @@ test("row create opens confirmation before creating without Epic", async functio
   assert.equal(creatorOptions.originalEstimate, "2h");
   assert.equal(creatorOptions.remainingEstimate, "1h");
   assert.equal(creatorOptions.sourceRows[0].value, "Applied corrected remark");
-  assert.equal(creatorOptions.childTasks[0].summary, "[SE] Improved story");
+  assert.equal(creatorOptions.childTasks[0].summary, "[SE] Проверить индикатор \"Гаечный ключ\"");
   assert.equal(creatorOptions.childTasks[0].assignee.name, "se-user");
   assert.equal(creatorOptions.childTasks[0].originalEstimate, "4h");
   assert.equal(creatorOptions.childTasks[0].remainingEstimate, "4h");

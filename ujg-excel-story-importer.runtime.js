@@ -5120,8 +5120,17 @@ define("_ujgESI_main", [
 
     function cleanupLlmSummary(value) {
       var text = value != null ? String(value).trim() : "";
-      text = text.replace(/^["'«]+|["'»]+$/g, "").replace(/\s+/g, " ").trim();
+      text = stripWrappingQuotes(text).replace(/\s+/g, " ").trim();
       return limitSummary(text);
+    }
+
+    function stripWrappingQuotes(value) {
+      var text = value != null ? String(value).trim() : "";
+      if (text.length < 2) return text;
+      var first = text.charAt(0);
+      var last = text.charAt(text.length - 1);
+      var pairs = { "\"": "\"", "'": "'", "«": "»", "“": "”", "„": "“" };
+      return pairs[first] === last ? text.slice(1, -1).trim() : text;
     }
 
     function stripJsonFence(value) {
@@ -5153,7 +5162,7 @@ define("_ujgESI_main", [
     function cleanupLlmRemark(value) {
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-      text = text.replace(/^["'«]+|["'»]+$/g, "").trim();
+      text = stripWrappingQuotes(text);
       return text;
     }
 
