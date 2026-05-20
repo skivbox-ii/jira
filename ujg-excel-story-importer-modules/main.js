@@ -1397,9 +1397,10 @@ define("_ujgESI_main", [
     function llmDescriptionDialogUserPrompt(dialog) {
       return [
         "Исходные данные:\n" + (dialog && dialog.beforeText || ""),
-        "Сформируй описание задачи обычным текстом.",
-        "Не используй markdown, HTML, спецразметку, декоративные заголовки и форматирование.",
-        "Верни только JSON без markdown: {\"description\":\"итоговое описание обычным текстом\", \"comment\":\"кратко что именно было изменено\"}."
+        "Сформируй описание задачи в Jira wiki-синтаксисе.",
+        "Используй только структурную разметку: h3. Заголовок, списки через *, пустые строки.",
+        "Не используй жирный, курсив, подчёркивание, цвет, панели, таблицы, HTML и markdown-заголовки.",
+        "Верни только JSON без markdown-fence: {\"description\":\"итоговое Jira wiki-описание\", \"comment\":\"кратко что именно было изменено\"}."
       ].filter(Boolean).join("\n\n");
     }
 
@@ -1476,10 +1477,13 @@ define("_ujgESI_main", [
       text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
       text = stripWrappingQuotes(text);
       text = text
-        .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-        .replace(/^\s{0,3}\*\s+/gm, "- ")
+        .replace(/^\s{0,3}#{1,6}\s+(.+)$/gm, "h3. $1")
+        .replace(/^\s{0,3}[-+]\s+/gm, "* ")
         .replace(/\*\*([^*\n]+)\*\*/g, "$1")
         .replace(/\*([^*\n]+)\*/g, "$1")
+        .replace(/__([^_\n]+)__/g, "$1")
+        .replace(/_([^_\n]+)_/g, "$1")
+        .replace(/\+([^+\n]+)\+/g, "$1")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
       return text;

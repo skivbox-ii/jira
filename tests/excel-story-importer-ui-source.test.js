@@ -332,14 +332,17 @@ test("mapping settings exposes editable AI prompts", function () {
   assert.match(css, /\.ujg-esi-llm-description-prompt/);
 });
 
-test("description LLM prompts request plain text instead of Jira wiki syntax", function () {
+test("description LLM prompts request Jira wiki structure without inline formatting", function () {
   const config = read("ujg-excel-story-importer-modules/config.js");
   const main = read("ujg-excel-story-importer-modules/main.js");
 
-  assert.match(config, /Подготовь обычное текстовое описание/);
-  assert.match(main, /итоговое описание обычным текстом/);
-  assert.doesNotMatch(config, /Jira wiki-описание|Jira wiki-синтаксис/);
-  assert.doesNotMatch(main, /Jira wiki syntax/);
+  assert.match(config, /Jira wiki-синтаксисе только для структуры/);
+  assert.match(config, /h3\. Заголовок/);
+  assert.match(config, /Не используй жирный, курсив, подч[её]ркивание/);
+  assert.match(main, /Jira wiki-синтаксисе/);
+  assert.match(main, /Не используй жирный, курсив, подч[её]ркивание/);
+  assert.doesNotMatch(config, /обычное текстовое описание|без markdown, HTML, спецразметки/);
+  assert.doesNotMatch(main, /итоговое описание обычным текстом|Сформируй описание задачи обычным текстом/);
 });
 
 test("api module quotes project keys before embedding them in JQL", function () {
