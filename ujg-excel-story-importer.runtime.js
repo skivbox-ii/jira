@@ -423,33 +423,33 @@ define("_ujgESI_config", [], function() {
 
   var LLM_DESCRIPTION_PROMPTS = {
     SE: [
-      "Ты системный аналитик. Подготовь Jira wiki-описание для SE-задачи по замечанию приемки.",
+      "Ты системный аналитик. Подготовь обычное текстовое описание для SE-задачи по замечанию приемки.",
       "Опиши цель, контекст, что нужно уточнить и ожидаемый результат анализа.",
-      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Пиши обычным текстом без markdown, HTML, спецразметки и декоративных заголовков.",
       "Не добавляй фактов, которых нет во входных данных."
     ].join("\n"),
     FE: [
-      "Ты frontend-разработчик. Подготовь Jira wiki-описание для FE-задачи по замечанию приемки.",
+      "Ты frontend-разработчик. Подготовь обычное текстовое описание для FE-задачи по замечанию приемки.",
       "Опиши экран, пользовательское поведение, UI-состояния и критерии готовности.",
-      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Пиши обычным текстом без markdown, HTML, спецразметки и декоративных заголовков.",
       "Не добавляй фактов, которых нет во входных данных."
     ].join("\n"),
     BE: [
-      "Ты backend-разработчик. Подготовь Jira wiki-описание для BE-задачи по замечанию приемки.",
+      "Ты backend-разработчик. Подготовь обычное текстовое описание для BE-задачи по замечанию приемки.",
       "Опиши серверную логику, данные, API, проверки и критерии готовности.",
-      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Пиши обычным текстом без markdown, HTML, спецразметки и декоративных заголовков.",
       "Не добавляй фактов, которых нет во входных данных."
     ].join("\n"),
     QA: [
-      "Ты QA-инженер. Подготовь Jira wiki-описание для QA-задачи по замечанию приемки.",
+      "Ты QA-инженер. Подготовь обычное текстовое описание для QA-задачи по замечанию приемки.",
       "Опиши сценарии проверки, регрессию, тестовые данные и ожидаемый результат.",
-      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Пиши обычным текстом без markdown, HTML, спецразметки и декоративных заголовков.",
       "Не добавляй фактов, которых нет во входных данных."
     ].join("\n"),
     DevOps: [
-      "Ты DevOps-инженер. Подготовь Jira wiki-описание для DevOps-задачи по замечанию приемки.",
+      "Ты DevOps-инженер. Подготовь обычное текстовое описание для DevOps-задачи по замечанию приемки.",
       "Опиши окружение, конфигурацию, pipeline, деплой и проверки после выкладки.",
-      "Используй Jira wiki-синтаксис: *жирный*, списки через # или *, без HTML и markdown.",
+      "Пиши обычным текстом без markdown, HTML, спецразметки и декоративных заголовков.",
       "Не добавляй фактов, которых нет во входных данных."
     ].join("\n")
   };
@@ -3768,7 +3768,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-summary-review-grid")
         .append(
           $("<label/>").append(
-            appendLlmReviewLabel("До LLM", dialog.beforeText || "", null),
+            appendLlmReviewLabel("Исходные данные, на основании которых создано", dialog.beforeText || "", null),
             appendTextarea("ujg-esi-summary-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
             })
@@ -3872,7 +3872,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-description-review-grid")
         .append(
           $("<label/>").append(
-            $("<span/>").text("До LLM"),
+            $("<span/>").text("Исходные данные, на основании которых создано"),
             appendTextarea("ujg-esi-description-review-before", dialog.beforeText || "", function(value) {
               change("beforeText", value);
             })
@@ -5422,19 +5422,31 @@ define("_ujgESI_main", [
       return [projectPrompt, prompt].filter(Boolean).join("\n\n");
     }
 
-    function llmDescriptionDialogUserPrompt(dialog) {
-      var createDialog = state.createDialog;
-      var source = (createDialog && createDialog.sourceRows || []).map(function(row) {
+    function sourceRowsText(rows) {
+      return (rows || []).map(function(row) {
         var name = row && row.name != null ? String(row.name).trim() : "";
         var value = row && row.value != null ? String(row.value).trim() : "";
         return name && value ? name + ": " + value : "";
       }).filter(Boolean).join("\n");
+    }
+
+    function descriptionSourceText(task) {
+      var createDialog = state.createDialog;
+      var source = sourceRowsText(createDialog && createDialog.sourceRows);
       return [
-        "Роль дочерней задачи: " + (dialog && dialog.role || ""),
-        "Название задачи: " + (dialog && dialog.summary || ""),
-        "Текущее описание:\n" + (dialog && dialog.beforeText || ""),
-        source ? "Поля строки Excel:\n" + source : "",
-        "Верни только JSON без markdown: {\"description\":\"итоговое описание в Jira wiki syntax\", \"comment\":\"кратко что именно было изменено\"}."
+        "Роль дочерней задачи: " + (task && task.role || ""),
+        "Название задачи: " + (task && task.summary || ""),
+        "Исходное описание:\n" + (task && task.description || defaultChildDescription()),
+        source ? "Поля строки Excel:\n" + source : ""
+      ].filter(Boolean).join("\n\n");
+    }
+
+    function llmDescriptionDialogUserPrompt(dialog) {
+      return [
+        "Исходные данные:\n" + (dialog && dialog.beforeText || ""),
+        "Сформируй описание задачи обычным текстом.",
+        "Не используй markdown, HTML, спецразметку, декоративные заголовки и форматирование.",
+        "Верни только JSON без markdown: {\"description\":\"итоговое описание обычным текстом\", \"comment\":\"кратко что именно было изменено\"}."
       ].filter(Boolean).join("\n\n");
     }
 
@@ -5509,7 +5521,15 @@ define("_ujgESI_main", [
     function cleanupLlmDescription(value) {
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-      return stripWrappingQuotes(text);
+      text = stripWrappingQuotes(text);
+      text = text
+        .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+        .replace(/^\s{0,3}\*\s+/gm, "- ")
+        .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+        .replace(/\*([^*\n]+)\*/g, "$1")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      return text;
     }
 
     function parseLlmDescriptionResponse(value) {
@@ -6611,7 +6631,7 @@ define("_ujgESI_main", [
         target: targetKey,
         role: task.role || "",
         summary: task.summary || "",
-        beforeText: task.description || defaultChildDescription(),
+        beforeText: descriptionSourceText(task),
         afterText: "",
         comment: "",
         prompt: llmDescriptionPrompt(task),
