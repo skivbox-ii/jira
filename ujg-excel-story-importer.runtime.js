@@ -2756,6 +2756,27 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($td);
   }
 
+  function appendSummaryCell($tr, row, index, state) {
+    var target = "row-remark-" + index;
+    var isBusy = state && state.llmLoadingTarget === target;
+    var text = row && row.summary != null ? String(row.summary) : "";
+    var $button = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-row-ai")
+      .prop("disabled", isBusy || !text.trim())
+      .text(isBusy ? "Исправляю..." : "Исправить")
+      .on("click", function() {
+        if (services && services.onRowImproveRemark) services.onRowImproveRemark(index);
+      });
+    var $td = $("<td/>")
+      .addClass("ujg-esi-summary")
+      .append(
+        $("<div/>").addClass("ujg-esi-summary-text").text(text),
+        $("<div/>").addClass("ujg-esi-summary-actions").append($button)
+      );
+    $tr.append($td);
+  }
+
   function issueBrowseUrl(key, baseUrl) {
     var path = "/browse/" + encodeURIComponent(String(key || ""));
     var base = baseUrl != null ? String(baseUrl).replace(/\/+$/, "") : "";
@@ -3579,7 +3600,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-row-" + String(row.status || "ready"))
         .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
-      appendValue($tr, row.summary || "", "ujg-esi-summary");
+      appendSummaryCell($tr, row, index, state);
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
       appendStatusCell($tr, row, state, previewStatusText(cols));
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
@@ -3609,6 +3630,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $root.append($header, $toolbar);
     appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
+    if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
     if (s.syncSummary) $root.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
@@ -4915,6 +4937,13 @@ define("_ujgESI_main", [
       ].filter(Boolean).join("\n\n");
     }
 
+    function rowRemarkSourceRow(row) {
+      var name = summaryColumnName();
+      var cols = row && row.sourceColumns ? row.sourceColumns : {};
+      var value = Object.prototype.hasOwnProperty.call(cols, name) ? cols[name] : row && row.summary;
+      return { name: name, value: value };
+    }
+
     function cleanupLlmSummary(value) {
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/^["'«]+|["'»]+$/g, "").replace(/\s+/g, " ").trim();
@@ -5882,6 +5911,47 @@ define("_ujgESI_main", [
       );
     }
 
+    function onRowImproveRemark(index) {
+      var i = Number(index);
+      var row = state.rows && state.rows[i] ? state.rows[i] : null;
+      var sourceRow = row ? rowRemarkSourceRow(row) : null;
+      var llmConfig;
+      var targetKey = "row-remark-" + i;
+      if (!row || state.llmLoadingTarget || !sourceRow || !String(sourceRow.value || "").trim()) return;
+      llmConfig = ensureLlmConfig();
+      if (!llmConfig) {
+        state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
+        render();
+        return;
+      }
+      state.llmError = "";
+      state.llmLoadingTarget = targetKey;
+      render();
+      promiseOf(llmClient.requestText(llmConfig, {
+        systemPrompt: llmRemarkSystemPrompt(),
+        userPrompt: llmRemarkUserPrompt(sourceRow),
+        temperature: 0.1,
+      })).then(
+        function(result) {
+          var cleaned = cleanupLlmRemark(result && result.text);
+          if (cleaned) {
+            row.summary = cleaned;
+            row.sourceColumns = row.sourceColumns || {};
+            row.sourceColumns[summaryColumnName()] = cleaned;
+            resetExportState();
+          }
+          state.llmLoadingTarget = "";
+          state.llmError = "";
+          render();
+        },
+        function(err) {
+          state.llmLoadingTarget = "";
+          state.llmError = "Не удалось исправить замечание: " + (err && err.message ? err.message : "request failed");
+          render();
+        }
+      );
+    }
+
     function onDialogAssigneeFocus(target) {
       var targetKey = target != null ? String(target) : "";
       if (!userTargetNode(targetKey)) return;
@@ -5981,6 +6051,7 @@ define("_ujgESI_main", [
       onDialogChildChange: onDialogChildChange,
       onDialogImproveSummary: onDialogImproveSummary,
       onDialogImproveRemark: onDialogImproveRemark,
+      onRowImproveRemark: onRowImproveRemark,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,

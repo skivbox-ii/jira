@@ -1282,6 +1282,13 @@ define("_ujgESI_main", [
       ].filter(Boolean).join("\n\n");
     }
 
+    function rowRemarkSourceRow(row) {
+      var name = summaryColumnName();
+      var cols = row && row.sourceColumns ? row.sourceColumns : {};
+      var value = Object.prototype.hasOwnProperty.call(cols, name) ? cols[name] : row && row.summary;
+      return { name: name, value: value };
+    }
+
     function cleanupLlmSummary(value) {
       var text = value != null ? String(value).trim() : "";
       text = text.replace(/^["'«]+|["'»]+$/g, "").replace(/\s+/g, " ").trim();
@@ -2249,6 +2256,47 @@ define("_ujgESI_main", [
       );
     }
 
+    function onRowImproveRemark(index) {
+      var i = Number(index);
+      var row = state.rows && state.rows[i] ? state.rows[i] : null;
+      var sourceRow = row ? rowRemarkSourceRow(row) : null;
+      var llmConfig;
+      var targetKey = "row-remark-" + i;
+      if (!row || state.llmLoadingTarget || !sourceRow || !String(sourceRow.value || "").trim()) return;
+      llmConfig = ensureLlmConfig();
+      if (!llmConfig) {
+        state.llmError = "LLM не настроен: укажите API Base URL, модель и ключ.";
+        render();
+        return;
+      }
+      state.llmError = "";
+      state.llmLoadingTarget = targetKey;
+      render();
+      promiseOf(llmClient.requestText(llmConfig, {
+        systemPrompt: llmRemarkSystemPrompt(),
+        userPrompt: llmRemarkUserPrompt(sourceRow),
+        temperature: 0.1,
+      })).then(
+        function(result) {
+          var cleaned = cleanupLlmRemark(result && result.text);
+          if (cleaned) {
+            row.summary = cleaned;
+            row.sourceColumns = row.sourceColumns || {};
+            row.sourceColumns[summaryColumnName()] = cleaned;
+            resetExportState();
+          }
+          state.llmLoadingTarget = "";
+          state.llmError = "";
+          render();
+        },
+        function(err) {
+          state.llmLoadingTarget = "";
+          state.llmError = "Не удалось исправить замечание: " + (err && err.message ? err.message : "request failed");
+          render();
+        }
+      );
+    }
+
     function onDialogAssigneeFocus(target) {
       var targetKey = target != null ? String(target) : "";
       if (!userTargetNode(targetKey)) return;
@@ -2348,6 +2396,7 @@ define("_ujgESI_main", [
       onDialogChildChange: onDialogChildChange,
       onDialogImproveSummary: onDialogImproveSummary,
       onDialogImproveRemark: onDialogImproveRemark,
+      onRowImproveRemark: onRowImproveRemark,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,

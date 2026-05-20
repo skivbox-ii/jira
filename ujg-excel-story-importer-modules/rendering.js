@@ -427,6 +427,27 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $tr.append($td);
   }
 
+  function appendSummaryCell($tr, row, index, state) {
+    var target = "row-remark-" + index;
+    var isBusy = state && state.llmLoadingTarget === target;
+    var text = row && row.summary != null ? String(row.summary) : "";
+    var $button = $("<button/>")
+      .attr("type", "button")
+      .addClass("ujg-esi-row-ai")
+      .prop("disabled", isBusy || !text.trim())
+      .text(isBusy ? "Исправляю..." : "Исправить")
+      .on("click", function() {
+        if (services && services.onRowImproveRemark) services.onRowImproveRemark(index);
+      });
+    var $td = $("<td/>")
+      .addClass("ujg-esi-summary")
+      .append(
+        $("<div/>").addClass("ujg-esi-summary-text").text(text),
+        $("<div/>").addClass("ujg-esi-summary-actions").append($button)
+      );
+    $tr.append($td);
+  }
+
   function issueBrowseUrl(key, baseUrl) {
     var path = "/browse/" + encodeURIComponent(String(key || ""));
     var base = baseUrl != null ? String(baseUrl).replace(/\/+$/, "") : "";
@@ -1250,7 +1271,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
         .addClass("ujg-esi-row-" + String(row.status || "ready"))
         .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
       appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
-      appendValue($tr, row.summary || "", "ujg-esi-summary");
+      appendSummaryCell($tr, row, index, state);
       appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
       appendStatusCell($tr, row, state, previewStatusText(cols));
       appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
@@ -1280,6 +1301,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     $root.append($header, $toolbar);
     appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
+    if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
     if (s.syncSummary) $root.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));

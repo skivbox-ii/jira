@@ -35,6 +35,8 @@ test("rendering module exposes import controls and row create action classes", f
   assert.doesNotMatch(source, /Создавать дочерние задачи/);
   assert.doesNotMatch(source, /appendSubtasksToggle/);
   assert.match(source, /ujg-esi-create-row/);
+  assert.match(source, /ujg-esi-row-ai/);
+  assert.match(source, /onRowImproveRemark/);
 });
 
 test("importer CSS uses one icon button style for toolbar actions", function () {
@@ -47,6 +49,7 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-file-name/);
   assert.match(source, /\.ujg-esi-meta-file/);
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
+  assert.match(source, /\.ujg-esi-row-ai/);
 });
 
 test("importer CSS renders story and child statuses as one compact block", function () {
@@ -179,6 +182,7 @@ test("main module wires renderer callbacks for project, epic, file, subtasks, an
   assert.match(source, /onMappingRoleChange/);
   assert.match(source, /onSyncJira/);
   assert.match(source, /onDownloadPatchedExcel/);
+  assert.match(source, /onRowImproveRemark/);
 });
 
 test("rendering module exposes daily-diligence style mapping settings overlay", function () {
