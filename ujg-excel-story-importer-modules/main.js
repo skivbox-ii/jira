@@ -1386,9 +1386,10 @@ define("_ujgESI_main", [
     function descriptionSourceText(task) {
       var createDialog = state.createDialog;
       var source = sourceRowsText(createDialog && createDialog.sourceRows);
+      var title = createDialog ? fullChildSummarySource(createDialog, task) : task && task.summary || "";
       return [
         "Роль дочерней задачи: " + (task && task.role || ""),
-        "Название задачи: " + (task && task.summary || ""),
+        "Название задачи: " + title,
         "Исходное описание:\n" + (task && task.description || defaultChildDescription()),
         source ? "Поля строки Excel:\n" + source : ""
       ].filter(Boolean).join("\n\n");

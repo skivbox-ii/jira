@@ -293,12 +293,20 @@ test("story and child summary LLM dialogs use full Excel remark when mapped summ
         createDialog: state.createDialog
           ? {
               summary: state.createDialog.summary || "",
+              sourceRows: state.createDialog.sourceRows.map(function (row) {
+                return row.name + ":" + row.value;
+              }),
             }
           : null,
         summaryDialog: state.summaryDialog
           ? {
               beforeText: state.summaryDialog.beforeText || "",
               afterText: state.summaryDialog.afterText || "",
+            }
+          : null,
+        descriptionDialog: state.descriptionDialog
+          ? {
+              beforeText: state.descriptionDialog.beforeText || "",
             }
           : null,
       });
@@ -391,6 +399,7 @@ test("story and child summary LLM dialogs use full Excel remark when mapped summ
 
   const last = states[states.length - 1];
   assert.equal(last.createDialog.summary, fullRemarkText.slice(0, 255));
+  assert.ok(last.createDialog.sourceRows.includes("Содержание замечания:" + fullRemarkText));
   assert.equal(last.summaryDialog.beforeText, fullRemarkText);
   assert.equal(last.summaryDialog.afterText, "Улучшенное название");
   assert.equal(llmRequests.length, 1);
@@ -403,6 +412,14 @@ test("story and child summary LLM dialogs use full Excel remark when mapped summ
   assert.equal(childState.summaryDialog.beforeText, "[SE] " + fullRemarkText);
   assert.equal(childState.summaryDialog.afterText, "Улучшенное название");
   assert.equal(llmRequests.length, 2);
+  callbacks.onSummaryDialogCancel();
+  await flush();
+  callbacks.onDialogImproveDescription("child-1");
+  await flush();
+  await flush();
+  const descriptionState = states[states.length - 1];
+  assert.ok(descriptionState.descriptionDialog.beforeText.includes("Название задачи: [FE] " + fullRemarkText));
+  assert.equal(llmRequests.length, 3);
 });
 
 test("row create opens confirmation before creating without Epic", async function () {
