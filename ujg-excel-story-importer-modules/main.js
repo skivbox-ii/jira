@@ -1558,8 +1558,7 @@ define("_ujgESI_main", [
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
       reparseLoadedWorkbookAfterMappingChange();
-      saveMappings();
-      render();
+      saveMappings({ render: false });
     }
 
     function onMappingTableStartChange(field, value) {
@@ -1567,15 +1566,13 @@ define("_ujgESI_main", [
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
       reparseLoadedWorkbookAfterMappingChange();
-      saveMappings();
-      render();
+      saveMappings({ render: false });
     }
 
     function onMappingSheetNameChange(value) {
       state.mappingSettings.sheetName = copySheetName(value);
       reparseLoadedWorkbookAfterMappingChange();
-      saveMappings();
-      render();
+      saveMappings({ render: false });
     }
 
     function onMappingPairAdd(block) {
@@ -1638,7 +1635,7 @@ define("_ujgESI_main", [
         roles[i].assigneeLabel = userLabel(roles[i].assignee);
       }
       state.mappingSettings.roles = roles;
-      saveMappings();
+      saveMappings({ render: key === "enabled" || key === "assigneeId" });
     }
 
     function onMappingRoleRemove(index) {
@@ -1959,7 +1956,7 @@ define("_ujgESI_main", [
     function onIssueTypeSearch(target, query) {
       openIssueTypePicker(target, query);
       var mappingTarget = setTargetIssueType(target, query);
-      if (mappingTarget) saveMappings();
+      if (mappingTarget) saveMappings({ render: false });
     }
 
     function onIssueTypeSelect(target, name) {

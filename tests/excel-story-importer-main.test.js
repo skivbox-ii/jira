@@ -2081,7 +2081,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   assert.equal(creatorOptions.childTasks[1].assignee.name, "qa-user");
 });
 
-test("mapping pair input changes save without rerendering the focused editor", async function () {
+test("mapping text input changes save without rerendering the focused editor", async function () {
   const states = [];
   let callbacks = null;
   let savedMappings = null;
@@ -2104,9 +2104,23 @@ test("mapping pair input changes save without rerendering the focused editor", a
           return Promise.resolve({
             moduleComponentMap: {},
             priorityMap: {},
-            columnMap: {},
-            tableStart: {},
-            roles: [],
+            columnMap: {
+              summary: "Замечание",
+              jira: "Jira",
+            },
+            tableStart: {
+              headerMarker: "Замечание",
+            },
+            sheetName: "Замечания",
+            roles: [
+              {
+                role: "SE",
+                issueType: "System Engineer",
+                originalEstimate: "2h",
+                remainingEstimate: "2h",
+                enabled: true,
+              },
+            ],
           });
         },
         save: function (settings) {
@@ -2161,6 +2175,40 @@ test("mapping pair input changes save without rerendering the focused editor", a
 
   assert.equal(savedMappings.priorityMap["Новое значение"], "High");
   assert.equal(states.length, renderCountBeforeTyping);
+
+  const renderCountBeforeColumnTyping = states.length;
+  callbacks.onMappingColumnChange("summary", "Содержание замечания");
+  await flush();
+  await flush();
+  assert.equal(savedMappings.columnMap.summary, "Содержание замечания");
+  assert.equal(states.length, renderCountBeforeColumnTyping);
+
+  const renderCountBeforeTableTyping = states.length;
+  callbacks.onMappingTableStartChange("headerMarker", "Содержание замечания");
+  callbacks.onMappingSheetNameChange("Замечания 2026");
+  await flush();
+  await flush();
+  assert.equal(savedMappings.tableStart.headerMarker, "Содержание замечания");
+  assert.equal(savedMappings.sheetName, "Замечания 2026");
+  assert.equal(states.length, renderCountBeforeTableTyping);
+
+  const renderCountBeforeRoleTyping = states.length;
+  callbacks.onMappingRoleChange(0, "role", "QA");
+  callbacks.onMappingRoleChange(0, "originalEstimate", "4h");
+  callbacks.onMappingRoleChange(0, "remainingEstimate", "3h");
+  await flush();
+  await flush();
+  assert.equal(savedMappings.roles[0].role, "QA");
+  assert.equal(savedMappings.roles[0].originalEstimate, "4h");
+  assert.equal(savedMappings.roles[0].remainingEstimate, "3h");
+  assert.equal(states.length, renderCountBeforeRoleTyping);
+
+  const renderCountBeforeIssueTypeTyping = states.length;
+  callbacks.onIssueTypeSearch("mapping-role-type-0", "Task");
+  await flush();
+  await flush();
+  assert.equal(savedMappings.roles[0].issueType, "Task");
+  assert.equal(states.length, renderCountBeforeIssueTypeTyping + 1);
 });
 
 test("meta sheet picker saves selected sheet and reparses current workbook", async function () {
