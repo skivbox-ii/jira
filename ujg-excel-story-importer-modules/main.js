@@ -2452,6 +2452,15 @@ define("_ujgESI_main", [
       return (exact && exact.value) || (likely && likely.value) || (bySummary && bySummary.value) || summary;
     }
 
+    function fullChildSummarySource(dialog, task) {
+      var source = fullStorySummarySource(dialog);
+      var role = task && task.role != null ? String(task.role).trim() : "";
+      var prefix = role ? "[" + role + "] " : "";
+      if (!source) return task && task.summary || "";
+      if (prefix && String(source).indexOf(prefix) !== 0) return prefix + source;
+      return source;
+    }
+
     function requestSummaryDialogImprove() {
       var dialog = state.summaryDialog;
       var llmConfig;
@@ -2496,7 +2505,7 @@ define("_ujgESI_main", [
       var beforeText;
       if (!dialog || state.llmLoadingTarget) return;
       if (targetKey !== "story" && !task) return;
-      beforeText = targetKey === "story" ? fullStorySummarySource(dialog) : task.summary;
+      beforeText = targetKey === "story" ? fullStorySummarySource(dialog) : fullChildSummarySource(dialog, task);
       state.summaryDialog = {
         target: targetKey,
         role: targetKey === "story" ? "Story" : task.role || "",

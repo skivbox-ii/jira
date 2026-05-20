@@ -279,7 +279,7 @@ test("epic picker search opens filtered epic choices and select stores epic key"
   assert.equal(last.epicPicker.open, false);
 });
 
-test("story summary LLM dialog uses full Excel remark when mapped summary is truncated", async function () {
+test("story and child summary LLM dialogs use full Excel remark when mapped summary is truncated", async function () {
   const states = [];
   const llmRequests = [];
   let callbacks = null;
@@ -394,6 +394,15 @@ test("story summary LLM dialog uses full Excel remark when mapped summary is tru
   assert.equal(last.summaryDialog.beforeText, fullRemarkText);
   assert.equal(last.summaryDialog.afterText, "Улучшенное название");
   assert.equal(llmRequests.length, 1);
+  callbacks.onSummaryDialogCancel();
+  await flush();
+  callbacks.onDialogImproveSummary("child-0");
+  await flush();
+  await flush();
+  const childState = states[states.length - 1];
+  assert.equal(childState.summaryDialog.beforeText, "[SE] " + fullRemarkText);
+  assert.equal(childState.summaryDialog.afterText, "Улучшенное название");
+  assert.equal(llmRequests.length, 2);
 });
 
 test("row create opens confirmation before creating without Epic", async function () {
@@ -708,7 +717,7 @@ test("row create opens confirmation before creating without Epic", async functio
   last = states[states.length - 1];
   assert.equal(last.createDialog.childTasks[0], "SE:System Engineer:[SE] Edited story:true:::Создано автоматически из журнала замечаний.");
   assert.equal(last.summaryDialog.target, "child-0");
-  assert.equal(last.summaryDialog.beforeText, "[SE] Edited story");
+  assert.equal(last.summaryDialog.beforeText, "[SE] Applied corrected remark");
   assert.equal(last.summaryDialog.afterText, "[SE] Проверить индикатор \"Гаечный ключ\"");
   assert.equal(last.summaryDialog.comment, "Добавил префикс SE и уточнил формулировку.");
   assert.equal(last.summaryDialog.prompt, "SE prompt");
