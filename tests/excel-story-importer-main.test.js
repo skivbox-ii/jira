@@ -584,7 +584,9 @@ test("row create opens confirmation before creating without Epic", async functio
     requestText: function (_config, request) {
       llmRequests.push(request);
       return Promise.resolve({
-        text: /remark prompt/i.test(request.systemPrompt)
+        text: /Remark before second pass/.test(request.userPrompt)
+          ? JSON.stringify({ text: "Corrected remark text", comment: "Исправил орфографию и сохранил смысл замечания." })
+          : /remark prompt/i.test(request.systemPrompt)
           ? JSON.stringify({ text: "Corrected remark text", comment: "Исправил орфографию и сохранил смысл замечания." })
           : request.systemPrompt.indexOf("SE description prompt") >= 0
             ? JSON.stringify({ description: "## Цель\nПроверить сохранение состояния панели.\n\n* Уточнить условия перезагрузки", comment: "Собрал описание для SE в Jira wiki." })
@@ -705,7 +707,7 @@ test("row create opens confirmation before creating without Epic", async functio
   last = states[states.length - 1];
   assert.equal(last.remarkDialog.beforeText, "Corrected remark text");
   assert.equal(last.remarkDialog.afterText, "Corrected remark text");
-  assert.equal(last.remarkDialog.comment, "Исправил орфографию и сохранил смысл замечания.");
+  assert.equal(last.remarkDialog.comment, "LLM вернул текст без изменений.");
   assert.equal(llmRequests[3].systemPrompt, "Project prompt\n\nRemark prompt");
   assert.match(llmRequests[3].userPrompt, /text/);
   assert.match(llmRequests[3].userPrompt, /comment/);

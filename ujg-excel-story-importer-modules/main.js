@@ -1513,6 +1513,22 @@ define("_ujgESI_main", [
       };
     }
 
+    function normalizedLlmResultText(value) {
+      return String(value || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/[ \t]+/g, " ")
+        .replace(/[ \t]*\n[ \t]*/g, "\n")
+        .replace(/\n{2,}/g, "\n")
+        .trim();
+    }
+
+    function llmResultComment(beforeText, afterText, comment) {
+      var before = normalizedLlmResultText(beforeText);
+      var after = normalizedLlmResultText(afterText);
+      if (before && before === after) return "LLM вернул текст без изменений.";
+      return comment || "";
+    }
+
     function estimateHours(value) {
       var text = value != null ? String(value) : "";
       var match = /(\d+(?:[.,]\d+)?)/.exec(text);
@@ -2492,7 +2508,7 @@ define("_ujgESI_main", [
           var response = parseLlmSummaryResponse(result && result.text);
           if (state.summaryDialog && response.summary) {
             state.summaryDialog.afterText = response.summary;
-            state.summaryDialog.comment = response.comment || "";
+            state.summaryDialog.comment = llmResultComment(state.summaryDialog.beforeText, response.summary, response.comment);
           }
           state.llmLoadingTarget = "";
           state.llmError = "";
@@ -2581,7 +2597,7 @@ define("_ujgESI_main", [
           var response = parseLlmDescriptionResponse(result && result.text);
           if (state.descriptionDialog && response.description) {
             state.descriptionDialog.afterText = response.description;
-            state.descriptionDialog.comment = response.comment || "";
+            state.descriptionDialog.comment = llmResultComment(state.descriptionDialog.beforeText, response.description, response.comment);
           }
           state.llmLoadingTarget = "";
           state.llmError = "";
@@ -2710,7 +2726,7 @@ define("_ujgESI_main", [
           var response = parseLlmRemarkResponse(result && result.text);
           if (state.remarkDialog && response.text) {
             state.remarkDialog.afterText = response.text;
-            state.remarkDialog.comment = response.comment || "";
+            state.remarkDialog.comment = llmResultComment(state.remarkDialog.beforeText, response.text, response.comment);
           }
           state.llmLoadingTarget = "";
           state.llmError = "";
