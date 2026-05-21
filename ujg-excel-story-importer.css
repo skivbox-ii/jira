@@ -150,7 +150,8 @@
   min-height: 32px;
 }
 
-.ujg-esi-file-field input[type="file"] {
+.ujg-esi-file-field input[type="file"],
+.ujg-esi-dropzone input[type="file"] {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -292,6 +293,38 @@
   border: 1px solid #dfe1e6;
   border-radius: 4px;
   background: #fff;
+}
+
+.ujg-esi-preview-empty {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.ujg-esi-dropzone {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 360px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #f8fbff url("ujg-excel-story-importer-status-icons/import-dropzone.png") center / contain no-repeat;
+  cursor: pointer;
+  transition: filter 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+  aspect-ratio: 16 / 9;
+}
+
+.ujg-esi-dropzone:hover,
+.ujg-esi-dropzone:focus-within,
+.ujg-esi-dropzone-dragover {
+  box-shadow: 0 8px 24px rgba(12, 102, 228, 0.16);
+  filter: saturate(1.04) brightness(1.01);
+  transform: translateY(-1px);
+}
+
+.ujg-esi-dropzone-dragover {
+  outline: 2px solid #0c66e4;
+  outline-offset: 2px;
 }
 
 .ujg-esi-preview-table {

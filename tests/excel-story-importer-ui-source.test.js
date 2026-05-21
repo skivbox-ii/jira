@@ -17,6 +17,11 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-epic-search/);
   assert.match(source, /ujg-esi-epic-options/);
   assert.match(source, /ujg-esi-file/);
+  assert.match(source, /ujg-esi-dropzone/);
+  assert.match(source, /ujg-esi-dropzone-file/);
+  assert.match(source, /dragover/);
+  assert.match(source, /drop/);
+  assert.match(source, /onFileChange\(file\)/);
   assert.match(source, /ujg-esi-upload-excel/);
   assert.match(source, /ujg-esi-file-name/);
   assert.match(source, /ujg-esi-meta-file/);
@@ -66,6 +71,9 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-meta-file/);
   assert.match(source, /\.ujg-esi-file-field input\[type="file"\]/);
   assert.match(source, /\.ujg-esi-row-ai/);
+  assert.match(source, /\.ujg-esi-dropzone/);
+  assert.match(source, /import-dropzone\.png/);
+  assert.match(source, /\.ujg-esi-dropzone-dragover/);
 });
 
 test("importer CSS renders story and child statuses as one compact block", function () {
@@ -110,6 +118,7 @@ test("cropped child status icon assets are committed", function () {
     "closed-qa.png",
     "closed-dev.png",
     "blocked-qa.png",
+    "import-dropzone.png",
   ].forEach(function (fileName) {
     assert.ok(fs.existsSync(path.join(ROOT, "ujg-excel-story-importer-status-icons", fileName)), fileName);
   });

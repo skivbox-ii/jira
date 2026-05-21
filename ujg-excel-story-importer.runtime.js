@@ -2659,10 +2659,46 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .attr("accept", ".xlsx,.xls");
     $file.on("change", function() {
       var file = this.files && this.files.length ? this.files[0] : null;
-      if (services && services.onFileChange) services.onFileChange(file);
+      if (file && services && services.onFileChange) services.onFileChange(file);
     });
     $upload.append($("<span/>").addClass("ujg-esi-action-icon").html("&#8682;"), $file);
     $actions.append($upload);
+  }
+
+  function appendDropzone($parent) {
+    var $dropzone = $("<label/>")
+      .addClass("ujg-esi-dropzone")
+      .attr("title", "Загрузить Excel")
+      .attr("aria-label", "Перетащите Excel-файл или нажмите, чтобы выбрать файл");
+    var $file = $("<input/>")
+      .addClass("ujg-esi-dropzone-file")
+      .attr("type", "file")
+      .attr("accept", ".xlsx,.xls");
+    $file.on("change", function() {
+      var file = this.files && this.files.length ? this.files[0] : null;
+      if (file && services && services.onFileChange) services.onFileChange(file);
+    });
+    $dropzone.on("dragenter dragover", function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      $dropzone.addClass("ujg-esi-dropzone-dragover");
+    });
+    $dropzone.on("dragleave dragend", function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      $dropzone.removeClass("ujg-esi-dropzone-dragover");
+    });
+    $dropzone.on("drop", function(event) {
+      var original = event.originalEvent || {};
+      var files = original.dataTransfer && original.dataTransfer.files ? original.dataTransfer.files : [];
+      var file = files && files.length ? files[0] : null;
+      event.preventDefault();
+      event.stopPropagation();
+      $dropzone.removeClass("ujg-esi-dropzone-dragover");
+      if (file && services && services.onFileChange) services.onFileChange(file);
+    });
+    $dropzone.append($file);
+    $parent.append($dropzone);
   }
 
   function appendMappingButton($actions) {
@@ -4009,7 +4045,8 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var rows = state.rows || [];
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
     if (!rows.length) {
-      $wrap.append($("<div/>").addClass("ujg-esi-empty").text("Загрузите Excel с журналом замечаний."));
+      $wrap.addClass("ujg-esi-preview-empty");
+      appendDropzone($wrap);
       $parent.append($wrap);
       return;
     }
@@ -4061,7 +4098,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     appendEpicPicker($toolbar, s);
     appendExcelActions($toolbar, s);
     $root.append($header, $toolbar);
-    appendCounters($root, s);
+    if (s.rows && s.rows.length) appendCounters($root, s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
