@@ -320,6 +320,86 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
         return result;
     }
 
+    function parseDateOnly(value) {
+        if (!value) return null;
+        var parts = String(value).split("-");
+        if (parts.length !== 3) return null;
+        var year = parseInt(parts[0], 10);
+        var month = parseInt(parts[1], 10);
+        var day = parseInt(parts[2], 10);
+        if (!year || !month || !day) return null;
+        var date = new Date(year, month - 1, day);
+        if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+        return date;
+    }
+
+    function pad2(value) {
+        return value < 10 ? "0" + value : String(value);
+    }
+
+    function formatTimezoneOffset(date) {
+        var minutes = -date.getTimezoneOffset();
+        var sign = minutes >= 0 ? "+" : "-";
+        var abs = Math.abs(minutes);
+        return sign + pad2(Math.floor(abs / 60)) + pad2(abs % 60);
+    }
+
+    function formatJiraStarted(dayKey) {
+        var date = parseDateOnly(dayKey);
+        if (!date) return "";
+        date.setHours(9, 0, 0, 0);
+        return utils.getDayKey(date) + "T09:00:00.000" + formatTimezoneOffset(date);
+    }
+
+    function issueHasSelfWorklogOnDay(calendarData, issueKey, dayKey, currentUserId) {
+        var items = (calendarData && calendarData[dayKey]) || [];
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            if (String(item.key || "") !== String(issueKey || "")) continue;
+            var worklogs = item.worklogs || [];
+            if (currentUserId) {
+                for (var w = 0; w < worklogs.length; w++) {
+                    if (worklogs[w].authorId === currentUserId) return true;
+                }
+                return !!(item.authors && item.authors[currentUserId]);
+            }
+            return worklogs.length > 0 || !!item.seconds;
+        }
+        return false;
+    }
+
+    function buildMassWorklogPlan(options) {
+        options = options || {};
+        var start = parseDateOnly(options.startDate);
+        var end = parseDateOnly(options.endDate);
+        var result = {
+            issueKey: options.issueKey || "",
+            seconds: options.seconds || 0,
+            startDate: start ? utils.getDayKey(start) : "",
+            endDate: end ? utils.getDayKey(end) : "",
+            dates: [],
+            skipDates: []
+        };
+        if (!start || !end || !result.issueKey || result.seconds <= 0) return result;
+        if (start > end) {
+            var t = start;
+            start = end;
+            end = t;
+            result.startDate = utils.getDayKey(start);
+            result.endDate = utils.getDayKey(end);
+        }
+        Common.daysBetween(start, end).forEach(function(day) {
+            if (utils.getDayOfWeek(day) >= 5) return;
+            var dayKey = utils.getDayKey(day);
+            if (issueHasSelfWorklogOnDay(options.calendarData || {}, result.issueKey, dayKey, options.currentUserId)) {
+                result.skipDates.push(dayKey);
+            } else {
+                result.dates.push(dayKey);
+            }
+        });
+        return result;
+    }
+
     function MyGadget(API) {
         var state = {
             showComments: false,
@@ -338,6 +418,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             showDetails: false,
             changelogData: {},
             changelogLoading: false,
+            currentUser: null,
+            currentUserLoading: false,
+            currentUserPromise: null,
         };
 
         var $content = API.getGadgetContentEl();
@@ -352,6 +435,55 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
 
         function log(msg) {
             if (CONFIG.debug) console.log("[UJG-Timesheet]", msg);
+        }
+
+        function escapeAttr(value) {
+            return utils.escapeHtml(value == null ? "" : String(value)).replace(/"/g, "&quot;");
+        }
+
+        function currentUserId() {
+            var user = state.currentUser || {};
+            return user.accountId || user.key || user.name || "";
+        }
+
+        function loadCurrentUser() {
+            if (state.currentUser) return null;
+            if (state.currentUserLoading) return state.currentUserPromise;
+            state.currentUserLoading = true;
+            state.currentUserPromise = $.ajax({
+                url: baseUrl + "/rest/api/2/myself",
+                type: "GET"
+            }).then(function(user) {
+                state.currentUser = user || null;
+                state.currentUserLoading = false;
+                return state.currentUser;
+            }, function() {
+                state.currentUser = null;
+                state.currentUserLoading = false;
+                return null;
+            });
+            return state.currentUserPromise;
+        }
+
+        function findIssueInDay(dayKey, issueKey) {
+            var items = state.calendarData[dayKey] || [];
+            for (var i = 0; i < items.length; i++) {
+                if (String(items[i].key || "") === String(issueKey || "")) return items[i];
+            }
+            return null;
+        }
+
+        function createWorklog(issueKey, dayKey, seconds) {
+            return $.ajax({
+                url: baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey) + "/worklog",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({
+                    started: formatJiraStarted(dayKey),
+                    timeSpentSeconds: seconds,
+                    comment: "Массовое списание из Timesheet"
+                })
+            });
         }
 
         function toggleFs() {
@@ -455,6 +587,154 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             var s = status.trim();
             if (s.length <= 5) return s;
             return s.substring(0, 5);
+        }
+
+        function closeMassWorklogDialog() {
+            $content.find(".ujg-mass-worklog-overlay").remove();
+        }
+
+        function renderMassWorklogPreview($dialog, template) {
+            var plan = buildMassWorklogPlan({
+                issueKey: template.issueKey,
+                seconds: template.seconds,
+                currentUserId: currentUserId(),
+                startDate: $dialog.find(".ujg-mass-start").val(),
+                endDate: $dialog.find(".ujg-mass-end").val(),
+                calendarData: state.calendarData
+            });
+            var $preview = $dialog.find(".ujg-mass-preview");
+            var totalHours = utils.formatTime(plan.dates.length * plan.seconds) || "0";
+            var html = '<div class="ujg-mass-summary">Будет списано: <strong>' + plan.dates.length + '</strong> дн. × ' +
+                (utils.formatTime(plan.seconds) || "0") + ' = <strong>' + totalHours + '</strong></div>';
+
+            if (!currentUserId()) {
+                html += '<div class="ujg-mass-warning">Не удалось определить текущего пользователя. Списание будет создано от вашей Jira-сессии, но существующие записи могут быть распознаны не полностью.</div>';
+            }
+
+            if (plan.dates.length > 0) {
+                html += '<div class="ujg-mass-days">';
+                plan.dates.forEach(function(dayKey) {
+                    html += '<label class="ujg-mass-day"><input type="checkbox" checked data-day="' + escapeAttr(dayKey) + '"> ' + escapeAttr(dayKey) + '</label>';
+                });
+                html += '</div>';
+            } else {
+                html += '<div class="ujg-mass-empty">Нет рабочих дней для списания</div>';
+            }
+
+            if (plan.skipDates.length > 0) {
+                html += '<div class="ujg-mass-skips">Уже есть списание по этой задаче: ' + plan.skipDates.map(escapeAttr).join(", ") + '</div>';
+            }
+
+            $preview.html(html);
+            $dialog.data("massPlan", plan);
+            $dialog.find(".ujg-mass-submit").prop("disabled", plan.dates.length === 0 || plan.seconds <= 0);
+        }
+
+        function runMassWorklog($dialog, template) {
+            var plan = $dialog.data("massPlan") || {};
+            var dates = [];
+            $dialog.find(".ujg-mass-day input:checked").each(function() {
+                dates.push($(this).data("day"));
+            });
+            if (dates.length === 0) {
+                alert("Выберите хотя бы один рабочий день");
+                return;
+            }
+
+            $dialog.find("input, button").prop("disabled", true);
+            var $bar = $dialog.find(".ujg-mass-progress-bar");
+            var $text = $dialog.find(".ujg-mass-progress-text");
+            var created = 0;
+            var failed = 0;
+
+            function updateProgress(done) {
+                var pct = dates.length ? Math.round(done / dates.length * 100) : 0;
+                $bar.css("width", pct + "%");
+                $text.text("Списание: " + done + "/" + dates.length);
+                $progress.text("Списание: " + done + "/" + dates.length).show();
+            }
+
+            function finish() {
+                $progress.text("Списание завершено: " + created + "/" + dates.length + (failed ? ", ошибок: " + failed : ""));
+                closeMassWorklogDialog();
+                startLoading();
+            }
+
+            function next(idx) {
+                if (idx >= dates.length) {
+                    finish();
+                    return;
+                }
+                createWorklog(template.issueKey, dates[idx], plan.seconds).then(function() {
+                    created++;
+                    updateProgress(idx + 1);
+                    next(idx + 1);
+                }, function() {
+                    failed++;
+                    updateProgress(idx + 1);
+                    next(idx + 1);
+                });
+            }
+
+            updateProgress(0);
+            next(0);
+        }
+
+        function openMassWorklogDialog(template) {
+            closeMassWorklogDialog();
+            var currentUserRequest = loadCurrentUser();
+
+            var issue = findIssueInDay(template.dayKey, template.issueKey) || {};
+            var $overlay = $('<div class="ujg-mass-worklog-overlay"></div>');
+            var $dialog = $('<div class="ujg-mass-worklog-dialog" role="dialog" aria-modal="true"></div>');
+            var issueUrl = baseUrl + "/browse/" + encodeURIComponent(template.issueKey);
+
+            $dialog.append(
+                '<div class="ujg-mass-head">' +
+                    '<div><div class="ujg-mass-title">Массовое списание</div>' +
+                    '<div class="ujg-mass-subtitle"><a href="' + issueUrl + '" target="_blank">' + escapeAttr(template.issueKey) + '</a> · ' +
+                    (utils.formatTime(template.seconds) || "0") + '</div></div>' +
+                    '<button type="button" class="aui-button aui-button-link ujg-mass-close" title="Закрыть">×</button>' +
+                '</div>'
+            );
+            if (issue.summary) {
+                $dialog.append('<div class="ujg-mass-issue-summary">' + utils.escapeHtml(issue.summary) + '</div>');
+            }
+            $dialog.append(
+                '<div class="ujg-mass-fields">' +
+                    '<label>С <input type="date" class="ujg-range-input ujg-mass-start" value="' + escapeAttr(template.dayKey) + '"></label>' +
+                    '<label>По <input type="date" class="ujg-range-input ujg-mass-end" value="' + escapeAttr(template.dayKey) + '"></label>' +
+                '</div>' +
+                '<div class="ujg-mass-preview"></div>' +
+                '<div class="ujg-mass-progress"><div class="ujg-mass-progress-bar"></div></div>' +
+                '<div class="ujg-mass-progress-text"></div>' +
+                '<div class="ujg-mass-actions">' +
+                    '<button type="button" class="aui-button ujg-mass-cancel">Отмена</button>' +
+                    '<button type="button" class="aui-button aui-button-primary ujg-mass-submit">Списать</button>' +
+                '</div>'
+            );
+
+            $overlay.append($dialog);
+            $content.append($overlay);
+
+            function refresh() {
+                renderMassWorklogPreview($dialog, template);
+                API.resize();
+            }
+
+            $dialog.find(".ujg-mass-close, .ujg-mass-cancel").on("click", closeMassWorklogDialog);
+            $dialog.find(".ujg-mass-start, .ujg-mass-end").on("change input", refresh);
+            $dialog.find(".ujg-mass-submit").on("click", function() {
+                runMassWorklog($dialog, template);
+            });
+            $overlay.on("click", function(e) {
+                if (e.target === $overlay[0]) closeMassWorklogDialog();
+            });
+
+            refresh();
+            if (currentUserRequest && typeof currentUserRequest.then === "function") {
+                currentUserRequest.then(refresh, refresh);
+            }
         }
         
         function renderWeekSummaryCell(summary, transitions, groupSummary) {
@@ -645,7 +925,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
                         html += '<div class="ujg-cell-issues">';
                         dayData.forEach(function(item) {
                             var isDone = item.status && DONE_STATUSES.indexOf(item.status.toLowerCase()) >= 0;
-                            html += '<div class="ujg-cell-issue">';
+                            html += '<div class="ujg-cell-issue ujg-worklog-template" data-issue-key="' + escapeAttr(item.key) + '" data-day="' + escapeAttr(dayKey) + '" data-seconds="' + escapeAttr(item.seconds || 0) + '" title="Правая кнопка: массовое списание по шаблону">';
                             html += '<div class="ujg-issue-header">';
                             html += '<a href="' + baseUrl + '/browse/' + item.key + '" target="_blank" class="ujg-issue-link' + (isDone ? ' ujg-link-done' : '') + '">' + item.key + '</a>';
                             html += '<span class="ujg-issue-time">' + (utils.formatTime(item.seconds) || "") + '</span>';
@@ -737,6 +1017,15 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             var html = calHtml;
 
             $cont.html(html);
+            $cont.find(".ujg-worklog-template").on("contextmenu", function(e) {
+                e.preventDefault();
+                var $issue = $(this);
+                openMassWorklogDialog({
+                    issueKey: String($issue.data("issue-key") || ""),
+                    dayKey: String($issue.data("day") || ""),
+                    seconds: parseInt($issue.data("seconds"), 10) || 0
+                });
+            });
 
             API.resize();
         }
@@ -1126,6 +1415,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         initPanel();
+        loadCurrentUser();
         startLoading();
     }
 
@@ -1137,7 +1427,10 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
         computeWeekSummary: computeWeekSummary,
         computeMonthSummary: computeMonthSummary,
         getWeekTransitions: getWeekTransitions,
-        formatSummaryHeadline: formatSummaryHeadline
+        formatSummaryHeadline: formatSummaryHeadline,
+        buildMassWorklogPlan: buildMassWorklogPlan,
+        formatJiraStarted: formatJiraStarted,
+        issueHasSelfWorklogOnDay: issueHasSelfWorklogOnDay
     };
     
     return MyGadget;

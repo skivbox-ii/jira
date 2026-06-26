@@ -234,6 +234,67 @@ test("computeMonthSummary adds utilization and project percentages", function() 
     assert.equal(result.projectPcts["B"], 25);
 });
 
+test("mass worklog helpers select only weekdays without existing self worklog for the issue", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.buildMassWorklogPlan, "function");
+
+    var plan = Timesheet.__test.buildMassWorklogPlan({
+        issueKey: "EKTSM-857",
+        seconds: 28800,
+        currentUserId: "u1",
+        startDate: "2026-03-02",
+        endDate: "2026-03-10",
+        calendarData: {
+            "2026-03-02": [
+                {
+                    key: "EKTSM-857",
+                    worklogs: [{ authorId: "u1", seconds: 28800 }]
+                }
+            ],
+            "2026-03-03": [
+                {
+                    key: "OTHER-1",
+                    worklogs: [{ authorId: "u1", seconds: 14400 }]
+                }
+            ],
+            "2026-03-04": [
+                {
+                    key: "EKTSM-857",
+                    worklogs: [{ authorId: "u2", seconds: 28800 }]
+                }
+            ]
+        }
+    });
+
+    assert.deepEqual(normalize(plan.skipDates), ["2026-03-02"]);
+    assert.deepEqual(normalize(plan.dates), [
+        "2026-03-03",
+        "2026-03-04",
+        "2026-03-05",
+        "2026-03-06",
+        "2026-03-09",
+        "2026-03-10"
+    ]);
+});
+
+test("mass worklog helpers normalize reversed date ranges and format Jira started timestamp", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    var plan = Timesheet.__test.buildMassWorklogPlan({
+        issueKey: "EKTSM-857",
+        seconds: 3600,
+        currentUserId: "u1",
+        startDate: "2026-03-08",
+        endDate: "2026-03-06",
+        calendarData: {}
+    });
+
+    assert.deepEqual(normalize(plan.dates), ["2026-03-06"]);
+    assert.match(Timesheet.__test.formatJiraStarted("2026-03-06"), /^2026-03-06T09:00:00\.000[+-]\d{4}$/);
+});
+
 test("computeWeekSummary in group mode scales capacity by active users", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);
