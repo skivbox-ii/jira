@@ -31,6 +31,8 @@ test("collectIssueWorklogs keeps aggregates and individual worklogs", function()
             comment: ""
         },
         {
+            id: "10002",
+            started: "2026-03-02T09:00:00.000+0300",
             author: { accountId: "u1", displayName: "Alice" },
             timeSpentSeconds: 1200,
             comment: "Sync"
@@ -47,7 +49,7 @@ test("collectIssueWorklogs keeps aggregates and individual worklogs", function()
     assert.deepEqual(normalize(result.comments), ["Sync", "Review"]);
     assert.deepEqual(normalize(result.worklogs), [
         { authorId: "u2", authorName: "Bob", seconds: 1800, comment: "" },
-        { authorId: "u1", authorName: "Alice", seconds: 1200, comment: "Sync" },
+        { id: "10002", started: "2026-03-02T09:00:00.000+0300", authorId: "u1", authorName: "Alice", seconds: 1200, comment: "Sync" },
         { authorId: "u1", authorName: "Alice", seconds: 2400, comment: "Review" }
     ]);
 });
@@ -234,7 +236,7 @@ test("computeMonthSummary adds utilization and project percentages", function() 
     assert.equal(result.projectPcts["B"], 25);
 });
 
-test("mass worklog helpers select only weekdays without existing self worklog for the issue", function() {
+test("mass worklog helpers select weekdays to create and existing self worklogs to update", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);
     assert.equal(typeof Timesheet.__test.buildMassWorklogPlan, "function");
@@ -245,11 +247,12 @@ test("mass worklog helpers select only weekdays without existing self worklog fo
         currentUserId: "u1",
         startDate: "2026-03-02",
         endDate: "2026-03-10",
+        comment: "Работа по задаче",
         calendarData: {
             "2026-03-02": [
                 {
                     key: "EKTSM-857",
-                    worklogs: [{ authorId: "u1", seconds: 28800 }]
+                    worklogs: [{ id: "w-1", authorId: "u1", seconds: 28800, comment: "Старый комментарий", started: "2026-03-02T10:00:00.000+0300" }]
                 }
             ],
             "2026-03-03": [
@@ -267,7 +270,16 @@ test("mass worklog helpers select only weekdays without existing self worklog fo
         }
     });
 
-    assert.deepEqual(normalize(plan.skipDates), ["2026-03-02"]);
+    assert.deepEqual(normalize(plan.updateWorklogs), [
+        {
+            dayKey: "2026-03-02",
+            worklogId: "w-1",
+            started: "2026-03-02T10:00:00.000+0300",
+            seconds: 28800,
+            existingComment: "Старый комментарий"
+        }
+    ]);
+    assert.deepEqual(normalize(plan.skipDates), []);
     assert.deepEqual(normalize(plan.dates), [
         "2026-03-03",
         "2026-03-04",
@@ -276,6 +288,43 @@ test("mass worklog helpers select only weekdays without existing self worklog fo
         "2026-03-09",
         "2026-03-10"
     ]);
+});
+
+test("mass worklog helpers skip existing self worklogs when requested comment is already set", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    var plan = Timesheet.__test.buildMassWorklogPlan({
+        issueKey: "EKTSM-857",
+        seconds: 28800,
+        currentUserId: "u1",
+        startDate: "2026-03-02",
+        endDate: "2026-03-02",
+        comment: "Уже такой",
+        calendarData: {
+            "2026-03-02": [
+                {
+                    key: "EKTSM-857",
+                    worklogs: [{ id: "w-1", authorId: "u1", seconds: 28800, comment: "Уже такой" }]
+                }
+            ]
+        }
+    });
+
+    assert.deepEqual(normalize(plan.dates), []);
+    assert.deepEqual(normalize(plan.updateWorklogs), []);
+    assert.deepEqual(normalize(plan.skipDates), ["2026-03-02"]);
+});
+
+test("mass worklog payload uses only the user supplied comment", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    var payload = Timesheet.__test.buildWorklogPayload("2026-03-06", 3600, "Комментарий пользователя");
+
+    assert.equal(payload.comment, "Комментарий пользователя");
+    assert.equal(payload.timeSpentSeconds, 3600);
+    assert.match(payload.started, /^2026-03-06T09:00:00\.000[+-]\d{4}$/);
 });
 
 test("mass worklog helpers normalize reversed date ranges and format Jira started timestamp", function() {

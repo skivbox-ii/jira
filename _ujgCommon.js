@@ -69,12 +69,15 @@ define("_ujgCommon", ["jquery"], function($) {
             if (!byAuthor[uid]) byAuthor[uid] = { seconds: 0, comments: [], name: uname };
             byAuthor[uid].seconds += w.timeSpentSeconds || 0;
             if (w.comment) byAuthor[uid].comments.push(w.comment);
-            return {
+            var entry = {
                 authorId: uid,
                 authorName: uname,
                 seconds: w.timeSpentSeconds || 0,
                 comment: w.comment || ""
             };
+            if (w.id != null) entry.id = String(w.id);
+            if (w.started) entry.started = w.started;
+            return entry;
         });
         var totalSeconds = 0;
         var allComments = [];

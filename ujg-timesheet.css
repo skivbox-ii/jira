@@ -84,12 +84,17 @@
 .ujg-mass-issue-summary{padding:12px 18px;border-bottom:1px solid #dfe1e6;font-size:13px;line-height:1.4;color:#172b4d}
 .ujg-mass-fields{display:flex;gap:12px;flex-wrap:wrap;padding:14px 18px 8px}
 .ujg-mass-fields label{display:flex;align-items:center;gap:6px;font-weight:600;color:#42526e}
+.ujg-mass-comment-row{display:flex;flex-direction:column;gap:6px;padding:8px 18px}
+.ujg-mass-comment-row label{font-weight:600;color:#42526e}
+.ujg-mass-comment{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #dfe1e6;border-radius:3px;color:#172b4d;font-size:13px;resize:vertical}
+.ujg-mass-comment:focus{border-color:#0052cc;outline:none;box-shadow:0 0 0 2px rgba(0,82,204,0.2)}
 .ujg-mass-preview{padding:8px 18px 12px}
 .ujg-mass-summary{margin-bottom:10px;font-size:13px;color:#172b4d}
 .ujg-mass-warning{margin:8px 0;padding:8px 10px;border-radius:3px;background:#fff4e5;color:#974f0c;font-size:12px}
 .ujg-mass-days{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:6px;max-height:180px;overflow:auto;padding:8px;border:1px solid #dfe1e6;border-radius:3px;background:#fafbfc}
 .ujg-mass-day{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:3px;background:#fff;color:#172b4d;font-size:12px;cursor:pointer}
 .ujg-mass-day input{margin:0}
+.ujg-mass-update-title{margin:12px 0 6px;font-weight:600;font-size:12px;color:#42526e}
 .ujg-mass-empty{padding:10px;border-radius:3px;background:#f4f5f7;color:#6b778c;font-size:13px}
 .ujg-mass-skips{margin-top:10px;font-size:12px;color:#6b778c}
 .ujg-mass-progress{height:8px;margin:0 18px;background:#dfe1e6;border-radius:4px;overflow:hidden}
