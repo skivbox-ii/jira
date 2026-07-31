@@ -168,6 +168,21 @@ test("JQL presets keep active query editable without applying automatically", fu
     ]);
 });
 
+test("JQL toolbar renders Lucide save and sparkle icons", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.jqlToolbarIcon, "function");
+
+    var saveIcon = Timesheet.__test.jqlToolbarIcon("save");
+    var llmIcon = Timesheet.__test.jqlToolbarIcon("sparkles");
+
+    assert.match(saveIcon, /class="lucide lucide-save"/);
+    assert.match(llmIcon, /class="lucide lucide-sparkles"/);
+    assert.match(saveIcon, /aria-hidden="true"/);
+    assert.match(llmIcon, /aria-hidden="true"/);
+    assert.doesNotMatch(saveIcon + llmIcon, /[+μ]/);
+});
+
 test("JQL action plan keeps select and save-as as drafts until apply", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);

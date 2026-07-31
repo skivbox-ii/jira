@@ -7,7 +7,8 @@
 .ujg-jql-pick-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left}
 .ujg-jql-pick-btn span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ujg-jql-pick-btn b{font-weight:700;color:#42526e}
-.ujg-jql-icon-btn{min-width:32px;padding:4px 8px;font-weight:700}
+.ujg-jql-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;min-width:34px;height:32px;padding:0;color:#42526e}
+.ujg-jql-icon-btn svg{display:block;width:16px;height:16px;pointer-events:none}
 .ujg-jql-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:35;width:360px;max-height:300px;overflow:auto;padding:6px;background:#fff;border:1px solid #dfe1e6;border-radius:4px;box-shadow:0 8px 18px rgba(9,30,66,0.18)}
 .ujg-jql-menu-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:3px;cursor:pointer;color:#172b4d}
 .ujg-jql-menu-item:hover{background:#f4f5f7}

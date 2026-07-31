@@ -53,6 +53,17 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
         return String(value == null ? "" : value).trim();
     }
 
+    function jqlToolbarIcon(name) {
+        var attrs = ' class="lucide lucide-' + name + '" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+        if (name === "save") {
+            return '<svg' + attrs + '><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>';
+        }
+        if (name === "sparkles") {
+            return '<svg' + attrs + '><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>';
+        }
+        return "";
+    }
+
     function makeJqlPresetId() {
         return "jql-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
     }
@@ -1862,8 +1873,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             var $jqlPicker = $('<div class="ujg-jql-picker"></div>');
             var $jqlPickBtn = $('<button type="button" class="aui-button ujg-jql-pick-btn" title="Выбрать сохраненный JQL"><span></span><b>▾</b></button>');
             var $jqlMenu = $('<div class="ujg-jql-menu"></div>').hide();
-            var $jqlSaveAsBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="Сохранить как новый JQL">+</button>');
-            var $jqlLlmBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="JQL через LLM">μ</button>');
+            var $jqlSaveAsBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="Сохранить как новый JQL" aria-label="Сохранить как новый JQL"></button>').html(jqlToolbarIcon("save"));
+            var $jqlLlmBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="JQL через LLM" aria-label="JQL через LLM"></button>').html(jqlToolbarIcon("sparkles"));
             var $jqlBtn = $('<button type="button" class="aui-button aui-button-primary">Применить</button>');
 
             function activeJqlPresetName() {
@@ -2151,6 +2162,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
         buildWorklogPayload: buildWorklogPayload,
         buildTransitionMassWorklogTemplate: buildTransitionMassWorklogTemplate,
         issueHasSelfWorklogOnDay: issueHasSelfWorklogOnDay,
+        jqlToolbarIcon: jqlToolbarIcon,
         normalizeJqlPresets: normalizeJqlPresets,
         selectJqlPreset: selectJqlPreset,
         applyJqlPreset: applyJqlPreset,
