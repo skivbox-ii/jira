@@ -5,7 +5,7 @@ define("_ujgTimesheet", [], function() {
   var widgetRuntimeFile = "ujg-timesheet.v0.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgTimesheetV0Runtime";
-  var releaseRef = "639e4cc";
+  var releaseRef = "95a94d0";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
