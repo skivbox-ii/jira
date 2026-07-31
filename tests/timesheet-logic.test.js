@@ -168,6 +168,80 @@ test("JQL presets keep active query editable without applying automatically", fu
     ]);
 });
 
+test("JQL action plan keeps select and save-as as drafts until apply", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.planJqlPresetAction, "function");
+
+    var presets = Timesheet.__test.normalizeJqlPresets({
+        activeId: "a",
+        items: [
+            { id: "a", name: "Проект A", jql: "project = A" },
+            { id: "b", name: "Проект B", jql: "project = B" }
+        ]
+    }, "");
+
+    var selected = Timesheet.__test.planJqlPresetAction(presets, "select", {
+        presetId: "b"
+    });
+    assert.equal(selected.currentJql, "project = B");
+    assert.equal(selected.appliedJql, null);
+    assert.equal(selected.shouldReload, false);
+
+    var saved = Timesheet.__test.planJqlPresetAction(selected.presets, "saveAs", {
+        name: "Без закрытых",
+        jql: "project = B AND statusCategory != Done"
+    });
+    assert.equal(saved.currentJql, "project = B AND statusCategory != Done");
+    assert.equal(saved.appliedJql, null);
+    assert.equal(saved.shouldReload, false);
+
+    var applied = Timesheet.__test.planJqlPresetAction(saved.presets, "apply", {
+        jql: saved.currentJql
+    });
+    assert.equal(applied.currentJql, "project = B AND statusCategory != Done");
+    assert.equal(applied.appliedJql, "project = B AND statusCategory != Done");
+    assert.equal(applied.shouldReload, true);
+});
+
+test("JQL initialization keeps the saved draft separate from the applied query", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.resolveInitialJqlState, "function");
+
+    var initial = Timesheet.__test.resolveInitialJqlState({
+        savedJql: "project = A",
+        hasSavedJql: true,
+        storedPresets: {
+            activeId: "b",
+            items: [
+                { id: "a", name: "Проект A", jql: "project = A" },
+                { id: "b", name: "Проект B", jql: "project = B" }
+            ]
+        }
+    });
+
+    assert.equal(initial.appliedJql, "project = A");
+    assert.equal(initial.inputJql, "project = B");
+    assert.equal(initial.presets.activeId, "b");
+});
+
+test("new timesheet load invalidates prior load and keeps its JQL snapshot", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.beginTimesheetLoad, "function");
+    assert.equal(typeof Timesheet.__test.isTimesheetLoadCurrent, "function");
+
+    var state = { loadRevision: 0 };
+    var first = Timesheet.__test.beginTimesheetLoad(state, ["2026-03-02"], "project = A");
+    var second = Timesheet.__test.beginTimesheetLoad(state, ["2026-03-02"], "project = B");
+
+    assert.equal(first.jqlFilter, "project = A");
+    assert.equal(second.jqlFilter, "project = B");
+    assert.equal(Timesheet.__test.isTimesheetLoadCurrent(state, first), false);
+    assert.equal(Timesheet.__test.isTimesheetLoadCurrent(state, second), true);
+});
+
 test("JQL preset helpers can save as and delete active presets", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);
@@ -204,6 +278,76 @@ test("JQL LLM prompt includes current JQL and known projects", function() {
     assert.match(request.userPrompt, /Текущий JQL:\nproject = EVOSCADA/);
     assert.match(request.userPrompt, /Доступные проекты:\nEVOSCADA, SDKU/);
     assert.match(request.userPrompt, /Исключи закрытые/);
+});
+
+test("available project loader merges Jira projects with current calendar projects", async function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.fetchAvailableProjectKeys, "function");
+
+    var requestOptions = null;
+    var projects = await Timesheet.__test.fetchAvailableProjectKeys(function(options) {
+        requestOptions = options;
+        return Promise.resolve([
+            { id: "10001", key: "EVOSCADA", name: "SCADA" },
+            { id: "10002", key: "SDKU", name: "SDKU" },
+            { id: "10003", key: "EVOSCADA", name: "duplicate" }
+        ]);
+    }, "https://jira.example/rest/api/2/project", ["CURRENT"]);
+
+    assert.deepEqual(normalize(requestOptions), {
+        url: "https://jira.example/rest/api/2/project",
+        type: "GET"
+    });
+    assert.deepEqual(normalize(projects), ["CURRENT", "EVOSCADA", "SDKU"]);
+});
+
+test("available project loader falls back to current calendar projects on Jira error", async function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    var projects = await Timesheet.__test.fetchAvailableProjectKeys(function() {
+        return Promise.reject(new Error("Jira unavailable"));
+    }, "https://jira.example/rest/api/2/project", ["EVOSCADA"]);
+
+    assert.deepEqual(normalize(projects), ["EVOSCADA"]);
+});
+
+test("available project loader falls back when Jira returns an unexpected payload", async function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    var projects = await Timesheet.__test.fetchAvailableProjectKeys(function() {
+        return Promise.resolve({ values: [{ key: "IGNORED" }] });
+    }, "https://jira.example/rest/api/2/project", ["EVOSCADA"]);
+
+    assert.deepEqual(normalize(projects), ["EVOSCADA"]);
+});
+
+test("timesheet migrates legacy User Activity LLM settings to shared storage", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var LlmClient = loadAmdModule(path.join(__dirname, "..", "ujg-shared-modules", "llm-client.js"), {});
+    var values = {
+        "ujg-ua-ai-report-config": JSON.stringify({
+            apiBase: "https://llm.example/v1",
+            model: "qwen",
+            apiKey: "secret"
+        })
+    };
+    var storage = {
+        getItem: function(key) {
+            return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
+        },
+        setItem: function(key, value) {
+            values[key] = String(value);
+        }
+    };
+
+    var config = Timesheet.__test.readTimesheetLlmConfig(storage, LlmClient);
+
+    assert.equal(config.model, "qwen");
+    assert.equal(JSON.parse(values["ujg-shared-llm-config"]).apiBase, "https://llm.example/v1");
 });
 
 test("getUserDropdownEntries always shows selected users above filtered matches", function() {

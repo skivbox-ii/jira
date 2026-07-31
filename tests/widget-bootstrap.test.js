@@ -363,6 +363,28 @@ test("timesheet runtime rewrites the public AMD name to a dedicated runtime name
   assert.match(out["ujg-timesheet.bootstrap.js"], /ujg-shared-modules\/llm-client\.js/);
 });
 
+test("timesheet runtime carries its LLM dependency for cached older bootstraps", function() {
+  var mod = require(MOD_PATH);
+  var out = mod.buildAssets({
+    releaseRef: "unused",
+    assetBaseUrl: "https://cdn.jsdelivr.net/gh/skivbox-ii/jira",
+    widgets: [mod.WIDGETS.timesheet]
+  });
+  var modules = {};
+
+  vm.runInNewContext(out["ujg-timesheet.runtime.js"], {
+    define: function(name, deps, factory) {
+      modules[name] = { deps: deps, factory: factory };
+    }
+  });
+
+  assert.ok(modules._ujgTimesheet_llmClient);
+  assert.deepEqual(
+    Array.from(modules._ujgTimesheetRuntime.deps),
+    ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient"]
+  );
+});
+
 test("timesheet v0 runtime uses a distinct runtime AMD name from timesheet", function() {
   var mod = require(MOD_PATH);
   var out = mod.buildAssets({

@@ -1,7 +1,8 @@
 define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils", "_ujgShared_llmClient"], function($, utils, llmClient) {
     "use strict";
 
-    var STORAGE_KEY = "ujg-ua-ai-report-config";
+    var STORAGE_KEY = "ujg-shared-llm-config";
+    var LEGACY_STORAGE_KEY = "ujg-ua-ai-report-config";
     var MAX_PROMPT_TOKENS = 50000;
     // Use UTF-8 bytes as a conservative upper bound for tokens and leave headroom
     // for wrapper metadata.
@@ -209,10 +210,25 @@ define("_ujgUA_aiReport", ["jquery", "_ujgUA_utils", "_ujgShared_llmClient"], fu
     }
 
     function readStoredConfig(storage) {
-        if (llmClient && typeof llmClient.readStoredConfig === "function") return llmClient.readStoredConfig(storage, STORAGE_KEY);
+        var config;
+        if (llmClient && typeof llmClient.readStoredConfig === "function") {
+            config = llmClient.readStoredConfig(storage, STORAGE_KEY);
+            if (config) return config;
+            config = llmClient.readStoredConfig(storage, LEGACY_STORAGE_KEY);
+            if (config && typeof llmClient.writeStoredConfig === "function") {
+                llmClient.writeStoredConfig(storage, config, STORAGE_KEY);
+            }
+            return config;
+        }
         if (!storage || typeof storage.getItem !== "function") return null;
         try {
-            return normalizeConfig(JSON.parse(storage.getItem(STORAGE_KEY) || "null"));
+            config = normalizeConfig(JSON.parse(storage.getItem(STORAGE_KEY) || "null"));
+            if (config) return config;
+            config = normalizeConfig(JSON.parse(storage.getItem(LEGACY_STORAGE_KEY) || "null"));
+            if (config && typeof storage.setItem === "function") {
+                storage.setItem(STORAGE_KEY, JSON.stringify(config));
+            }
+            return config;
         } catch (err) {
             return null;
         }

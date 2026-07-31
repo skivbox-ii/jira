@@ -5,7 +5,7 @@ define("_ujgDailyDiligence", [], function() {
   var widgetRuntimeFile = "ujg-daily-diligence.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgDailyDiligenceRuntime";
-  var releaseRef = "61d94c1";
+  var releaseRef = "39c54af";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;

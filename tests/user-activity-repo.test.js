@@ -5843,6 +5843,32 @@ test("user-activity ai-report treats configured value as apiBase and calls chat 
     assert.equal(body.messages[1].content.indexOf("Задача:"), -1);
 });
 
+test("user-activity ai-report migrates legacy settings to shared LLM storage", function() {
+    var storageData = {
+        "ujg-ua-ai-report-config": JSON.stringify({
+            apiBase: "https://legacy-llm.example/v1",
+            model: "legacy-model",
+            apiKey: "legacy-key",
+            basePrompt: "legacy prompt"
+        })
+    };
+    var storage = {
+        getItem: function(key) {
+            return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null;
+        },
+        setItem: function(key, value) {
+            storageData[key] = String(value);
+        }
+    };
+    var mod = loadAiReport();
+
+    var config = mod.readStoredConfig(storage);
+
+    assert.equal(mod.STORAGE_KEY, "ujg-shared-llm-config");
+    assert.equal(config.model, "legacy-model");
+    assert.equal(JSON.parse(storageData["ujg-shared-llm-config"]).basePrompt, "legacy prompt");
+});
+
 test("user-activity ai-report promptForConfig keeps saved base prompt without extra prompt", function() {
     var mod = loadAiReport();
     var answers = [

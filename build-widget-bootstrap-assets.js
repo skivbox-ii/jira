@@ -43,7 +43,11 @@ var WIDGET_SPECS = {
     fileKey: "ujg-timesheet",
     publicAmd: "_ujgTimesheet",
     runtimeAmd: "_ujgTimesheetRuntime",
-    sharedJsFiles: ["ujg-shared-modules/llm-client.js"]
+    sharedJsFiles: ["ujg-shared-modules/llm-client.js"],
+    embeddedJsFiles: ["ujg-shared-modules/llm-client.js"],
+    embeddedAmdRenames: {
+      "_ujgShared_llmClient": "_ujgTimesheet_llmClient"
+    }
   },
   "ujg-timesheet.v0": {
     fileKey: "ujg-timesheet.v0",
@@ -95,6 +99,17 @@ function jsStringArray(values) {
       .join(",") +
     "]"
   );
+}
+
+function applyAmdRenames(source, renames) {
+  var out = String(source);
+  Object.keys(renames || {}).forEach(function(fromName) {
+    out = out.replace(
+      new RegExp(escapeRegExp(JSON.stringify(fromName)), "g"),
+      JSON.stringify(renames[fromName])
+    );
+  });
+  return out;
 }
 
 function transformRuntimeAmdRename(src, publicName, runtimeName) {
@@ -821,8 +836,23 @@ function buildAssets(options) {
     }
     var fk = spec.fileKey;
     var runtimeFile = fk + ".runtime.js";
+    var runtimeSource = runtimeFromPublicRename(fk, spec.publicAmd, spec.runtimeAmd);
+    var embeddedAmdRenames = spec.embeddedAmdRenames || {};
 
-    out[runtimeFile] = runtimeFromPublicRename(fk, spec.publicAmd, spec.runtimeAmd);
+    if (spec.embeddedJsFiles && spec.embeddedJsFiles.length) {
+      runtimeSource =
+        spec.embeddedJsFiles
+          .map(function(fileName) {
+            return applyAmdRenames(
+              fs.readFileSync(path.join(REPO_ROOT, fileName), "utf8").replace(/\s+$/, ""),
+              embeddedAmdRenames
+            );
+          })
+          .join("\n\n") +
+        "\n\n" +
+        applyAmdRenames(runtimeSource, embeddedAmdRenames);
+    }
+    out[runtimeFile] = runtimeSource;
     out[fk + ".bootstrap.js"] = widgetBootstrapModuleSource(
       spec.publicAmd,
       spec.runtimeAmd,

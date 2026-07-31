@@ -1,4 +1,300 @@
-define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], function($, Common, LlmClient) {
+define("_ujgTimesheet_llmClient", [], function() {
+  "use strict";
+
+  var DEFAULT_STORAGE_KEY = "ujg-shared-llm-config";
+  var MAX_BASE_PROMPT_BYTES = 6000;
+  var MAX_USER_PROMPT_BYTES = 42000;
+  var CHAT_COMPLETIONS_PATH = "/chat/completions";
+  var LEGACY_COMPLETIONS_PATH = "/completions";
+  var TRIM_SUFFIX = "\n...[trimmed]";
+
+  function trimString(value) {
+    return String(value == null ? "" : value).trim();
+  }
+
+  function utf8ByteLength(value) {
+    var text = String(value == null ? "" : value);
+    var total = 0;
+    var i;
+    var ch;
+    if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(text).length;
+    for (i = 0; i < text.length; i++) {
+      ch = text.charCodeAt(i);
+      if (ch < 128) total += 1;
+      else if (ch < 2048) total += 2;
+      else if ((ch & 0xFC00) === 0xD800 && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
+        total += 4;
+        i += 1;
+      } else {
+        total += 3;
+      }
+    }
+    return total;
+  }
+
+  function sliceByBytes(value, maxBytes) {
+    var text = String(value == null ? "" : value);
+    var out = "";
+    var total = 0;
+    var i;
+    var ch;
+    var charText;
+    var charBytes;
+    if (!text || maxBytes <= 0) return "";
+    for (i = 0; i < text.length; i++) {
+      ch = text.charCodeAt(i);
+      charText = text.charAt(i);
+      if ((ch & 0xFC00) === 0xD800 && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
+        charText = text.substring(i, i + 2);
+        charBytes = 4;
+        i += 1;
+      } else if (ch < 128) {
+        charBytes = 1;
+      } else if (ch < 2048) {
+        charBytes = 2;
+      } else {
+        charBytes = 3;
+      }
+      if (total + charBytes > maxBytes) break;
+      out += charText;
+      total += charBytes;
+    }
+    return out;
+  }
+
+  function truncateByBytes(value, maxBytes, suffix) {
+    var text = String(value == null ? "" : value);
+    var tail = suffix == null ? "" : String(suffix);
+    var suffixBytes = utf8ByteLength(tail);
+    if (utf8ByteLength(text) <= maxBytes) return text;
+    if (maxBytes <= suffixBytes) return sliceByBytes(tail, maxBytes);
+    return sliceByBytes(text, maxBytes - suffixBytes) + tail;
+  }
+
+  function normalizePromptWhitespace(value) {
+    return trimString(String(value == null ? "" : value)
+      .replace(/\r/g, "\n")
+      .replace(/\u00A0/g, " ")
+      .replace(/[ \t\f\v]+/g, " ")
+      .replace(/ *\n */g, "\n")
+      .replace(/\n{3,}/g, "\n\n"));
+  }
+
+  function sanitizePrompt(value, maxBytes) {
+    return truncateByBytes(normalizePromptWhitespace(value), maxBytes || MAX_BASE_PROMPT_BYTES, TRIM_SUFFIX);
+  }
+
+  function normalizeApiBaseParts(rawValue) {
+    var value = trimString(rawValue).replace(/\/+$/, "");
+    if (!value) return { apiBase: "", useLegacyCompletionsEndpoint: false };
+    if (/\/chat\/completions$/i.test(value)) {
+      return { apiBase: value.replace(/\/chat\/completions$/i, ""), useLegacyCompletionsEndpoint: false };
+    }
+    if (/\/completions$/i.test(value)) {
+      return { apiBase: value.replace(/\/completions$/i, ""), useLegacyCompletionsEndpoint: true };
+    }
+    return { apiBase: value, useLegacyCompletionsEndpoint: false };
+  }
+
+  function toBool(value, fallback) {
+    if (value == null || value === "") return !!fallback;
+    if (typeof value === "boolean") return value;
+    var normalized = trimString(value).toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "y";
+  }
+
+  function normalizeConfig(input) {
+    var apiBaseParts;
+    var model;
+    var apiKey;
+    if (!input || typeof input !== "object") return null;
+    apiBaseParts = normalizeApiBaseParts(input.apiBase || input.url || input.endpoint);
+    model = trimString(input.model);
+    apiKey = trimString(input.apiKey || input.key || input.token);
+    if (!apiBaseParts.apiBase || !model || !apiKey) return null;
+    return {
+      apiBase: apiBaseParts.apiBase,
+      model: model,
+      apiKey: apiKey,
+      basePrompt: sanitizePrompt(input.basePrompt || input.base_prompt || input.systemPrompt || input.prompt, MAX_BASE_PROMPT_BYTES),
+      useLegacyCompletionsEndpoint: toBool(input.useLegacyCompletionsEndpoint, apiBaseParts.useLegacyCompletionsEndpoint),
+    };
+  }
+
+  function readStoredConfig(storage, storageKey) {
+    if (!storage || typeof storage.getItem !== "function") return null;
+    try {
+      return normalizeConfig(JSON.parse(storage.getItem(storageKey || DEFAULT_STORAGE_KEY) || "null"));
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeStoredConfig(storage, config, storageKey) {
+    var normalized = normalizeConfig(config);
+    if (!normalized) return null;
+    if (storage && typeof storage.setItem === "function") {
+      storage.setItem(storageKey || DEFAULT_STORAGE_KEY, JSON.stringify(normalized));
+    }
+    return normalized;
+  }
+
+  function promptForConfig(promptFn, existing) {
+    var current = existing || {};
+    var apiBase;
+    var model;
+    var apiKey;
+    if (typeof promptFn !== "function") return null;
+    apiBase = promptFn("LLM API Base URL (например https://llm/v1, можно вставить полный endpoint)", current.apiBase || "");
+    if (apiBase == null) return null;
+    model = promptFn("LLM модель", current.model || "");
+    if (model == null) return null;
+    apiKey = promptFn("LLM API key", current.apiKey || "");
+    if (apiKey == null) return null;
+    return normalizeConfig({
+      apiBase: apiBase,
+      model: model,
+      apiKey: apiKey,
+      basePrompt: current.basePrompt,
+      useLegacyCompletionsEndpoint: current.useLegacyCompletionsEndpoint,
+    });
+  }
+
+  function buildRequestUrl(config, forceLegacy) {
+    var normalized = normalizeConfig(config);
+    var useLegacy;
+    if (!normalized) throw new Error("AI config is invalid");
+    useLegacy = forceLegacy == null ? !!normalized.useLegacyCompletionsEndpoint : !!forceLegacy;
+    return normalized.apiBase + (useLegacy ? LEGACY_COMPLETIONS_PATH : CHAT_COMPLETIONS_PATH);
+  }
+
+  function buildRequestBody(config, request, forceLegacy) {
+    var normalized = normalizeConfig(config);
+    var systemPrompt = sanitizePrompt(request && request.systemPrompt, MAX_BASE_PROMPT_BYTES);
+    var userPrompt = sanitizePrompt(request && request.userPrompt, MAX_USER_PROMPT_BYTES);
+    var useLegacy;
+    if (!normalized) throw new Error("AI config is invalid");
+    if (!systemPrompt) throw new Error("AI prompt is empty");
+    if (!userPrompt) throw new Error("AI user prompt is empty");
+    useLegacy = forceLegacy == null ? !!normalized.useLegacyCompletionsEndpoint : !!forceLegacy;
+    if (useLegacy) {
+      return {
+        model: normalized.model,
+        temperature: request && request.temperature != null ? Number(request.temperature) : 0.2,
+        prompt: systemPrompt + "\n\n" + userPrompt,
+      };
+    }
+    return {
+      model: normalized.model,
+      temperature: request && request.temperature != null ? Number(request.temperature) : 0.2,
+      messages: [
+        { role: "user", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    };
+  }
+
+  function getContentParts(content) {
+    if (typeof content === "string") return [content];
+    if (!content) return [];
+    if (Array.isArray(content)) {
+      return content.map(function(part) {
+        if (typeof part === "string") return part;
+        if (part && typeof part.text === "string") return part.text;
+        if (part && typeof part.content === "string") return part.content;
+        return "";
+      }).filter(Boolean);
+    }
+    if (typeof content.text === "string") return [content.text];
+    if (typeof content.content === "string") return [content.content];
+    return [];
+  }
+
+  function extractResponseText(payload) {
+    var choice;
+    var messageText;
+    var outputText;
+    if (!payload) return "";
+    if (typeof payload === "string") return trimString(payload);
+    if (typeof payload.output_text === "string") return trimString(payload.output_text);
+    if (Array.isArray(payload.output)) {
+      outputText = payload.output.map(function(item) {
+        return getContentParts(item && item.content).join("\n");
+      }).filter(Boolean).join("\n");
+      if (outputText) return trimString(outputText);
+    }
+    choice = payload.choices && payload.choices[0];
+    if (!choice) return "";
+    if (choice.message) {
+      messageText = getContentParts(choice.message.content).join("\n");
+      if (messageText) return trimString(messageText);
+    }
+    if (typeof choice.text === "string") return trimString(choice.text);
+    return "";
+  }
+
+  function requestText(config, request, fetchImpl) {
+    var normalized = normalizeConfig(config);
+    var callFetch = typeof fetchImpl === "function" ? fetchImpl : (typeof fetch === "function" ? fetch : null);
+    if (!normalized) return Promise.reject(new Error("AI config is invalid"));
+    if (!callFetch) return Promise.reject(new Error("fetch is unavailable"));
+
+    function performRequest(forceLegacy, allowFallback) {
+      var requestUrl = buildRequestUrl(normalized, forceLegacy);
+      return Promise.resolve(callFetch(requestUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + normalized.apiKey,
+        },
+        body: JSON.stringify(buildRequestBody(normalized, request, forceLegacy)),
+      })).then(function(resp) {
+        return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
+          var payload = {};
+          var out;
+          if ((!resp || !resp.ok) && allowFallback && !forceLegacy && resp && (resp.status === 404 || resp.status === 405)) {
+            return performRequest(true, false);
+          }
+          if (!resp || !resp.ok) {
+            throw new Error("AI API " + (resp && resp.status != null ? resp.status : "error") + " (" + requestUrl + "): " + trimString(text));
+          }
+          if (trimString(text)) {
+            try {
+              payload = JSON.parse(text);
+            } catch (err) {
+              throw new Error("AI API вернул не-JSON ответ");
+            }
+          }
+          out = extractResponseText(payload);
+          if (!out) throw new Error("AI API вернул пустой ответ");
+          return { text: out, payload: payload, url: requestUrl };
+        });
+      });
+    }
+
+    return performRequest(!!normalized.useLegacyCompletionsEndpoint, !normalized.useLegacyCompletionsEndpoint);
+  }
+
+  return {
+    DEFAULT_STORAGE_KEY: DEFAULT_STORAGE_KEY,
+    MAX_BASE_PROMPT_BYTES: MAX_BASE_PROMPT_BYTES,
+    MAX_USER_PROMPT_BYTES: MAX_USER_PROMPT_BYTES,
+    trimString: trimString,
+    utf8ByteLength: utf8ByteLength,
+    truncateByBytes: truncateByBytes,
+    sanitizePrompt: sanitizePrompt,
+    normalizeConfig: normalizeConfig,
+    readStoredConfig: readStoredConfig,
+    writeStoredConfig: writeStoredConfig,
+    promptForConfig: promptForConfig,
+    buildRequestUrl: buildRequestUrl,
+    buildRequestBody: buildRequestBody,
+    extractResponseText: extractResponseText,
+    requestText: requestText,
+  };
+});
+
+define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient"], function($, Common, LlmClient) {
 
     var utils = Common.utils;
     var baseUrl = Common.baseUrl;
@@ -7,6 +303,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
     var STORAGE_KEY_GROUPS = "ujg_timesheet_groups";
     var STORAGE_KEY_JQL_PRESETS = "ujg_timesheet_jql_presets";
     var LLM_CONFIG_STORAGE_KEY = "ujg-shared-llm-config";
+    var LEGACY_LLM_CONFIG_STORAGE_KEYS = ["ujg-ua-ai-report-config"];
     
     var CONFIG = {
         version: "1.6.0",
@@ -141,6 +438,26 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
         return normalized;
     }
 
+    function planJqlPresetAction(presets, action, options) {
+        var opts = options || {};
+        var nextPresets;
+        if (action === "select") {
+            nextPresets = selectJqlPreset(presets, opts.presetId);
+        } else if (action === "saveAs") {
+            nextPresets = saveAsJqlPreset(presets, opts.name, opts.jql);
+        } else if (action === "apply") {
+            nextPresets = applyJqlPreset(presets, opts.jql);
+        } else {
+            nextPresets = normalizeJqlPresets(presets, "");
+        }
+        return {
+            presets: nextPresets,
+            currentJql: nextPresets.currentJql,
+            appliedJql: action === "apply" ? nextPresets.currentJql : null,
+            shouldReload: action === "apply"
+        };
+    }
+
     function deleteJqlPreset(presets, presetId) {
         var normalized = normalizeJqlPresets(presets, "");
         if (normalized.items.length <= 1) {
@@ -181,6 +498,27 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
         return normalized;
     }
 
+    function resolveInitialJqlState(options) {
+        var opts = options || {};
+        var fallbackJql = opts.hasUrlJql
+            ? normalizeJqlText(opts.urlJql)
+            : (opts.hasSavedJql ? normalizeJqlText(opts.savedJql) : "");
+        var presets = normalizeJqlPresets(opts.storedPresets, fallbackJql);
+        var appliedJql;
+        if (opts.hasUrlJql) {
+            appliedJql = normalizeJqlText(opts.urlJql);
+        } else if (opts.hasSavedJql) {
+            appliedJql = normalizeJqlText(opts.savedJql);
+        } else {
+            appliedJql = presets.currentJql;
+        }
+        return {
+            appliedJql: appliedJql,
+            inputJql: opts.hasUrlJql ? appliedJql : presets.currentJql,
+            presets: presets
+        };
+    }
+
     function cleanGeneratedJql(value) {
         var text = normalizeJqlText(value);
         text = text.replace(/^```(?:jql)?\s*/i, "").replace(/```$/i, "").trim();
@@ -198,6 +536,67 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             });
         });
         return Object.keys(projects).sort();
+    }
+
+    function normalizeProjectKeys(projects) {
+        var seen = {};
+        var list = Array.isArray(projects) ? projects : [];
+        list.forEach(function(project) {
+            var key = normalizeJqlText(project && typeof project === "object" ? project.key : project).toUpperCase();
+            if (key) seen[key] = true;
+        });
+        return Object.keys(seen).sort();
+    }
+
+    function mergeProjectKeys(first, second) {
+        return normalizeProjectKeys((first || []).concat(second || []));
+    }
+
+    function fetchAvailableProjectKeys(ajaxFn, url, fallbackProjects) {
+        var fallback = normalizeProjectKeys(fallbackProjects);
+        var request;
+        if (typeof ajaxFn !== "function") return Promise.resolve(fallback);
+        try {
+            request = ajaxFn({
+                url: url,
+                type: "GET"
+            });
+        } catch(e) {
+            return Promise.resolve(fallback);
+        }
+        return Promise.resolve(request).then(function(projects) {
+            return mergeProjectKeys(fallback, normalizeProjectKeys(projects));
+        }, function() {
+            return fallback;
+        });
+    }
+
+    function readTimesheetLlmConfig(storage, client) {
+        if (!client || typeof client.readStoredConfig !== "function") return null;
+        var config = client.readStoredConfig(storage, LLM_CONFIG_STORAGE_KEY);
+        if (config) return config;
+        for (var i = 0; i < LEGACY_LLM_CONFIG_STORAGE_KEYS.length; i++) {
+            config = client.readStoredConfig(storage, LEGACY_LLM_CONFIG_STORAGE_KEYS[i]);
+            if (!config) continue;
+            if (typeof client.writeStoredConfig === "function") {
+                client.writeStoredConfig(storage, config, LLM_CONFIG_STORAGE_KEY);
+            }
+            return config;
+        }
+        return null;
+    }
+
+    function beginTimesheetLoad(state, days, jqlFilter) {
+        state.loadRevision = (parseInt(state.loadRevision, 10) || 0) + 1;
+        return {
+            revision: state.loadRevision,
+            days: (days || []).slice(),
+            jqlFilter: normalizeJqlText(jqlFilter)
+        };
+    }
+
+    function isTimesheetLoadCurrent(state, loadContext) {
+        return !!loadContext && state.loadRevision === loadContext.revision;
     }
 
     function buildJqlLlmRequest(options) {
@@ -699,7 +1098,10 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             currentUser: null,
             currentUserLoading: false,
             currentUserPromise: null,
-            jqlPresets: normalizeJqlPresets(null, "")
+            jqlPresets: normalizeJqlPresets(null, ""),
+            loadRevision: 0,
+            availableProjectKeys: null,
+            availableProjectKeysPromise: null
         };
 
         var $content = API.getGadgetContentEl();
@@ -1408,8 +1810,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             renderCalendar();
         }
 
-        function loadDaySequentially(index) {
-            if (index >= state.days.length) {
+        function loadDaySequentially(index, loadContext) {
+            if (!isTimesheetLoadCurrent(state, loadContext)) return;
+            if (index >= loadContext.days.length) {
                 state.loading = false;
                 $progress.hide();
                 updateDebug();
@@ -1417,14 +1820,15 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
                 return;
             }
             
-            var day = state.days[index];
+            var day = loadContext.days[index];
             var dayKey = utils.getDayKey(day);
             
             state.loadedDays = index + 1;
             $progress.text("Загрузка: " + state.loadedDays + "/" + state.totalDays);
             updateDebug();
             
-            Common.loadDayData(day, CONFIG.jqlFilter, null).then(function(result) {
+            Common.loadDayData(day, loadContext.jqlFilter, null).then(function(result) {
+                if (!isTimesheetLoadCurrent(state, loadContext)) return;
                 if (result.issues && result.issues.length > 0) {
                     state.calendarData[dayKey] = result.issues;
                     // Собираем пользователей
@@ -1439,9 +1843,11 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
                     updateUserList();
                 }
                 // Загружаем следующий день
-                loadDaySequentially(index + 1);
+                loadDaySequentially(index + 1, loadContext);
             }, function() {
-                loadDaySequentially(index + 1);
+                if (isTimesheetLoadCurrent(state, loadContext)) {
+                    loadDaySequentially(index + 1, loadContext);
+                }
             });
         }
 
@@ -1514,9 +1920,10 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             if (s > e) { var t = s; s = e; e = t; }
             
             state.days = Common.daysBetween(s, e);
+            var loadContext = beginTimesheetLoad(state, state.days, CONFIG.jqlFilter);
             state.calendarData = {};
             state.users = {};
-            state.totalDays = state.days.length;
+            state.totalDays = loadContext.days.length;
             state.loadedDays = 0;
             state.loading = true;
             state.lastError = "";
@@ -1529,12 +1936,29 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             updateDebug();
             
             // Начинаем последовательную загрузку
-            loadDaySequentially(0);
+            loadDaySequentially(0, loadContext);
         }
 
         function llmConfig() {
-            if (!LlmClient || typeof LlmClient.readStoredConfig !== "function") return null;
-            return LlmClient.readStoredConfig(localStorage, LLM_CONFIG_STORAGE_KEY);
+            return readTimesheetLlmConfig(localStorage, LlmClient);
+        }
+
+        function loadAvailableProjectKeys() {
+            var fallbackProjects = collectProjectKeys(state.calendarData);
+            if (state.availableProjectKeys) {
+                return Promise.resolve(mergeProjectKeys(state.availableProjectKeys, fallbackProjects));
+            }
+            if (state.availableProjectKeysPromise) return state.availableProjectKeysPromise;
+            state.availableProjectKeysPromise = fetchAvailableProjectKeys(
+                function(options) { return $.ajax(options); },
+                baseUrl + "/rest/api/2/project",
+                fallbackProjects
+            ).then(function(projects) {
+                state.availableProjectKeys = projects;
+                state.availableProjectKeysPromise = null;
+                return projects;
+            });
+            return state.availableProjectKeysPromise;
         }
 
         function openLlmSettingsDialog(onSaved) {
@@ -1596,6 +2020,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
                 return;
             }
             var projects = collectProjectKeys(state.calendarData);
+            var projectsLoading = true;
             var $overlay = $('<div class="ujg-llm-overlay"></div>');
             var $dialog = $('<div class="ujg-llm-dialog ujg-llm-dialog-wide"></div>');
             var $current = $('<textarea class="ujg-llm-textarea ujg-llm-jql-current" rows="3"></textarea>').val($jqlInput.val());
@@ -1603,7 +2028,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             var $prompt = $('<textarea class="ujg-llm-textarea" rows="5" placeholder="Например: покажи задачи EVOSCADA без закрытых за последние 30 дней"></textarea>');
             var $result = $('<textarea class="ujg-llm-textarea ujg-llm-result" rows="4" placeholder="Здесь появится JQL"></textarea>');
             var $error = $('<div class="ujg-llm-error"></div>').hide();
-            var $projects = $('<div class="ujg-llm-projects"></div>').text("Проекты: " + (projects.length ? projects.join(", ") : "нет загруженного списка"));
+            var $projects = $('<div class="ujg-llm-projects"></div>').text("Проекты: загрузка...");
             $dialog.append(
                 $('<div class="ujg-llm-head"><div><div class="ujg-llm-title">JQL через LLM</div><div class="ujg-llm-subtitle">Результат будет вставлен в строку. Загрузка начнется только после Применить.</div></div></div>'),
                 $projects,
@@ -1618,6 +2043,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             var $cancel = $('<button type="button" class="aui-button">Отмена</button>');
             var $generate = $('<button type="button" class="aui-button">Сгенерировать</button>');
             var $use = $('<button type="button" class="aui-button aui-button-primary">Вставить</button>');
+            $generate.prop("disabled", true);
             $settings.on("click", function() {
                 openLlmSettingsDialog(function(savedCfg) {
                     cfg = savedCfg;
@@ -1625,6 +2051,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             });
             $cancel.on("click", function() { $overlay.remove(); });
             $generate.on("click", function() {
+                if (projectsLoading) return;
                 if (!LlmClient || typeof LlmClient.requestText !== "function") {
                     $error.text("LLM-клиент не загружен").show();
                     return;
@@ -1658,6 +2085,12 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             $overlay.append($dialog);
             $("body").append($overlay);
             $prompt.trigger("focus");
+            loadAvailableProjectKeys().then(function(availableProjects) {
+                projects = availableProjects;
+                projectsLoading = false;
+                $projects.text("Проекты: " + (projects.length ? projects.join(", ") : "нет доступных проектов"));
+                $generate.prop("disabled", false);
+            });
         }
 
         function updateDebug() {
@@ -1694,18 +2127,18 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             var saved = loadSettings();
             var defaultDates = getDefaultDates();
             
-            // JQL: URL > localStorage
-            if (urlParams.jql) {
-                CONFIG.jqlFilter = urlParams.jql;
-            } else if (saved.jql) {
-                CONFIG.jqlFilter = saved.jql;
-            }
-            state.jqlPresets = readJqlPresets(CONFIG.jqlFilter);
-            if (urlParams.jql) {
-                state.jqlPresets.currentJql = CONFIG.jqlFilter;
-            } else {
-                CONFIG.jqlFilter = state.jqlPresets.currentJql;
-            }
+            // JQL: URL > last applied value; the active preset remains an unapplied draft.
+            var hasUrlJql = Object.prototype.hasOwnProperty.call(urlParams, "jql");
+            var hasSavedJql = Object.prototype.hasOwnProperty.call(saved, "jql");
+            var initialJql = resolveInitialJqlState({
+                urlJql: urlParams.jql,
+                hasUrlJql: hasUrlJql,
+                savedJql: saved.jql,
+                hasSavedJql: hasSavedJql,
+                storedPresets: readJqlPresets(hasUrlJql ? urlParams.jql : saved.jql)
+            });
+            CONFIG.jqlFilter = initialJql.appliedJql;
+            state.jqlPresets = initialJql.presets;
             
             // Даты: URL > defaults
             var initStart = urlParams.from || defaultDates.start;
@@ -1721,7 +2154,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             // JQL
             var $jqlRow = $('<div class="ujg-jql-filter"></div>');
             var $jqlInput = $('<input type="text" class="ujg-jql-input" placeholder="project = SDKU">');
-            $jqlInput.val(CONFIG.jqlFilter);
+            $jqlInput.val(initialJql.inputJql);
             var $jqlPicker = $('<div class="ujg-jql-picker"></div>');
             var $jqlPickBtn = $('<button type="button" class="aui-button ujg-jql-pick-btn" title="Выбрать сохраненный JQL"><span></span><b>▾</b></button>');
             var $jqlMenu = $('<div class="ujg-jql-menu"></div>').hide();
@@ -1747,8 +2180,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
                     $text.append($('<div class="ujg-jql-menu-query"></div>').text(item.jql || "(все задачи)"));
                     var $del = $('<button type="button" class="ujg-jql-menu-delete" title="Удалить">×</button>');
                     $row.on("click", function() {
-                        state.jqlPresets = selectJqlPreset(state.jqlPresets, item.id);
-                        $jqlInput.val(state.jqlPresets.currentJql);
+                        var action = planJqlPresetAction(state.jqlPresets, "select", { presetId: item.id });
+                        state.jqlPresets = writeJqlPresets(action.presets);
+                        $jqlInput.val(action.currentJql);
                         renderJqlMenu();
                         $jqlMenu.hide();
                     });
@@ -1774,25 +2208,28 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
             $jqlSaveAsBtn.on("click", function() {
                 var name = prompt("Название JQL:", makeDefaultJqlName(state.jqlPresets.items.length, $jqlInput.val()));
                 if (name == null) return;
-                state.jqlPresets = writeJqlPresets(saveAsJqlPreset(state.jqlPresets, name, $jqlInput.val()));
-                CONFIG.jqlFilter = state.jqlPresets.currentJql;
-                $jqlInput.val(CONFIG.jqlFilter);
-                saveSettings({ jql: CONFIG.jqlFilter });
+                var action = planJqlPresetAction(state.jqlPresets, "saveAs", {
+                    name: name,
+                    jql: $jqlInput.val()
+                });
+                state.jqlPresets = writeJqlPresets(action.presets);
+                $jqlInput.val(action.currentJql);
                 renderJqlMenu();
-                updateUrlState();
-                updateDebug();
             });
             $jqlLlmBtn.on("click", function() {
                 openJqlLlmDialog($jqlInput);
             });
             $jqlBtn.on("click", function() {
-                CONFIG.jqlFilter = $jqlInput.val().trim();
-                state.jqlPresets = writeJqlPresets(applyJqlPreset(state.jqlPresets, CONFIG.jqlFilter));
+                var action = planJqlPresetAction(state.jqlPresets, "apply", {
+                    jql: $jqlInput.val()
+                });
+                CONFIG.jqlFilter = action.appliedJql;
+                state.jqlPresets = writeJqlPresets(action.presets);
                 saveSettings({ jql: CONFIG.jqlFilter });
                 renderJqlMenu();
                 updateUrlState();
                 updateDebug();
-                if (!state.loading) startLoading();
+                if (action.shouldReload) startLoading();
             });
             $jqlPicker.append($jqlPickBtn, $jqlMenu);
             renderJqlMenu();
@@ -2014,8 +2451,14 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgShared_llmClient"],
         selectJqlPreset: selectJqlPreset,
         applyJqlPreset: applyJqlPreset,
         saveAsJqlPreset: saveAsJqlPreset,
+        planJqlPresetAction: planJqlPresetAction,
         deleteJqlPreset: deleteJqlPreset,
+        resolveInitialJqlState: resolveInitialJqlState,
         collectProjectKeys: collectProjectKeys,
+        fetchAvailableProjectKeys: fetchAvailableProjectKeys,
+        readTimesheetLlmConfig: readTimesheetLlmConfig,
+        beginTimesheetLoad: beginTimesheetLoad,
+        isTimesheetLoadCurrent: isTimesheetLoadCurrent,
         buildJqlLlmRequest: buildJqlLlmRequest,
         cleanGeneratedJql: cleanGeneratedJql
     };
