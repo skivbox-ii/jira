@@ -5,7 +5,7 @@ define("_ujgProjectAnalytics", [], function() {
   var widgetRuntimeFile = "ujg-project-analytics.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgProjectAnalyticsRuntime";
-  var releaseRef = "39c54af";
+  var releaseRef = "99144f8";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
