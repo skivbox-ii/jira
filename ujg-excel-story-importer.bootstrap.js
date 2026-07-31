@@ -5,7 +5,7 @@ define("_ujgExcelStoryImporter", [], function() {
   var widgetRuntimeFile = "ujg-excel-story-importer.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgExcelStoryImporterRuntime";
-  var releaseRef = "23cba9c";
+  var releaseRef = "67e9d83";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
