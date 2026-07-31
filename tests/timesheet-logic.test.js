@@ -405,6 +405,73 @@ test("countWorkDays counts only Mon-Fri", function() {
     assert.equal(Timesheet.__test.countWorkDays([]), 0);
 });
 
+test("month boundary splits one calendar week into strict month rows", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var days = [
+        new Date(2026, 5, 29),
+        new Date(2026, 5, 30),
+        new Date(2026, 6, 1),
+        new Date(2026, 6, 2),
+        new Date(2026, 6, 3)
+    ];
+
+    var rows = Timesheet.__test.groupWeeksByMonth(days).map(function(row) {
+        return row.map(function(day) {
+            return day ? Common.utils.getDayKey(day) : null;
+        });
+    });
+
+    assert.deepEqual(normalize(rows), [
+        ["2026-06-29", "2026-06-30", null, null, null, null, null],
+        [null, null, "2026-07-01", "2026-07-02", "2026-07-03", null, null]
+    ]);
+});
+
+test("partial month rows scope weekly totals and transitions", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var rows = Timesheet.__test.groupWeeksByMonth([
+        new Date(2026, 5, 29),
+        new Date(2026, 5, 30),
+        new Date(2026, 6, 1),
+        new Date(2026, 6, 2),
+        new Date(2026, 6, 3)
+    ]);
+    var calendarData = {
+        "2026-06-30": [{
+            key: "EDGE-1",
+            seconds: 28800,
+            authors: { u1: "User One" },
+            worklogs: [{ authorId: "u1", seconds: 28800 }]
+        }],
+        "2026-07-01": [{
+            key: "EDGE-1",
+            seconds: 14400,
+            authors: { u1: "User One" },
+            worklogs: [{ authorId: "u1", seconds: 14400 }]
+        }]
+    };
+    var changelogData = {
+        "EDGE-1": [
+            { date: "2026-06-30T10:00:00.000+0000", from: "Open", to: "In Progress" },
+            { date: "2026-07-01T10:00:00.000+0000", from: "In Progress", to: "Review" }
+        ]
+    };
+
+    var juneSummary = Timesheet.__test.computeWeekSummary(rows[0], ["u1"], calendarData);
+    var julySummary = Timesheet.__test.computeWeekSummary(rows[1], ["u1"], calendarData);
+    var juneTransitions = Timesheet.__test.getWeekTransitions(rows[0], juneSummary.tasks, changelogData);
+    var julyTransitions = Timesheet.__test.getWeekTransitions(rows[1], julySummary.tasks, changelogData);
+
+    assert.equal(juneSummary.totalSeconds, 28800);
+    assert.equal(juneSummary.expectedSeconds, 2 * 8 * 3600);
+    assert.deepEqual(normalize(juneTransitions[0].changes), ["Open → In Progress"]);
+    assert.equal(julySummary.totalSeconds, 14400);
+    assert.equal(julySummary.expectedSeconds, 3 * 8 * 3600);
+    assert.deepEqual(normalize(julyTransitions[0].changes), ["In Progress → Review"]);
+});
+
 test("computeUserReport computes metrics correctly", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);

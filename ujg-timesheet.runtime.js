@@ -1247,6 +1247,53 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         return result;
     }
 
+    function groupWeeks(days) {
+        var weeks = [];
+        var currentWeek = null;
+        var firstDay = days[0];
+        var startDow = utils.getDayOfWeek(firstDay);
+
+        if (startDow > 0) {
+            currentWeek = [];
+            for (var i = 0; i < startDow; i++) currentWeek.push(null);
+        }
+
+        days.forEach(function(day) {
+            var dow = utils.getDayOfWeek(day);
+            if (dow === 0 || !currentWeek) {
+                if (currentWeek) weeks.push(currentWeek);
+                currentWeek = [];
+            }
+            currentWeek.push(day);
+        });
+
+        if (currentWeek) {
+            while (currentWeek.length < 7) currentWeek.push(null);
+            weeks.push(currentWeek);
+        }
+
+        return weeks;
+    }
+
+    function groupWeeksByMonth(days) {
+        var rows = [];
+        groupWeeks(days).forEach(function(week) {
+            var monthKeys = [];
+            week.forEach(function(day) {
+                if (!day) return;
+                var monthKey = day.getFullYear() + "-" + day.getMonth();
+                if (monthKeys.indexOf(monthKey) < 0) monthKeys.push(monthKey);
+            });
+            monthKeys.forEach(function(monthKey) {
+                rows.push(week.map(function(day) {
+                    if (!day) return null;
+                    return day.getFullYear() + "-" + day.getMonth() === monthKey ? day : null;
+                }));
+            });
+        });
+        return rows;
+    }
+
     function MyGadget(API) {
         var state = {
             showComments: false,
@@ -1449,35 +1496,6 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
             });
         }
 
-        // Группирует недели из дней
-        function groupWeeks(days) {
-            var weeks = [];
-            var currentWeek = null;
-            var firstDay = days[0];
-            var startDow = utils.getDayOfWeek(firstDay);
-            
-            if (startDow > 0) {
-                currentWeek = [];
-                for (var i = 0; i < startDow; i++) currentWeek.push(null);
-            }
-            
-            days.forEach(function(day) {
-                var dow = utils.getDayOfWeek(day);
-                if (dow === 0 || !currentWeek) {
-                    if (currentWeek) weeks.push(currentWeek);
-                    currentWeek = [];
-                }
-                currentWeek.push(day);
-            });
-            
-            if (currentWeek) {
-                while (currentWeek.length < 7) currentWeek.push(null);
-                weeks.push(currentWeek);
-            }
-            
-            return weeks;
-        }
-        
         // Сокращает статус до 5 символов
         function shortStatus(status) {
             if (!status) return "";
@@ -1778,7 +1796,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         function renderSingleCalendar(userId, calendarId) {
             var days = state.days;
             var calendarData = state.calendarData;
-            var weeks = groupWeeks(days);
+            var weeks = groupWeeksByMonth(days);
             var userFilter = userId ? [userId] : state.selectedUsers;
             var showAuthors = !userId && state.selectedUsers.length !== 1;
             
@@ -2856,6 +2874,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         computeWeekSummary: computeWeekSummary,
         computeMonthSummary: computeMonthSummary,
         getWeekTransitions: getWeekTransitions,
+        groupWeeksByMonth: groupWeeksByMonth,
         retainSelectedUsers: retainSelectedUsers,
         collectActivityIssueKeys: collectActivityIssueKeys,
         filterStatusTransitions: filterStatusTransitions,
