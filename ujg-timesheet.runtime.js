@@ -15,6 +15,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
     var WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
     var MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
     var DONE_STATUSES = ["done", "closed", "resolved", "готово", "закрыт", "закрыта", "завершен", "завершена", "выполнено"];
+    var DEFAULT_MASS_WORKLOG_SECONDS = 8 * 3600;
     
     // Загрузка/сохранение групп пользователей
     function loadGroups() {
@@ -290,6 +291,31 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
         return result;
     }
 
+    function getFirstWorkdayKey(weekDays) {
+        var selected = null;
+        (weekDays || []).forEach(function(day) {
+            if (!day || utils.getDayOfWeek(day) >= 5) return;
+            if (!selected || day < selected) selected = day;
+        });
+        if (!selected) {
+            (weekDays || []).forEach(function(day) {
+                if (!day) return;
+                if (!selected || day < selected) selected = day;
+            });
+        }
+        return selected ? utils.getDayKey(selected) : "";
+    }
+
+    function buildTransitionMassWorklogTemplate(transition, weekDays) {
+        transition = transition || {};
+        return {
+            issueKey: transition.key || "",
+            dayKey: getFirstWorkdayKey(weekDays),
+            seconds: DEFAULT_MASS_WORKLOG_SECONDS,
+            summary: transition.summary || ""
+        };
+    }
+
     function getWeekTransitions(weekDays, taskKeysObj, changelogData) {
         if (!changelogData || Object.keys(changelogData).length === 0) return [];
         var weekStart = null, weekEnd = null;
@@ -304,7 +330,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
 
         var result = [];
         Object.keys(taskKeysObj).forEach(function(key) {
-            var transitions = changelogData[key];
+            var changelogEntry = changelogData[key];
+            var transitions = Array.isArray(changelogEntry) ? changelogEntry : (changelogEntry && changelogEntry.transitions);
+            var summary = Array.isArray(changelogEntry) ? "" : (changelogEntry && changelogEntry.summary || "");
             if (!transitions || transitions.length === 0) return;
             var weekChanges = [];
             transitions.forEach(function(t) {
@@ -314,7 +342,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
                 }
             });
             if (weekChanges.length > 0) {
-                result.push({ key: key, changes: weekChanges });
+                result.push({ key: key, summary: summary, changes: weekChanges });
             }
         });
         return result;
@@ -353,6 +381,21 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
 
     function normalizeWorklogComment(comment) {
         return comment == null ? "" : String(comment);
+    }
+
+    function parseWorklogSeconds(value) {
+        if (value == null) return 0;
+        var text = String(value).trim().toLowerCase().replace(",", ".");
+        if (!text) return 0;
+        if (/^\d+(?:\.\d+)?$/.test(text)) {
+            return Math.round(parseFloat(text) * 3600);
+        }
+        var seconds = 0;
+        var hours = text.match(/(\d+(?:\.\d+)?)\s*(h|ч|час|часа|часов)\b/);
+        var minutes = text.match(/(\d+(?:\.\d+)?)\s*(m|м|мин|минут|минуты)\b/);
+        if (hours) seconds += Math.round(parseFloat(hours[1]) * 3600);
+        if (minutes) seconds += Math.round(parseFloat(minutes[1]) * 60);
+        return seconds;
     }
 
     function buildWorklogPayload(dayKey, seconds, comment, started) {
@@ -635,9 +678,10 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
         }
 
         function renderMassWorklogPreview($dialog, template) {
+            var seconds = parseWorklogSeconds($dialog.find(".ujg-mass-seconds").val());
             var plan = buildMassWorklogPlan({
                 issueKey: template.issueKey,
-                seconds: template.seconds,
+                seconds: seconds,
                 currentUserId: currentUserId(),
                 startDate: $dialog.find(".ujg-mass-start").val(),
                 endDate: $dialog.find(".ujg-mass-end").val(),
@@ -652,6 +696,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
 
             if (!currentUserId()) {
                 html += '<div class="ujg-mass-warning">Не удалось определить текущего пользователя. Списание будет создано от вашей Jira-сессии, но существующие записи могут быть распознаны не полностью.</div>';
+            }
+            if (seconds <= 0) {
+                html += '<div class="ujg-mass-warning">Укажите часы списания.</div>';
             }
 
             if (plan.dates.length > 0) {
@@ -759,15 +806,17 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             var currentUserRequest = loadCurrentUser();
 
             var issue = findIssueInDay(template.dayKey, template.issueKey) || {};
+            if (!issue.summary && template.summary) issue.summary = template.summary;
             var $overlay = $('<div class="ujg-mass-worklog-overlay"></div>');
             var $dialog = $('<div class="ujg-mass-worklog-dialog" role="dialog" aria-modal="true"></div>');
             var issueUrl = baseUrl + "/browse/" + encodeURIComponent(template.issueKey);
+            var initialSeconds = template.seconds || DEFAULT_MASS_WORKLOG_SECONDS;
 
             $dialog.append(
                 '<div class="ujg-mass-head">' +
                     '<div><div class="ujg-mass-title">Массовое списание</div>' +
                     '<div class="ujg-mass-subtitle"><a href="' + issueUrl + '" target="_blank">' + escapeAttr(template.issueKey) + '</a> · ' +
-                    (utils.formatTime(template.seconds) || "0") + '</div></div>' +
+                    (utils.formatTime(initialSeconds) || "0") + '</div></div>' +
                     '<button type="button" class="aui-button aui-button-link ujg-mass-close" title="Закрыть">×</button>' +
                 '</div>'
             );
@@ -778,6 +827,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
                 '<div class="ujg-mass-fields">' +
                     '<label>С <input type="date" class="ujg-range-input ujg-mass-start" value="' + escapeAttr(template.dayKey) + '"></label>' +
                     '<label>По <input type="date" class="ujg-range-input ujg-mass-end" value="' + escapeAttr(template.dayKey) + '"></label>' +
+                    '<label>Часы <input type="text" class="ujg-range-input ujg-mass-seconds" value="' + escapeAttr(utils.formatTime(initialSeconds) || "8h") + '"></label>' +
                 '</div>' +
                 '<div class="ujg-mass-comment-row">' +
                     '<label>Комментарий</label>' +
@@ -801,7 +851,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             }
 
             $dialog.find(".ujg-mass-close, .ujg-mass-cancel").on("click", closeMassWorklogDialog);
-            $dialog.find(".ujg-mass-start, .ujg-mass-end, .ujg-mass-comment").on("change input", refresh);
+            $dialog.find(".ujg-mass-start, .ujg-mass-end, .ujg-mass-seconds, .ujg-mass-comment").on("change input", refresh);
             $dialog.find(".ujg-mass-submit").on("click", function() {
                 runMassWorklog($dialog, template);
             });
@@ -815,7 +865,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             }
         }
         
-        function renderWeekSummaryCell(summary, transitions, groupSummary) {
+        function renderWeekSummaryCell(summary, transitions, groupSummary, weekDays) {
             var isOk = groupSummary ? (summary.utilization >= 100) : (summary.totalSeconds >= summary.expectedSeconds);
             var cls = isOk ? "ujg-sum-ok" : "ujg-sum-deficit";
 
@@ -854,8 +904,12 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
             if (transitions && transitions.length > 0) {
                 html += '<div class="ujg-sum-section ujg-sum-transitions">';
                 transitions.forEach(function(t) {
+                    var template = buildTransitionMassWorklogTemplate(t, weekDays);
+                    var linkTitle = t.key + (t.summary ? ": " + t.summary : "");
                     html += '<div class="ujg-sum-tr">';
-                    html += '<a href="' + baseUrl + '/browse/' + t.key + '" target="_blank" class="ujg-sum-tr-key">' + t.key + '</a> ';
+                    html += '<a href="' + baseUrl + '/browse/' + t.key + '" target="_blank" class="ujg-sum-tr-key ujg-transition-worklog-template" title="' + escapeAttr(linkTitle) +
+                        '" data-issue-key="' + escapeAttr(template.issueKey) + '" data-day="' + escapeAttr(template.dayKey) +
+                        '" data-seconds="' + escapeAttr(template.seconds) + '" data-summary="' + escapeAttr(template.summary) + '">' + utils.escapeHtml(t.key) + '</a> ';
                     html += '<span class="ujg-sum-tr-changes">' + utils.escapeHtml(t.changes.join(', ')) + '</span>';
                     html += '</div>';
                 });
@@ -1045,7 +1099,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
                 var groupSummaryMode = !userId;
                 var wSummary = computeWeekSummary(week, userFilter, calendarData, { groupSummary: groupSummaryMode });
                 var transitions = state.showDetails ? getWeekTransitions(week, wSummary.tasks, state.changelogData) : null;
-                html += renderWeekSummaryCell(wSummary, transitions, groupSummaryMode);
+                html += renderWeekSummaryCell(wSummary, transitions, groupSummaryMode, week);
 
                 html += '</div>';
 
@@ -1102,6 +1156,16 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
                     issueKey: String($issue.data("issue-key") || ""),
                     dayKey: String($issue.data("day") || ""),
                     seconds: parseInt($issue.data("seconds"), 10) || 0
+                });
+            });
+            $cont.find(".ujg-transition-worklog-template").on("contextmenu", function(e) {
+                e.preventDefault();
+                var $issue = $(this);
+                openMassWorklogDialog({
+                    issueKey: String($issue.attr("data-issue-key") || ""),
+                    dayKey: String($issue.attr("data-day") || ""),
+                    seconds: parseInt($issue.attr("data-seconds"), 10) || DEFAULT_MASS_WORKLOG_SECONDS,
+                    summary: String($issue.attr("data-summary") || "")
                 });
             });
 
@@ -1196,7 +1260,10 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
                                     }
                                 });
                             });
-                            state.changelogData[keys[idx]] = transitions;
+                            state.changelogData[keys[idx]] = {
+                                summary: r.fields && r.fields.summary || "",
+                                transitions: transitions
+                            };
                         }
                         done++;
                         $progress.text("Changelog: " + done + "/" + total).show();
@@ -1508,7 +1575,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon"], function($, Common) {
         formatSummaryHeadline: formatSummaryHeadline,
         buildMassWorklogPlan: buildMassWorklogPlan,
         formatJiraStarted: formatJiraStarted,
+        parseWorklogSeconds: parseWorklogSeconds,
         buildWorklogPayload: buildWorklogPayload,
+        buildTransitionMassWorklogTemplate: buildTransitionMassWorklogTemplate,
         issueHasSelfWorklogOnDay: issueHasSelfWorklogOnDay
     };
     

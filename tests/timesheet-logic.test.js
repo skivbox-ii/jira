@@ -327,6 +327,17 @@ test("mass worklog payload uses only the user supplied comment", function() {
     assert.match(payload.started, /^2026-03-06T09:00:00\.000[+-]\d{4}$/);
 });
 
+test("parseWorklogSeconds accepts hours and minutes for mass worklog form", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    assert.equal(Timesheet.__test.parseWorklogSeconds("8h"), 28800);
+    assert.equal(Timesheet.__test.parseWorklogSeconds("7.5"), 27000);
+    assert.equal(Timesheet.__test.parseWorklogSeconds("1h 30m"), 5400);
+    assert.equal(Timesheet.__test.parseWorklogSeconds("45m"), 2700);
+    assert.equal(Timesheet.__test.parseWorklogSeconds(""), 0);
+});
+
 test("mass worklog helpers normalize reversed date ranges and format Jira started timestamp", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);
@@ -427,4 +438,46 @@ test("getWeekTransitions filters changelog entries by week date range", function
     assert.deepEqual(t1.changes, ["Open \u2192 In Progress"]);
     assert.ok(t2);
     assert.deepEqual(t2.changes, ["Open \u2192 Review"]);
+});
+
+test("getWeekTransitions carries issue summaries from changelog metadata", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var weekDays = [
+        new Date(2026, 2, 2),
+        new Date(2026, 2, 3),
+        null, null, null, null, null,
+    ];
+    var result = normalize(Timesheet.__test.getWeekTransitions(weekDays, { "T-1": true }, {
+        "T-1": {
+            summary: "Проработка требований",
+            transitions: [
+                { date: "2026-03-02T10:00:00.000+0000", from: "Open", to: "In Progress" }
+            ]
+        }
+    }));
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].summary, "Проработка требований");
+});
+
+test("buildTransitionMassWorklogTemplate uses first workday and eight hours", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var template = Timesheet.__test.buildTransitionMassWorklogTemplate({
+        key: "T-1",
+        summary: "Проработка требований"
+    }, [
+        null,
+        new Date(2026, 2, 7), // Sat
+        new Date(2026, 2, 2), // Mon
+        new Date(2026, 2, 3), // Tue
+    ]);
+
+    assert.deepEqual(normalize(template), {
+        issueKey: "T-1",
+        dayKey: "2026-03-02",
+        seconds: 28800,
+        summary: "Проработка требований"
+    });
 });

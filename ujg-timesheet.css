@@ -132,7 +132,7 @@
 .ujg-sum-type-badge{display:inline-block;padding:1px 6px;background:#dfe1e6;border-radius:10px;font-size:10px;font-weight:500;color:#42526e;white-space:nowrap}
 .ujg-sum-transitions{font-size:10px}
 .ujg-sum-tr{display:flex;gap:4px;align-items:baseline;flex-wrap:wrap}
-.ujg-sum-tr-key{color:#0052cc;font-weight:600;text-decoration:none;font-size:10px}
+.ujg-sum-tr-key{color:#0052cc;font-weight:600;text-decoration:none;font-size:10px;cursor:context-menu}
 .ujg-sum-tr-key:hover{text-decoration:underline}
 .ujg-sum-tr-changes{color:#42526e;font-size:10px}
 
