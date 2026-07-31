@@ -7,8 +7,8 @@
 .ujg-jql-pick-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left}
 .ujg-jql-pick-btn span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ujg-jql-pick-btn b{font-weight:700;color:#42526e}
-.ujg-jql-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;min-width:34px;height:32px;padding:0;color:#42526e}
-.ujg-jql-icon-btn svg{display:block;width:16px;height:16px;pointer-events:none}
+.ujg-toolbar-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;min-width:34px;height:32px;padding:0;color:#42526e}
+.ujg-toolbar-icon-btn svg{display:block;width:16px;height:16px;pointer-events:none}
 .ujg-jql-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:35;width:360px;max-height:300px;overflow:auto;padding:6px;background:#fff;border:1px solid #dfe1e6;border-radius:4px;box-shadow:0 8px 18px rgba(9,30,66,0.18)}
 .ujg-jql-menu-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:3px;cursor:pointer;color:#172b4d}
 .ujg-jql-menu-item:hover{background:#f4f5f7}
@@ -24,10 +24,11 @@
 .ujg-range-input:focus{border-color:#0052cc;outline:none;box-shadow:0 0 0 2px rgba(0,82,204,0.2)}
 .ujg-progress{font-size:12px;color:#0052cc;font-weight:500;margin-left:10px;padding:4px 10px;background:#deebff;border-radius:3px}
 .ujg-copy-link{margin-left:5px;padding:4px 8px;font-size:14px;cursor:pointer}
-.ujg-controls-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #dfe1e6}
+.ujg-controls-row{display:flex;align-items:center;column-gap:6px;row-gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #dfe1e6}
+.ujg-controls-row>*{min-width:0}
 .ujg-user-filter{display:flex;align-items:center;gap:5px;flex-wrap:wrap;position:relative}
 .ujg-user-filter label{font-weight:500;color:#42526e;white-space:nowrap}
-.ujg-user-dd-btn{min-width:140px;text-align:left;white-space:nowrap}
+.ujg-user-dd-btn{min-width:118px;text-align:left;white-space:nowrap}
 .ujg-user-dd-panel{position:absolute;top:calc(100% + 4px);left:0;z-index:30;width:320px;padding:8px;background:#fff;border:1px solid #dfe1e6;border-radius:4px;box-shadow:0 8px 18px rgba(9,30,66,0.18)}
 .ujg-user-dd-selected{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #dfe1e6}
 .ujg-user-dd-selected-title{width:100%;font-size:11px;font-weight:600;color:#6b778c;text-transform:uppercase}
@@ -44,11 +45,13 @@
 .ujg-user-dd-item span{flex:1;min-width:0}
 .ujg-user-dd-item input{margin:0}
 .ujg-user-dd-empty{padding:6px;color:#6b778c;font-size:12px}
-.ujg-control-checkbox{display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;padding:0 10px}
+.ujg-mode-controls{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.ujg-control-checkbox{display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;padding:0;white-space:nowrap;font-size:11px}
 .ujg-control-checkbox input{margin:0}
 .ujg-fullscreen-btn{margin-left:auto}
-.ujg-debug-box{width:100%;padding:4px 8px;background:#f8f9fb;border-radius:3px;font-size:11px;color:#6b778c;margin-top:5px}
-.ujg-debug-text{white-space:normal;word-break:break-word}
+.ujg-debug-box{flex:1 1 70px;min-width:70px;max-width:100%;padding:3px 0;font-size:11px;color:#6b778c;overflow:hidden}
+.ujg-debug-box.ujg-debug-error{color:#de350b}
+.ujg-debug-text{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ujg-message{padding:15px;border-radius:3px;margin:10px 0}
 .ujg-message-info{background:#deebff;color:#0747a6}
 .ujg-message-loading{background:#f4f5f7;color:#42526e}
@@ -143,8 +146,8 @@
 .ujg-btn-small{padding:4px 8px;font-size:12px;line-height:1;min-width:auto}
 .ujg-btn-danger{color:#de350b}
 .ujg-btn-danger:hover{background:#ffebe6}
-.ujg-group-filter{display:flex;align-items:center;gap:5px}
-.ujg-group-select{padding:4px 8px;border:1px solid #dfe1e6;border-radius:3px;background:#fff;min-width:120px;font-size:12px;color:#172b4d;cursor:pointer}
+.ujg-group-filter{display:flex;align-items:center;gap:4px}
+.ujg-group-select{width:105px;padding:4px 6px;border:1px solid #dfe1e6;border-radius:3px;background:#fff;font-size:12px;color:#172b4d;cursor:pointer}
 
 /* Контейнер для нескольких календарей */
 .ujg-calendars-container{display:flex;flex-direction:column;gap:20px}

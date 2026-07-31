@@ -53,13 +53,22 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
         return String(value == null ? "" : value).trim();
     }
 
-    function jqlToolbarIcon(name) {
+    function toolbarIcon(name) {
         var attrs = ' class="lucide lucide-' + name + '" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
         if (name === "save") {
             return '<svg' + attrs + '><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>';
         }
         if (name === "sparkles") {
             return '<svg' + attrs + '><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>';
+        }
+        if (name === "trash-2") {
+            return '<svg' + attrs + '><path d="M3 6h18"/><path d="M8 6V4c0-.6.4-1 1-1h6c.6 0 1 .4 1 1v2"/><path d="m19 6-1 14c-.1.6-.5 1-1.1 1H7.1c-.6 0-1-.4-1.1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+        }
+        if (name === "maximize-2") {
+            return '<svg' + attrs + '><path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/></svg>';
+        }
+        if (name === "minimize-2") {
+            return '<svg' + attrs + '><path d="m14 10 7-7"/><path d="M20 10h-6V4"/><path d="m3 21 7-7"/><path d="M4 14h6v6"/></svg>';
         }
         return "";
     }
@@ -894,12 +903,20 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             if (state.isFullscreen) {
                 $el.data("ujg-style", $el.attr("style") || "");
                 $el.addClass("ujg-fullscreen");
-                $fsBtn.text("Exit");
             } else {
                 $el.removeClass("ujg-fullscreen").attr("style", $el.data("ujg-style"));
-                $fsBtn.text("Fullscreen");
             }
+            updateFullscreenButton();
             API.resize();
+        }
+
+        function updateFullscreenButton() {
+            if (!$fsBtn) return;
+            var label = state.isFullscreen ? "Выйти из полноэкранного режима" : "На весь экран";
+            $fsBtn
+                .html(toolbarIcon(state.isFullscreen ? "minimize-2" : "maximize-2"))
+                .attr("title", label)
+                .attr("aria-label", label);
         }
 
         function applyUserSelection() {
@@ -1811,7 +1828,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
         function updateDebug() {
             if (!CONFIG.debug || !$debugText) return;
             var parts = [];
-            parts.push("<b>v" + CONFIG.version + "</b>");
+            parts.push("v" + CONFIG.version);
             parts.push("JQL: " + (CONFIG.jqlFilter || "(все)"));
             if (state.rangeStart && state.rangeEnd) parts.push(state.rangeStart + " — " + state.rangeEnd);
             if (state.loading) parts.push("Загрузка " + state.loadedDays + "/" + state.totalDays);
@@ -1820,8 +1837,10 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
                 parts.push("Фильтр: " + names.join(", "));
             }
             if (state.separateCalendars) parts.push("[Отдельные]");
-            if (state.lastError) parts.push("<span style='color:red'>" + state.lastError + "</span>");
-            $debugText.html(parts.join(" | "));
+            if (state.lastError) parts.push("Ошибка: " + state.lastError);
+            var summary = parts.join(" | ");
+            $debugBox.toggleClass("ujg-debug-error", !!state.lastError);
+            $debugText.text(summary).attr("title", summary);
         }
         
         function updateUrlState() {
@@ -1873,8 +1892,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             var $jqlPicker = $('<div class="ujg-jql-picker"></div>');
             var $jqlPickBtn = $('<button type="button" class="aui-button ujg-jql-pick-btn" title="Выбрать сохраненный JQL"><span></span><b>▾</b></button>');
             var $jqlMenu = $('<div class="ujg-jql-menu"></div>').hide();
-            var $jqlSaveAsBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="Сохранить как новый JQL" aria-label="Сохранить как новый JQL"></button>').html(jqlToolbarIcon("save"));
-            var $jqlLlmBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="JQL через LLM" aria-label="JQL через LLM"></button>').html(jqlToolbarIcon("sparkles"));
+            var $jqlSaveAsBtn = $('<button type="button" class="aui-button ujg-toolbar-icon-btn ujg-jql-icon-btn" title="Сохранить как новый JQL" aria-label="Сохранить как новый JQL"></button>').html(toolbarIcon("save"));
+            var $jqlLlmBtn = $('<button type="button" class="aui-button ujg-toolbar-icon-btn ujg-jql-icon-btn" title="JQL через LLM" aria-label="JQL через LLM"></button>').html(toolbarIcon("sparkles"));
             var $jqlBtn = $('<button type="button" class="aui-button aui-button-primary">Применить</button>');
 
             function activeJqlPresetName() {
@@ -1991,7 +2010,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             $p.append($rangeRow);
 
             // Контролы - пользователи
-            var $row2 = $('<div class="ujg-controls-row"></div>');
+            var $controlsRow = $('<div class="ujg-controls-row"></div>');
             
             // Фильтр пользователей с поиском
             var $userFilter = $('<div class="ujg-user-filter"></div>');
@@ -2029,8 +2048,6 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             });
             updateUserList();
             
-            $row2.append($userFilter);
-            
             // Группы пользователей
             var $groupFilter = $('<div class="ujg-group-filter"></div>');
             $groupSelect = $('<select class="ujg-group-select"><option value="">-- Группы --</option></select>');
@@ -2049,7 +2066,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             });
             
             // Кнопка сохранения группы
-            $groupSaveBtn = $('<button class="aui-button ujg-btn-small" title="Сохранить выбранных как группу">💾</button>');
+            $groupSaveBtn = $('<button type="button" class="aui-button ujg-toolbar-icon-btn" title="Сохранить выбранных как группу" aria-label="Сохранить выбранных как группу"></button>').html(toolbarIcon("save"));
             $groupSaveBtn.on("click", function() {
                 if (state.selectedUsers.length === 0) {
                     alert("Сначала выберите пользователей");
@@ -2066,7 +2083,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             });
             
             // Кнопка удаления группы
-            var $groupDelBtn = $('<button class="aui-button ujg-btn-small ujg-btn-danger" title="Удалить группу">🗑</button>');
+            var $groupDelBtn = $('<button type="button" class="aui-button ujg-toolbar-icon-btn ujg-btn-danger" title="Удалить группу" aria-label="Удалить группу"></button>').html(toolbarIcon("trash-2"));
             $groupDelBtn.on("click", function() {
                 var groups = loadGroups();
                 var names = Object.keys(groups);
@@ -2084,12 +2101,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
             });
             
             $groupFilter.append($groupSelect, $groupSaveBtn, $groupDelBtn);
-            $row2.append($groupFilter);
-
-            $p.append($row2);
-            
-            // Контролы - чекбоксы
-            var $row3 = $('<div class="ujg-controls-row"></div>');
+            var $modeControls = $('<div class="ujg-mode-controls"></div>');
             
             // Галочка "По разработчикам"
             $separateCheck = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>По разработчикам</span></label>');
@@ -2099,14 +2111,14 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
                 updateDebug();
                 renderCalendar();
             });
-            $row3.append($separateCheck);
+            $modeControls.append($separateCheck);
 
             var $cmt = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>Комментарии</span></label>');
             $cmt.find("input").on("change", function() { 
                 state.showComments = $(this).is(":checked"); 
                 renderCalendar();
             });
-            $row3.append($cmt);
+            $modeControls.append($cmt);
 
             var $detailCheck = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>Подробно</span></label>');
             $detailCheck.find("input").on("change", function() {
@@ -2117,20 +2129,19 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
                     renderCalendar();
                 }
             });
-            $row3.append($detailCheck);
+            $modeControls.append($detailCheck);
 
-            $fsBtn = $('<button class="aui-button ujg-fullscreen-btn">Fullscreen</button>');
+            $fsBtn = $('<button type="button" class="aui-button ujg-toolbar-icon-btn ujg-fullscreen-btn"></button>');
             $fsBtn.on("click", toggleFs);
-            $row3.append($fsBtn);
-
-            $p.append($row3);
+            updateFullscreenButton();
 
             // Debug
             $debugBox = $('<div class="ujg-debug-box"></div>');
             $debugText = $('<span class="ujg-debug-text"></span>');
             $debugBox.append($debugText);
             if (!CONFIG.debug) $debugBox.hide();
-            $p.append($debugBox);
+            $controlsRow.append($userFilter, $groupFilter, $modeControls, $debugBox, $fsBtn);
+            $p.append($controlsRow);
 
             $cont.before($p);
             $(document).on("keydown.ujgTs", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFs(); });
@@ -2162,7 +2173,8 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], functi
         buildWorklogPayload: buildWorklogPayload,
         buildTransitionMassWorklogTemplate: buildTransitionMassWorklogTemplate,
         issueHasSelfWorklogOnDay: issueHasSelfWorklogOnDay,
-        jqlToolbarIcon: jqlToolbarIcon,
+        toolbarIcon: toolbarIcon,
+        jqlToolbarIcon: toolbarIcon,
         normalizeJqlPresets: normalizeJqlPresets,
         selectJqlPreset: selectJqlPreset,
         applyJqlPreset: applyJqlPreset,

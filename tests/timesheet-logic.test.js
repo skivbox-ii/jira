@@ -183,6 +183,14 @@ test("JQL toolbar renders Lucide save and sparkle icons", function() {
     assert.doesNotMatch(saveIcon + llmIcon, /[+μ]/);
 });
 
+test("fullscreen control renders Lucide maximize and minimize icons", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    assert.match(Timesheet.__test.toolbarIcon("maximize-2"), /class="lucide lucide-maximize-2"/);
+    assert.match(Timesheet.__test.toolbarIcon("minimize-2"), /class="lucide lucide-minimize-2"/);
+});
+
 test("JQL action plan keeps select and save-as as drafts until apply", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);
