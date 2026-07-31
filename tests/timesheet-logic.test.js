@@ -120,6 +120,40 @@ test("getCalendarUserIds prefers selected users and otherwise returns all users 
     }, ["u2", "u9"])), ["u2"]);
 });
 
+test("getUserDropdownEntries keeps selected users pinned and highlighted", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.getUserDropdownEntries, "function");
+
+    var entries = Timesheet.__test.getUserDropdownEntries({
+        u3: "Charlie",
+        u1: "Alice",
+        u2: "Bob"
+    }, ["u3", "u2"], "");
+
+    assert.deepEqual(normalize(entries), [
+        { id: "u2", name: "Bob", selected: true },
+        { id: "u3", name: "Charlie", selected: true },
+        { id: "u1", name: "Alice", selected: false }
+    ]);
+});
+
+test("getUserDropdownEntries always shows selected users above filtered matches", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    var entries = Timesheet.__test.getUserDropdownEntries({
+        u3: "Charlie",
+        u1: "Alice",
+        u2: "Bob"
+    }, ["u3"], "ali");
+
+    assert.deepEqual(normalize(entries), [
+        { id: "u3", name: "Charlie", selected: true },
+        { id: "u1", name: "Alice", selected: false }
+    ]);
+});
+
 test("countWorkDays counts only Mon-Fri", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);

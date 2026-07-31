@@ -130,6 +130,30 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         });
     }
 
+    function getUserDropdownEntries(users, selectedUsers, query) {
+        var allUsers = users || {};
+        var selected = selectedUsers || [];
+        var selectedMap = {};
+        selected.forEach(function(id) {
+            if (allUsers[id]) selectedMap[id] = true;
+        });
+        var q = (query || "").trim().toLowerCase();
+        var entries = Object.keys(allUsers).map(function(id) {
+            return {
+                id: id,
+                name: allUsers[id] || id,
+                selected: !!selectedMap[id]
+            };
+        }).filter(function(entry) {
+            if (entry.selected) return true;
+            return !q || entry.name.toLowerCase().indexOf(q) >= 0 || entry.id.toLowerCase().indexOf(q) >= 0;
+        });
+        return entries.sort(function(a, b) {
+            if (a.selected !== b.selected) return a.selected ? -1 : 1;
+            return a.name.localeCompare(b.name);
+        });
+    }
+
     function countWorkDays(days) {
         var count = 0;
         (days || []).forEach(function(day) {
@@ -509,7 +533,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             $content.append($cont);
         }
 
-        var $fsBtn, $userBtn, $userPanel, $userSearch, $userList, $rangeStart, $rangeEnd, $debugBox, $debugText, $progress;
+        var $fsBtn, $userBtn, $userPanel, $userSearch, $userSelected, $userList, $rangeStart, $rangeEnd, $debugBox, $debugText, $progress;
         var $groupSelect, $groupSaveBtn, $separateCheck;
 
         function log(msg) {
@@ -595,23 +619,44 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         function updateUserList() {
             if (!$userList) return;
             var query = ($userSearch && $userSearch.val() || "").trim().toLowerCase();
-            var userIds = getCalendarUserIds(state.users, []);
+            var entries = getUserDropdownEntries(state.users, state.selectedUsers, query);
+            if ($userSelected) {
+                $userSelected.empty();
+                var selectedEntries = getUserDropdownEntries(state.users, state.selectedUsers, "").filter(function(entry) {
+                    return entry.selected;
+                });
+                if (selectedEntries.length > 0) {
+                    $userSelected.append('<div class="ujg-user-dd-selected-title">Выбрано</div>');
+                    selectedEntries.forEach(function(entry) {
+                        var $chip = $('<button type="button" class="ujg-user-dd-chip" title="Снять выбор"></button>');
+                        $chip.text(entry.name + " ×");
+                        $chip.on("click", function(e) {
+                            e.stopPropagation();
+                            state.selectedUsers = state.selectedUsers.filter(function(selectedId) { return selectedId !== entry.id; });
+                            applyUserSelection();
+                        });
+                        $userSelected.append($chip);
+                    });
+                    $userSelected.show();
+                } else {
+                    $userSelected.hide();
+                }
+            }
             $userList.empty();
-            userIds.forEach(function(id) {
-                var name = state.users[id];
-                if (query && name.toLowerCase().indexOf(query) < 0) return;
-                var checked = state.selectedUsers.indexOf(id) >= 0;
+            entries.forEach(function(entry) {
                 var $item = $('<label class="ujg-user-dd-item"></label>');
+                if (entry.selected) $item.addClass("ujg-user-dd-item-selected");
+                var checked = entry.selected;
                 var $check = $('<input type="checkbox">').prop("checked", checked);
                 $check.on("change", function() {
                     if ($(this).is(":checked")) {
-                        if (state.selectedUsers.indexOf(id) < 0) state.selectedUsers.push(id);
+                        if (state.selectedUsers.indexOf(entry.id) < 0) state.selectedUsers.push(entry.id);
                     } else {
-                        state.selectedUsers = state.selectedUsers.filter(function(selectedId) { return selectedId !== id; });
+                        state.selectedUsers = state.selectedUsers.filter(function(selectedId) { return selectedId !== entry.id; });
                     }
                     applyUserSelection();
                 });
-                $item.append($check, $('<span></span>').text(name));
+                $item.append($check, $('<span></span>').text(entry.name));
                 $userList.append($item);
             });
             if ($userList.children().length === 0) $userList.append('<div class="ujg-user-dd-empty">Ничего не найдено</div>');
@@ -622,7 +667,11 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var count = state.selectedUsers.length;
             var total = Object.keys(state.users).length;
             var label = count === 0 ? "Все (" + total + ")" : count + " из " + total;
-            if ($userBtn) $userBtn.text(label);
+            if ($userBtn) {
+                $userBtn.text(label);
+                var names = state.selectedUsers.map(function(id) { return state.users[id] || id; }).filter(Boolean);
+                $userBtn.attr("title", names.length ? names.join(", ") : "Все пользователи");
+            }
         }
         
         function updateGroupSelect() {
@@ -1420,6 +1469,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var $userLabel = $('<label>Кто:</label>');
             $userBtn = $('<button type="button" class="aui-button ujg-user-dd-btn"></button>');
             $userPanel = $('<div class="ujg-user-dd-panel"></div>').hide();
+            $userSelected = $('<div class="ujg-user-dd-selected"></div>').hide();
             $userSearch = $('<input type="search" class="ujg-user-dd-search" placeholder="Поиск пользователя">');
             $userList = $('<div class="ujg-user-dd-list"></div>');
             var $userActions = $('<div class="ujg-user-dd-actions"></div>');
@@ -1443,7 +1493,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
                 applyUserSelection();
             });
             $userActions.append($allUsersBtn, $clearUsersBtn);
-            $userPanel.append($userSearch, $userActions, $userList);
+            $userPanel.append($userSelected, $userSearch, $userActions, $userList);
             $userFilter.append($userLabel, $userBtn, $userPanel);
             $(document).on("click.ujgUserDd", function() {
                 $userPanel.hide();
@@ -1567,6 +1617,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
     MyGadget.__test = {
         filterDayDataByUsers: filterDayDataByUsers,
         getCalendarUserIds: getCalendarUserIds,
+        getUserDropdownEntries: getUserDropdownEntries,
         countWorkDays: countWorkDays,
         computeUserReport: computeUserReport,
         computeWeekSummary: computeWeekSummary,
