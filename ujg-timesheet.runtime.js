@@ -349,6 +349,133 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         return String(value == null ? "" : value).trim();
     }
 
+    function retainSelectedUsers(users, selectedUsers) {
+        var source = users || {};
+        var retained = {};
+        (selectedUsers || []).forEach(function(id) {
+            if (!id) return;
+            retained[id] = source[id] || id;
+        });
+        return retained;
+    }
+
+    function xmlElementText(block, tagName) {
+        var re = new RegExp("<" + tagName + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + tagName + ">", "i");
+        var match = String(block || "").match(re);
+        if (!match) return "";
+        return String(match[1])
+            .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+    }
+
+    function collectActivityIssueKeys(xmlText, startDate, endDate) {
+        var entries = String(xmlText || "").match(/<entry\b[^>]*>[\s\S]*?<\/entry>/gi) || [];
+        var keys = [];
+        var seen = {};
+        entries.forEach(function(entry) {
+            var published = xmlElementText(entry, "published");
+            var dateMatch = String(published).match(/^(\d{4}-\d{2}-\d{2})/);
+            var dayKey = dateMatch ? dateMatch[1] : "";
+            if (!dayKey || dayKey < startDate || dayKey > endDate) return;
+            var text = xmlElementText(entry, "title") + " " + xmlElementText(entry, "summary") + " " + entry;
+            var keyMatches = text.match(/\b[A-Z][A-Z0-9_]*-\d+\b/g) || [];
+            keyMatches.forEach(function(key) {
+                if (seen[key]) return;
+                seen[key] = true;
+                keys.push(key);
+            });
+        });
+        return keys;
+    }
+
+    function addIdentityToken(tokens, value) {
+        var token = String(value == null ? "" : value).trim().toLowerCase();
+        if (token) tokens[token] = true;
+    }
+
+    function buildUserIdentitySet(profiles) {
+        var identities = {};
+        (profiles || []).forEach(function(profile) {
+            if (typeof profile === "string") {
+                addIdentityToken(identities, profile);
+                return;
+            }
+            profile = profile || {};
+            addIdentityToken(identities, profile.requestedId);
+            addIdentityToken(identities, profile.accountId);
+            addIdentityToken(identities, profile.key);
+            addIdentityToken(identities, profile.name);
+            addIdentityToken(identities, profile.username);
+            addIdentityToken(identities, profile.displayName);
+        });
+        return identities;
+    }
+
+    function authorMatchesIdentity(author, identities) {
+        author = author || {};
+        var stableCandidates = [author.accountId, author.key, author.name, author.username].filter(function(value) {
+            return String(value == null ? "" : value).trim() !== "";
+        });
+        var candidates = stableCandidates.length > 0 ? stableCandidates : [author.displayName];
+        return candidates.some(function(value) {
+            var token = String(value == null ? "" : value).trim().toLowerCase();
+            return !!token && !!identities[token];
+        });
+    }
+
+    function filterStatusTransitions(histories, profiles, startDate, endDate) {
+        var identities = buildUserIdentitySet(profiles);
+        var transitions = [];
+        (histories || []).forEach(function(history) {
+            var created = String(history && history.created || "");
+            var dateMatch = created.match(/^(\d{4}-\d{2}-\d{2})/);
+            var dayKey = dateMatch ? dateMatch[1] : "";
+            if (!dayKey || dayKey < startDate || dayKey > endDate) return;
+            if (!authorMatchesIdentity(history.author, identities)) return;
+            (history.items || []).forEach(function(item) {
+                if (String(item.field || "").toLowerCase() !== "status") return;
+                transitions.push({
+                    date: history.created,
+                    from: item.fromString || "",
+                    to: item.toString || "",
+                    author: history.author && (history.author.displayName || history.author.name || history.author.key) || ""
+                });
+            });
+        });
+        return transitions;
+    }
+
+    function extractActivityNextHref(xmlText) {
+        var links = String(xmlText || "").match(/<link\b[^>]*>/gi) || [];
+        for (var i = 0; i < links.length; i++) {
+            if (!/rel\s*=\s*["']next["']/i.test(links[i])) continue;
+            var href = links[i].match(/href\s*=\s*["']([^"']+)["']/i);
+            if (href) return href[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+        }
+        return "";
+    }
+
+    function resolveActivityUrl(base, href) {
+        var value = String(href || "");
+        if (!value) return "";
+        if (/^https?:\/\//i.test(value)) return value;
+        var normalizedBase = String(base || "").replace(/\/+$/, "");
+        return normalizedBase + (value.charAt(0) === "/" ? value : "/" + value);
+    }
+
+    function activityDayBoundsMs(startDate, endDate) {
+        return {
+            start: new Date(String(startDate) + "T00:00:00.000Z").getTime(),
+            end: new Date(String(endDate) + "T23:59:59.999Z").getTime()
+        };
+    }
+
     function toolbarIcon(name) {
         var attrs = ' class="lucide lucide-' + name + '" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
         if (name === "save") {
@@ -934,7 +1061,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         };
     }
 
-    function getWeekTransitions(weekDays, taskKeysObj, changelogData) {
+    function getWeekTransitions(weekDays, taskKeysObj, changelogData, userFilter) {
         if (!changelogData || Object.keys(changelogData).length === 0) return [];
         var weekStart = null, weekEnd = null;
         weekDays.forEach(function(day) {
@@ -946,10 +1073,33 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         var startMs = weekStart.getTime();
         var endMs = weekEnd.getTime() + 24 * 3600 * 1000;
 
+        var keys = {};
+        Object.keys(taskKeysObj || {}).forEach(function(key) {
+            keys[key] = true;
+        });
+        Object.keys(changelogData || {}).forEach(function(key) {
+            var entry = changelogData[key];
+            if (Array.isArray(entry) || !entry || !entry.activityScoped) return;
+            if (entry.transitionsByUser && userFilter && userFilter.length > 0) {
+                var hasScopedTransitions = userFilter.some(function(userId) {
+                    return entry.transitionsByUser[userId] && entry.transitionsByUser[userId].length > 0;
+                });
+                if (hasScopedTransitions) keys[key] = true;
+                return;
+            }
+            keys[key] = true;
+        });
+
         var result = [];
-        Object.keys(taskKeysObj).forEach(function(key) {
+        Object.keys(keys).forEach(function(key) {
             var changelogEntry = changelogData[key];
             var transitions = Array.isArray(changelogEntry) ? changelogEntry : (changelogEntry && changelogEntry.transitions);
+            if (!Array.isArray(changelogEntry) && changelogEntry && changelogEntry.transitionsByUser && userFilter && userFilter.length > 0) {
+                transitions = [];
+                userFilter.forEach(function(userId) {
+                    transitions = transitions.concat(changelogEntry.transitionsByUser[userId] || []);
+                });
+            }
             var summary = Array.isArray(changelogEntry) ? "" : (changelogEntry && changelogEntry.summary || "");
             if (!transitions || transitions.length === 0) return;
             var weekChanges = [];
@@ -1115,6 +1265,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
             showDetails: false,
             changelogData: {},
             changelogLoading: false,
+            changelogRevision: 0,
+            changelogSignature: "",
+            activityProfiles: {},
             currentUser: null,
             currentUserLoading: false,
             currentUserPromise: null,
@@ -1216,10 +1369,15 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         }
 
         function applyUserSelection() {
+            var retained = retainSelectedUsers(state.users, state.selectedUsers);
+            Object.keys(retained).forEach(function(id) {
+                state.users[id] = retained[id];
+            });
             updateUserList();
             updateUrlState();
             updateDebug();
-            renderCalendar();
+            invalidateChangelogs();
+            ensureDetailsLoaded();
         }
 
         function updateUserList() {
@@ -1753,7 +1911,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
                 // Summary cell for this week
                 var groupSummaryMode = !userId;
                 var wSummary = computeWeekSummary(week, userFilter, calendarData, { groupSummary: groupSummaryMode });
-                var transitions = state.showDetails ? getWeekTransitions(week, wSummary.tasks, state.changelogData) : null;
+                var transitions = state.showDetails ? getWeekTransitions(week, wSummary.tasks, state.changelogData, userFilter) : null;
                 html += renderWeekSummaryCell(wSummary, transitions, groupSummaryMode, week);
 
                 html += '</div>';
@@ -1845,6 +2003,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
                 $progress.hide();
                 updateDebug();
                 API.resize();
+                ensureDetailsLoaded();
                 return;
             }
             
@@ -1879,64 +2038,299 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
             });
         }
 
-        function fetchChangelogs() {
-            var allKeys = {};
+        function changelogSignature() {
+            return [
+                state.rangeStart,
+                state.rangeEnd,
+                state.selectedUsers.slice().sort().join(","),
+                normalizeJqlText(CONFIG.jqlFilter)
+            ].join("|");
+        }
+
+        function invalidateChangelogs() {
+            state.changelogRevision++;
+            state.changelogLoading = false;
+            state.changelogSignature = "";
+            state.changelogData = {};
+        }
+
+        function collectWorklogIssueKeys(userIds) {
+            var selected = {};
+            (userIds || []).forEach(function(id) { selected[id] = true; });
+            var filterSelected = Object.keys(selected).length > 0;
+            var keys = {};
             Object.keys(state.calendarData).forEach(function(dayKey) {
                 (state.calendarData[dayKey] || []).forEach(function(item) {
-                    if (item.key) allKeys[item.key] = true;
+                    if (!item.key) return;
+                    if (!filterSelected) {
+                        keys[item.key] = true;
+                        return;
+                    }
+                    var matches = (item.worklogs || []).some(function(worklog) {
+                        return !!selected[worklog.authorId];
+                    });
+                    if (!matches) {
+                        matches = Object.keys(item.authors || {}).some(function(authorId) {
+                            return !!selected[authorId];
+                        });
+                    }
+                    if (matches) keys[item.key] = true;
                 });
             });
-            var keys = Object.keys(allKeys);
-            if (keys.length === 0) return;
+            return Object.keys(keys);
+        }
 
-            state.changelogLoading = true;
-            state.changelogData = {};
-            var done = 0;
-            var total = keys.length;
+        function profileFromUser(userId, user) {
+            user = user || {};
+            return {
+                requestedId: userId,
+                accountId: user.accountId || "",
+                key: user.key || "",
+                name: user.name || "",
+                username: user.username || "",
+                displayName: user.displayName || state.users[userId] || userId
+            };
+        }
 
-            function fetchNext(idx) {
-                if (idx >= keys.length) {
-                    state.changelogLoading = false;
-                    $progress.hide();
-                    renderCalendar();
+        function resolveActivityProfile(userId) {
+            if (state.activityProfiles[userId]) {
+                return $.Deferred().resolve(state.activityProfiles[userId]).promise();
+            }
+            var deferred = $.Deferred();
+            var attempts = [
+                { key: userId },
+                { username: userId },
+                { accountId: userId }
+            ];
+
+            function tryNext(index) {
+                if (index >= attempts.length) {
+                    var fallback = profileFromUser(userId, { key: userId, name: userId });
+                    state.activityProfiles[userId] = fallback;
+                    deferred.resolve(fallback);
                     return;
                 }
                 $.ajax({
-                    url: baseUrl + "/rest/api/2/issue/" + keys[idx] + "?expand=changelog&fields=summary",
+                    url: baseUrl + "/rest/api/2/user",
                     type: "GET",
-                    success: function(r) {
-                        if (r && r.changelog && r.changelog.histories) {
-                            var transitions = [];
-                            r.changelog.histories.forEach(function(h) {
-                                (h.items || []).forEach(function(item) {
-                                    if (item.field === "status") {
-                                        transitions.push({
-                                            date: h.created,
-                                            from: item.fromString || "",
-                                            to: item.toString || "",
-                                            author: h.author && h.author.displayName || ""
-                                        });
-                                    }
-                                });
-                            });
-                            state.changelogData[keys[idx]] = {
-                                summary: r.fields && r.fields.summary || "",
-                                transitions: transitions
-                            };
-                        }
-                        done++;
-                        $progress.text("Changelog: " + done + "/" + total).show();
-                        fetchNext(idx + 1);
-                    },
-                    error: function() {
-                        done++;
-                        fetchNext(idx + 1);
-                    }
+                    dataType: "json",
+                    data: attempts[index]
+                }).done(function(user) {
+                    var profile = profileFromUser(userId, user);
+                    state.activityProfiles[userId] = profile;
+                    if (profile.displayName) state.users[userId] = profile.displayName;
+                    deferred.resolve(profile);
+                }).fail(function() {
+                    tryNext(index + 1);
                 });
             }
 
-            $progress.text("Changelog: 0/" + total).show();
-            fetchNext(0);
+            tryNext(0);
+            return deferred.promise();
+        }
+
+        function activityUsername(profile) {
+            return profile && (profile.name || profile.username || profile.key || profile.requestedId) || "";
+        }
+
+        function fetchActivityKeysForProfile(profile) {
+            var deferred = $.Deferred();
+            var username = activityUsername(profile);
+            if (!username) {
+                deferred.resolve([]);
+                return deferred.promise();
+            }
+            var bounds = activityDayBoundsMs(state.rangeStart, state.rangeEnd);
+            var keys = {};
+            var visited = {};
+
+            function runPage(requestUrl, firstPage) {
+                var url = requestUrl || (baseUrl + "/activity");
+                if (visited[url]) {
+                    deferred.resolve(Object.keys(keys));
+                    return;
+                }
+                visited[url] = true;
+                var options = {
+                    url: url,
+                    type: "GET",
+                    dataType: "text",
+                    traditional: true
+                };
+                if (firstPage) {
+                    options.data = {
+                        streams: [
+                            "user+IS+" + username,
+                            "update-date+BETWEEN+" + bounds.start + "+" + bounds.end
+                        ],
+                        maxResults: 200
+                    };
+                }
+                $.ajax(options).done(function(xmlText) {
+                    collectActivityIssueKeys(xmlText, state.rangeStart, state.rangeEnd).forEach(function(key) {
+                        keys[key] = true;
+                    });
+                    var nextHref = extractActivityNextHref(xmlText);
+                    if (nextHref) runPage(resolveActivityUrl(baseUrl, nextHref), false);
+                    else deferred.resolve(Object.keys(keys));
+                }).fail(function() {
+                    deferred.resolve(Object.keys(keys));
+                });
+            }
+
+            runPage("", true);
+            return deferred.promise();
+        }
+
+        function loadSelectedActivityScope(revision) {
+            var deferred = $.Deferred();
+            var selectedUsers = state.selectedUsers.slice();
+            var profiles = [];
+            var keys = {};
+            var index = 0;
+
+            function nextUser() {
+                if (revision !== state.changelogRevision) {
+                    deferred.resolve({ profiles: [], keys: [] });
+                    return;
+                }
+                if (index >= selectedUsers.length) {
+                    collectWorklogIssueKeys(selectedUsers).forEach(function(key) { keys[key] = true; });
+                    deferred.resolve({ profiles: profiles, keys: Object.keys(keys) });
+                    return;
+                }
+                var userId = selectedUsers[index++];
+                resolveActivityProfile(userId).done(function(profile) {
+                    profiles.push(profile);
+                    fetchActivityKeysForProfile(profile).done(function(activityKeys) {
+                        (activityKeys || []).forEach(function(key) { keys[key] = true; });
+                        nextUser();
+                    });
+                });
+            }
+
+            nextUser();
+            return deferred.promise();
+        }
+
+        function allStatusTransitions(histories) {
+            var transitions = [];
+            (histories || []).forEach(function(history) {
+                (history.items || []).forEach(function(item) {
+                    if (String(item.field || "").toLowerCase() !== "status") return;
+                    transitions.push({
+                        date: history.created,
+                        from: item.fromString || "",
+                        to: item.toString || "",
+                        author: history.author && (history.author.displayName || history.author.name || history.author.key) || ""
+                    });
+                });
+            });
+            return transitions;
+        }
+
+        function restoreLoadProgress() {
+            if (state.loading) {
+                $progress.text("Загрузка: " + state.loadedDays + "/" + state.totalDays).show();
+            } else {
+                $progress.hide();
+            }
+        }
+
+        function fetchChangelogs() {
+            var selectedMode = state.selectedUsers.length > 0;
+            var signature = changelogSignature();
+            var revision = ++state.changelogRevision;
+            state.changelogLoading = true;
+            state.changelogSignature = signature;
+            state.changelogData = {};
+            if (selectedMode) $progress.text("Подробно: поиск активности...").show();
+
+            function finish() {
+                if (revision !== state.changelogRevision) return;
+                state.changelogLoading = false;
+                restoreLoadProgress();
+                renderCalendar();
+            }
+
+            function fetchIssues(scope) {
+                if (revision !== state.changelogRevision) return;
+                var keys = scope.keys || [];
+                var profiles = scope.profiles || [];
+                var done = 0;
+                if (keys.length === 0) {
+                    finish();
+                    return;
+                }
+                $progress.text("Подробно: 0/" + keys.length).show();
+
+                function fetchNext(index) {
+                    if (revision !== state.changelogRevision) return;
+                    if (index >= keys.length) {
+                        finish();
+                        return;
+                    }
+                    var key = keys[index];
+                    $.ajax({
+                        url: baseUrl + "/rest/api/2/issue/" + encodeURIComponent(key),
+                        type: "GET",
+                        dataType: "json",
+                        data: { expand: "changelog", fields: "summary" }
+                    }).done(function(issue) {
+                        if (revision !== state.changelogRevision) return;
+                        var histories = issue && issue.changelog && issue.changelog.histories || [];
+                        var transitionsByUser = {};
+                        if (selectedMode) {
+                            profiles.forEach(function(profile) {
+                                transitionsByUser[profile.requestedId] = filterStatusTransitions(
+                                    histories,
+                                    [profile],
+                                    state.rangeStart,
+                                    state.rangeEnd
+                                );
+                            });
+                        }
+                        state.changelogData[key] = {
+                            summary: issue && issue.fields && issue.fields.summary || "",
+                            transitions: selectedMode
+                                ? filterStatusTransitions(histories, profiles, state.rangeStart, state.rangeEnd)
+                                : allStatusTransitions(histories),
+                            transitionsByUser: selectedMode ? transitionsByUser : null,
+                            activityScoped: selectedMode
+                        };
+                    }).always(function() {
+                        if (revision !== state.changelogRevision) return;
+                        done++;
+                        $progress.text("Подробно: " + done + "/" + keys.length).show();
+                        fetchNext(index + 1);
+                    });
+                }
+
+                fetchNext(0);
+            }
+
+            if (selectedMode) {
+                loadSelectedActivityScope(revision).done(fetchIssues);
+            } else {
+                fetchIssues({ profiles: [], keys: collectWorklogIssueKeys([]) });
+            }
+        }
+
+        function ensureDetailsLoaded(force) {
+            if (!state.showDetails) {
+                renderCalendar();
+                return;
+            }
+            if (state.loading) {
+                renderCalendar();
+                return;
+            }
+            var signature = changelogSignature();
+            if (!force && state.changelogSignature === signature) {
+                if (!state.changelogLoading) renderCalendar();
+                return;
+            }
+            fetchChangelogs();
         }
 
         function startLoading() {
@@ -1950,7 +2344,8 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
             state.days = Common.daysBetween(s, e);
             var loadContext = beginTimesheetLoad(state, state.days, CONFIG.jqlFilter);
             state.calendarData = {};
-            state.users = {};
+            state.users = retainSelectedUsers(state.users, state.selectedUsers);
+            invalidateChangelogs();
             state.totalDays = loadContext.days.length;
             state.loadedDays = 0;
             state.loading = true;
@@ -2353,10 +2748,7 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
                 var groups = loadGroups();
                 if (groups[name]) {
                     state.selectedUsers = groups[name].slice();
-                    updateUserList();
-                    updateUrlState();
-                    updateDebug();
-                    renderCalendar();
+                    applyUserSelection();
                 }
                 $(this).val(""); // Сбрасываем select
             });
@@ -2419,9 +2811,11 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
             var $detailCheck = $('<label class="ujg-control-checkbox"><input type="checkbox"><span>Подробно</span></label>');
             $detailCheck.find("input").on("change", function() {
                 state.showDetails = $(this).is(":checked");
-                if (state.showDetails && Object.keys(state.changelogData).length === 0 && !state.changelogLoading) {
-                    fetchChangelogs();
+                if (state.showDetails) {
+                    ensureDetailsLoaded();
                 } else {
+                    invalidateChangelogs();
+                    restoreLoadProgress();
                     renderCalendar();
                 }
             });
@@ -2462,6 +2856,9 @@ define("_ujgTimesheetRuntime", ["jquery", "_ujgCommon", "_ujgTimesheet_llmClient
         computeWeekSummary: computeWeekSummary,
         computeMonthSummary: computeMonthSummary,
         getWeekTransitions: getWeekTransitions,
+        retainSelectedUsers: retainSelectedUsers,
+        collectActivityIssueKeys: collectActivityIssueKeys,
+        filterStatusTransitions: filterStatusTransitions,
         formatSummaryHeadline: formatSummaryHeadline,
         buildMassWorklogPlan: buildMassWorklogPlan,
         formatJiraStarted: formatJiraStarted,

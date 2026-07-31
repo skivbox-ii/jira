@@ -730,6 +730,117 @@ test("getWeekTransitions carries issue summaries from changelog metadata", funct
     assert.equal(result[0].summary, "Проработка требований");
 });
 
+test("activity feed discovers issue keys without worklogs", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var xml = [
+        '<feed xmlns="http://www.w3.org/2005/Atom">',
+        '<entry><title>User transitioned ACT-12</title><published>2026-07-08T10:15:00.000Z</published></entry>',
+        '<entry><title>User commented on ACT-13</title><published>2026-07-09T11:00:00.000Z</published></entry>',
+        '<entry><title>User transitioned OLD-1</title><published>2026-06-30T23:00:00.000Z</published></entry>',
+        '</feed>'
+    ].join("");
+
+    assert.deepEqual(
+        normalize(Timesheet.__test.collectActivityIssueKeys(xml, "2026-07-01", "2026-07-31")),
+        ["ACT-12", "ACT-13"]
+    );
+});
+
+test("status transitions are filtered by selected user and period", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var profiles = [{
+        requestedId: "u1",
+        key: "u1",
+        name: "user.one",
+        displayName: "User One"
+    }];
+    var histories = [
+        {
+            created: "2026-07-08T10:15:00.000+0000",
+            author: { key: "u1", name: "user.one", displayName: "User One" },
+            items: [{ field: "status", fromString: "Open", toString: "In Progress" }]
+        },
+        {
+            created: "2026-07-09T10:15:00.000+0000",
+            author: { key: "u2", name: "user.two", displayName: "User Two" },
+            items: [{ field: "status", fromString: "In Progress", toString: "Done" }]
+        },
+        {
+            created: "2026-08-01T10:15:00.000+0000",
+            author: { key: "u1" },
+            items: [{ field: "status", fromString: "In Progress", toString: "Done" }]
+        }
+    ];
+
+    assert.deepEqual(
+        normalize(Timesheet.__test.filterStatusTransitions(histories, profiles, "2026-07-01", "2026-07-31")),
+        [{
+            date: "2026-07-08T10:15:00.000+0000",
+            from: "Open",
+            to: "In Progress",
+            author: "User One"
+        }]
+    );
+});
+
+test("weekly details include activity-scoped tasks without worklogs", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var weekDays = [new Date(2026, 6, 6), new Date(2026, 6, 7), new Date(2026, 6, 8)];
+    var result = Timesheet.__test.getWeekTransitions(weekDays, {}, {
+        "ACT-12": {
+            activityScoped: true,
+            summary: "Activity only",
+            transitions: [{
+                date: "2026-07-08T10:15:00.000+0000",
+                from: "Open",
+                to: "In Progress"
+            }]
+        }
+    });
+
+    assert.deepEqual(normalize(result), [{
+        key: "ACT-12",
+        summary: "Activity only",
+        changes: ["Open → In Progress"]
+    }]);
+});
+
+test("weekly details keep activity separated between selected users", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var weekDays = [new Date(2026, 6, 6), new Date(2026, 6, 7), new Date(2026, 6, 8)];
+    var changelogData = {
+        "ACT-12": {
+            activityScoped: true,
+            summary: "First user activity",
+            transitions: [],
+            transitionsByUser: {
+                u1: [{ date: "2026-07-08T10:15:00.000+0000", from: "Open", to: "In Progress" }],
+                u2: []
+            }
+        }
+    };
+
+    assert.equal(Timesheet.__test.getWeekTransitions(weekDays, {}, changelogData, ["u2"]).length, 0);
+    assert.deepEqual(
+        normalize(Timesheet.__test.getWeekTransitions(weekDays, {}, changelogData, ["u1"])),
+        [{ key: "ACT-12", summary: "First user activity", changes: ["Open → In Progress"] }]
+    );
+});
+
+test("selected users remain addressable when a new period has no worklogs", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+
+    assert.deepEqual(
+        normalize(Timesheet.__test.retainSelectedUsers({ u1: "User One", u2: "User Two" }, ["u1", "u3"])),
+        { u1: "User One", u3: "u3" }
+    );
+});
+
 test("buildTransitionMassWorklogTemplate uses first workday and eight hours", function() {
     var Common = loadCommon();
     var Timesheet = loadTimesheet(Common);
