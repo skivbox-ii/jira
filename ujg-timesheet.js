@@ -1,10 +1,12 @@
-define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
+define("_ujgTimesheet", ["jquery", "_ujgCommon", "_ujgShared_llmClient"], function($, Common, LlmClient) {
 
     var utils = Common.utils;
     var baseUrl = Common.baseUrl;
     
     var STORAGE_KEY = "ujg_timesheet_settings";
     var STORAGE_KEY_GROUPS = "ujg_timesheet_groups";
+    var STORAGE_KEY_JQL_PRESETS = "ujg_timesheet_jql_presets";
+    var LLM_CONFIG_STORAGE_KEY = "ujg-shared-llm-config";
     
     var CONFIG = {
         version: "1.6.0",
@@ -44,6 +46,179 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
         } catch(e) {}
+    }
+
+    function normalizeJqlText(value) {
+        return String(value == null ? "" : value).trim();
+    }
+
+    function makeJqlPresetId() {
+        return "jql-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    }
+
+    function makeDefaultJqlName(index, jql) {
+        var text = normalizeJqlText(jql);
+        if (!text) return "Все задачи";
+        if (/project\s*=/i.test(text)) {
+            var m = /project\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i.exec(text);
+            if (m && m[1]) return m[1].toUpperCase();
+        }
+        return "JQL " + (index + 1);
+    }
+
+    function normalizeJqlPresets(input, fallbackJql) {
+        var rawItems = input && Array.isArray(input.items) ? input.items : [];
+        var items = [];
+        var seen = {};
+        rawItems.forEach(function(item, idx) {
+            var jql = normalizeJqlText(item && item.jql);
+            var id = normalizeJqlText(item && item.id) || ("jql-" + (idx + 1));
+            if (seen[id]) id = id + "-" + (idx + 1);
+            seen[id] = true;
+            items.push({
+                id: id,
+                name: normalizeJqlText(item && item.name) || makeDefaultJqlName(idx, jql),
+                jql: jql
+            });
+        });
+        if (items.length === 0) {
+            items.push({
+                id: "jql-default",
+                name: makeDefaultJqlName(0, fallbackJql),
+                jql: normalizeJqlText(fallbackJql)
+            });
+        }
+        var activeId = normalizeJqlText(input && input.activeId);
+        if (!items.some(function(item) { return item.id === activeId; })) {
+            activeId = items[0].id;
+        }
+        var active = items.filter(function(item) { return item.id === activeId; })[0] || items[0];
+        return {
+            activeId: activeId,
+            currentJql: active ? active.jql : "",
+            items: items
+        };
+    }
+
+    function selectJqlPreset(presets, presetId) {
+        var normalized = normalizeJqlPresets(presets, "");
+        var item = normalized.items.filter(function(candidate) {
+            return candidate.id === presetId;
+        })[0];
+        if (!item) return normalized;
+        normalized.activeId = item.id;
+        normalized.currentJql = item.jql;
+        return normalized;
+    }
+
+    function applyJqlPreset(presets, jql) {
+        var normalized = normalizeJqlPresets(presets, "");
+        var activeId = normalized.activeId;
+        var currentJql = normalizeJqlText(jql);
+        normalized.items = normalized.items.map(function(item, idx) {
+            if (item.id !== activeId) return item;
+            return {
+                id: item.id,
+                name: item.name || makeDefaultJqlName(idx, currentJql),
+                jql: currentJql
+            };
+        });
+        normalized.currentJql = currentJql;
+        return normalized;
+    }
+
+    function saveAsJqlPreset(presets, name, jql) {
+        var normalized = normalizeJqlPresets(presets, "");
+        var currentJql = normalizeJqlText(jql);
+        var id = makeJqlPresetId();
+        normalized.items.push({
+            id: id,
+            name: normalizeJqlText(name) || makeDefaultJqlName(normalized.items.length, currentJql),
+            jql: currentJql
+        });
+        normalized.activeId = id;
+        normalized.currentJql = currentJql;
+        return normalized;
+    }
+
+    function deleteJqlPreset(presets, presetId) {
+        var normalized = normalizeJqlPresets(presets, "");
+        if (normalized.items.length <= 1) {
+            normalized.items[0].jql = "";
+            normalized.items[0].name = "Все задачи";
+            normalized.activeId = normalized.items[0].id;
+            normalized.currentJql = "";
+            return normalized;
+        }
+        normalized.items = normalized.items.filter(function(item) {
+            return item.id !== presetId;
+        });
+        if (!normalized.items.some(function(item) { return item.id === normalized.activeId; })) {
+            normalized.activeId = normalized.items[0].id;
+        }
+        normalized.currentJql = (normalized.items.filter(function(item) {
+            return item.id === normalized.activeId;
+        })[0] || normalized.items[0]).jql;
+        return normalized;
+    }
+
+    function readJqlPresets(fallbackJql) {
+        try {
+            return normalizeJqlPresets(JSON.parse(localStorage.getItem(STORAGE_KEY_JQL_PRESETS) || "null"), fallbackJql);
+        } catch(e) {
+            return normalizeJqlPresets(null, fallbackJql);
+        }
+    }
+
+    function writeJqlPresets(presets) {
+        var normalized = normalizeJqlPresets(presets, "");
+        try {
+            localStorage.setItem(STORAGE_KEY_JQL_PRESETS, JSON.stringify({
+                activeId: normalized.activeId,
+                items: normalized.items
+            }));
+        } catch(e) {}
+        return normalized;
+    }
+
+    function cleanGeneratedJql(value) {
+        var text = normalizeJqlText(value);
+        text = text.replace(/^```(?:jql)?\s*/i, "").replace(/```$/i, "").trim();
+        text = text.replace(/^JQL\s*:\s*/i, "").trim();
+        return text;
+    }
+
+    function collectProjectKeys(calendarData) {
+        var projects = {};
+        Object.keys(calendarData || {}).forEach(function(dayKey) {
+            (calendarData[dayKey] || []).forEach(function(item) {
+                var key = item && item.key ? String(item.key) : "";
+                var m = /^([A-Z][A-Z0-9_]+)-\d+/.exec(key);
+                if (m && m[1]) projects[m[1]] = true;
+            });
+        });
+        return Object.keys(projects).sort();
+    }
+
+    function buildJqlLlmRequest(options) {
+        var opts = options || {};
+        var projects = opts.projects && opts.projects.length ? opts.projects.join(", ") : "(нет загруженного списка)";
+        var systemPrompt = normalizeJqlText(opts.systemPrompt) || "Ты помогаешь составить Jira JQL. Верни только JQL без markdown и пояснений.";
+        var userPrompt = [
+            "Текущий JQL:",
+            normalizeJqlText(opts.currentJql) || "(пусто)",
+            "",
+            "Доступные проекты:",
+            projects,
+            "",
+            "Задача пользователя:",
+            normalizeJqlText(opts.userPrompt)
+        ].join("\n");
+        return {
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            temperature: 0.1
+        };
     }
     
     // URL hash params
@@ -524,6 +699,7 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             currentUser: null,
             currentUserLoading: false,
             currentUserPromise: null,
+            jqlPresets: normalizeJqlPresets(null, "")
         };
 
         var $content = API.getGadgetContentEl();
@@ -1356,6 +1532,134 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             loadDaySequentially(0);
         }
 
+        function llmConfig() {
+            if (!LlmClient || typeof LlmClient.readStoredConfig !== "function") return null;
+            return LlmClient.readStoredConfig(localStorage, LLM_CONFIG_STORAGE_KEY);
+        }
+
+        function openLlmSettingsDialog(onSaved) {
+            var existing = llmConfig() || {};
+            var $overlay = $('<div class="ujg-llm-overlay"></div>');
+            var $dialog = $('<div class="ujg-llm-dialog"></div>');
+            var $apiBase = $('<input type="text" class="ujg-llm-input" placeholder="https://host/v1">').val(existing.apiBase || "");
+            var $model = $('<input type="text" class="ujg-llm-input" placeholder="model">').val(existing.model || "");
+            var $apiKey = $('<input type="password" class="ujg-llm-input" placeholder="API key">').val(existing.apiKey || "");
+            var $basePrompt = $('<textarea class="ujg-llm-textarea" rows="3" placeholder="Общий системный контекст"></textarea>').val(existing.basePrompt || "");
+            var $legacy = $('<label class="ujg-llm-check"><input type="checkbox"><span>Legacy /completions</span></label>');
+            var $error = $('<div class="ujg-llm-error"></div>').hide();
+            $legacy.find("input").prop("checked", !!existing.useLegacyCompletionsEndpoint);
+            $dialog.append(
+                $('<div class="ujg-llm-head"><div><div class="ujg-llm-title">Настройки LLM</div><div class="ujg-llm-subtitle">Настройки общие для всех дашбордов</div></div></div>'),
+                $('<label class="ujg-llm-field"><span>API base</span></label>').append($apiBase),
+                $('<label class="ujg-llm-field"><span>Модель</span></label>').append($model),
+                $('<label class="ujg-llm-field"><span>API key</span></label>').append($apiKey),
+                $('<label class="ujg-llm-field"><span>Базовый промпт</span></label>').append($basePrompt),
+                $legacy,
+                $error
+            );
+            var $actions = $('<div class="ujg-llm-actions"></div>');
+            var $cancel = $('<button type="button" class="aui-button">Отмена</button>');
+            var $save = $('<button type="button" class="aui-button aui-button-primary">Сохранить</button>');
+            $cancel.on("click", function() { $overlay.remove(); });
+            $save.on("click", function() {
+                if (!LlmClient || typeof LlmClient.writeStoredConfig !== "function") {
+                    $error.text("LLM-клиент не загружен").show();
+                    return;
+                }
+                var cfg = LlmClient.writeStoredConfig(localStorage, {
+                    apiBase: $apiBase.val(),
+                    model: $model.val(),
+                    apiKey: $apiKey.val(),
+                    basePrompt: $basePrompt.val(),
+                    useLegacyCompletionsEndpoint: $legacy.find("input").is(":checked")
+                }, LLM_CONFIG_STORAGE_KEY);
+                if (!cfg) {
+                    $error.text("Заполните API base, модель и ключ").show();
+                    return;
+                }
+                $overlay.remove();
+                if (typeof onSaved === "function") onSaved(cfg);
+            });
+            $actions.append($cancel, $save);
+            $dialog.append($actions);
+            $overlay.append($dialog);
+            $("body").append($overlay);
+            $apiBase.trigger("focus");
+        }
+
+        function openJqlLlmDialog($jqlInput, config) {
+            var cfg = config || llmConfig();
+            if (!cfg) {
+                openLlmSettingsDialog(function(savedCfg) {
+                    openJqlLlmDialog($jqlInput, savedCfg);
+                });
+                return;
+            }
+            var projects = collectProjectKeys(state.calendarData);
+            var $overlay = $('<div class="ujg-llm-overlay"></div>');
+            var $dialog = $('<div class="ujg-llm-dialog ujg-llm-dialog-wide"></div>');
+            var $current = $('<textarea class="ujg-llm-textarea ujg-llm-jql-current" rows="3"></textarea>').val($jqlInput.val());
+            var $system = $('<textarea class="ujg-llm-textarea" rows="4"></textarea>').val((cfg.basePrompt ? cfg.basePrompt + "\n\n" : "") + "Ты помогаешь составить Jira JQL. Верни только JQL без markdown и пояснений.");
+            var $prompt = $('<textarea class="ujg-llm-textarea" rows="5" placeholder="Например: покажи задачи EVOSCADA без закрытых за последние 30 дней"></textarea>');
+            var $result = $('<textarea class="ujg-llm-textarea ujg-llm-result" rows="4" placeholder="Здесь появится JQL"></textarea>');
+            var $error = $('<div class="ujg-llm-error"></div>').hide();
+            var $projects = $('<div class="ujg-llm-projects"></div>').text("Проекты: " + (projects.length ? projects.join(", ") : "нет загруженного списка"));
+            $dialog.append(
+                $('<div class="ujg-llm-head"><div><div class="ujg-llm-title">JQL через LLM</div><div class="ujg-llm-subtitle">Результат будет вставлен в строку. Загрузка начнется только после Применить.</div></div></div>'),
+                $projects,
+                $('<label class="ujg-llm-field"><span>Текущий JQL</span></label>').append($current),
+                $('<label class="ujg-llm-field"><span>Системный промпт</span></label>').append($system),
+                $('<label class="ujg-llm-field"><span>Что изменить</span></label>').append($prompt),
+                $('<label class="ujg-llm-field"><span>Результат</span></label>').append($result),
+                $error
+            );
+            var $actions = $('<div class="ujg-llm-actions"></div>');
+            var $settings = $('<button type="button" class="aui-button">Настройки</button>');
+            var $cancel = $('<button type="button" class="aui-button">Отмена</button>');
+            var $generate = $('<button type="button" class="aui-button">Сгенерировать</button>');
+            var $use = $('<button type="button" class="aui-button aui-button-primary">Вставить</button>');
+            $settings.on("click", function() {
+                openLlmSettingsDialog(function(savedCfg) {
+                    cfg = savedCfg;
+                });
+            });
+            $cancel.on("click", function() { $overlay.remove(); });
+            $generate.on("click", function() {
+                if (!LlmClient || typeof LlmClient.requestText !== "function") {
+                    $error.text("LLM-клиент не загружен").show();
+                    return;
+                }
+                $error.hide();
+                $generate.prop("disabled", true).text("Генерация...");
+                LlmClient.requestText(cfg, buildJqlLlmRequest({
+                    currentJql: $current.val(),
+                    systemPrompt: $system.val(),
+                    userPrompt: $prompt.val(),
+                    projects: projects
+                })).then(function(result) {
+                    $result.val(cleanGeneratedJql(result && result.text || ""));
+                }, function(err) {
+                    $error.text(err && err.message ? err.message : "Ошибка LLM").show();
+                }).then(function() {
+                    $generate.prop("disabled", false).text("Сгенерировать");
+                });
+            });
+            $use.on("click", function() {
+                var next = cleanGeneratedJql($result.val());
+                if (!next) {
+                    $error.text("Нет JQL для вставки").show();
+                    return;
+                }
+                $jqlInput.val(next).trigger("focus");
+                $overlay.remove();
+            });
+            $actions.append($settings, $cancel, $generate, $use);
+            $dialog.append($actions);
+            $overlay.append($dialog);
+            $("body").append($overlay);
+            $prompt.trigger("focus");
+        }
+
         function updateDebug() {
             if (!CONFIG.debug || !$debugText) return;
             var parts = [];
@@ -1396,6 +1700,12 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             } else if (saved.jql) {
                 CONFIG.jqlFilter = saved.jql;
             }
+            state.jqlPresets = readJqlPresets(CONFIG.jqlFilter);
+            if (urlParams.jql) {
+                state.jqlPresets.currentJql = CONFIG.jqlFilter;
+            } else {
+                CONFIG.jqlFilter = state.jqlPresets.currentJql;
+            }
             
             // Даты: URL > defaults
             var initStart = urlParams.from || defaultDates.start;
@@ -1412,14 +1722,81 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
             var $jqlRow = $('<div class="ujg-jql-filter"></div>');
             var $jqlInput = $('<input type="text" class="ujg-jql-input" placeholder="project = SDKU">');
             $jqlInput.val(CONFIG.jqlFilter);
-            var $jqlBtn = $('<button class="aui-button">Применить</button>');
-            $jqlBtn.on("click", function() {
-                CONFIG.jqlFilter = $jqlInput.val().trim();
+            var $jqlPicker = $('<div class="ujg-jql-picker"></div>');
+            var $jqlPickBtn = $('<button type="button" class="aui-button ujg-jql-pick-btn" title="Выбрать сохраненный JQL"><span></span><b>▾</b></button>');
+            var $jqlMenu = $('<div class="ujg-jql-menu"></div>').hide();
+            var $jqlSaveAsBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="Сохранить как новый JQL">+</button>');
+            var $jqlLlmBtn = $('<button type="button" class="aui-button ujg-jql-icon-btn" title="JQL через LLM">μ</button>');
+            var $jqlBtn = $('<button type="button" class="aui-button aui-button-primary">Применить</button>');
+
+            function activeJqlPresetName() {
+                var item = state.jqlPresets.items.filter(function(candidate) {
+                    return candidate.id === state.jqlPresets.activeId;
+                })[0];
+                return item ? item.name : "JQL";
+            }
+
+            function renderJqlMenu() {
+                $jqlPickBtn.find("span").text(activeJqlPresetName());
+                $jqlMenu.empty();
+                state.jqlPresets.items.forEach(function(item) {
+                    var $row = $('<div class="ujg-jql-menu-item"></div>');
+                    if (item.id === state.jqlPresets.activeId) $row.addClass("ujg-jql-menu-item-active");
+                    var $text = $('<div class="ujg-jql-menu-text"></div>');
+                    $text.append($('<div class="ujg-jql-menu-name"></div>').text(item.name));
+                    $text.append($('<div class="ujg-jql-menu-query"></div>').text(item.jql || "(все задачи)"));
+                    var $del = $('<button type="button" class="ujg-jql-menu-delete" title="Удалить">×</button>');
+                    $row.on("click", function() {
+                        state.jqlPresets = selectJqlPreset(state.jqlPresets, item.id);
+                        $jqlInput.val(state.jqlPresets.currentJql);
+                        renderJqlMenu();
+                        $jqlMenu.hide();
+                    });
+                    $del.on("click", function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        state.jqlPresets = writeJqlPresets(deleteJqlPreset(state.jqlPresets, item.id));
+                        $jqlInput.val(state.jqlPresets.currentJql);
+                        renderJqlMenu();
+                    });
+                    $row.append($text, $del);
+                    $jqlMenu.append($row);
+                });
+            }
+
+            $jqlPickBtn.on("click", function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                renderJqlMenu();
+                $jqlMenu.toggle();
+            });
+            $jqlMenu.on("click", function(e) { e.stopPropagation(); });
+            $jqlSaveAsBtn.on("click", function() {
+                var name = prompt("Название JQL:", makeDefaultJqlName(state.jqlPresets.items.length, $jqlInput.val()));
+                if (name == null) return;
+                state.jqlPresets = writeJqlPresets(saveAsJqlPreset(state.jqlPresets, name, $jqlInput.val()));
+                CONFIG.jqlFilter = state.jqlPresets.currentJql;
+                $jqlInput.val(CONFIG.jqlFilter);
                 saveSettings({ jql: CONFIG.jqlFilter });
+                renderJqlMenu();
                 updateUrlState();
                 updateDebug();
             });
-            $jqlRow.append($('<label>JQL: </label>'), $jqlInput, $jqlBtn);
+            $jqlLlmBtn.on("click", function() {
+                openJqlLlmDialog($jqlInput);
+            });
+            $jqlBtn.on("click", function() {
+                CONFIG.jqlFilter = $jqlInput.val().trim();
+                state.jqlPresets = writeJqlPresets(applyJqlPreset(state.jqlPresets, CONFIG.jqlFilter));
+                saveSettings({ jql: CONFIG.jqlFilter });
+                renderJqlMenu();
+                updateUrlState();
+                updateDebug();
+                if (!state.loading) startLoading();
+            });
+            $jqlPicker.append($jqlPickBtn, $jqlMenu);
+            renderJqlMenu();
+            $jqlRow.append($('<label>JQL: </label>'), $jqlPicker, $jqlInput, $jqlSaveAsBtn, $jqlLlmBtn, $jqlBtn);
             $p.append($jqlRow);
 
             // Даты
@@ -1605,6 +1982,9 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
 
             $cont.before($p);
             $(document).on("keydown.ujgTs", function(e) { if (e.key === "Escape" && state.isFullscreen) toggleFs(); });
+            $(document).on("click.ujgJqlMenu", function() {
+                $jqlMenu.hide();
+            });
             updateGroupSelect();
             updateDebug();
         }
@@ -1629,7 +2009,15 @@ define("_ujgTimesheet", ["jquery", "_ujgCommon"], function($, Common) {
         parseWorklogSeconds: parseWorklogSeconds,
         buildWorklogPayload: buildWorklogPayload,
         buildTransitionMassWorklogTemplate: buildTransitionMassWorklogTemplate,
-        issueHasSelfWorklogOnDay: issueHasSelfWorklogOnDay
+        issueHasSelfWorklogOnDay: issueHasSelfWorklogOnDay,
+        normalizeJqlPresets: normalizeJqlPresets,
+        selectJqlPreset: selectJqlPreset,
+        applyJqlPreset: applyJqlPreset,
+        saveAsJqlPreset: saveAsJqlPreset,
+        deleteJqlPreset: deleteJqlPreset,
+        collectProjectKeys: collectProjectKeys,
+        buildJqlLlmRequest: buildJqlLlmRequest,
+        cleanGeneratedJql: cleanGeneratedJql
     };
     
     return MyGadget;

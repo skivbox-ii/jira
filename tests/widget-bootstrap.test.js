@@ -360,6 +360,7 @@ test("timesheet runtime rewrites the public AMD name to a dedicated runtime name
   assert.match(out["ujg-timesheet.runtime.js"], /define\("_ujgTimesheetRuntime"/);
   assert.match(out["ujg-timesheet.bootstrap.js"], /define\("_ujgTimesheet"/);
   assert.match(out["ujg-timesheet.bootstrap.js"], /ujg-timesheet\.runtime\.js"/);
+  assert.match(out["ujg-timesheet.bootstrap.js"], /ujg-shared-modules\/llm-client\.js/);
 });
 
 test("timesheet v0 runtime uses a distinct runtime AMD name from timesheet", function() {

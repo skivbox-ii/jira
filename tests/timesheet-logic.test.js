@@ -16,7 +16,8 @@ function loadCommon() {
 function loadTimesheet(Common) {
     return loadAmdModule(path.join(__dirname, "..", "ujg-timesheet.js"), {
         jquery: {},
-        _ujgCommon: Common
+        _ujgCommon: Common,
+        _ujgShared_llmClient: {}
     });
 }
 
@@ -136,6 +137,73 @@ test("getUserDropdownEntries keeps selected users pinned and highlighted", funct
         { id: "u3", name: "Charlie", selected: true },
         { id: "u1", name: "Alice", selected: false }
     ]);
+});
+
+test("JQL presets keep active query editable without applying automatically", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.normalizeJqlPresets, "function");
+    assert.equal(typeof Timesheet.__test.selectJqlPreset, "function");
+    assert.equal(typeof Timesheet.__test.applyJqlPreset, "function");
+
+    var normalized = Timesheet.__test.normalizeJqlPresets({
+        activeId: "b",
+        items: [
+            { id: "a", name: "Проект A", jql: "project = A" },
+            { id: "b", name: "Проект B", jql: "project = B" }
+        ]
+    }, "");
+
+    var selected = Timesheet.__test.selectJqlPreset(normalized, "a");
+    assert.equal(selected.currentJql, "project = A");
+    assert.equal(selected.activeId, "a");
+    assert.equal(normalized.items[1].jql, "project = B");
+
+    var applied = Timesheet.__test.applyJqlPreset(selected, "project = A AND statusCategory != Done");
+    assert.equal(applied.currentJql, "project = A AND statusCategory != Done");
+    assert.equal(applied.activeId, "a");
+    assert.deepEqual(normalize(applied.items), [
+        { id: "a", name: "Проект A", jql: "project = A AND statusCategory != Done" },
+        { id: "b", name: "Проект B", jql: "project = B" }
+    ]);
+});
+
+test("JQL preset helpers can save as and delete active presets", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    var presets = Timesheet.__test.normalizeJqlPresets(null, "project = EVOSCADA");
+
+    presets = Timesheet.__test.saveAsJqlPreset(presets, "Без закрытых", "project = EVOSCADA AND statusCategory != Done");
+    assert.equal(presets.currentJql, "project = EVOSCADA AND statusCategory != Done");
+    assert.equal(presets.items.length, 2);
+    assert.equal(presets.items[1].name, "Без закрытых");
+
+    presets = Timesheet.__test.deleteJqlPreset(presets, presets.activeId);
+    assert.equal(presets.items.length, 1);
+    assert.equal(presets.currentJql, "project = EVOSCADA");
+});
+
+test("JQL LLM prompt includes current JQL and known projects", function() {
+    var Common = loadCommon();
+    var Timesheet = loadTimesheet(Common);
+    assert.equal(typeof Timesheet.__test.collectProjectKeys, "function");
+    assert.equal(typeof Timesheet.__test.buildJqlLlmRequest, "function");
+
+    var projects = Timesheet.__test.collectProjectKeys({
+        "2026-03-02": [{ key: "EVOSCADA-1" }, { key: "SDKU-2" }],
+        "2026-03-03": [{ key: "EVOSCADA-3" }]
+    });
+    var request = Timesheet.__test.buildJqlLlmRequest({
+        currentJql: "project = EVOSCADA",
+        systemPrompt: "Верни только JQL.",
+        userPrompt: "Исключи закрытые",
+        projects: projects
+    });
+
+    assert.deepEqual(normalize(projects), ["EVOSCADA", "SDKU"]);
+    assert.match(request.userPrompt, /Текущий JQL:\nproject = EVOSCADA/);
+    assert.match(request.userPrompt, /Доступные проекты:\nEVOSCADA, SDKU/);
+    assert.match(request.userPrompt, /Исключи закрытые/);
 });
 
 test("getUserDropdownEntries always shows selected users above filtered matches", function() {

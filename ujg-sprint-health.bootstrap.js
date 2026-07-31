@@ -3,8 +3,9 @@ define("_ujgSprintHealth", [], function() {
   var assetBaseUrl = "https://cdn.jsdelivr.net/gh/skivbox-ii/jira";
   var widgetCssFile = "ujg-sprint-health.css";
   var widgetRuntimeFile = "ujg-sprint-health.runtime.js";
+  var sharedJsFiles = [];
   var runtimeAmd = "_ujgSprintHealthRuntime";
-  var releaseRef = "3dfc9ae";
+  var releaseRef = "61d94c1";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
@@ -274,6 +275,7 @@ define("_ujgSprintHealth", [], function() {
     if (!target) return;
     target.releaseRef = normalizedRef;
     target.commonJs = buildPinnedAssetUrl(normalizedRef, "_ujgCommon.js");
+    target.sharedJs = sharedJsFiles.map(function(fileName) { return buildPinnedAssetUrl(normalizedRef, fileName); });
     target.css = buildPinnedAssetUrl(normalizedRef, widgetCssFile);
     target.runtimeJs = buildPinnedAssetUrl(normalizedRef, widgetRuntimeFile);
   }
@@ -336,11 +338,18 @@ define("_ujgSprintHealth", [], function() {
   function instantiateWhenReady(api, gadgetInstance) {
     return resolveRuntimeReleaseRefForAssets(api, gadgetInstance).then(function(activeRef) {
       var commonJsU = buildPinnedAssetUrl(activeRef, "_ujgCommon.js");
+      var sharedJsU = sharedJsFiles.map(function(fileName) { return buildPinnedAssetUrl(activeRef, fileName); });
       var cssU = buildPinnedAssetUrl(activeRef, widgetCssFile);
       var runtimeU = buildPinnedAssetUrl(activeRef, widgetRuntimeFile);
       syncExportedAssetUrls(activeRef, gadgetInstance);
       return loadScriptOnce(commonJsU)
         .then(function() {
+          if (sharedJsU.length > 0) {
+            return Promise.all(sharedJsU.map(function(url) { return loadScriptOnce(url); }))
+              .then(function() {
+                return Promise.all([loadStyleOnce(cssU), loadScriptOnce(runtimeU)]);
+              });
+          }
           return Promise.all([loadStyleOnce(cssU), loadScriptOnce(runtimeU)]);
         })
         .then(function() {

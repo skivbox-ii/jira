@@ -42,7 +42,8 @@ var WIDGET_SPECS = {
   "ujg-timesheet": {
     fileKey: "ujg-timesheet",
     publicAmd: "_ujgTimesheet",
-    runtimeAmd: "_ujgTimesheetRuntime"
+    runtimeAmd: "_ujgTimesheetRuntime",
+    sharedJsFiles: ["ujg-shared-modules/llm-client.js"]
   },
   "ujg-timesheet.v0": {
     fileKey: "ujg-timesheet.v0",
@@ -82,6 +83,18 @@ function escapeRegExp(value) {
 
 function escapeJsString(value) {
   return JSON.stringify(String(value)).slice(1, -1);
+}
+
+function jsStringArray(values) {
+  return (
+    "[" +
+    (values || [])
+      .map(function(value) {
+        return '"' + escapeJsString(value) + '"';
+      })
+      .join(",") +
+    "]"
+  );
 }
 
 function transformRuntimeAmdRename(src, publicName, runtimeName) {
@@ -335,13 +348,14 @@ function emittedCommitMetadataHelpers() {
   );
 }
 
-function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBaseUrl, fk) {
+function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBaseUrl, fk, sharedJsFiles) {
   var pa = escapeJsString(publicAmd);
   var ra = escapeJsString(runtimeAmd);
   var rs = escapeJsString(releaseRef);
   var ab = escapeJsString(String(assetBaseUrl).replace(/\/+$/, ""));
   var wcf = escapeJsString(fk + ".css");
   var wrf = escapeJsString(fk + ".runtime.js");
+  var shared = jsStringArray(sharedJsFiles || []);
   return (
     'define("' +
     pa +
@@ -356,6 +370,9 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     '  var widgetRuntimeFile = "' +
     wrf +
     '";\n' +
+    "  var sharedJsFiles = " +
+    shared +
+    ";\n" +
     '  var runtimeAmd = "' +
     ra +
     '";\n' +
@@ -427,6 +444,7 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "    if (!target) return;\n" +
     "    target.releaseRef = normalizedRef;\n" +
     "    target.commonJs = buildPinnedAssetUrl(normalizedRef, \"_ujgCommon.js\");\n" +
+    "    target.sharedJs = sharedJsFiles.map(function(fileName) { return buildPinnedAssetUrl(normalizedRef, fileName); });\n" +
     "    target.css = buildPinnedAssetUrl(normalizedRef, widgetCssFile);\n" +
     "    target.runtimeJs = buildPinnedAssetUrl(normalizedRef, widgetRuntimeFile);\n" +
     "  }\n" +
@@ -489,11 +507,18 @@ function widgetBootstrapModuleSource(publicAmd, runtimeAmd, releaseRef, assetBas
     "  function instantiateWhenReady(api, gadgetInstance) {\n" +
     "    return resolveRuntimeReleaseRefForAssets(api, gadgetInstance).then(function(activeRef) {\n" +
     "      var commonJsU = buildPinnedAssetUrl(activeRef, \"_ujgCommon.js\");\n" +
+    "      var sharedJsU = sharedJsFiles.map(function(fileName) { return buildPinnedAssetUrl(activeRef, fileName); });\n" +
     "      var cssU = buildPinnedAssetUrl(activeRef, widgetCssFile);\n" +
     "      var runtimeU = buildPinnedAssetUrl(activeRef, widgetRuntimeFile);\n" +
     "      syncExportedAssetUrls(activeRef, gadgetInstance);\n" +
     "      return loadScriptOnce(commonJsU)\n" +
     "        .then(function() {\n" +
+    "          if (sharedJsU.length > 0) {\n" +
+    "            return Promise.all(sharedJsU.map(function(url) { return loadScriptOnce(url); }))\n" +
+    "              .then(function() {\n" +
+    "                return Promise.all([loadStyleOnce(cssU), loadScriptOnce(runtimeU)]);\n" +
+    "              });\n" +
+    "          }\n" +
     "          return Promise.all([loadStyleOnce(cssU), loadScriptOnce(runtimeU)]);\n" +
     "        })\n" +
     "        .then(function() {\n" +
@@ -803,7 +828,8 @@ function buildAssets(options) {
       spec.runtimeAmd,
       releaseRef,
       assetBaseUrl,
-      fk
+      fk,
+      spec.sharedJsFiles || []
     );
   });
 
