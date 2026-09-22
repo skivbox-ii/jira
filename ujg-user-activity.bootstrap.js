@@ -5,7 +5,7 @@ define("_ujgUserActivity", [], function() {
   var widgetRuntimeFile = "ujg-user-activity.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgUserActivityRuntime";
-  var releaseRef = "67e9d83";
+  var releaseRef = "312695e";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
