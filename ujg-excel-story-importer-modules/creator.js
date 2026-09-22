@@ -1,4 +1,4 @@
-define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(config, description) {
+define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_remarkId"], function(config, description, remarkId) {
   "use strict";
 
   function ajaxErrorText(err) {
@@ -31,6 +31,25 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   function sourceValue(row, name) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
     return cols && cols[name] != null ? String(cols[name]).trim() : "";
+  }
+
+  function summaryWithRemarkId(row, summary, childRole) {
+    var id = remarkId(row);
+    var text = summary != null ? String(summary).trim() : "";
+    var role = text.match(/^\[([^\]]+)\]\s*/);
+    var prefix = "";
+    if (!id || !text) return limitSummary(text);
+    if (childRole && childRole.role && (!role || role[1] === id)) {
+      text = childSummary(childRole, text);
+      role = text.match(/^\[([^\]]+)\]\s*/);
+    }
+    if (role && role[1] !== id) {
+      prefix = role[0].trim() + " ";
+      text = text.slice(role[0].length);
+    }
+    var escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    var existing = new RegExp("^(?:(?:№|#)\\s*)?" + escaped + "(?=$|\\s|[.):;\\-](?:\\s|$))|^\\[" + escaped + "\\](?=$|\\s)");
+    return limitSummary(prefix + (existing.test(text) ? text : "№" + id + (text ? " " + text : "")));
   }
 
   function normalizedKey(value) {
@@ -77,7 +96,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     var opts = options || {};
     var fields = {
       project: { key: String(opts.projectKey || "") },
-      summary: limitSummary(opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : ""),
+      summary: summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : ""),
       issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
       description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
@@ -353,7 +372,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       warnings = warnings || [];
       if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
       if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
-      var storySummary = opts.summary != null ? opts.summary : row && row.summary;
+      var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
       var roles = Array.isArray(opts.childTasks)
         ? opts.childTasks
         : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
@@ -366,6 +385,12 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
           });
       roles = roles.filter(function(role) {
         return !role || role.enabled !== false;
+      }).map(function(role) {
+        var out = {};
+        Object.keys(role || {}).forEach(function(name) { out[name] = role[name]; });
+        var summary = out.summary != null ? out.summary : childSummary(role, storySummary);
+        out.summary = summaryWithRemarkId(row, summary, role);
+        return out;
       });
       return resolveChildLinkType(api).then(function(childLinkType) {
         return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType).then(function(sub) {
@@ -410,6 +435,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     subtaskFields: subtaskFields,
     childSummary: childSummary,
     limitSummary: limitSummary,
+    summaryWithRemarkId: summaryWithRemarkId,
     childLinkPayload: childLinkPayload,
     pickChildLinkType: pickChildLinkType,
     blocksLinkPayload: blocksLinkPayload,

@@ -1,14 +1,16 @@
-define("_ujgESI_rendering", ["jquery"], function($) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], function($, gridModule, icon) {
   "use strict";
 
   var $root;
   var services;
   var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
+  var grid;
 
   function init(container, svc) {
     $root = container;
     services = svc || {};
+    grid = gridModule.create();
   }
 
   function scheduleEpicSearch(query) {
@@ -24,7 +26,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   }
 
   function captureScrollState() {
-    var selectors = [".ujg-esi-confirm-modal", ".ujg-esi-confirm-scroll", ".ujg-esi-preview-wrap", ".ujg-esi-mapping-panel"];
+    var selectors = [".ujg-esi-confirm-modal", ".ujg-esi-confirm-scroll", ".ujg-esi-registry-scroll", ".ujg-esi-mapping-panel"];
     var state = {
       windowLeft: typeof window !== "undefined" && window.pageXOffset != null ? window.pageXOffset : null,
       windowTop: typeof window !== "undefined" && window.pageYOffset != null ? window.pageYOffset : null,
@@ -110,6 +112,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       row &&
       !row.alreadyLinked &&
       !row.jiraKey &&
+      !row.createdKey &&
       row.status !== "creating" &&
       row.status !== "created"
     );
@@ -122,9 +125,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return status;
   }
 
-  function previewStatusText(cols) {
-    return cols && (cols["Статус в Jira"] || cols["Статус"] || "") || "";
-  }
 
   function wikiInline($parent, text) {
     String(text || "").split(/(\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-|\+[^\+\n]+\+)/g).forEach(function(part) {
@@ -273,7 +273,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       var file = this.files && this.files.length ? this.files[0] : null;
       if (file && services && services.onFileChange) services.onFileChange(file);
     });
-    $upload.append($("<span/>").addClass("ujg-esi-action-icon").html("&#8682;"), $file);
+    $upload.append(icon("Upload"), $file);
     $actions.append($upload);
   }
 
@@ -319,7 +319,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-mapping-button")
       .attr("title", "Настроить мапинг")
       .attr("aria-label", "Настроить мапинг")
-      .append($("<span/>").addClass("ujg-esi-action-icon ujg-esi-mapping-button-icon").html("&#9881;"))
+      .append(icon("Settings"))
       .on("click", function() {
         if (services && services.onOpenMappings) services.onOpenMappings();
       });
@@ -335,7 +335,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-sync-jira")
       .attr("title", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
       .attr("aria-label", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
-      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8635;"))
+      .append(icon("RefreshCw"))
       .prop("disabled", !canSync)
       .on("click", function() {
         if (services && services.onSyncJira) services.onSyncJira();
@@ -345,7 +345,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-download-excel")
       .attr("title", "Скачать Excel")
       .attr("aria-label", "Скачать Excel")
-      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#10515;"))
+      .append(icon("Download"))
       .prop("disabled", !canDownload)
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
@@ -356,7 +356,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   function appendExcelActions($toolbar, state) {
     var $field = $("<div/>").addClass("ujg-esi-field ujg-esi-file-field ujg-esi-actions-field");
     var $actions = $("<div/>").addClass("ujg-esi-toolbar-actions");
-    $field.append($("<span/>").text("Excel"));
     appendFileInput($actions);
     appendMappingButton($actions);
     appendSyncActions($actions, state);
@@ -369,7 +368,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var sheetNames = state && Array.isArray(state.sheetNames) ? state.sheetNames : [];
     var currentSheet = meta && meta.sheetName != null ? String(meta.sheetName) : "";
     var $meta = $("<div/>").addClass("ujg-esi-meta");
-    $meta.append($("<span/>").text("Лист: "));
+    $meta.attr("title", (state.sourceFileName || "") + " · заголовок: строка " + meta.headerRowNumber);
     var $sheetWrap = $("<span/>").addClass("ujg-esi-meta-sheet");
     var $sheetButton = $("<button/>")
       .attr("type", "button")
@@ -398,10 +397,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       });
       $sheetWrap.append($menu);
     }
-    $meta.append($sheetWrap, $("<span/>").text(" · заголовок строка " + meta.headerRowNumber));
+    $meta.append($sheetWrap);
     if (state && state.sourceFileName) {
       $meta.append(
-        $("<span/>").text(" · файл: "),
+        $("<span/>").text(" · "),
         $("<span/>").addClass("ujg-esi-file-name ujg-esi-meta-file").text(String(state.sourceFileName))
       );
     }
@@ -508,164 +507,37 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var isBusy = state && state.llmLoadingTarget === target;
     return $("<button/>")
       .attr("type", "button")
-      .addClass("ujg-esi-row-ai")
+      .addClass("ujg-esi-row-ai ujg-esi-icon-button")
       .prop("disabled", isBusy || !text.trim())
-      .text(isBusy ? "Исправляю..." : "Исправить")
+      .attr("title", isBusy ? "Исправляю..." : "Исправить текст замечания (AI)")
+      .attr("aria-label", "Исправить текст замечания (AI)")
+      .append(icon(isBusy ? "RefreshCw" : "WandSparkles"))
       .on("click", function() {
         if (services && services.onRowImproveRemark) services.onRowImproveRemark(index);
       });
   }
 
-  function appendSummaryCell($tr, row) {
-    var text = row && row.summary != null ? String(row.summary) : "";
-    var $td = $("<td/>")
-      .addClass("ujg-esi-summary")
-      .append($("<div/>").addClass("ujg-esi-summary-text").text(text));
-    $tr.append($td);
-  }
 
-  function issueBrowseUrl(key, baseUrl) {
-    var path = "/browse/" + encodeURIComponent(String(key || ""));
-    var base = baseUrl != null ? String(baseUrl).replace(/\/+$/, "") : "";
-    return base ? base + path : path;
-  }
-
-  function childStatusClass(status, item) {
-    if (item && item.done === true) return "ujg-esi-child-status-done";
-    var state = String(item && item.statusState || "").toLowerCase();
-    if (state === "done") return "ujg-esi-child-status-done";
-    if (state === "progress") return "ujg-esi-child-status-progress";
-    if (state === "todo") return "ujg-esi-child-status-todo";
-    var category = String(item && item.statusCategory || "").toLowerCase();
-    if (/done|green|complete/.test(category)) return "ujg-esi-child-status-done";
-    if (/indeterminate|yellow|progress/.test(category)) return "ujg-esi-child-status-progress";
-    if (/new|blue-gray|grey|gray|todo/.test(category)) return "ujg-esi-child-status-todo";
-    var value = String(status || "").toLowerCase();
-    if (/done|resolved|closed|готов|закры|снят|выполн|принят/.test(value)) return "ujg-esi-child-status-done";
-    if (/progress|review|testing|тест|работ|разработ|исполн|провер|ревью/.test(value)) return "ujg-esi-child-status-progress";
-    if (/todo|open|backlog|нов|выдан|ожид/.test(value)) return "ujg-esi-child-status-todo";
-    return "ujg-esi-child-status-default";
-  }
-
-  function storyStatusClass(status) {
-    var value = String(status || "").toLowerCase();
-    if (/done|resolved|closed|готов|закры|снят/.test(value)) return "ujg-esi-story-status-done";
-    if (/progress|review|testing|тест|работ|разработ|выполн/.test(value)) return "ujg-esi-story-status-progress";
-    if (/todo|open|backlog|нов|выдан|ожид|принят/.test(value)) return "ujg-esi-story-status-todo";
-    return "ujg-esi-story-status-default";
-  }
-
-  function childStatusLabel(item) {
-    var role = item && item.role != null ? String(item.role).trim() : "";
-    var key = item && item.key != null ? String(item.key).trim() : "";
-    var summary = item && item.summary != null ? String(item.summary).trim() : "";
-    var match = !role && summary ? summary.match(/^\s*\[([^\]]+)\]/) : null;
-    return role || (match && match[1] ? String(match[1]).trim() : "") || key || "TASK";
-  }
-
-  function childStatusTitle(item) {
-    var summary = item && item.summary ? item.summary : item && item.key ? item.key : "Задача";
-    var status = item && item.status ? item.status : "Без статуса";
-    var assignee = item && item.assignee ? item.assignee : "Не назначен";
-    return summary + " | " + status + " | " + assignee;
-  }
-
-  function childStatusRoleClass(label) {
-    var value = String(label || "").trim().toLowerCase();
-    if (value === "se") return "ujg-esi-child-role-se";
-    if (value === "be") return "ujg-esi-child-role-be";
-    if (value === "fe") return "ujg-esi-child-role-fe";
-    if (value === "qa") return "ujg-esi-child-role-qa";
-    if (value === "dev" || value === "devops" || value === "do") return "ujg-esi-child-role-dev";
-    return "ujg-esi-child-role-default";
-  }
-
-  function appendStatusCell($tr, row, state, fallbackText) {
-    var $td = $("<td/>").addClass("ujg-esi-status");
-    var children = row && Array.isArray(row.childStatuses) ? row.childStatuses : [];
-    var base = state && state.baseUrl || "";
-    var storyStatus = fallbackText != null ? String(fallbackText) : "";
-    if (row && row.statusTitle) $td.attr("title", row.statusTitle);
-    if (storyStatus || children.length) {
-      var $block = $("<div/>")
-        .addClass("ujg-esi-status-block")
-        .addClass(storyStatusClass(storyStatus));
-
-      if (storyStatus) {
-        $block.append($("<div/>").addClass("ujg-esi-story-status").text(storyStatus));
-      }
-
-      if (children.length) {
-        var $list = $("<div/>").addClass("ujg-esi-child-status-list");
-        children.forEach(function(item) {
-          var key = item && item.key != null ? String(item.key).trim() : "";
-          var label = childStatusLabel(item);
-          var statusClass = childStatusClass(item && item.status, item);
-          var isBlocked = !!(item && item.blocked);
-          var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
-
-          $badge
-            .addClass("ujg-esi-child-status-badge")
-            .addClass(statusClass)
-            .addClass(childStatusRoleClass(label))
-            .toggleClass("ujg-esi-child-status-blocked", isBlocked)
-            .attr("title", childStatusTitle(item))
-            .attr("aria-label", label)
-            .append($("<span/>").addClass("ujg-esi-child-status-label").text(label));
-
-          $list.append($badge);
-        });
-        $block.append($list);
-      }
-
-      $td.append($block);
-      $tr.append($td);
-      return;
-    }
-    $td.text(fallbackText != null ? String(fallbackText) : "");
-    $tr.append($td);
-  }
-
-  function appendJiraCell($tr, row, state) {
-    var key = row.createdKey || row.jiraKey || "";
-    var $td = $("<td/>");
-    var base = state.baseUrl || "";
-    if (key) {
-      $td.append(
-        $("<a/>")
-          .attr("href", issueBrowseUrl(key, base))
-          .attr("target", "_blank")
-          .attr("rel", "noreferrer noopener")
-          .addClass("ujg-esi-jira-link")
-          .text(key)
-      );
-    } else {
-      $td.text(key || "—");
-    }
-    $tr.append($td);
-  }
-
-  function appendActionCell($tr, row, state, index) {
-    var $td = $("<td/>").addClass("ujg-esi-action-cell");
+  function appendRowActions($td, row, state, index) {
     var canCreate = canCreateRow(row, state);
     var actionStatus = rowActionStatusText(row, state);
     var $button = $("<button/>")
       .attr("type", "button")
       .attr("title", actionStatus)
       .addClass("ujg-esi-create-row")
-      .text(row.alreadyLinked || row.jiraKey ? "Уже создано" : row.status === "created" ? "Создано" : "Создать");
+      .append(icon("Plus"), $("<span/>").text("Создать"));
     if (!canCreate) $button.prop("disabled", true);
     $button.on("click", function() {
       if (services && services.onCreateRow) services.onCreateRow(index);
     });
-    $td.append(
-      $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index), $button),
-      $("<div/>").addClass("ujg-esi-row-status").text(actionStatus)
-    );
+    var $actions = $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index));
+    if (!(row.alreadyLinked || row.jiraKey || row.createdKey || row.status === "created")) $actions.append($button);
+    $td.attr("title", actionStatus).append($actions);
     if (row.errors && row.errors.length) {
-      $td.append($("<div/>").addClass("ujg-esi-row-errors").text(row.errors.join(" · ")));
+      var $details = $("<details/>").addClass("ujg-esi-error-details");
+      $details.append($("<summary/>").attr({ title: row.errors.join(" · "), "aria-label": "Ошибки создания" }).append(icon("TriangleAlert")), $("<div/>").text(row.errors.join(" · ")));
+      $td.append($details);
     }
-    $tr.append($td);
   }
 
   function appendConfirmControl($list, label, $control) {
@@ -1662,59 +1534,34 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       $parent.append($wrap);
       return;
     }
-    var $table = $("<table/>").addClass("ujg-esi-preview-table");
-    $table.append(
-      $("<thead/>").append(
-        $("<tr/>")
-          .append($("<th/>").text("Строка"))
-          .append($("<th/>").text("Замечание"))
-          .append($("<th/>").text("Модуль"))
-          .append($("<th/>").text("Статус"))
-          .append($("<th/>").text("Приоритет"))
-          .append($("<th/>").text("Jira"))
-          .append($("<th/>").text("Действие"))
-      )
-    );
-    var $tbody = $("<tbody/>");
-    rows.forEach(function(row, index) {
-      var cols = row.sourceColumns || {};
-      var $tr = $("<tr/>")
-        .addClass("ujg-esi-row-" + String(row.status || "ready"))
-        .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
-      appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
-      appendSummaryCell($tr, row);
-      appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendStatusCell($tr, row, state, previewStatusText(cols));
-      appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
-      appendJiraCell($tr, row, state);
-      appendActionCell($tr, row, state, index);
-      $tbody.append($tr);
-    });
-    $table.append($tbody);
-    $wrap.append($table);
-    $parent.append($wrap);
+    grid.mount($parent, state, { appendActions: function($td, row, index) { appendRowActions($td, row, state, index); } });
   }
+
 
   function render(state) {
     if (!$root || !$root.length) return;
     var scrollState = captureScrollState();
     $root.empty();
     var s = state || {};
-    var $header = $("<div/>").addClass("ujg-esi-header");
-    var $toolbar = $("<div/>").addClass("ujg-esi-toolbar");
-    $header.append($("<h2/>").text("Импорт замечаний из Excel"));
-    if (s.parseMeta) {
-      appendParseMeta($header, s);
-    }
+    var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
+    $toolbar.append($("<h2/>").text("Импорт замечаний"));
     appendProjectSelect($toolbar, s);
     appendEpicPicker($toolbar, s);
+    if (s.parseMeta) appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
-    $root.append($header, $toolbar);
-    if (s.rows && s.rows.length) appendCounters($root, s);
+    if (s.rows && s.rows.length) {
+      var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
+      $tools.append(gridModule.button("Expand", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
+      var $summary = $("<details/>").addClass("ujg-esi-import-summary");
+      $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
+      appendCounters($summary, s);
+      if (s.syncSummary) $summary.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
+      $tools.append($summary); $toolbar.append($tools);
+    }
+    $root.append($toolbar);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
-    if (s.syncSummary) $root.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);

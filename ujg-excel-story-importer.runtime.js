@@ -1040,8 +1040,29 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   };
 });
 
+/* === Module: remark-id.js === */
+define("_ujgESI_remarkId", [], function() {
+  "use strict";
+  return function(row) {
+    var columns = row && row.sourceColumns || {};
+    var names = Object.keys(columns);
+    var result = "";
+    ["№", "id", "номер замечания", "номер"].some(function(wanted) {
+      return names.some(function(name) {
+        var value = columns[name];
+        if (name.trim().toLowerCase() !== wanted || (typeof value !== "string" && typeof value !== "number")) return false;
+        value = String(value).trim().replace(/^(?:№|#)\s*/, "");
+        if (!value || value.length > 64 || !/\d/.test(value) || !/^[a-zа-яё0-9][a-zа-яё0-9._\/-]*$/i.test(value)) return false;
+        result = value;
+        return true;
+      });
+    });
+    return result;
+  };
+});
+
 /* === Module: creator.js === */
-define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(config, description) {
+define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_remarkId"], function(config, description, remarkId) {
   "use strict";
 
   function ajaxErrorText(err) {
@@ -1074,6 +1095,25 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
   function sourceValue(row, name) {
     var cols = row && row.sourceColumns ? row.sourceColumns : {};
     return cols && cols[name] != null ? String(cols[name]).trim() : "";
+  }
+
+  function summaryWithRemarkId(row, summary, childRole) {
+    var id = remarkId(row);
+    var text = summary != null ? String(summary).trim() : "";
+    var role = text.match(/^\[([^\]]+)\]\s*/);
+    var prefix = "";
+    if (!id || !text) return limitSummary(text);
+    if (childRole && childRole.role && (!role || role[1] === id)) {
+      text = childSummary(childRole, text);
+      role = text.match(/^\[([^\]]+)\]\s*/);
+    }
+    if (role && role[1] !== id) {
+      prefix = role[0].trim() + " ";
+      text = text.slice(role[0].length);
+    }
+    var escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    var existing = new RegExp("^(?:(?:№|#)\\s*)?" + escaped + "(?=$|\\s|[.):;\\-](?:\\s|$))|^\\[" + escaped + "\\](?=$|\\s)");
+    return limitSummary(prefix + (existing.test(text) ? text : "№" + id + (text ? " " + text : "")));
   }
 
   function normalizedKey(value) {
@@ -1120,7 +1160,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     var opts = options || {};
     var fields = {
       project: { key: String(opts.projectKey || "") },
-      summary: limitSummary(opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : ""),
+      summary: summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary != null ? row.summary : ""),
       issuetype: { name: String(opts.issueType || config.STORY_ISSUE_TYPE) },
       description: opts.sourceRows ? description.buildDescriptionFromRows(opts.sourceRows) : description.buildDescription(row),
     };
@@ -1396,7 +1436,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
       warnings = warnings || [];
       if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
       if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
-      var storySummary = opts.summary != null ? opts.summary : row && row.summary;
+      var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
       var roles = Array.isArray(opts.childTasks)
         ? opts.childTasks
         : (config.CREATE_TEMPLATE_ROLES || []).map(function(role) {
@@ -1409,6 +1449,12 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
           });
       roles = roles.filter(function(role) {
         return !role || role.enabled !== false;
+      }).map(function(role) {
+        var out = {};
+        Object.keys(role || {}).forEach(function(name) { out[name] = role[name]; });
+        var summary = out.summary != null ? out.summary : childSummary(role, storySummary);
+        out.summary = summaryWithRemarkId(row, summary, role);
+        return out;
       });
       return resolveChildLinkType(api).then(function(childLinkType) {
         return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType).then(function(sub) {
@@ -1453,6 +1499,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description"], function(co
     subtaskFields: subtaskFields,
     childSummary: childSummary,
     limitSummary: limitSummary,
+    summaryWithRemarkId: summaryWithRemarkId,
     childLinkPayload: childLinkPayload,
     pickChildLinkType: pickChildLinkType,
     blocksLinkPayload: blocksLinkPayload,
@@ -1572,9 +1619,9 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         },
       });
     },
-    getIssuesByKeys: function(keys) {
+    getIssuesByKeys: function(keys, options) {
       var list = uniqueIssueKeys(keys);
-      var fields = ["summary", "status", "resolution", "resolutiondate", "assignee", "issuelinks"];
+      var fields = ["summary", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "priority", "issuetype", "updated", "created"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
@@ -1587,6 +1634,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify({
           jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
           fields: fields,
+          expand: options && options.expand === "changelog" ? "changelog" : undefined,
           maxResults: list.length,
         }),
       });
@@ -2385,18 +2433,372 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
   };
 });
 
+/* === Module: registry.js === */
+define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
+  "use strict";
+
+  function text(value) { return value == null ? "" : String(value).trim(); }
+  function compare(a, b) { return text(a).localeCompare(text(b), "ru", { numeric: true, sensitivity: "base" }); }
+  function importStatus(row) {
+    if (row.status === "creating") return "Создается";
+    if (row.status === "partial") return "Частично создано";
+    if (row.status === "failed") return "Ошибка создания";
+    if (row.status === "created") return "Создано";
+    if (row.jiraKey || row.createdKey || row.alreadyLinked) return "Уже в Jira";
+    return "Не заведено";
+  }
+  function ageText(ms) {
+    if (ms == null || !isFinite(ms) || ms < 0) return "";
+    var hours = Math.floor(ms / 3600000);
+    if (hours >= 24) return Math.floor(hours / 24) + " д " + (hours % 24) + " ч";
+    if (hours) return hours + " ч " + Math.floor(ms / 60000 % 60) + " мин";
+    return Math.floor(ms / 60000) + " мин";
+  }
+  function buildRows(rows, now) {
+    var result = [];
+    now = now == null ? Date.now() : now;
+    (rows || []).forEach(function(row, index) {
+      var cols = row.sourceColumns || {};
+      var groupId = text(row.id) || String(index);
+      var parentKey = text(row.createdKey || row.jiraKey);
+      function entry(details, child, childIndex) {
+        var synced = !!details;
+        details = details || {};
+        var key = text(details.key || (child ? "" : parentKey));
+        var since = key && details.statusSince ? Date.parse(details.statusSince) : NaN;
+        var ms = isFinite(since) && since <= now ? now - since : null;
+        return {
+          source: row, rowIndex: index, groupId: groupId, uid: groupId + ":" + (child ? childIndex : "story"), isChild: !!child,
+          remarkId: remarkId(row), remark: text(row.summary), owner: text(cols["Ответственный"] || cols["Исполнитель"]),
+          module: text(cols["Модуль"]), importState: importStatus(row), key: key,
+          type: key ? text(details.issueType) : "",
+          role: child ? text(details.role) : "",
+          summary: text(details.summary || (child ? "" : row.summary)),
+          status: key ? text(synced || child ? details.status : cols["Статус в Jira"]) : "",
+          assignee: key ? text(synced || child ? details.assignee : cols["Исполнитель в Jira"]) : "",
+          priority: text(synced || child ? details.priority : cols["Приоритет"]),
+          updated: key ? text(details.updated) : "", age: ageText(ms), ageMs: ms,
+          statusSince: text(details.statusSince), ageReason: text(details.statusSinceReason) || "История переходов не загружена",
+          done: details.done === true || /done|готов|закры|resolved|снят/i.test(text(details.status)),
+          statusState: text(details.statusState), statusCategory: text(details.statusCategory),
+          blocked: !!details.blocked,
+        };
+      }
+      result.push(entry(row.storyDetails, false));
+      (row.childStatuses || []).forEach(function(child, childIndex) { result.push(entry(child, true, childIndex)); });
+    });
+    return result;
+  }
+  function matches(row, filters, except) {
+    return Object.keys(filters || {}).every(function(key) {
+      return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
+    });
+  }
+  function values(rows, column, filters) {
+    var seen = Object.create(null);
+    (rows || []).filter(function(row) { return matches(row, filters, column); }).forEach(function(row) { seen[text(row[column])] = true; });
+    return Object.keys(seen).sort(compare);
+  }
+  function selectGroups(rows, filters, sort) {
+    var groups = [];
+    var current;
+    (rows || []).forEach(function(row) {
+      if (!row.isChild) {
+        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0 };
+        groups.push(current);
+      } else if (current) {
+        current.totalChildren += 1;
+        if (matches(row, filters)) current.children.push(row);
+      }
+    });
+    groups = groups.filter(function(group) { return !group.contextOnly || group.children.length; });
+    if (sort && sort.column) {
+      function value(row) { return sort.column === "age" ? row.ageMs : row[sort.column]; }
+      function cmp(a, b) {
+        var av = value(a), bv = value(b);
+        var result = sort.column === "age" ? (av == null ? -1 : av) - (bv == null ? -1 : bv) : compare(av, bv);
+        return result * (sort.direction === "desc" ? -1 : 1);
+      }
+      groups.forEach(function(group) { group.children.sort(cmp); });
+      groups.sort(function(a, b) {
+        return cmp(a.contextOnly ? a.children[0] : a.parent, b.contextOnly ? b.children[0] : b.parent) || a.parent.rowIndex - b.parent.rowIndex;
+      });
+    }
+    return groups;
+  }
+  return { buildRows: buildRows, selectGroups: selectGroups, values: values, remarkId: remarkId, importStatus: importStatus, compare: compare };
+});
+
+/* === Module: icons.js === */
+// Icon nodes from Lucide 1.8.0, ISC license; see docs/licenses/lucide.txt.
+define("_ujgESI_icons", [], function() {
+  "use strict";
+  var nodes = {"ChevronDown":[["path",{"d":"m6 9 6 6 6-6"}]],"ChevronRight":[["path",{"d":"m9 18 6-6-6-6"}]],"Plus":[["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],"WandSparkles":[["path",{"d":"m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"}],["path",{"d":"m14 7 3 3"}],["path",{"d":"M5 6v4"}],["path",{"d":"M19 14v4"}],["path",{"d":"M10 2v2"}],["path",{"d":"M7 8H3"}],["path",{"d":"M21 16h-4"}],["path",{"d":"M11 3H9"}]],"Upload":[["path",{"d":"M12 3v12"}],["path",{"d":"m17 8-5-5-5 5"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}]],"Download":[["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],"Settings":[["path",{"d":"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"}],["circle",{"cx":"12","cy":"12","r":"3"}]],"RefreshCw":[["path",{"d":"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}],["path",{"d":"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"}],["path",{"d":"M8 16H3v5"}]],"Info":[["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],"Columns3":[["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}],["path",{"d":"M9 3v18"}],["path",{"d":"M15 3v18"}]],"Expand":[["path",{"d":"m15 15 6 6"}],["path",{"d":"m15 9 6-6"}],["path",{"d":"M21 16v5h-5"}],["path",{"d":"M21 8V3h-5"}],["path",{"d":"M3 16v5h5"}],["path",{"d":"m3 21 6-6"}],["path",{"d":"M3 8V3h5"}],["path",{"d":"M9 9 3 3"}]],"Minimize2":[["path",{"d":"m14 10 7-7"}],["path",{"d":"M20 10h-6V4"}],["path",{"d":"m3 21 7-7"}],["path",{"d":"M4 14h6v6"}]],"X":[["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],"Funnel":[["path",{"d":"M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"}]],"FunnelX":[["path",{"d":"M12.531 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14v6a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341l.427-.473"}],["path",{"d":"m16.5 3.5 5 5"}],["path",{"d":"m21.5 3.5-5 5"}]],"ArrowDownAZ":[["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"ArrowUpAZ":[["path",{"d":"m3 8 4-4 4 4"}],["path",{"d":"M7 4v16"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"Search":[["path",{"d":"m21 21-4.34-4.34"}],["circle",{"cx":"11","cy":"11","r":"8"}]],"TriangleAlert":[["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],"ExternalLink":[["path",{"d":"M15 3h6v6"}],["path",{"d":"M10 14 21 3"}],["path",{"d":"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}]],"Bookmark":[["path",{"d":"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"}]],"CheckSquare":[["path",{"d":"M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"}],["path",{"d":"m9 11 3 3L22 4"}]],"ChevronLeft":[["path",{"d":"m15 18-6-6 6-6"}]],"ArrowUp":[["path",{"d":"m5 12 7-7 7 7"}],["path",{"d":"M12 19V5"}]],"ArrowDown":[["path",{"d":"M12 5v14"}],["path",{"d":"m19 12-7 7-7-7"}]]};
+  return function(name) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    var attrs = { viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" };
+    Object.keys(attrs).forEach(function(key) { svg.setAttribute(key, attrs[key]); });
+    (nodes[name] || nodes.Info).forEach(function(item) {
+      var el = document.createElementNS("http://www.w3.org/2000/svg", item[0]);
+      Object.keys(item[1]).forEach(function(key) { el.setAttribute(key, item[1][key]); });
+      svg.appendChild(el);
+    });
+    return svg;
+  };
+});
+
+/* === Module: grid.js === */
+define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function($, registry, icon) {
+  "use strict";
+  var sequence = 0;
+  var columns = [
+    ["remarkId", "ID", 66], ["remark", "Замечание из Excel", 260], ["owner", "Ответственный", 144],
+    ["module", "Модуль", 110], ["importState", "Импорт", 136], ["key", "Ключ Jira", 146],
+    ["type", "Тип", 90], ["role", "Роль", 68], ["summary", "Тема задачи", 270],
+    ["status", "Статус Jira", 142], ["age", "В статусе", 105], ["assignee", "Исполнитель", 154],
+    ["priority", "Приоритет", 100], ["updated", "Обновлено", 104]
+  ];
+  var sourceFields = ["remarkId", "remark", "owner", "module", "importState"];
+  function button(name, label, fn) {
+    return $("<button/>").attr({ type: "button", title: label, "aria-label": label }).addClass("ujg-esi-icon-button").append(icon(name)).on("click", fn);
+  }
+  function label(value) { return value === "" ? "(Пустые)" : value; }
+  function person(value) {
+    var $el = $("<span/>").addClass("ujg-esi-person");
+    if (!value) return $el.text("—");
+    if (value === "Не назначен") return $el.addClass("ujg-esi-unassigned").text(value);
+    var initials = value.split(/\s+/).slice(0, 2).map(function(part) { return part.charAt(0); }).join("");
+    return $el.append($("<span/>").addClass("ujg-esi-avatar").attr("aria-hidden", "true").text(initials), $("<span/>").text(value));
+  }
+  function statusClass(entry) {
+    if (entry.statusState) return entry.statusState === "progress" ? "progress" : entry.statusState === "done" ? "done" : "todo";
+    if (entry.statusCategory) return entry.statusCategory === "indeterminate" ? "progress" : entry.statusCategory === "done" ? "done" : "todo";
+    if (entry.done) return "done";
+    if (/тест|работ|progress|review|testing|разработ/i.test(entry.status)) return "progress";
+    return "todo";
+  }
+  function create() {
+    var id = ++sequence;
+    var state, hooks, $host, $viewport, $menu, menuAnchor;
+    var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null);
+    var hidden = { module: true, importState: true }, page = 0, pageSize = 50;
+
+    function closeMenu(focus) {
+      if ($menu) $menu.remove();
+      $menu = null;
+      if (menuAnchor) {
+        $(menuAnchor).attr("aria-expanded", "false");
+        if (focus && document.contains(menuAnchor)) menuAnchor.focus();
+      }
+      menuAnchor = null;
+    }
+    function popup(anchor, title) {
+      closeMenu();
+      menuAnchor = anchor;
+      $(anchor).attr("aria-expanded", "true");
+      $menu = $("<div/>").addClass("ujg-esi-grid-menu").attr({ role: "dialog", "aria-label": title });
+      $host.append($menu);
+      var rect = anchor.getBoundingClientRect(), base = $host[0].getBoundingClientRect();
+      $menu.css({ left: Math.max(0, Math.min(rect.right - base.left - 268, $host.width() - 276)), top: rect.bottom - base.top + 3 });
+      $menu.on("keydown", function(event) { if (event.key === "Escape") { event.stopPropagation(); closeMenu(true); } });
+      return $menu;
+    }
+    function refresh() { closeMenu(); draw(); }
+    function filterMenu(anchor, column) {
+      var key = column[0], isPerson = key === "owner" || key === "assignee";
+      var active = Array.isArray(filters[key]);
+      var options = registry.values(rows, key, filters);
+      (filters[key] || []).forEach(function(value) { if (options.indexOf(value) === -1) options.push(value); });
+      options.sort(registry.compare);
+      var selected = active ? filters[key].slice() : options.slice();
+      var $box = popup(anchor, "Фильтр: " + column[1]);
+      [ ["asc", "ArrowDownAZ", "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", "Сортировка по убыванию"] ].forEach(function(item) {
+        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
+      });
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
+      var $chips = $("<div/>").addClass("ujg-esi-filter-chips");
+      var $all = $("<input/>").attr({ type: "checkbox", "aria-label": "Выделить все найденные значения" });
+      var $list = $("<div/>").addClass("ujg-esi-filter-values");
+      var $count = $("<span/>").addClass("ujg-esi-filter-count");
+      $box.append($search, $chips, $("<label/>").addClass("ujg-esi-filter-all").append($all, $("<span/>").text("(Выделить всё)"), $count), $list);
+      function searchValues() {
+        var query = String($search.val() || "").toLocaleLowerCase();
+        return options.filter(function(value) { return label(value).toLocaleLowerCase().indexOf(query) !== -1; });
+      }
+      function update() {
+        var found = searchValues();
+        var displayed = options.filter(function(value) { return found.indexOf(value) !== -1 || (isPerson && selected.indexOf(value) !== -1); });
+        if (isPerson) displayed.sort(function(a, b) { return (selected.indexOf(b) !== -1 ? 1 : 0) - (selected.indexOf(a) !== -1 ? 1 : 0) || registry.compare(a, b); });
+        $count.text(selected.length + " / " + options.length);
+        $all.prop("checked", !!found.length && found.every(function(value) { return selected.indexOf(value) !== -1; }));
+        $all.prop("indeterminate", found.some(function(value) { return selected.indexOf(value) !== -1; }) && !$all.prop("checked"));
+        $chips.empty();
+        if (isPerson && selected.length < options.length) selected.forEach(function(value) {
+          $chips.append($("<button/>").attr({ type: "button", title: "Убрать: " + label(value) }).addClass("ujg-esi-selected-chip").append($("<span/>").text(label(value)), icon("X")).on("click", function(event) { event.stopPropagation(); selected = selected.filter(function(v) { return v !== value; }); update(); }));
+        });
+        $list.empty();
+        if (!displayed.length) $list.append($("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений"));
+        displayed.forEach(function(value) {
+          var checked = selected.indexOf(value) !== -1;
+          var $check = $("<input/>").attr("type", "checkbox").prop("checked", checked).on("change", function() {
+            if (this.checked) { if (selected.indexOf(value) === -1) selected.push(value); }
+            else selected = selected.filter(function(v) { return v !== value; });
+            update();
+          });
+          $list.append($("<label/>").addClass("ujg-esi-filter-option").toggleClass("is-selected", checked).append($check, $("<span/>").text(label(value))));
+        });
+      }
+      $search.on("input", update);
+      $all.on("change", function() {
+        var found = searchValues(), check = this.checked;
+        found.forEach(function(value) { if (check && selected.indexOf(value) === -1) selected.push(value); });
+        if (!check) selected = selected.filter(function(value) { return found.indexOf(value) === -1; });
+        update();
+      });
+      var $apply = $("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() {
+        var allValues = registry.values(rows, key, {});
+        if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
+        page = 0; refresh();
+        $host.find('[data-filter="' + key + '"]').trigger("focus");
+      });
+      $box.append($("<div/>").addClass("ujg-esi-filter-actions").append($apply, $("<button/>").attr("type", "button").text("Отмена").on("click", function() { closeMenu(true); })));
+      update(); $search.trigger("focus");
+    }
+    function cell(entry, key) {
+      var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
+      if (key === "owner" || key === "assignee") return $td.append(person(value)).attr("title", value || "Не указан");
+      if (key === "remark") {
+        $td.append($("<div/>").addClass("ujg-esi-source-text").text(value));
+        $td.attr("title", value).append($("<small/>").text([entry.module, "Excel: " + entry.source.excelRowNumber].filter(Boolean).join(" · ")));
+        if (entry.source.status === "partial") $td.append($("<small/>").addClass("ujg-esi-import-warning").append(icon("TriangleAlert"), document.createTextNode("Частично создано")));
+        return $td;
+      }
+      if (key === "key") {
+        if (value) return $td.append($("<a/>").attr({ href: (state.baseUrl || "").replace(/\/+$/, "") + "/browse/" + encodeURIComponent(value), target: "_blank", rel: "noopener noreferrer" }).text(value));
+        return $td.append($("<span/>").addClass("ujg-esi-import-state").toggleClass("is-error", entry.source.status === "failed").text(entry.importState));
+      }
+      if (key === "summary") {
+        if (entry.isChild) $td.append($("<span/>").addClass("ujg-esi-tree-mark").attr("aria-hidden", "true"));
+        return $td.append($("<span/>").addClass("ujg-esi-issue-summary-text").text(value || "—")).attr("title", value);
+      }
+      if (key === "status" && value) return $td.append($("<span/>").addClass("ujg-esi-workflow-status is-" + statusClass(entry)).text(value)).attr("title", entry.blocked ? "Задача заблокирована" : value);
+      if (key === "type" && value) return $td.append($("<span/>").addClass("ujg-esi-issue-type").toggleClass("is-story", !entry.isChild).append(icon(entry.isChild ? "CheckSquare" : "Bookmark")), $("<span/>").text(value)).attr("title", value);
+      if (key === "age") return $td.text(value || "—").attr("title", entry.statusSince ? "В статусе с " + new Date(entry.statusSince).toLocaleString("ru-RU") : entry.ageReason);
+      if (key === "updated" && value) { var date = new Date(value); return $td.text(isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU")).attr("title", value); }
+      return $td.text(value || "—").attr("title", value || "");
+    }
+    function draw() {
+      if (!$host) return;
+      var scroll = $viewport ? { top: $viewport.scrollTop(), left: $viewport.scrollLeft() } : { top: 0, left: 0 };
+      $host.empty();
+      var visible = columns.filter(function(column) { return !hidden[column[0]]; });
+      var groups = registry.selectGroups(rows, filters, sort);
+      var pages = Math.max(1, Math.ceil(groups.length / pageSize));
+      page = Math.max(0, Math.min(page, pages - 1));
+      var $table = $("<table/>").addClass("ujg-esi-registry-table").attr("aria-label", "Замечания и связанные задачи Jira");
+      var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "30px"));
+      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("Expand", "Развернуть все", function() { collapsed = Object.create(null); refresh(); })));
+      visible.forEach(function(column) {
+        $colgroup.append($("<col/>").css("width", column[2] + "px"));
+        var active = Array.isArray(filters[column[0]]), sorted = sort && sort.column === column[0];
+        var caption = "Фильтр: " + column[1];
+        var $filter = button(active ? "Funnel" : "ChevronDown", caption, function(event) { event.stopPropagation(); filterMenu(this, column); })
+          .addClass("ujg-esi-header-filter").toggleClass("is-active", active).attr({ "data-filter": column[0], "aria-haspopup": "dialog", "aria-expanded": "false" });
+        if (active && (column[0] === "owner" || column[0] === "assignee")) $filter.append($("<b/>").text(filters[column[0]].length));
+        $head.append($("<th/>").attr({ scope: "col", "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
+          .append($("<span/>").text(column[1]), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null, $filter));
+      });
+      $colgroup.append($("<col/>").css("width", "118px"));
+      $head.append($("<th/>").attr("scope", "col").text("Действия"));
+      $table.append($colgroup, $("<thead/>").append($head));
+      var $body = $("<tbody/>");
+      groups.slice(page * pageSize, (page + 1) * pageSize).forEach(function(group) {
+        var parent = group.parent, force = Object.keys(filters).length > 0;
+        var opened = force || !collapsed[parent.groupId];
+        var children = opened ? group.children : [];
+        [parent].concat(children).forEach(function(entry, rowNumber) {
+          var $tr = $("<tr/>").addClass(entry.isChild ? "ujg-esi-child-row" : "ujg-esi-parent-row").attr({ "data-key": entry.key, "data-source-index": entry.rowIndex });
+          $tr.toggleClass("is-context", rowNumber === 0 && group.contextOnly).toggleClass("is-new", !parent.key).toggleClass("is-failed", parent.source.status === "failed");
+          if (!rowNumber) {
+            var $toggle = $("<td/>").attr("rowspan", children.length + 1).addClass("ujg-esi-expand-cell");
+            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.source.excelRowNumber), function() { if (!force) { collapsed[parent.groupId] = opened; refresh(); } }).attr("aria-expanded", String(opened)).prop("disabled", force));
+            $tr.append($toggle);
+          }
+          visible.forEach(function(column) {
+            var isSource = sourceFields.indexOf(column[0]) !== -1;
+            if (rowNumber && isSource) return;
+            var $cell = cell(entry, column[0]);
+            if (isSource) $cell.attr("rowspan", children.length + 1).addClass("ujg-esi-source-cell");
+            $tr.append($cell);
+          });
+          if (!rowNumber) {
+            var $action = $("<td/>").attr("rowspan", children.length + 1).addClass("ujg-esi-registry-actions");
+            hooks.appendActions($action, parent.source, parent.rowIndex);
+            $tr.append($action);
+          }
+          $body.append($tr);
+        });
+      });
+      if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 2).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
+      $table.append($body);
+      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); });
+      $host.append($viewport);
+      var $footer = $("<div/>").addClass("ujg-esi-grid-footer");
+      $footer.append($("<span/>").text(groups.length ? (page * pageSize + 1) + "–" + Math.min((page + 1) * pageSize, groups.length) + " из " + groups.length : "0 замечаний"));
+      var $size = $("<select/>").attr("aria-label", "Замечаний на странице").on("change", function() { pageSize = Number(this.value); page = 0; refresh(); });
+      [20, 50, 100].forEach(function(n) { $size.append($("<option/>").val(n).text(n + " на странице")); });
+      $size.val(pageSize);
+      $footer.append($size, button("FunnelX", "Сбросить все фильтры", function() { filters = Object.create(null); page = 0; refresh(); }).prop("disabled", !Object.keys(filters).length));
+      $footer.append($("<span/>").addClass("ujg-esi-page-spacer"), button("ChevronLeft", "Предыдущая страница", function() { page -= 1; refresh(); }).prop("disabled", page === 0), $("<span/>").text((page + 1) + " / " + pages), button("ChevronRight", "Следующая страница", function() { page += 1; refresh(); }).prop("disabled", page >= pages - 1));
+      $host.append($footer);
+      $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
+    }
+    return {
+      mount: function($parent, nextState, nextHooks) {
+        state = nextState; hooks = nextHooks;
+        closeMenu();
+        if (sourceRows !== state.rows) { sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); page = 0; }
+        rows = registry.buildRows(state.rows);
+        $host = $("<div/>").addClass("ujg-esi-registry"); $parent.append($host); $viewport = null;
+        $(document).off("click.ujgRegistry" + id).on("click.ujgRegistry" + id, function(event) {
+          if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
+        });
+        draw();
+      },
+      toggleAll: function() {
+        var collapse = !Object.keys(collapsed).length;
+        collapsed = Object.create(null);
+        if (collapse) rows.forEach(function(row) { collapsed[row.groupId] = true; });
+        refresh();
+      },
+      columnsMenu: function(anchor) {
+        if (!$host) return;
+        var $box = popup(anchor, "Столбцы");
+        columns.forEach(function(column) {
+          $box.append($("<label/>").addClass("ujg-esi-filter-option").append($("<input/>").attr("type", "checkbox").prop("checked", !hidden[column[0]]).prop("disabled", column[0] === "remarkId" || column[0] === "remark").on("change", function() { hidden[column[0]] = !this.checked; }), $("<span/>").text(column[1])));
+        });
+        $box.append($("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", refresh));
+      }
+    };
+  }
+  return { create: create, button: button };
+});
+
 /* === Module: rendering.js === */
-define("_ujgESI_rendering", ["jquery"], function($) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], function($, gridModule, icon) {
   "use strict";
 
   var $root;
   var services;
   var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
+  var grid;
 
   function init(container, svc) {
     $root = container;
     services = svc || {};
+    grid = gridModule.create();
   }
 
   function scheduleEpicSearch(query) {
@@ -2412,7 +2814,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   }
 
   function captureScrollState() {
-    var selectors = [".ujg-esi-confirm-modal", ".ujg-esi-confirm-scroll", ".ujg-esi-preview-wrap", ".ujg-esi-mapping-panel"];
+    var selectors = [".ujg-esi-confirm-modal", ".ujg-esi-confirm-scroll", ".ujg-esi-registry-scroll", ".ujg-esi-mapping-panel"];
     var state = {
       windowLeft: typeof window !== "undefined" && window.pageXOffset != null ? window.pageXOffset : null,
       windowTop: typeof window !== "undefined" && window.pageYOffset != null ? window.pageYOffset : null,
@@ -2498,6 +2900,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       row &&
       !row.alreadyLinked &&
       !row.jiraKey &&
+      !row.createdKey &&
       row.status !== "creating" &&
       row.status !== "created"
     );
@@ -2510,9 +2913,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     return status;
   }
 
-  function previewStatusText(cols) {
-    return cols && (cols["Статус в Jira"] || cols["Статус"] || "") || "";
-  }
 
   function wikiInline($parent, text) {
     String(text || "").split(/(\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-|\+[^\+\n]+\+)/g).forEach(function(part) {
@@ -2661,7 +3061,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       var file = this.files && this.files.length ? this.files[0] : null;
       if (file && services && services.onFileChange) services.onFileChange(file);
     });
-    $upload.append($("<span/>").addClass("ujg-esi-action-icon").html("&#8682;"), $file);
+    $upload.append(icon("Upload"), $file);
     $actions.append($upload);
   }
 
@@ -2707,7 +3107,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-mapping-button")
       .attr("title", "Настроить мапинг")
       .attr("aria-label", "Настроить мапинг")
-      .append($("<span/>").addClass("ujg-esi-action-icon ujg-esi-mapping-button-icon").html("&#9881;"))
+      .append(icon("Settings"))
       .on("click", function() {
         if (services && services.onOpenMappings) services.onOpenMappings();
       });
@@ -2723,7 +3123,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-sync-jira")
       .attr("title", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
       .attr("aria-label", state && state.syncLoading ? "Синхронизация из Jira" : "Синхронизировать из Jira")
-      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#8635;"))
+      .append(icon("RefreshCw"))
       .prop("disabled", !canSync)
       .on("click", function() {
         if (services && services.onSyncJira) services.onSyncJira();
@@ -2733,7 +3133,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       .addClass("ujg-esi-icon-button ujg-esi-download-excel")
       .attr("title", "Скачать Excel")
       .attr("aria-label", "Скачать Excel")
-      .append($("<span/>").addClass("ujg-esi-action-icon").html("&#10515;"))
+      .append(icon("Download"))
       .prop("disabled", !canDownload)
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
@@ -2744,7 +3144,6 @@ define("_ujgESI_rendering", ["jquery"], function($) {
   function appendExcelActions($toolbar, state) {
     var $field = $("<div/>").addClass("ujg-esi-field ujg-esi-file-field ujg-esi-actions-field");
     var $actions = $("<div/>").addClass("ujg-esi-toolbar-actions");
-    $field.append($("<span/>").text("Excel"));
     appendFileInput($actions);
     appendMappingButton($actions);
     appendSyncActions($actions, state);
@@ -2757,7 +3156,7 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var sheetNames = state && Array.isArray(state.sheetNames) ? state.sheetNames : [];
     var currentSheet = meta && meta.sheetName != null ? String(meta.sheetName) : "";
     var $meta = $("<div/>").addClass("ujg-esi-meta");
-    $meta.append($("<span/>").text("Лист: "));
+    $meta.attr("title", (state.sourceFileName || "") + " · заголовок: строка " + meta.headerRowNumber);
     var $sheetWrap = $("<span/>").addClass("ujg-esi-meta-sheet");
     var $sheetButton = $("<button/>")
       .attr("type", "button")
@@ -2786,10 +3185,10 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       });
       $sheetWrap.append($menu);
     }
-    $meta.append($sheetWrap, $("<span/>").text(" · заголовок строка " + meta.headerRowNumber));
+    $meta.append($sheetWrap);
     if (state && state.sourceFileName) {
       $meta.append(
-        $("<span/>").text(" · файл: "),
+        $("<span/>").text(" · "),
         $("<span/>").addClass("ujg-esi-file-name ujg-esi-meta-file").text(String(state.sourceFileName))
       );
     }
@@ -2896,164 +3295,37 @@ define("_ujgESI_rendering", ["jquery"], function($) {
     var isBusy = state && state.llmLoadingTarget === target;
     return $("<button/>")
       .attr("type", "button")
-      .addClass("ujg-esi-row-ai")
+      .addClass("ujg-esi-row-ai ujg-esi-icon-button")
       .prop("disabled", isBusy || !text.trim())
-      .text(isBusy ? "Исправляю..." : "Исправить")
+      .attr("title", isBusy ? "Исправляю..." : "Исправить текст замечания (AI)")
+      .attr("aria-label", "Исправить текст замечания (AI)")
+      .append(icon(isBusy ? "RefreshCw" : "WandSparkles"))
       .on("click", function() {
         if (services && services.onRowImproveRemark) services.onRowImproveRemark(index);
       });
   }
 
-  function appendSummaryCell($tr, row) {
-    var text = row && row.summary != null ? String(row.summary) : "";
-    var $td = $("<td/>")
-      .addClass("ujg-esi-summary")
-      .append($("<div/>").addClass("ujg-esi-summary-text").text(text));
-    $tr.append($td);
-  }
 
-  function issueBrowseUrl(key, baseUrl) {
-    var path = "/browse/" + encodeURIComponent(String(key || ""));
-    var base = baseUrl != null ? String(baseUrl).replace(/\/+$/, "") : "";
-    return base ? base + path : path;
-  }
-
-  function childStatusClass(status, item) {
-    if (item && item.done === true) return "ujg-esi-child-status-done";
-    var state = String(item && item.statusState || "").toLowerCase();
-    if (state === "done") return "ujg-esi-child-status-done";
-    if (state === "progress") return "ujg-esi-child-status-progress";
-    if (state === "todo") return "ujg-esi-child-status-todo";
-    var category = String(item && item.statusCategory || "").toLowerCase();
-    if (/done|green|complete/.test(category)) return "ujg-esi-child-status-done";
-    if (/indeterminate|yellow|progress/.test(category)) return "ujg-esi-child-status-progress";
-    if (/new|blue-gray|grey|gray|todo/.test(category)) return "ujg-esi-child-status-todo";
-    var value = String(status || "").toLowerCase();
-    if (/done|resolved|closed|готов|закры|снят|выполн|принят/.test(value)) return "ujg-esi-child-status-done";
-    if (/progress|review|testing|тест|работ|разработ|исполн|провер|ревью/.test(value)) return "ujg-esi-child-status-progress";
-    if (/todo|open|backlog|нов|выдан|ожид/.test(value)) return "ujg-esi-child-status-todo";
-    return "ujg-esi-child-status-default";
-  }
-
-  function storyStatusClass(status) {
-    var value = String(status || "").toLowerCase();
-    if (/done|resolved|closed|готов|закры|снят/.test(value)) return "ujg-esi-story-status-done";
-    if (/progress|review|testing|тест|работ|разработ|выполн/.test(value)) return "ujg-esi-story-status-progress";
-    if (/todo|open|backlog|нов|выдан|ожид|принят/.test(value)) return "ujg-esi-story-status-todo";
-    return "ujg-esi-story-status-default";
-  }
-
-  function childStatusLabel(item) {
-    var role = item && item.role != null ? String(item.role).trim() : "";
-    var key = item && item.key != null ? String(item.key).trim() : "";
-    var summary = item && item.summary != null ? String(item.summary).trim() : "";
-    var match = !role && summary ? summary.match(/^\s*\[([^\]]+)\]/) : null;
-    return role || (match && match[1] ? String(match[1]).trim() : "") || key || "TASK";
-  }
-
-  function childStatusTitle(item) {
-    var summary = item && item.summary ? item.summary : item && item.key ? item.key : "Задача";
-    var status = item && item.status ? item.status : "Без статуса";
-    var assignee = item && item.assignee ? item.assignee : "Не назначен";
-    return summary + " | " + status + " | " + assignee;
-  }
-
-  function childStatusRoleClass(label) {
-    var value = String(label || "").trim().toLowerCase();
-    if (value === "se") return "ujg-esi-child-role-se";
-    if (value === "be") return "ujg-esi-child-role-be";
-    if (value === "fe") return "ujg-esi-child-role-fe";
-    if (value === "qa") return "ujg-esi-child-role-qa";
-    if (value === "dev" || value === "devops" || value === "do") return "ujg-esi-child-role-dev";
-    return "ujg-esi-child-role-default";
-  }
-
-  function appendStatusCell($tr, row, state, fallbackText) {
-    var $td = $("<td/>").addClass("ujg-esi-status");
-    var children = row && Array.isArray(row.childStatuses) ? row.childStatuses : [];
-    var base = state && state.baseUrl || "";
-    var storyStatus = fallbackText != null ? String(fallbackText) : "";
-    if (row && row.statusTitle) $td.attr("title", row.statusTitle);
-    if (storyStatus || children.length) {
-      var $block = $("<div/>")
-        .addClass("ujg-esi-status-block")
-        .addClass(storyStatusClass(storyStatus));
-
-      if (storyStatus) {
-        $block.append($("<div/>").addClass("ujg-esi-story-status").text(storyStatus));
-      }
-
-      if (children.length) {
-        var $list = $("<div/>").addClass("ujg-esi-child-status-list");
-        children.forEach(function(item) {
-          var key = item && item.key != null ? String(item.key).trim() : "";
-          var label = childStatusLabel(item);
-          var statusClass = childStatusClass(item && item.status, item);
-          var isBlocked = !!(item && item.blocked);
-          var $badge = key ? $("<a/>").attr("href", issueBrowseUrl(item.key, base)).attr("target", "_blank").attr("rel", "noreferrer noopener") : $("<span/>");
-
-          $badge
-            .addClass("ujg-esi-child-status-badge")
-            .addClass(statusClass)
-            .addClass(childStatusRoleClass(label))
-            .toggleClass("ujg-esi-child-status-blocked", isBlocked)
-            .attr("title", childStatusTitle(item))
-            .attr("aria-label", label)
-            .append($("<span/>").addClass("ujg-esi-child-status-label").text(label));
-
-          $list.append($badge);
-        });
-        $block.append($list);
-      }
-
-      $td.append($block);
-      $tr.append($td);
-      return;
-    }
-    $td.text(fallbackText != null ? String(fallbackText) : "");
-    $tr.append($td);
-  }
-
-  function appendJiraCell($tr, row, state) {
-    var key = row.createdKey || row.jiraKey || "";
-    var $td = $("<td/>");
-    var base = state.baseUrl || "";
-    if (key) {
-      $td.append(
-        $("<a/>")
-          .attr("href", issueBrowseUrl(key, base))
-          .attr("target", "_blank")
-          .attr("rel", "noreferrer noopener")
-          .addClass("ujg-esi-jira-link")
-          .text(key)
-      );
-    } else {
-      $td.text(key || "—");
-    }
-    $tr.append($td);
-  }
-
-  function appendActionCell($tr, row, state, index) {
-    var $td = $("<td/>").addClass("ujg-esi-action-cell");
+  function appendRowActions($td, row, state, index) {
     var canCreate = canCreateRow(row, state);
     var actionStatus = rowActionStatusText(row, state);
     var $button = $("<button/>")
       .attr("type", "button")
       .attr("title", actionStatus)
       .addClass("ujg-esi-create-row")
-      .text(row.alreadyLinked || row.jiraKey ? "Уже создано" : row.status === "created" ? "Создано" : "Создать");
+      .append(icon("Plus"), $("<span/>").text("Создать"));
     if (!canCreate) $button.prop("disabled", true);
     $button.on("click", function() {
       if (services && services.onCreateRow) services.onCreateRow(index);
     });
-    $td.append(
-      $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index), $button),
-      $("<div/>").addClass("ujg-esi-row-status").text(actionStatus)
-    );
+    var $actions = $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index));
+    if (!(row.alreadyLinked || row.jiraKey || row.createdKey || row.status === "created")) $actions.append($button);
+    $td.attr("title", actionStatus).append($actions);
     if (row.errors && row.errors.length) {
-      $td.append($("<div/>").addClass("ujg-esi-row-errors").text(row.errors.join(" · ")));
+      var $details = $("<details/>").addClass("ujg-esi-error-details");
+      $details.append($("<summary/>").attr({ title: row.errors.join(" · "), "aria-label": "Ошибки создания" }).append(icon("TriangleAlert")), $("<div/>").text(row.errors.join(" · ")));
+      $td.append($details);
     }
-    $tr.append($td);
   }
 
   function appendConfirmControl($list, label, $control) {
@@ -4050,59 +4322,34 @@ define("_ujgESI_rendering", ["jquery"], function($) {
       $parent.append($wrap);
       return;
     }
-    var $table = $("<table/>").addClass("ujg-esi-preview-table");
-    $table.append(
-      $("<thead/>").append(
-        $("<tr/>")
-          .append($("<th/>").text("Строка"))
-          .append($("<th/>").text("Замечание"))
-          .append($("<th/>").text("Модуль"))
-          .append($("<th/>").text("Статус"))
-          .append($("<th/>").text("Приоритет"))
-          .append($("<th/>").text("Jira"))
-          .append($("<th/>").text("Действие"))
-      )
-    );
-    var $tbody = $("<tbody/>");
-    rows.forEach(function(row, index) {
-      var cols = row.sourceColumns || {};
-      var $tr = $("<tr/>")
-        .addClass("ujg-esi-row-" + String(row.status || "ready"))
-        .toggleClass("ujg-esi-row-linked", !!(row.alreadyLinked || row.jiraKey));
-      appendValue($tr, row.excelRowNumber || "", "ujg-esi-row-num");
-      appendSummaryCell($tr, row);
-      appendValue($tr, cols["Модуль"] || "", "ujg-esi-module");
-      appendStatusCell($tr, row, state, previewStatusText(cols));
-      appendValue($tr, cols["Приоритет"] || "", "ujg-esi-priority");
-      appendJiraCell($tr, row, state);
-      appendActionCell($tr, row, state, index);
-      $tbody.append($tr);
-    });
-    $table.append($tbody);
-    $wrap.append($table);
-    $parent.append($wrap);
+    grid.mount($parent, state, { appendActions: function($td, row, index) { appendRowActions($td, row, state, index); } });
   }
+
 
   function render(state) {
     if (!$root || !$root.length) return;
     var scrollState = captureScrollState();
     $root.empty();
     var s = state || {};
-    var $header = $("<div/>").addClass("ujg-esi-header");
-    var $toolbar = $("<div/>").addClass("ujg-esi-toolbar");
-    $header.append($("<h2/>").text("Импорт замечаний из Excel"));
-    if (s.parseMeta) {
-      appendParseMeta($header, s);
-    }
+    var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
+    $toolbar.append($("<h2/>").text("Импорт замечаний"));
     appendProjectSelect($toolbar, s);
     appendEpicPicker($toolbar, s);
+    if (s.parseMeta) appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
-    $root.append($header, $toolbar);
-    if (s.rows && s.rows.length) appendCounters($root, s);
+    if (s.rows && s.rows.length) {
+      var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
+      $tools.append(gridModule.button("Expand", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
+      var $summary = $("<details/>").addClass("ujg-esi-import-summary");
+      $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
+      appendCounters($summary, s);
+      if (s.syncSummary) $summary.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
+      $tools.append($summary); $toolbar.append($tools);
+    }
+    $root.append($toolbar);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
-    if (s.syncSummary) $root.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
     appendConfirmModal($root, s);
@@ -4668,6 +4915,106 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function isoTimestamp(value) {
+    var text = typeof value === "string" ? value.trim() : "";
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) return "";
+    var calendar = new Date(text.slice(0, 10) + "T00:00:00Z");
+    if (!isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== text.slice(0, 10) || Number(text.slice(11, 13)) > 23) return "";
+    var time = Date.parse(text);
+    return isFinite(time) ? new Date(time).toISOString() : "";
+  }
+
+  function sameStatus(leftId, leftName, rightId, rightName) {
+    function text(value) { return value != null ? String(value).trim() : ""; }
+    if (text(leftId) && text(rightId)) return text(leftId) === text(rightId);
+    return !!text(leftName) && !!text(rightName) && text(leftName).toLowerCase() === text(rightName).toLowerCase();
+  }
+
+  function issueStatusSince(issue) {
+    var fields = issue && issue.fields || {};
+    var log = issue && issue.changelog;
+    var histories = log && log.histories;
+    function unknown(reason) { return { statusSince: "", statusSinceReason: reason }; }
+    if (!Array.isArray(histories)) return unknown("История изменений Jira недоступна.");
+    // Search expansions may contain only one page. Never infer a date from a partial history.
+    var startAt = log.startAt == null ? 0 : Number(log.startAt);
+    var hasTotal = log.total != null && /^\d+$/.test(String(log.total));
+    var complete = hasTotal ? Number(log.total) === histories.length : log.total == null && log.startAt === 0 && log.isLast === true;
+    if (startAt !== 0 || log.isLast === false || !complete) return unknown("Полнота истории изменений Jira не подтверждена.");
+    var transitions = [];
+    var malformed = false;
+    var historyIds = {};
+    histories.forEach(function(history) {
+      if (!history || !Array.isArray(history.items)) {
+        malformed = true;
+        return;
+      }
+      if (history.id != null) {
+        var identity = "$" + String(history.id);
+        if (historyIds[identity]) malformed = true;
+        historyIds[identity] = true;
+      }
+      history.items.forEach(function(item) {
+        if (!item || (!item.field && !item.fieldId)) {
+          malformed = true;
+          return;
+        }
+        if (String(item.fieldId || item.field).toLowerCase() !== "status") return;
+        transitions.push({ at: isoTimestamp(history.created), item: item });
+      });
+    });
+    if (malformed) return unknown("История изменений Jira неполна или повреждена.");
+    if (transitions.some(function(transition) { return !transition.at; })) return unknown("В истории переходов отсутствует достоверная дата или часовой пояс.");
+    transitions.sort(function(a, b) { return Date.parse(a.at) - Date.parse(b.at); });
+    var status = fields.status || {};
+    var created = isoTimestamp(fields.created);
+    var updated = isoTimestamp(fields.updated);
+    function sinceCreation() {
+      if (!created || !issueStatusName(issue)) return unknown("Дата создания или текущий статус Jira недоступны.");
+      return { statusSince: created, statusSinceReason: "С даты создания: полная история Jira не содержит смены статуса." };
+    }
+    if (created && updated && created > updated) return unknown("Дата создания Jira позже даты обновления.");
+    if (!transitions.length) return sinceCreation();
+    if ((created && transitions[0].at < created) || (updated && transitions[transitions.length - 1].at > updated)) return unknown("Даты переходов не согласуются с датами создания или обновления Jira.");
+    for (var i = 1; i < transitions.length; i += 1) {
+      var previous = transitions[i - 1];
+      var current = transitions[i];
+      if (previous.at === current.at) return unknown("Порядок переходов с одинаковым временем неоднозначен.");
+      if ((current.item.from != null || current.item.fromString) && !sameStatus(previous.item.to, previous.item.toString, current.item.from, current.item.fromString)) {
+        return unknown("История переходов неполна или несогласована.");
+      }
+    }
+    var latest = transitions[transitions.length - 1];
+    if (!sameStatus(latest.item.to, latest.item.toString, status.id, issueStatusName(issue))) return unknown("Последний переход в истории не совпадает с текущим статусом Jira.");
+    var changes = transitions.filter(function(transition) {
+      var item = transition.item;
+      return !sameStatus(item.from, item.fromString, item.to, item.toString);
+    });
+    if (!changes.length) return sinceCreation();
+    latest = changes[changes.length - 1];
+    return { statusSince: latest.at, statusSinceReason: "Дата последнего перехода в текущий статус по полной истории Jira." };
+  }
+
+  function issueDetails(issue) {
+    var fields = issue && issue.fields || {};
+    var since = issueStatusSince(issue);
+    function name(value) { return value && value.name != null ? String(value.name) : typeof value === "string" ? value : ""; }
+    return {
+      key: issueKey(issue),
+      summary: issueSummaryName(issue),
+      status: issueStatusName(issue),
+      statusState: issueIsDone(issue) ? "done" : issueStatusState(issue),
+      statusCategory: issueStatusCategoryKey(issue),
+      done: issueIsDone(issue),
+      assignee: issueAssigneeName(issue),
+      priority: name(fields.priority),
+      issueType: name(fields.issuetype),
+      updated: fields.updated != null ? String(fields.updated) : "",
+      statusSince: since.statusSince,
+      statusSinceReason: since.statusSinceReason,
+    };
+  }
+
   function normalizeLinkName(name) {
     return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
   }
@@ -4790,6 +5137,7 @@ define("_ujgESI_main", [
       var status = issueStatusName(resolved) || "Без статуса";
       var assignee = issueAssigneeName(resolved) || "Не назначен";
       var done = issueIsDone(resolved);
+      var details = issueDetails(resolved);
       return {
         role: childRoleFromSummary(summary),
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
@@ -4800,6 +5148,11 @@ define("_ujgESI_main", [
         done: done,
         assignee: assignee,
         blocked: issueIsBlocked(resolved, mergedIssueMap),
+        priority: details.priority,
+        issueType: details.issueType,
+        updated: details.updated,
+        statusSince: details.statusSince,
+        statusSinceReason: details.statusSinceReason,
         sourceIndex: index,
       };
     }).sort(function(a, b) {
@@ -5366,6 +5719,10 @@ define("_ujgESI_main", [
       return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
     }
 
+    function numberedSummary(row, summary, childRole) {
+      return creator && typeof creator.summaryWithRemarkId === "function" ? creator.summaryWithRemarkId(row, summary, childRole) : limitSummary(summary);
+    }
+
     function defaultChildDescription() {
       return "Создано автоматически из журнала замечаний.";
     }
@@ -5712,7 +6069,7 @@ define("_ujgESI_main", [
     function buildCreateDialog(row, index) {
       var settings = normalizeMappingSettings(state.mappingSettings);
       var roles = copyRoles(settings.roles);
-      var summary = limitSummary(row && row.summary != null ? row.summary : "");
+      var summary = numberedSummary(row, row && row.summary != null ? row.summary : "");
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
@@ -6282,11 +6639,11 @@ define("_ujgESI_main", [
       promiseOf(tryMatchRowsBySummary()).then(function() {
         var keys = uniqueKeys(state.rows);
         if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
-        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys)));
+        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys), { expand: "changelog" }));
       }).then(function(data) {
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
-        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys))) : Promise.resolve({ issues: [] });
+        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys), { expand: "changelog" })) : Promise.resolve({ issues: [] });
         return childrenPromise.then(function(childData) {
           return {
             data: data,
@@ -6299,10 +6656,12 @@ define("_ujgESI_main", [
         var synced = 0;
         (state.rows || []).forEach(function(row) {
           row.childStatuses = [];
+          row.storyDetails = null;
           row.statusTitle = "";
           var key = issueKeyFromRow(row);
           var issue = issues[key];
           if (!issue) return;
+          row.storyDetails = issueDetails(issue);
           row.jiraKey = key;
           row.alreadyLinked = true;
           row.sourceColumns = row.sourceColumns || {};
@@ -6428,7 +6787,7 @@ define("_ujgESI_main", [
       var shouldRender = false;
       if (!dialog) return;
       if (key === "summary") {
-        dialog.summary = limitSummary(value);
+        dialog.summary = numberedSummary(state.rows[dialog.rowIndex], value);
         (dialog.childTasks || []).forEach(function(task) {
           task.summary = childSummary(task, dialog.summary);
         });
@@ -6497,7 +6856,7 @@ define("_ujgESI_main", [
       var task = dialog && dialog.childTasks ? dialog.childTasks[i] : null;
       if (!task) return;
       if (key === "summary") {
-        task.summary = limitSummary(value);
+        task.summary = numberedSummary(state.rows[dialog.rowIndex], value, task);
       } else if (key === "issueType") {
         task.issueType = value != null ? String(value) : "";
       } else if (key === "assigneeId") {
@@ -6533,7 +6892,7 @@ define("_ujgESI_main", [
       var idx;
       if (!dialog || !cleaned) return;
       if (target === "story") {
-        dialog.summary = cleaned;
+        dialog.summary = numberedSummary(state.rows[dialog.rowIndex], cleaned);
         (dialog.childTasks || []).forEach(function(task) {
           task.summary = childSummary(task, dialog.summary);
         });
@@ -6542,7 +6901,7 @@ define("_ujgESI_main", [
       match = String(target || "").match(/^child-(\d+)$/);
       idx = match ? Number(match[1]) : -1;
       if (idx >= 0 && dialog.childTasks && dialog.childTasks[idx]) {
-        dialog.childTasks[idx].summary = cleaned;
+        dialog.childTasks[idx].summary = numberedSummary(state.rows[dialog.rowIndex], cleaned, dialog.childTasks[idx]);
       }
     }
 

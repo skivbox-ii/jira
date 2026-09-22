@@ -1,0 +1,58 @@
+const { chromium } = require("playwright");
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+
+(async () => {
+  const output = process.env.IMPORT_SCREENSHOTS || "/tmp/ujg-import-registry-screenshots";
+  await fs.mkdir(output,{recursive:true});
+  const browser = await chromium.launch({headless:true,channel:"chrome"});
+  try {
+    const page = await browser.newPage({viewport:{width:2400,height:1350},deviceScaleFactor:1});
+    const errors = [], blocked = [];
+    page.on("pageerror",e => errors.push(e.message));
+    await page.route("**/*", route => {
+      const uri = new URL(route.request().url());
+      if(uri.hostname !== "127.0.0.1") {blocked.push(route.request().url());return route.abort();}
+      return route.continue();
+    });
+    await page.goto("http://127.0.0.1:4317/");
+    await page.locator(".ujg-esi-project-select").selectOption("EVOSCADA");
+    const excel = await page.request.get("http://127.0.0.1:4317/fixture.xlsx");
+    await page.locator(".ujg-esi-file").setInputFiles({name:"График замечаний.xlsx",mimeType:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",buffer:await excel.body()});
+    await page.waitForFunction(() => document.querySelectorAll(".ujg-esi-parent-row").length === 50);
+    assert.equal(await page.locator(".ujg-esi-create-row").count(),1);
+    assert.equal(await page.locator(".ujg-esi-parent-row").first().locator(".ujg-esi-cell-remarkId").innerText(),"815");
+    await page.locator(".ujg-esi-sync-jira").click();
+    await page.waitForFunction(() => document.querySelectorAll(".ujg-esi-child-row").length > 50);
+    await page.waitForFunction(() => !document.querySelector(".ujg-esi-sync-jira").disabled);
+    assert.equal(await page.locator(".ujg-esi-sync-error").count(),0);
+    const tableTop = await page.locator(".ujg-esi-registry-table").evaluate(el=>el.getBoundingClientRect().top);
+    assert.ok(tableTop < 1350 * .15, "Toolbar exceeds 15% of desktop viewport: " + tableTop);
+    await page.screenshot({path:path.join(output,"desktop.png")});
+    await page.locator("[data-filter='status']").click();
+    await page.screenshot({path:path.join(output,"status-filter.png")});
+    await page.locator(".ujg-esi-filter-all input").uncheck();
+    await page.locator(".ujg-esi-filter-option").filter({hasText:"Тестирование"}).locator("input").check();
+    await page.locator(".ujg-esi-filter-apply").click();
+    const visibleStatuses = await page.locator(".ujg-esi-child-row .ujg-esi-cell-status").allTextContents();
+    assert.ok(visibleStatuses.length);
+    assert.ok(visibleStatuses.every(x=>x === "Тестирование"));
+    await page.locator("[aria-label='Сбросить все фильтры']").click();
+    await page.locator(".ujg-esi-create-row").click();
+    await page.locator(".ujg-esi-confirm-modal").waitFor();
+    const summary = await page.locator(".ujg-esi-confirm-summary input, input.ujg-esi-confirm-summary").first().inputValue();
+    assert.match(summary,/815/);
+    await page.locator(".ujg-esi-confirm-cancel").click();
+    assert.equal(await page.evaluate(()=>window.mutationCalls),0);
+    await page.setViewportSize({width:1920,height:1080});
+    await page.screenshot({path:path.join(output,"desktop-1920.png")});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:path.join(output,"mobile.png")});
+    const overflow = await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth);
+    assert.equal(overflow,false,"Page must keep horizontal scrolling inside the grid");
+    assert.deepEqual(errors,[]);
+    assert.deepEqual(blocked,[]);
+    console.log(JSON.stringify({passed:true,tableTop,mutationCalls:0,errors,blocked,screenshots:output}));
+  } finally {await browser.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

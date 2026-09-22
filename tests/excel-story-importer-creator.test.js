@@ -16,8 +16,85 @@ function loadCreator() {
   return loadAmdModule(path.join(MODULE_DIR, "creator.js"), {
     "_ujgESI_config": config,
     "_ujgESI_description": description,
+    "_ujgESI_remarkId": loadAmdModule(path.join(MODULE_DIR, "remark-id.js"), {}),
   });
 }
+
+test("storyFields prefixes only the source remark ID and keeps existing prefixes", function () {
+  const creator = loadCreator();
+  const cases = [
+    [{ "№": 42, ID: 7 }, "Fix alarm", "№42 Fix alarm"],
+    [{ "№": " 0042 " }, "Fix alarm", "№0042 Fix alarm"],
+    [{ "№": 0 }, "Fix alarm", "№0 Fix alarm"],
+    [{ "№": "", ID: "R-42" }, "Fix alarm", "№R-42 Fix alarm"],
+    [{ "Номер": "42.1" }, "Fix alarm", "№42.1 Fix alarm"],
+    [{ "Номер замечания": "42" }, "Fix alarm", "№42 Fix alarm"],
+    [{ " id ": "42" }, "Fix alarm", "№42 Fix alarm"],
+    [{ "№": 42 }, "№42 Fix alarm", "№42 Fix alarm"],
+    [{ "№": 42 }, "№ 42. Fix alarm", "№ 42. Fix alarm"],
+    [{ "№": 42 }, "42. Fix alarm", "42. Fix alarm"],
+    [{ "№": 42 }, "[42] Fix alarm", "[42] Fix alarm"],
+    [{ "№": 42 }, "#42 Fix alarm", "#42 Fix alarm"],
+    [{ "№": 42 }, "420 Fix alarm", "№42 420 Fix alarm"],
+    [{ "№": 42 }, "42.1 Fix alarm", "№42 42.1 Fix alarm"],
+    [{ "№": "undefined" }, "Fix alarm", "Fix alarm"],
+    [{ "№": 42 }, "", ""],
+    [{ "№": 42 }, undefined, ""],
+    [{ ID: { value: 42 } }, "Fix alarm", "Fix alarm"],
+    [{}, "Fix alarm", "Fix alarm"],
+  ];
+  for (const [sourceColumns, summary, expected] of cases) {
+    const row = { id: 999, excelRowNumber: 123, summary, sourceColumns };
+    assert.equal(creator.storyFields(row, {}).summary, expected, JSON.stringify(sourceColumns) + " / " + summary);
+  }
+});
+
+test("summaryWithRemarkId keeps child role before remark ID and enforces the summary limit", function () {
+  const creator = loadCreator();
+  const row = { sourceColumns: { "№": "42" } };
+  assert.equal(typeof creator.summaryWithRemarkId, "function");
+  assert.equal(creator.summaryWithRemarkId(row, "[FE] Fix alarm"), "[FE] №42 Fix alarm");
+  assert.equal(creator.summaryWithRemarkId(row, "[FE] №42 Fix alarm"), "[FE] №42 Fix alarm");
+  assert.equal(creator.summaryWithRemarkId(row, "[FE] 42. Fix alarm"), "[FE] 42. Fix alarm");
+  assert.equal(creator.summaryWithRemarkId(null, undefined), "");
+  assert.equal(creator.summaryWithRemarkId(row, "[FE] " + "x".repeat(300)), "[FE] №42 " + "x".repeat(246));
+  assert.equal(creator.storyFields(row, { summary: "x".repeat(300) }).summary, "№42 " + "x".repeat(251));
+});
+
+test("createRow numbers default and edited children while retaining Epic fallback and source details", async function () {
+  const creator = loadCreator();
+  for (const childTasks of [undefined, [
+    { role: "FE", issueType: "Task", summary: "[FE] Edited child", description: "Edited details" },
+    { role: "BE", issueType: "Task", summary: "[BE] №42 Already numbered" },
+    { role: "QA", issueType: "Task", summary: "Disabled", enabled: false },
+  ]]) {
+    const calls = [];
+    const row = { summary: "Full source remark", sourceColumns: { "№": 42, "Замечание": "Full source remark" } };
+    const result = await creator.createRow({
+      createIssue(payload) {
+        calls.push(payload.fields);
+        if (calls.length === 1) return Promise.reject({ responseJSON: { errors: { customfield_10109: "Not allowed" } } });
+        return Promise.resolve({ key: "TEST-" + calls.length });
+      },
+      createIssueLink() { return Promise.resolve({}); },
+    }, row, { projectKey: "TEST", epicKey: "TEST-1", summary: "Edited story", createSubtasks: true, childTasks });
+    assert.equal(result.ok, true);
+    assert.equal(result.epicLinkSkipped, true);
+    assert.equal(calls[0].summary, "№42 Edited story");
+    assert.equal(calls[1].summary, "№42 Edited story");
+    assert.equal(calls[1].customfield_10109, undefined);
+    assert.match(calls[1].description, /Full source remark/);
+    assert.match(calls[1].description, /42/);
+    assert.equal(calls[2].summary, childTasks ? "[FE] №42 Edited child" : "[SE] №42 Edited story");
+    if (childTasks) {
+      assert.equal(calls.length, 4);
+      assert.equal(calls[2].description, "Edited details");
+      assert.equal(calls[3].summary, "[BE] №42 Already numbered");
+      assert.equal(childTasks[0].summary, "[FE] Edited child");
+    }
+    assert.equal(row.summary, "Full source remark");
+  }
+});
 
 test("createRow skips rows that already have a Jira key", async function () {
   const creator = loadCreator();

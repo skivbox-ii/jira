@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Импорт замечаний · локальная проверка</title>
+<link rel="stylesheet" href="/ujg-excel-story-importer.css">
+<style>body{margin:0;background:#fff;font-family:Arial,sans-serif}nav{height:38px;display:flex;align-items:center;padding:0 16px;gap:30px;background:#0754ad;color:white;font-size:13px}nav strong{font-size:17px}main{padding:8px}footer{padding:5px 12px;color:#768291;font-size:11px}</style>
+<nav><strong>Jira Software</strong><span>Рабочий стол</span><span>Проекты</span><span>Задачи</span><span>Доски</span></nav>
+<main id="root"><div class="ujg-excel-story-importer"></div></main>
+<footer>Локальные тестовые данные</footer>
+<script src="/test/jquery.js"></script>
+<script src="/test/xlsx.js"></script>
+<script src="/test/jszip.js"></script>
+<script src="/test/fixture.js"></script>
+<script>
+window.modules = {jquery: jQuery};
+window.mutationCalls = 0;
+window.offlineApi = {
+  baseUrl: "https://jira.example.test",
+  getProjects: function(){return Promise.resolve([{key:"EVOSCADA",name:"EVO-SCADA"}]);},
+  getProjectEpics: function(){return Promise.resolve({issues:[{key:"EVOSCADA-100",fields:{summary:"Замечания ИИ ТСВ"}}]});},
+  getProjectCreateMeta: function(){return Promise.resolve({projects:[]});},
+  getIssuesByKeys: function(keys){return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
+  searchUsers: function(){return Promise.resolve({users:[]});},
+  createIssue: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");},
+  createIssueLink: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");}
+};
+window.define = function(name,deps,factory){modules[name] = name === "_ujgESI_api" ? offlineApi : factory.apply(null,deps.map(function(dep){return modules[dep];}));};
+window.define.amd = true;
+</script>
+<script src="/ujg-excel-story-importer.js"></script>
+<script>new modules._ujgExcelStoryImporter({getGadgetContentEl:function(){return jQuery("#root");},resize:function(){}});</script>
+</html>

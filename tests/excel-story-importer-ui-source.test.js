@@ -42,8 +42,6 @@ test("rendering module exposes import controls and row create action classes", f
   assert.match(source, /ujg-esi-create-row/);
   assert.match(source, /ujg-esi-row-ai/);
   assert.match(source, /onRowImproveRemark/);
-  assert.match(source, /function appendActionCell[\s\S]*appendRowAiButton/);
-  assert.doesNotMatch(source.match(/function appendSummaryCell[\s\S]*?function issueBrowseUrl/)?.[0] || "", /ujg-esi-row-ai/);
   assert.match(source, /appendLlmReviewDialog/);
   assert.match(source, /ujg-esi-summary-review-overlay/);
   assert.match(source, /ujg-esi-summary-review-before/);
@@ -132,33 +130,10 @@ test("toolbar keeps the four Excel action icons together without subtasks toggle
 
   assert.match(source, /appendExcelActions/);
   assert.match(source, /ujg-esi-toolbar-actions/);
-  assert.match(source, /html\("&#10515;"\)/);
   assert.doesNotMatch(appendFileInputSource, /\$field\.append/);
   assert.doesNotMatch(source, /ujg-esi-subtasks/);
 });
 
-test("preview status column prefers Jira sync status and falls back to Excel status", function () {
-  const source = read("ujg-excel-story-importer-modules/rendering.js");
-
-  assert.match(source, /function previewStatusText/);
-  assert.match(source, /cols\["Статус в Jira"\]/);
-  assert.match(source, /cols\["Статус"\]/);
-  assert.match(source, /function appendStatusCell/);
-  assert.match(source, /row\.childStatuses/);
-  assert.match(source, /ujg-esi-status-block/);
-  assert.match(source, /storyStatusClass/);
-  assert.match(source, /ujg-esi-story-status/);
-  assert.match(source, /childStatusRoleClass/);
-  assert.match(source, /item && item\.done === true/);
-  assert.match(source, /item && item\.statusState/);
-  assert.match(source, /item && item\.statusCategory/);
-  assert.match(source, /выполн\|принят/);
-  assert.match(source, /работ\|разработ\|исполн\|провер/);
-  assert.match(source, /previewStatusText\(cols\)/);
-  assert.match(source, /ujg-esi-child-status-badge/);
-  assert.match(source, /ujg-esi-child-status-blocked/);
-  assert.match(source, /issueBrowseUrl\(item\.key, base\)/);
-});
 
 test("file name is rendered in parse metadata, not beside upload icon", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
@@ -380,15 +355,6 @@ test("api module quotes project keys before embedding them in JQL", function () 
   assert.match(source, /description ~ /);
 });
 
-test("rendering module always renders Jira keys as new-tab browse links", function () {
-  const source = read("ujg-excel-story-importer-modules/rendering.js");
-
-  assert.match(source, /function issueBrowseUrl/);
-  assert.match(source, /\/browse\//);
-  assert.match(source, /target", "_blank"/);
-  assert.match(source, /row\.statusTitle/);
-  assert.doesNotMatch(source, /if \(key && base\)/);
-});
 
 test("importer CSS is scoped to widget root", function () {
   const source = read("ujg-excel-story-importer.css");

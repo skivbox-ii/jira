@@ -540,6 +540,106 @@ define("_ujgESI_main", [
     return "";
   }
 
+  function isoTimestamp(value) {
+    var text = typeof value === "string" ? value.trim() : "";
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) return "";
+    var calendar = new Date(text.slice(0, 10) + "T00:00:00Z");
+    if (!isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== text.slice(0, 10) || Number(text.slice(11, 13)) > 23) return "";
+    var time = Date.parse(text);
+    return isFinite(time) ? new Date(time).toISOString() : "";
+  }
+
+  function sameStatus(leftId, leftName, rightId, rightName) {
+    function text(value) { return value != null ? String(value).trim() : ""; }
+    if (text(leftId) && text(rightId)) return text(leftId) === text(rightId);
+    return !!text(leftName) && !!text(rightName) && text(leftName).toLowerCase() === text(rightName).toLowerCase();
+  }
+
+  function issueStatusSince(issue) {
+    var fields = issue && issue.fields || {};
+    var log = issue && issue.changelog;
+    var histories = log && log.histories;
+    function unknown(reason) { return { statusSince: "", statusSinceReason: reason }; }
+    if (!Array.isArray(histories)) return unknown("История изменений Jira недоступна.");
+    // Search expansions may contain only one page. Never infer a date from a partial history.
+    var startAt = log.startAt == null ? 0 : Number(log.startAt);
+    var hasTotal = log.total != null && /^\d+$/.test(String(log.total));
+    var complete = hasTotal ? Number(log.total) === histories.length : log.total == null && log.startAt === 0 && log.isLast === true;
+    if (startAt !== 0 || log.isLast === false || !complete) return unknown("Полнота истории изменений Jira не подтверждена.");
+    var transitions = [];
+    var malformed = false;
+    var historyIds = {};
+    histories.forEach(function(history) {
+      if (!history || !Array.isArray(history.items)) {
+        malformed = true;
+        return;
+      }
+      if (history.id != null) {
+        var identity = "$" + String(history.id);
+        if (historyIds[identity]) malformed = true;
+        historyIds[identity] = true;
+      }
+      history.items.forEach(function(item) {
+        if (!item || (!item.field && !item.fieldId)) {
+          malformed = true;
+          return;
+        }
+        if (String(item.fieldId || item.field).toLowerCase() !== "status") return;
+        transitions.push({ at: isoTimestamp(history.created), item: item });
+      });
+    });
+    if (malformed) return unknown("История изменений Jira неполна или повреждена.");
+    if (transitions.some(function(transition) { return !transition.at; })) return unknown("В истории переходов отсутствует достоверная дата или часовой пояс.");
+    transitions.sort(function(a, b) { return Date.parse(a.at) - Date.parse(b.at); });
+    var status = fields.status || {};
+    var created = isoTimestamp(fields.created);
+    var updated = isoTimestamp(fields.updated);
+    function sinceCreation() {
+      if (!created || !issueStatusName(issue)) return unknown("Дата создания или текущий статус Jira недоступны.");
+      return { statusSince: created, statusSinceReason: "С даты создания: полная история Jira не содержит смены статуса." };
+    }
+    if (created && updated && created > updated) return unknown("Дата создания Jira позже даты обновления.");
+    if (!transitions.length) return sinceCreation();
+    if ((created && transitions[0].at < created) || (updated && transitions[transitions.length - 1].at > updated)) return unknown("Даты переходов не согласуются с датами создания или обновления Jira.");
+    for (var i = 1; i < transitions.length; i += 1) {
+      var previous = transitions[i - 1];
+      var current = transitions[i];
+      if (previous.at === current.at) return unknown("Порядок переходов с одинаковым временем неоднозначен.");
+      if ((current.item.from != null || current.item.fromString) && !sameStatus(previous.item.to, previous.item.toString, current.item.from, current.item.fromString)) {
+        return unknown("История переходов неполна или несогласована.");
+      }
+    }
+    var latest = transitions[transitions.length - 1];
+    if (!sameStatus(latest.item.to, latest.item.toString, status.id, issueStatusName(issue))) return unknown("Последний переход в истории не совпадает с текущим статусом Jira.");
+    var changes = transitions.filter(function(transition) {
+      var item = transition.item;
+      return !sameStatus(item.from, item.fromString, item.to, item.toString);
+    });
+    if (!changes.length) return sinceCreation();
+    latest = changes[changes.length - 1];
+    return { statusSince: latest.at, statusSinceReason: "Дата последнего перехода в текущий статус по полной истории Jira." };
+  }
+
+  function issueDetails(issue) {
+    var fields = issue && issue.fields || {};
+    var since = issueStatusSince(issue);
+    function name(value) { return value && value.name != null ? String(value.name) : typeof value === "string" ? value : ""; }
+    return {
+      key: issueKey(issue),
+      summary: issueSummaryName(issue),
+      status: issueStatusName(issue),
+      statusState: issueIsDone(issue) ? "done" : issueStatusState(issue),
+      statusCategory: issueStatusCategoryKey(issue),
+      done: issueIsDone(issue),
+      assignee: issueAssigneeName(issue),
+      priority: name(fields.priority),
+      issueType: name(fields.issuetype),
+      updated: fields.updated != null ? String(fields.updated) : "",
+      statusSince: since.statusSince,
+      statusSinceReason: since.statusSinceReason,
+    };
+  }
+
   function normalizeLinkName(name) {
     return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
   }
@@ -662,6 +762,7 @@ define("_ujgESI_main", [
       var status = issueStatusName(resolved) || "Без статуса";
       var assignee = issueAssigneeName(resolved) || "Не назначен";
       var done = issueIsDone(resolved);
+      var details = issueDetails(resolved);
       return {
         role: childRoleFromSummary(summary),
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
@@ -672,6 +773,11 @@ define("_ujgESI_main", [
         done: done,
         assignee: assignee,
         blocked: issueIsBlocked(resolved, mergedIssueMap),
+        priority: details.priority,
+        issueType: details.issueType,
+        updated: details.updated,
+        statusSince: details.statusSince,
+        statusSinceReason: details.statusSinceReason,
         sourceIndex: index,
       };
     }).sort(function(a, b) {
@@ -1238,6 +1344,10 @@ define("_ujgESI_main", [
       return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
     }
 
+    function numberedSummary(row, summary, childRole) {
+      return creator && typeof creator.summaryWithRemarkId === "function" ? creator.summaryWithRemarkId(row, summary, childRole) : limitSummary(summary);
+    }
+
     function defaultChildDescription() {
       return "Создано автоматически из журнала замечаний.";
     }
@@ -1584,7 +1694,7 @@ define("_ujgESI_main", [
     function buildCreateDialog(row, index) {
       var settings = normalizeMappingSettings(state.mappingSettings);
       var roles = copyRoles(settings.roles);
-      var summary = limitSummary(row && row.summary != null ? row.summary : "");
+      var summary = numberedSummary(row, row && row.summary != null ? row.summary : "");
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
@@ -2154,11 +2264,11 @@ define("_ujgESI_main", [
       promiseOf(tryMatchRowsBySummary()).then(function() {
         var keys = uniqueKeys(state.rows);
         if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
-        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys)));
+        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys), { expand: "changelog" }));
       }).then(function(data) {
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
-        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys))) : Promise.resolve({ issues: [] });
+        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys), { expand: "changelog" })) : Promise.resolve({ issues: [] });
         return childrenPromise.then(function(childData) {
           return {
             data: data,
@@ -2171,10 +2281,12 @@ define("_ujgESI_main", [
         var synced = 0;
         (state.rows || []).forEach(function(row) {
           row.childStatuses = [];
+          row.storyDetails = null;
           row.statusTitle = "";
           var key = issueKeyFromRow(row);
           var issue = issues[key];
           if (!issue) return;
+          row.storyDetails = issueDetails(issue);
           row.jiraKey = key;
           row.alreadyLinked = true;
           row.sourceColumns = row.sourceColumns || {};
@@ -2300,7 +2412,7 @@ define("_ujgESI_main", [
       var shouldRender = false;
       if (!dialog) return;
       if (key === "summary") {
-        dialog.summary = limitSummary(value);
+        dialog.summary = numberedSummary(state.rows[dialog.rowIndex], value);
         (dialog.childTasks || []).forEach(function(task) {
           task.summary = childSummary(task, dialog.summary);
         });
@@ -2369,7 +2481,7 @@ define("_ujgESI_main", [
       var task = dialog && dialog.childTasks ? dialog.childTasks[i] : null;
       if (!task) return;
       if (key === "summary") {
-        task.summary = limitSummary(value);
+        task.summary = numberedSummary(state.rows[dialog.rowIndex], value, task);
       } else if (key === "issueType") {
         task.issueType = value != null ? String(value) : "";
       } else if (key === "assigneeId") {
@@ -2405,7 +2517,7 @@ define("_ujgESI_main", [
       var idx;
       if (!dialog || !cleaned) return;
       if (target === "story") {
-        dialog.summary = cleaned;
+        dialog.summary = numberedSummary(state.rows[dialog.rowIndex], cleaned);
         (dialog.childTasks || []).forEach(function(task) {
           task.summary = childSummary(task, dialog.summary);
         });
@@ -2414,7 +2526,7 @@ define("_ujgESI_main", [
       match = String(target || "").match(/^child-(\d+)$/);
       idx = match ? Number(match[1]) : -1;
       if (idx >= 0 && dialog.childTasks && dialog.childTasks[idx]) {
-        dialog.childTasks[idx].summary = cleaned;
+        dialog.childTasks[idx].summary = numberedSummary(state.rows[dialog.rowIndex], cleaned, dialog.childTasks[idx]);
       }
     }
 
