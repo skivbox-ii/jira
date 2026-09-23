@@ -303,32 +303,82 @@ define("_ujgESI_main", [
     return config && config.STORAGE_KEY ? String(config.STORAGE_KEY) : "ujg-esi-state";
   }
 
-  function readStoredState() {
-    if (typeof localStorage === "undefined") return {};
+  function jiraUserMeta(name) {
+    var value;
     try {
-      var raw = localStorage.getItem(stateStorageKey());
+      var ajs = typeof AJS !== "undefined" ? AJS : typeof window !== "undefined" ? window.AJS : null;
+      value = ajs && ajs.Meta && typeof ajs.Meta.get === "function" ? ajs.Meta.get(name) : "";
+      if (typeof value === "string" && value.trim()) return value.trim();
+    } catch (ignore) {}
+    try {
+      var doc = typeof document !== "undefined" ? document : typeof window !== "undefined" ? window.document : null;
+      var meta = doc && doc.querySelector ? doc.querySelector('meta[name="ajs-' + name + '"]') : null;
+      value = meta && meta.getAttribute("content");
+      if (typeof value === "string") return value.trim();
+    } catch (ignore) {}
+    return "";
+  }
+
+  function preferencesStorageKey() {
+    var userKey = jiraUserMeta("remote-user-key");
+    var userName = userKey ? "" : jiraUserMeta("remote-user");
+    return stateStorageKey() + (userKey ? ":user:key:" + encodeURIComponent(userKey)
+      : userName ? ":user:name:" + encodeURIComponent(userName) : "");
+  }
+
+  function preferencesStorage() {
+    try {
+      if (typeof localStorage !== "undefined") return localStorage;
+      return typeof window !== "undefined" ? window.localStorage : null;
+    } catch (ignore) {
+      return null;
+    }
+  }
+
+  function readStoredState(storageKey) {
+    try {
+      var storage = preferencesStorage();
+      var raw = storage && storage.getItem(storageKey);
       if (!raw) return {};
       var parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : {};
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
     } catch (err) {
       return {};
     }
   }
 
-  function readStoredProjectKey() {
-    var stored = readStoredState();
+  function readStoredProjectKey(storageKey) {
+    var stored = readStoredState(storageKey);
+    if (storageKey !== stateStorageKey() && !Object.prototype.hasOwnProperty.call(stored, "projectKey") && !Object.prototype.hasOwnProperty.call(stored, "project")) {
+      stored = readStoredState(stateStorageKey());
+    }
     var key = stored.projectKey != null ? stored.projectKey : stored.project;
-    return key != null ? String(key).trim() : "";
+    return typeof key === "string" ? key.trim() : "";
   }
 
-  function writeStoredProjectKey(projectKey) {
-    if (typeof localStorage === "undefined") return;
+  function storedEpics(stored) {
+    var source = stored && stored.epicsByProject;
+    var out = Object.create(null);
+    if (source && typeof source === "object" && !Array.isArray(source)) {
+      Object.keys(source).forEach(function(project) {
+        if (typeof source[project] === "string") out[project] = source[project].trim();
+      });
+    }
+    return out;
+  }
+
+  function writeStoredSelection(storageKey, projectKey, epicKey) {
     try {
-      var key = projectKey != null ? String(projectKey).trim() : "";
-      var stored = readStoredState();
-      if (key) stored.projectKey = key;
-      else delete stored.projectKey;
-      localStorage.setItem(stateStorageKey(), JSON.stringify(stored));
+      var storage = preferencesStorage();
+      if (!storage) return;
+      // Merge the latest object so grid preferences and other project choices survive.
+      var stored = readStoredState(storageKey);
+      stored.projectKey = projectKey;
+      if (projectKey && typeof epicKey === "string") {
+        stored.epicsByProject = storedEpics(stored);
+        stored.epicsByProject[projectKey] = epicKey;
+      }
+      storage.setItem(storageKey, JSON.stringify(stored));
     } catch (err) {
       // Dashboard storage is best-effort; failing to persist must not block import.
     }
@@ -923,6 +973,7 @@ define("_ujgESI_main", [
         })
       : null;
     var state = {
+      preferencesStorageKey: preferencesStorageKey(),
       projects: [],
       projectKey: "",
       epics: [],
@@ -988,6 +1039,11 @@ define("_ujgESI_main", [
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
+    var epicSeq = 0;
+    var dialogEpicSeq = 0;
+    var projectEpics = [];
+    var projectSelectionChanged = false;
+    var epicChoices = Object.create(null);
     var createInFlight = false;
 
     function hasOwn(obj, key) {
@@ -1028,6 +1084,15 @@ define("_ujgESI_main", [
       return !!(state.projects || []).filter(function(project) {
         return project && String(project.key || "") === key;
       })[0];
+    }
+
+    function rememberedEpic(projectKey) {
+      if (!projectKey) return "";
+      if (!hasOwn(epicChoices, projectKey)) {
+        var saved = storedEpics(readStoredState(state.preferencesStorageKey));
+        if (hasOwn(saved, projectKey)) epicChoices[projectKey] = saved[projectKey];
+      }
+      return hasOwn(epicChoices, projectKey) ? epicChoices[projectKey] : "";
     }
 
     function selectedEpicText() {
@@ -1799,6 +1864,7 @@ define("_ujgESI_main", [
     }
 
     function render() {
+      state.epics = state.createDialog && state.createDialog.epics ? state.createDialog.epics : projectEpics;
       rendering.render(state);
       if (API && typeof API.resize === "function") API.resize();
     }
@@ -1873,9 +1939,14 @@ define("_ujgESI_main", [
       return promiseOf(api.getProjects()).then(
         function(projects) {
           state.projects = normalizeProjects(projects);
+          if (projectSelectionChanged) {
+            render();
+            return;
+          }
           if (!state.projectKey) {
-            var storedProjectKey = readStoredProjectKey();
+            var storedProjectKey = readStoredProjectKey(state.preferencesStorageKey);
             if (storedProjectKey && hasProjectKey(storedProjectKey)) state.projectKey = storedProjectKey;
+            state.epicKey = rememberedEpic(state.projectKey);
           }
           state.loading = false;
           render();
@@ -1890,24 +1961,39 @@ define("_ujgESI_main", [
       );
     }
 
-    function loadEpics(projectKey) {
-      state.epicKey = "";
-      state.epics = [];
+    function loadEpics(projectKey, dialog) {
+      var seq = dialog ? ++dialogEpicSeq : ++epicSeq;
+      var scopeProjectKey = state.projectKey;
+      function active() {
+        return state.projectKey === scopeProjectKey && (dialog
+          ? seq === dialogEpicSeq && state.createDialog === dialog && dialog.projectKey === projectKey
+          : seq === epicSeq);
+      }
+      if (dialog) dialog.epics = [];
+      else projectEpics = [];
       closeEpicPicker();
       if (!projectKey) {
+        if (!dialog) state.loading = false;
         render();
         return Promise.resolve();
       }
-      state.loading = true;
+      if (!dialog) state.loading = true;
       render();
       return promiseOf(api.getProjectEpics(projectKey)).then(
         function(data) {
-          state.epics = normalizeEpics(data);
-          state.loading = false;
+          if (!active()) return;
+          if (dialog) dialog.epics = normalizeEpics(data);
+          else {
+            projectEpics = normalizeEpics(data);
+            state.loading = false;
+          }
           render();
         },
         function(err) {
-          setError("Не удалось загрузить Epic: " + (err && err.statusText ? err.statusText : "request failed"));
+          if (!active()) return;
+          state.error = "Не удалось загрузить Epic: " + (err && err.statusText ? err.statusText : "request failed");
+          if (!dialog) state.loading = false;
+          render();
         }
       );
     }
@@ -2120,15 +2206,17 @@ define("_ujgESI_main", [
     }
 
     function onProjectChange(projectKey) {
+      projectSelectionChanged = true;
       if (state.syncLoading) {
         syncSeq += 1;
         state.syncLoading = false;
       }
-      state.projectKey = projectKey != null ? String(projectKey) : "";
+      state.projectKey = projectKey != null ? String(projectKey).trim() : "";
+      state.epicKey = rememberedEpic(state.projectKey);
       invalidateRegistry();
       state.error = "";
       state.createDialog = null;
-      writeStoredProjectKey(state.projectKey);
+      writeStoredSelection(state.preferencesStorageKey, state.projectKey);
       closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
@@ -2152,7 +2240,11 @@ define("_ujgESI_main", [
         syncSeq += 1;
         state.syncLoading = false;
       }
-      state.epicKey = epicKey != null ? String(epicKey) : "";
+      state.epicKey = epicKey != null ? String(epicKey).trim() : "";
+      if (state.projectKey) {
+        epicChoices[state.projectKey] = state.epicKey;
+        writeStoredSelection(state.preferencesStorageKey, state.projectKey, state.epicKey);
+      }
       invalidateRegistry();
       state.createDialog = null;
       closeEpicPicker();
@@ -2802,7 +2894,7 @@ define("_ujgESI_main", [
         dialog.epicKey = "";
         dialog.epicText = "Без Epic";
         dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
-        loadEpics(dialog.projectKey);
+        loadEpics(dialog.projectKey, dialog);
         loadCreateMeta(dialog.projectKey);
         shouldRender = true;
       } else if (key === "issueType") {

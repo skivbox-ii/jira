@@ -17,6 +17,7 @@
 
 .ujg-esi-toolbar.ujg-esi-compact-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-height: 40px;
@@ -29,6 +30,9 @@
 .ujg-esi-compact-toolbar .ujg-esi-meta { margin-left: auto; white-space: nowrap; font-size: 11px; }
 .ujg-esi-compact-toolbar .ujg-esi-meta-file { max-width: 150px; font-size: 11px; line-height: 24px; }
 .ujg-esi-grid-tools { display: flex; align-items: center; gap: 4px; }
+.ujg-esi-fullscreen-button { flex: 0 0 28px; margin-left: auto; }
+.ujg-esi-fullscreen { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999 !important; overflow: auto !important; background: #fff !important; padding: 12px !important; box-sizing: border-box !important; }
+.ujg-esi-fullscreen .ujg-esi-registry-scroll { max-height: calc(100vh - 110px); }
 .ujg-esi-view-modes { display: inline-flex; flex: 0 0 auto; border: 1px solid #d6dce4; border-radius: 3px; overflow: hidden; }
 .ujg-esi-view-modes button { border: 0; border-right: 1px solid #d6dce4; background: #fff; color: #526174; padding: 0 8px; height: 28px; font-size: 11px; cursor: pointer; }
 .ujg-esi-view-modes button:last-child { border-right: 0; }
@@ -43,7 +47,7 @@
 .ujg-esi-import-summary .ujg-esi-sync-summary { position: absolute; right: 0; top: 174px; width: 210px; z-index: 60; }
 .ujg-esi-registry { position: relative; font-size: 12px; }
 .ujg-esi-registry-scroll { overflow: auto; max-height: min(880px, calc(100vh - 100px)); min-height: 160px; border: 1px solid #dfe3e8; }
-.ujg-esi-registry-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 100%; min-width: 1596px; color: #293441; background: #fff; }
+.ujg-esi-registry-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 100%; color: #293441; background: #fff; }
 .ujg-esi-registry-table th { position: sticky; top: 0; z-index: 3; background: #f2f4f7; padding: 0 26px 0 4px; height: 34px; border-right: 1px solid #e2e5e9; border-bottom: 1px solid #cdd4dc; font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap; }
 .ujg-esi-registry .ujg-esi-header-sort { display: flex; align-items: center; gap: 2px; width: 100%; min-width: 0; height: 30px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .ujg-esi-header-sort span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -52,6 +56,10 @@
 .ujg-esi-header-sort[data-sort="remarkId"] svg { width: 8px; height: 8px; }
 .ujg-esi-header-sort:hover { color: #075fc4; }
 .ujg-esi-header-sort:focus-visible { outline: 2px solid #075fc4; outline-offset: -1px; }
+.ujg-esi-registry-table th[data-column] { position: sticky; cursor: grab; }
+.ujg-esi-registry-table th[data-column]:active { cursor: grabbing; }
+.ujg-esi-column-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; z-index: 5; }
+.ujg-esi-column-resize:hover, .ujg-esi-column-resize:focus-visible { background: #8bb8e9; outline: none; }
 .ujg-esi-registry-table th > svg { width: 11px; height: 11px; vertical-align: middle; }
 .ujg-esi-registry-table td { padding: 4px 7px; height: 28px; border-right: 1px solid #edf0f3; border-bottom: 1px solid #edf0f3; line-height: 18px; vertical-align: top; overflow-wrap: anywhere; }
 .ujg-esi-registry-table .ujg-esi-source-cell { border-bottom-color: #d6dce4; }
@@ -59,10 +67,7 @@
 .ujg-esi-registry-table .is-context .ujg-esi-cell-summary { color: #687584; }
 .ujg-esi-registry-table .is-new td { background: #fffdf8; }
 .ujg-esi-registry-table .is-failed td { background: #fff9f9; }
-.ujg-esi-registry-table .ujg-esi-cell-remarkId { font-weight: 650; position: sticky; left: 28px; background: white; z-index: 1; }
-.ujg-esi-registry-table th:nth-child(2) { left: 28px; z-index: 4; }
-.ujg-esi-registry-table .ujg-esi-cell-remark { position: sticky; left: 82px; z-index: 1; background: white; }
-.ujg-esi-registry-table th:nth-child(3) { left: 82px; z-index: 4; }
+.ujg-esi-registry-table .ujg-esi-cell-remarkId { font-weight: 650; }
 .ujg-esi-registry-table .ujg-esi-expand-cell { position: sticky; left: 0; background: white; z-index: 1; padding: 3px 0; }
 .ujg-esi-registry-table th:first-child { left: 0; z-index: 4; padding: 2px; }
 .ujg-esi-source-text { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
@@ -78,7 +83,8 @@
 .ujg-esi-tree-mark::after { content: ""; position: absolute; top: 14px; left: 0; width: 8px; border-top: 1px solid #b9c8d9; }
 .is-last-child .ujg-esi-tree-mark { bottom: auto; height: 15px; }
 .ujg-esi-registry-table .ujg-esi-more-row td { padding: 0 5px; border-bottom-color: #d6dce4; }
-.ujg-esi-registry .ujg-esi-icon-button.ujg-esi-more-children { display: inline-flex; width: auto; min-width: 0; height: 27px; min-height: 27px; gap: 4px; padding: 0 3px; border: 0; background: transparent; color: #075fc4; font-size: 12px; font-weight: 400; white-space: nowrap; cursor: pointer; }
+.ujg-esi-registry .ujg-esi-icon-button.ujg-esi-more-children { display: inline-flex; justify-content: flex-start; width: 100%; min-width: 0; height: auto; min-height: 27px; gap: 4px; padding: 0 3px; border: 0; background: transparent; color: #075fc4; font-size: 12px; font-weight: 400; white-space: normal; text-align: left; cursor: pointer; }
+.ujg-esi-more-children span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ujg-esi-registry-table .is-collapsed .ujg-esi-source-text { -webkit-line-clamp: 1; }
 .ujg-esi-registry-table .is-collapsed .ujg-esi-cell-remark small { display: none; }
 .ujg-esi-registry-table .is-new .ujg-esi-source-text { -webkit-line-clamp: 2; }
@@ -103,6 +109,12 @@
 .ujg-esi-description-body .ujg-esi-jira-wiki-preview { padding: 0; border: 0; min-height: 0; max-height: none; background: transparent; }
 .ujg-esi-description-body h4 { margin: 8px 0; font-size: 13px; }
 .ujg-esi-description-body p { margin: 4px 0; }
+.ujg-esi-wiki-table { border-collapse: collapse; width: max-content; max-width: 100%; margin: 8px 0; }
+.ujg-esi-wiki-table th, .ujg-esi-wiki-table td { border: 1px solid #cbd4df; padding: 5px 8px; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ujg-esi-wiki-table th { background: #f2f4f7; text-align: left; }
+.ujg-esi-mermaid-diagram { overflow: auto; margin: 8px 0; }
+.ujg-esi-mermaid-diagram pre { margin: 0; padding: 8px; background: #f5f7f9; white-space: pre-wrap; }
+.ujg-esi-mermaid-diagram svg { display: block; max-width: 100%; height: auto; }
 .ujg-esi-description-empty { color: #748294; }
 .ujg-esi-row-owner-popover .ujg-esi-assignee-options { position: static; max-height: 240px; border: 0; box-shadow: none; width: 100%; margin-top: 6px; }
 .ujg-esi-row-owner-popover .ujg-esi-assignee-search { width: 100%; min-width: 0; height: 30px; font-size: 12px; }

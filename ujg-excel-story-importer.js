@@ -890,8 +890,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function headerNames(row, settings) {
     var raw = (row || []).map(cellText);
+    var useOwnerAlias = cellText(settings.columnMap.owner) === "Ответственный" && raw.indexOf("Ответственный") === -1;
     var names = raw.map(function(value, index) {
       var text = canonicalColumnName(value, settings);
+      if (useOwnerAlias && value === "Ответственный от ТНТ" && text === value) text = "Ответственный";
       return text || "Колонка " + String(index + 1);
     });
     var preferred = {
@@ -2706,6 +2708,8 @@ define("_ujgESI_icons", [], function() {
   "use strict";
   var nodes = {"ChevronDown":[["path",{"d":"m6 9 6 6 6-6"}]],"ChevronRight":[["path",{"d":"m9 18 6-6-6-6"}]],"Plus":[["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],"WandSparkles":[["path",{"d":"m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"}],["path",{"d":"m14 7 3 3"}],["path",{"d":"M5 6v4"}],["path",{"d":"M19 14v4"}],["path",{"d":"M10 2v2"}],["path",{"d":"M7 8H3"}],["path",{"d":"M21 16h-4"}],["path",{"d":"M11 3H9"}]],"Upload":[["path",{"d":"M12 3v12"}],["path",{"d":"m17 8-5-5-5 5"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}]],"Download":[["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],"Settings":[["path",{"d":"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"}],["circle",{"cx":"12","cy":"12","r":"3"}]],"RefreshCw":[["path",{"d":"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}],["path",{"d":"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"}],["path",{"d":"M8 16H3v5"}]],"Info":[["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],"Columns3":[["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}],["path",{"d":"M9 3v18"}],["path",{"d":"M15 3v18"}]],"Expand":[["path",{"d":"m15 15 6 6"}],["path",{"d":"m15 9 6-6"}],["path",{"d":"M21 16v5h-5"}],["path",{"d":"M21 8V3h-5"}],["path",{"d":"M3 16v5h5"}],["path",{"d":"m3 21 6-6"}],["path",{"d":"M3 8V3h5"}],["path",{"d":"M9 9 3 3"}]],"Minimize2":[["path",{"d":"m14 10 7-7"}],["path",{"d":"M20 10h-6V4"}],["path",{"d":"m3 21 7-7"}],["path",{"d":"M4 14h6v6"}]],"X":[["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],"Funnel":[["path",{"d":"M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"}]],"FunnelX":[["path",{"d":"M12.531 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14v6a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341l.427-.473"}],["path",{"d":"m16.5 3.5 5 5"}],["path",{"d":"m21.5 3.5-5 5"}]],"ArrowDownAZ":[["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"ArrowUpAZ":[["path",{"d":"m3 8 4-4 4 4"}],["path",{"d":"M7 4v16"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"Search":[["path",{"d":"m21 21-4.34-4.34"}],["circle",{"cx":"11","cy":"11","r":"8"}]],"TriangleAlert":[["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],"ExternalLink":[["path",{"d":"M15 3h6v6"}],["path",{"d":"M10 14 21 3"}],["path",{"d":"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}]],"Bookmark":[["path",{"d":"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"}]],"CheckSquare":[["path",{"d":"M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"}],["path",{"d":"m9 11 3 3L22 4"}]],"ChevronLeft":[["path",{"d":"m15 18-6-6 6-6"}]],"ArrowUp":[["path",{"d":"m5 12 7-7 7 7"}],["path",{"d":"M12 19V5"}]],"ArrowDown":[["path",{"d":"M12 5v14"}],["path",{"d":"m19 12-7 7-7-7"}]]};
   nodes.Equal = [["line",{"x1":"5","x2":"19","y1":"9","y2":"9"}],["line",{"x1":"5","x2":"19","y1":"15","y2":"15"}]];
+  nodes.ListTree = [["path",{"d":"M8 5h13"}],["path",{"d":"M13 12h8"}],["path",{"d":"M13 19h8"}],["path",{"d":"M3 10a2 2 0 0 0 2 2h3"}],["path",{"d":"M3 5v12a2 2 0 0 0 2 2h3"}]];
+  nodes.ChevronsUpDown = [["path",{"d":"m7 15 5 5 5-5"}],["path",{"d":"m7 9 5-5 5 5"}]];
   return function(name) {
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     var attrs = { viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" };
@@ -2731,6 +2735,17 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
     ["priority", "Приоритет", 94], ["updated", "Обновлено", 94]
   ];
   var sourceFields = ["remarkId", "remark", "owner", "module", "sourceStatus", "importState"];
+  var defaultHidden = { module: true, sourceStatus: true, importState: true };
+  function storageKey(state) { return state.preferencesStorageKey || "ujg-esi-state"; }
+  function readLayout(key) {
+    try {
+      var value = JSON.parse(window.localStorage.getItem(key) || "null");
+      return value && value.gridLayout && typeof value.gridLayout === "object" ? value.gridLayout : null;
+    } catch (ignore) { return null; }
+  }
+  function clampWidth(value, fallback) {
+    return typeof value === "number" && isFinite(value) ? Math.max(50, Math.min(600, Math.round(value))) : fallback;
+  }
   function button(name, label, fn) {
     return $("<button/>").attr({ type: "button", title: label, "aria-label": label }).addClass("ujg-esi-icon-button").append(icon(name)).on("click", fn);
   }
@@ -2754,7 +2769,50 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
     var state, hooks, $host, $viewport, $menu, menuAnchor;
     var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
     var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
-    var hidden = { module: true, sourceStatus: true, importState: true }, page = 0, pageSize = 50;
+    var hidden = Object.assign({}, defaultHidden), order = columns.map(function(c) { return c[0]; }), widths = {}, layoutKey, page = 0, pageSize = 50;
+    var suppressSort = false, drag = null;
+
+    function loadLayout(key) {
+      layoutKey = key; hidden = Object.assign({}, defaultHidden); widths = {};
+      order = columns.map(function(c) { return c[0]; });
+      var layout = readLayout(key);
+      if (!layout) return;
+      var known = order.slice(), seen = Object.create(null);
+      if (Array.isArray(layout.order)) order = layout.order.filter(function(id) {
+        if (known.indexOf(id) < 0 || seen[id]) return false;
+        seen[id] = true; return true;
+      }).concat(known.filter(function(id) { return !seen[id]; }));
+      if (Array.isArray(layout.visible)) {
+        var visible = layout.visible.filter(function(id) { return known.indexOf(id) !== -1; });
+        if (visible.length) known.forEach(function(id) { hidden[id] = visible.indexOf(id) === -1; });
+      }
+      if (layout.widths && typeof layout.widths === "object" && !Array.isArray(layout.widths)) columns.forEach(function(column) {
+        widths[column[0]] = clampWidth(layout.widths[column[0]], column[2]);
+      });
+    }
+    function saveLayout() {
+      try {
+        var storage = window.localStorage, stored;
+        try { stored = JSON.parse(storage.getItem(layoutKey) || "{}"); } catch (ignore) { stored = {}; }
+        if (!stored || typeof stored !== "object" || Array.isArray(stored)) stored = {};
+        stored.gridLayout = { order: order.slice(), visible: order.filter(function(id) { return !hidden[id]; }), widths: widths };
+        storage.setItem(layoutKey, JSON.stringify(stored));
+      } catch (ignore) { /* Storage is best-effort. */ }
+    }
+    function orderedColumns() {
+      return order.map(function(id) { return columns.filter(function(c) { return c[0] === id; })[0]; });
+    }
+    function visibleWidth() {
+      return 28 + 72 + orderedColumns().filter(function(c) { return !hidden[c[0]]; })
+        .reduce(function(total, c) { return total + (widths[c[0]] || c[2]); }, 0);
+    }
+    function moveColumn(from, to) {
+      if (from === to || order.indexOf(from) < 0 || order.indexOf(to) < 0) return;
+      var backwards = order.indexOf(from) > order.indexOf(to);
+      order.splice(order.indexOf(from), 1);
+      order.splice(order.indexOf(to) + (backwards ? 0 : 1), 0, from);
+      saveLayout(); draw();
+    }
 
     function closeDescription(focus) {
       clearTimeout(descriptionTimer);
@@ -2806,7 +2864,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
         .on("focus", function() { if (!skipDescriptionFocus) showDescription(this, entry); })
         .on("click", function(event) { event.stopPropagation(); showDescription(this, entry, true); })
         .on("keydown", function(event) {
-          if (event.key === "Escape") { event.stopPropagation(); closeDescription(); }
+          if (event.key === "Escape" && $description) { event.stopPropagation(); closeDescription(); }
           if (event.key === "Enter" || event.key === " ") { event.preventDefault(); showDescription(this, entry, true); $description.find("a,button").first().trigger("focus"); }
           if (event.key === "Tab" && !event.shiftKey && $description && descriptionAnchor === this) { event.preventDefault(); $description.find("a,button").first().trigger("focus"); }
         });
@@ -2937,15 +2995,16 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       if (!$host) return;
       var scroll = $viewport ? { top: $viewport.scrollTop(), left: $viewport.scrollLeft() } : { top: 0, left: 0 };
       $host.empty();
-      var visible = columns.filter(function(column) { return !hidden[column[0]]; });
+      var visible = orderedColumns().filter(function(column) { return !hidden[column[0]]; });
       var groups = registry.selectGroups(rows, filters, sort);
       var pages = Math.max(1, Math.ceil(groups.length / pageSize));
       page = Math.max(0, Math.min(page, pages - 1));
-      var $table = $("<table/>").addClass("ujg-esi-registry-table").attr("aria-label", "Замечания и связанные задачи Jira");
+      var tableWidth = visibleWidth();
+      var $table = $("<table/>").addClass("ujg-esi-registry-table").css({width:tableWidth + "px", "min-width":tableWidth + "px"}).attr("aria-label", "Замечания и связанные задачи Jira");
       var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "28px"));
-      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("Expand", "Развернуть все", function() { collapsed = Object.create(null); rows.forEach(function(row) { fullChildren[row.groupId] = true; }); refresh(); })));
+      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("ListTree", "Развернуть все", function() { collapsed = Object.create(null); rows.forEach(function(row) { fullChildren[row.groupId] = true; }); refresh(); })));
       visible.forEach(function(column) {
-        $colgroup.append($("<col/>").css("width", column[2] + "px"));
+        $colgroup.append($("<col/>").attr({"data-column":column[0],width:widths[column[0]] || column[2]}).css("width", (widths[column[0]] || column[2]) + "px"));
         var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!filters.excludeDone, sorted = sort && sort.column === column[0];
         var heading = column[0] === "remark" && state.viewMode === "jira" ? "Замечание" : column[1];
         var caption = "Фильтр: " + heading;
@@ -2955,11 +3014,24 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
         var $sort = $("<button/>").addClass("ujg-esi-header-sort").attr({ type: "button", "data-sort": column[0], title: "Сортировка: " + heading, "aria-label": "Сортировка: " + heading })
           .append($("<span/>").text(heading), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null)
           .on("click", function() {
+            if (suppressSort) { suppressSort = false; return; }
             sort = { column: column[0], direction: sorted ? (sort.direction === "asc" ? "desc" : "asc") : column[0] === "priority" ? "desc" : "asc" };
             page = 0; refresh(); $host.find('[data-sort="' + column[0] + '"]').trigger("focus");
           });
-        $head.append($("<th/>").attr({ scope: "col", "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
-          .append($sort, $filter));
+        var $resize = $("<span/>").addClass("ujg-esi-column-resize").attr({ role:"separator", tabindex:"0", "aria-label":"Ширина: " + heading, "aria-orientation":"vertical" })
+          .on("pointerdown", function(event) {
+            event.preventDefault(); event.stopPropagation();
+            var measured = $(this).closest("th")[0].getBoundingClientRect().width;
+            drag = { type:"resize", id:column[0], start:event.pageX, width:measured || widths[column[0]] || column[2] };
+          }).on("keydown", function(event) {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault(); widths[column[0]] = clampWidth((widths[column[0]] || column[2]) + (event.key === "ArrowRight" ? 10 : -10), column[2]); saveLayout(); draw();
+          });
+        $head.append($("<th/>").attr({ scope: "col", "data-column":column[0], "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
+          .on("pointerdown", function(event) {
+            if ($(event.target).closest(".ujg-esi-header-filter,.ujg-esi-column-resize").length) return;
+            drag = { type:"order", id:column[0], start:event.pageX };
+          }).append($sort, $filter, $resize));
       });
       $colgroup.append($("<col/>").css("width", "72px"));
       $head.append($("<th/>").attr({scope: "col", "aria-label": "Действия", title: "Действия"}).addClass("ujg-esi-actions-head").append(icon("WandSparkles"), icon("Plus")));
@@ -2969,7 +3041,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
         var parent = group.parent, force = Object.keys(filters).length > 0;
         if (!sort) group.children.sort(function(a, b) { return registry.compare(a.key, b.key); });
         var opened = force || !collapsed[parent.groupId];
-        var children = opened ? (force || fullChildren[parent.groupId] ? group.children : group.children.slice(0, 5)) : [];
+        var children = opened ? (force || fullChildren[parent.groupId] || !visible.some(function(c) { return sourceFields.indexOf(c[0]) < 0; }) ? group.children : group.children.slice(0, 5)) : [];
         var remaining = opened ? group.children.length - children.length : 0;
         var span = children.length + 1 + (remaining ? 1 : 0);
         [parent].concat(children).forEach(function(entry, rowNumber) {
@@ -2997,7 +3069,23 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
         });
         if (remaining) {
           var $more = button("ChevronDown", "Ещё " + remaining + " связанных задач", function() { fullChildren[parent.groupId] = true; refresh(); }).addClass("ujg-esi-more-children").append($("<span/>").text("Ещё " + remaining + " связанных задач"));
-          $body.append($("<tr/>").addClass("ujg-esi-more-row").attr("data-source-index", parent.rowIndex).append($("<td/>").attr("colspan", visible.filter(function(column) { return sourceFields.indexOf(column[0]) === -1; }).length).append($more)));
+          var $moreRow = $("<tr/>").addClass("ujg-esi-more-row").attr("data-source-index", parent.rowIndex), runs = [], run = {count:0,width:0};
+          function appendRun() {
+            if (run.count) runs.push(run);
+            run = {count:0,width:0};
+          }
+          visible.forEach(function(column) {
+            if (sourceFields.indexOf(column[0]) < 0) { run.count++; run.width += widths[column[0]] || column[2]; }
+            else appendRun();
+          });
+          appendRun();
+          var widest = runs.reduce(function(best, item, index) { return item.width > runs[best].width ? index : best; }, 0);
+          runs.forEach(function(item, index) {
+            var $cell = $("<td/>").attr("colspan", item.count);
+            if (index === widest) $cell.append($more);
+            $moreRow.append($cell);
+          });
+          $body.append($moreRow);
         }
       });
       if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 2).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
@@ -3015,8 +3103,14 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
     }
     return {
+      dismissPopover: function() {
+        if ($menu && $menu[0].isConnected) { closeMenu(true); return true; }
+        if ($description && $description[0].isConnected) { closeDescription(true); return true; }
+        return false;
+      },
       mount: function($parent, nextState, nextHooks) {
         state = nextState; hooks = nextHooks;
+        if (layoutKey !== storageKey(state)) loadLayout(storageKey(state));
         closeMenu(); closeDescription();
         if (sourceRows !== state.rows) {
           sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
@@ -3031,6 +3125,21 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
           if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
           if ($description && !$.contains($description[0], event.target) && event.target !== $description[0] && event.target !== descriptionAnchor) closeDescription();
         });
+        $(document).off("pointermove.ujgRegistry" + id + " pointerup.ujgRegistry" + id)
+          .on("pointermove.ujgRegistry" + id, function(event) {
+            if (drag && drag.type === "resize") {
+              var column = columns.filter(function(c) { return c[0] === drag.id; })[0];
+              widths[drag.id] = clampWidth(drag.width + event.pageX - drag.start, column[2]);
+              $host.find('col[data-column="' + drag.id + '"]').attr("width", widths[drag.id]).css("width", widths[drag.id] + "px");
+              $host.find("table").css({width:visibleWidth() + "px", "min-width":visibleWidth() + "px"});
+            }
+          }).on("pointerup.ujgRegistry" + id, function(event) {
+            if (!drag) return;
+            var action = drag; drag = null;
+            if (action.type === "resize") { suppressSort = true; setTimeout(function() { suppressSort = false; }, 0); saveLayout(); return; }
+            var $target = $(event.target).closest("th[data-column]");
+            if (Math.abs(event.pageX - action.start) >= 5 && $target.length) { suppressSort = true; setTimeout(function() { suppressSort = false; }, 0); moveColumn(action.id, $target.attr("data-column")); }
+          });
         draw();
       },
       toggleAll: function() {
@@ -3042,10 +3151,15 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       columnsMenu: function(anchor) {
         if (!$host) return;
         var $box = popup(anchor, "Столбцы");
-        columns.forEach(function(column) {
-          $box.append($("<label/>").addClass("ujg-esi-filter-option").append($("<input/>").attr("type", "checkbox").prop("checked", !hidden[column[0]]).prop("disabled", column[0] === "remarkId" || column[0] === "remark").on("change", function() { hidden[column[0]] = !this.checked; }), $("<span/>").text(column[1])));
+        orderedColumns().forEach(function(column) {
+          $box.append($("<label/>").addClass("ujg-esi-filter-option").append($("<input/>").attr("type", "checkbox").prop("checked", !hidden[column[0]]).on("change", function() {
+            if (!this.checked && order.filter(function(id) { return !hidden[id]; }).length <= 1) { this.checked = true; return; }
+            hidden[column[0]] = !this.checked;
+          }), $("<span/>").text(column[1])));
         });
-        $box.append($("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", refresh));
+        $box.append($("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() { saveLayout(); refresh(); }));
+        $box.append(button("RefreshCw", "Сбросить расположение столбцов", function() { hidden = Object.assign({}, defaultHidden); order = columns.map(function(c) { return c[0]; }); widths = {}; saveLayout(); refresh(); }).addClass("ujg-esi-menu-command").append($("<span/>").text("Сбросить расположение")));
+        $box.find("input,button").first().trigger("focus");
       }
     };
   }
@@ -3061,11 +3175,118 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
   var grid;
+  var mermaidLoad;
+  var mermaidRenderSequence = 0;
+  var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
+
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (mermaidLoad) return mermaidLoad;
+    mermaidLoad = new Promise(function(resolve, reject) {
+      var script = document.createElement("script"), settled = false;
+      var timer = setTimeout(function() { finish(new Error("Mermaid timed out")); }, 8000);
+      function finish(error) {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        if (error) reject(error); else resolve(window.mermaid);
+      }
+      script.src = "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js";
+      script.async = true;
+      script.onload = function() { finish(window.mermaid ? null : new Error("Mermaid unavailable")); };
+      script.onerror = function() { finish(new Error("Mermaid load failed")); };
+      document.head.appendChild(script);
+    }).catch(function(error) { mermaidLoad = null; throw error; });
+    return mermaidLoad;
+  }
+
+  function renderDiagram($node, source) {
+    if (/%%\{|^---\s*$|\b(?:https?:|data:|click\s|href\s|image\s*:|img\s*:)/im.test(source)) return;
+    // Mermaid can fetch assets while rendering, before the SVG is sanitized.
+    if (/@\s*\{|url\s*\(|@\s*import\b|!\s*\[|<\s*\/?\s*(?:img|image|iframe|video|audio|source|link|style|script|object|embed)\b/i.test(source)) return;
+    var renderId = "ujg-esi-mermaid-" + (++mermaidRenderSequence) + "-" + Math.random().toString(36).slice(2);
+    function cleanupRender() {
+      ["d" + renderId, "i" + renderId, renderId].forEach(function(id) {
+        var node = document.getElementById(id);
+        if (node) node.remove();
+      });
+    }
+    loadMermaid().then(function(lib) {
+      if (!$node[0] || !$node[0].isConnected) return;
+      lib.initialize({
+        startOnLoad: false, securityLevel: "strict", htmlLabels: false, suppressErrorRendering: true,
+        secure: ["securityLevel", "startOnLoad", "secure", "htmlLabels", "flowchart", "suppressErrorRendering"],
+        flowchart: { htmlLabels: false }
+      });
+      return lib.render(renderId, source);
+    }).then(function(result) {
+      cleanupRender();
+      if (!result || !$node[0] || !$node[0].isConnected) return;
+      var svg = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement;
+      if (svg.localName !== "svg" || svg.querySelector("parsererror")) return;
+      svg.querySelectorAll("script,foreignObject,image,feImage,use,a,iframe,animate,set").forEach(function(node) { node.remove(); });
+      [svg].concat(Array.from(svg.querySelectorAll("*"))).forEach(function(node) {
+        Array.from(node.attributes).forEach(function(attr) {
+          if (/^on/i.test(attr.name) || /href/i.test(attr.name) || /url\s*\(\s*(?!['"]?#)/i.test(attr.value)) node.removeAttribute(attr.name);
+        });
+      });
+      svg.querySelectorAll("style").forEach(function(node) {
+        if (/@import|url\s*\(\s*(?!['"]?#)/i.test(node.textContent)) node.remove();
+      });
+      $node.empty().append(document.importNode(svg, true));
+    }).catch(function() { cleanupRender(); /* The source remains readable. */ });
+  }
+
+  function wikiRowEnds(line, marker) {
+    if (!line.endsWith(marker)) return false;
+    var slashes = 0;
+    for (var i = line.length - marker.length - 1; i >= 0 && line[i] === "\\"; i--) slashes++;
+    return slashes % 2 === 0;
+  }
+
+  function wikiCells(line, marker) {
+    if (!line.startsWith(marker) || !wikiRowEnds(line, marker)) return null;
+    var cells = [], current = "";
+    for (var i = marker.length; i < line.length - marker.length; i++) {
+      var ch = line[i];
+      if (ch === "\\" && (line[i + 1] === "|" || line[i + 1] === "\\")) { current += line[++i]; continue; }
+      if (ch === "|" && (marker === "|" || line[i + 1] === "|")) {
+        cells.push(current.trim()); current = "";
+        if (marker === "||") i++;
+      } else current += ch;
+    }
+    cells.push(current.trim());
+    return cells;
+  }
 
   function init(container, svc) {
     $root = container;
     services = svc || {};
     grid = gridModule.create();
+    $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
+      if (event.key !== "Escape" || event.isPropagationStopped()) return;
+      if (grid.dismissPopover()) { event.stopPropagation(); return; }
+      if (!fullscreen) return;
+      if ($(event.target).closest("[role='dialog'],.ujg-esi-grid-menu").length) return;
+      toggleFullscreen();
+    });
+  }
+
+  function toggleFullscreen() {
+    if (!fullscreen) {
+      fullscreenHost = $root.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
+      if (!fullscreenHost.length) fullscreenHost = $root;
+      fullscreenStyle = fullscreenHost.attr("style");
+      fullscreenScroll = { top: fullscreenHost.scrollTop(), left: fullscreenHost.scrollLeft() };
+      fullscreenHost.addClass("ujg-esi-fullscreen");
+      fullscreen = true;
+    } else {
+      fullscreenHost.removeClass("ujg-esi-fullscreen");
+      if (fullscreenStyle == null) fullscreenHost.removeAttr("style"); else fullscreenHost.attr("style", fullscreenStyle);
+      fullscreenHost.scrollTop(fullscreenScroll.top).scrollLeft(fullscreenScroll.left);
+      fullscreen = false;
+    }
+    $root.find(".ujg-esi-fullscreen-button").empty().append(icon(fullscreen ? "Minimize2" : "Expand"))
+      .attr({ title: fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", "aria-label": fullscreen ? "Выйти из полноэкранного режима" : "На весь экран" });
   }
 
   function scheduleEpicSearch(query) {
@@ -3196,12 +3417,42 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
 
   function renderJiraWiki(text) {
     var $wrap = $("<div/>").addClass("ujg-esi-jira-wiki-preview");
-    String(text || "").split(/\n/).forEach(function(line) {
+    var lines = String(text || "").split(/\n/), $table = null, $lastCell = null;
+    for (var index = 0; index < lines.length; index++) {
+      var line = lines[index];
       var trimmed = line.trim();
       var $line;
+      var fence = /^```mermaid\s*$/i.test(trimmed) ? "```" : /^\{code:mermaid\}\s*$/i.test(trimmed) ? "{code}" : /^\{mermaid\}\s*$/i.test(trimmed) ? "{mermaid}" : null;
+      if (fence) {
+        var source = [];
+        while (++index < lines.length && lines[index].trim() !== fence) source.push(lines[index]);
+        var raw = source.join("\n"), $diagram = $("<div/>").addClass("ujg-esi-mermaid-diagram").append($("<pre/>").text(raw));
+        $wrap.append($diagram);
+        if (index < lines.length) renderDiagram($diagram, raw);
+        $table = null; $lastCell = null; continue;
+      }
+      if (trimmed.charAt(0) === "|" && !wikiRowEnds(trimmed, "|")) {
+        while (index + 1 < lines.length && !wikiRowEnds(line.trim(), "|")) line += "\n" + lines[++index];
+        trimmed = line.trim();
+      }
+      var headers = wikiCells(trimmed, "||"), cells = headers ? null : wikiCells(trimmed, "|");
+      if (headers || cells) {
+        if (!$table) { $table = $("<table/>").addClass("ujg-esi-wiki-table"); $wrap.append($table); }
+        var $row = $("<tr/>");
+        (headers || cells).forEach(function(value) {
+          $lastCell = $(headers ? "<th/>" : "<td/>");
+          value.replace(/\\?&#124;/gi, "|").split("\n").forEach(function(part, partIndex) {
+            if (partIndex) $lastCell.append($("<br/>"));
+            wikiInline($lastCell, part);
+          });
+          $row.append($lastCell);
+        });
+        $table.append($row); continue;
+      }
+      $table = null; $lastCell = null;
       if (!trimmed) {
         $wrap.append($("<div/>").addClass("ujg-esi-wiki-blank").html("&nbsp;"));
-        return;
+        continue;
       }
       if (/^h[1-6]\.\s+/.test(trimmed)) {
         $line = $("<h4/>").text(trimmed.replace(/^h[1-6]\.\s+/, ""));
@@ -3216,7 +3467,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
         wikiInline($line, line);
       }
       $wrap.append($line);
-    });
+    }
     return $wrap;
   }
 
@@ -4266,9 +4517,13 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("projectKey", value);
     }));
     appendConfirmControl($fields, "Тип Jira", appendIssueTypePicker("ujg-esi-confirm-issue-type", "story-type", dialog.issueType || "Story", state, false));
-    appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
+    var epicOptions = [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
       return { value: epic.key || "", label: epicLabel(epic) };
-    })), function(value) {
+    }));
+    if (dialog.epicKey && !epicOptions.some(function(option) { return option.value === dialog.epicKey; })) {
+      epicOptions.push({ value: dialog.epicKey, label: dialog.epicText || dialog.epicKey });
+    }
+    appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", epicOptions, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
     appendConfirmControl($fields, "Название", appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
@@ -4655,13 +4910,14 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     appendExcelActions($toolbar, s);
     if (s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
-      $tools.append(gridModule.button("Expand", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
+      $tools.append(gridModule.button("ChevronsUpDown", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
       var $summary = $("<details/>").addClass("ujg-esi-import-summary");
       $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
       appendCounters($summary, s);
       if (s.syncSummary) $summary.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
       $tools.append($summary); $toolbar.append($tools);
     }
+    $toolbar.append(gridModule.button(fullscreen ? "Minimize2" : "Expand", fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", toggleFullscreen).addClass("ujg-esi-fullscreen-button"));
     $root.append($toolbar);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
@@ -4997,32 +5253,82 @@ define("_ujgESI_main", [
     return config && config.STORAGE_KEY ? String(config.STORAGE_KEY) : "ujg-esi-state";
   }
 
-  function readStoredState() {
-    if (typeof localStorage === "undefined") return {};
+  function jiraUserMeta(name) {
+    var value;
     try {
-      var raw = localStorage.getItem(stateStorageKey());
+      var ajs = typeof AJS !== "undefined" ? AJS : typeof window !== "undefined" ? window.AJS : null;
+      value = ajs && ajs.Meta && typeof ajs.Meta.get === "function" ? ajs.Meta.get(name) : "";
+      if (typeof value === "string" && value.trim()) return value.trim();
+    } catch (ignore) {}
+    try {
+      var doc = typeof document !== "undefined" ? document : typeof window !== "undefined" ? window.document : null;
+      var meta = doc && doc.querySelector ? doc.querySelector('meta[name="ajs-' + name + '"]') : null;
+      value = meta && meta.getAttribute("content");
+      if (typeof value === "string") return value.trim();
+    } catch (ignore) {}
+    return "";
+  }
+
+  function preferencesStorageKey() {
+    var userKey = jiraUserMeta("remote-user-key");
+    var userName = userKey ? "" : jiraUserMeta("remote-user");
+    return stateStorageKey() + (userKey ? ":user:key:" + encodeURIComponent(userKey)
+      : userName ? ":user:name:" + encodeURIComponent(userName) : "");
+  }
+
+  function preferencesStorage() {
+    try {
+      if (typeof localStorage !== "undefined") return localStorage;
+      return typeof window !== "undefined" ? window.localStorage : null;
+    } catch (ignore) {
+      return null;
+    }
+  }
+
+  function readStoredState(storageKey) {
+    try {
+      var storage = preferencesStorage();
+      var raw = storage && storage.getItem(storageKey);
       if (!raw) return {};
       var parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : {};
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
     } catch (err) {
       return {};
     }
   }
 
-  function readStoredProjectKey() {
-    var stored = readStoredState();
+  function readStoredProjectKey(storageKey) {
+    var stored = readStoredState(storageKey);
+    if (storageKey !== stateStorageKey() && !Object.prototype.hasOwnProperty.call(stored, "projectKey") && !Object.prototype.hasOwnProperty.call(stored, "project")) {
+      stored = readStoredState(stateStorageKey());
+    }
     var key = stored.projectKey != null ? stored.projectKey : stored.project;
-    return key != null ? String(key).trim() : "";
+    return typeof key === "string" ? key.trim() : "";
   }
 
-  function writeStoredProjectKey(projectKey) {
-    if (typeof localStorage === "undefined") return;
+  function storedEpics(stored) {
+    var source = stored && stored.epicsByProject;
+    var out = Object.create(null);
+    if (source && typeof source === "object" && !Array.isArray(source)) {
+      Object.keys(source).forEach(function(project) {
+        if (typeof source[project] === "string") out[project] = source[project].trim();
+      });
+    }
+    return out;
+  }
+
+  function writeStoredSelection(storageKey, projectKey, epicKey) {
     try {
-      var key = projectKey != null ? String(projectKey).trim() : "";
-      var stored = readStoredState();
-      if (key) stored.projectKey = key;
-      else delete stored.projectKey;
-      localStorage.setItem(stateStorageKey(), JSON.stringify(stored));
+      var storage = preferencesStorage();
+      if (!storage) return;
+      // Merge the latest object so grid preferences and other project choices survive.
+      var stored = readStoredState(storageKey);
+      stored.projectKey = projectKey;
+      if (projectKey && typeof epicKey === "string") {
+        stored.epicsByProject = storedEpics(stored);
+        stored.epicsByProject[projectKey] = epicKey;
+      }
+      storage.setItem(storageKey, JSON.stringify(stored));
     } catch (err) {
       // Dashboard storage is best-effort; failing to persist must not block import.
     }
@@ -5617,6 +5923,7 @@ define("_ujgESI_main", [
         })
       : null;
     var state = {
+      preferencesStorageKey: preferencesStorageKey(),
       projects: [],
       projectKey: "",
       epics: [],
@@ -5682,6 +5989,11 @@ define("_ujgESI_main", [
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
+    var epicSeq = 0;
+    var dialogEpicSeq = 0;
+    var projectEpics = [];
+    var projectSelectionChanged = false;
+    var epicChoices = Object.create(null);
     var createInFlight = false;
 
     function hasOwn(obj, key) {
@@ -5722,6 +6034,15 @@ define("_ujgESI_main", [
       return !!(state.projects || []).filter(function(project) {
         return project && String(project.key || "") === key;
       })[0];
+    }
+
+    function rememberedEpic(projectKey) {
+      if (!projectKey) return "";
+      if (!hasOwn(epicChoices, projectKey)) {
+        var saved = storedEpics(readStoredState(state.preferencesStorageKey));
+        if (hasOwn(saved, projectKey)) epicChoices[projectKey] = saved[projectKey];
+      }
+      return hasOwn(epicChoices, projectKey) ? epicChoices[projectKey] : "";
     }
 
     function selectedEpicText() {
@@ -6493,6 +6814,7 @@ define("_ujgESI_main", [
     }
 
     function render() {
+      state.epics = state.createDialog && state.createDialog.epics ? state.createDialog.epics : projectEpics;
       rendering.render(state);
       if (API && typeof API.resize === "function") API.resize();
     }
@@ -6567,9 +6889,14 @@ define("_ujgESI_main", [
       return promiseOf(api.getProjects()).then(
         function(projects) {
           state.projects = normalizeProjects(projects);
+          if (projectSelectionChanged) {
+            render();
+            return;
+          }
           if (!state.projectKey) {
-            var storedProjectKey = readStoredProjectKey();
+            var storedProjectKey = readStoredProjectKey(state.preferencesStorageKey);
             if (storedProjectKey && hasProjectKey(storedProjectKey)) state.projectKey = storedProjectKey;
+            state.epicKey = rememberedEpic(state.projectKey);
           }
           state.loading = false;
           render();
@@ -6584,24 +6911,39 @@ define("_ujgESI_main", [
       );
     }
 
-    function loadEpics(projectKey) {
-      state.epicKey = "";
-      state.epics = [];
+    function loadEpics(projectKey, dialog) {
+      var seq = dialog ? ++dialogEpicSeq : ++epicSeq;
+      var scopeProjectKey = state.projectKey;
+      function active() {
+        return state.projectKey === scopeProjectKey && (dialog
+          ? seq === dialogEpicSeq && state.createDialog === dialog && dialog.projectKey === projectKey
+          : seq === epicSeq);
+      }
+      if (dialog) dialog.epics = [];
+      else projectEpics = [];
       closeEpicPicker();
       if (!projectKey) {
+        if (!dialog) state.loading = false;
         render();
         return Promise.resolve();
       }
-      state.loading = true;
+      if (!dialog) state.loading = true;
       render();
       return promiseOf(api.getProjectEpics(projectKey)).then(
         function(data) {
-          state.epics = normalizeEpics(data);
-          state.loading = false;
+          if (!active()) return;
+          if (dialog) dialog.epics = normalizeEpics(data);
+          else {
+            projectEpics = normalizeEpics(data);
+            state.loading = false;
+          }
           render();
         },
         function(err) {
-          setError("Не удалось загрузить Epic: " + (err && err.statusText ? err.statusText : "request failed"));
+          if (!active()) return;
+          state.error = "Не удалось загрузить Epic: " + (err && err.statusText ? err.statusText : "request failed");
+          if (!dialog) state.loading = false;
+          render();
         }
       );
     }
@@ -6814,15 +7156,17 @@ define("_ujgESI_main", [
     }
 
     function onProjectChange(projectKey) {
+      projectSelectionChanged = true;
       if (state.syncLoading) {
         syncSeq += 1;
         state.syncLoading = false;
       }
-      state.projectKey = projectKey != null ? String(projectKey) : "";
+      state.projectKey = projectKey != null ? String(projectKey).trim() : "";
+      state.epicKey = rememberedEpic(state.projectKey);
       invalidateRegistry();
       state.error = "";
       state.createDialog = null;
-      writeStoredProjectKey(state.projectKey);
+      writeStoredSelection(state.preferencesStorageKey, state.projectKey);
       closeEpicPicker();
       closeUserPicker();
       closeIssueTypePicker();
@@ -6846,7 +7190,11 @@ define("_ujgESI_main", [
         syncSeq += 1;
         state.syncLoading = false;
       }
-      state.epicKey = epicKey != null ? String(epicKey) : "";
+      state.epicKey = epicKey != null ? String(epicKey).trim() : "";
+      if (state.projectKey) {
+        epicChoices[state.projectKey] = state.epicKey;
+        writeStoredSelection(state.preferencesStorageKey, state.projectKey, state.epicKey);
+      }
       invalidateRegistry();
       state.createDialog = null;
       closeEpicPicker();
@@ -7496,7 +7844,7 @@ define("_ujgESI_main", [
         dialog.epicKey = "";
         dialog.epicText = "Без Epic";
         dialog.epicLinkAllowed = projectEpicLinkAllowed(dialog.projectKey, dialog.issueType);
-        loadEpics(dialog.projectKey);
+        loadEpics(dialog.projectKey, dialog);
         loadCreateMeta(dialog.projectKey);
         shouldRender = true;
       } else if (key === "issueType") {

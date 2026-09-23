@@ -74,6 +74,18 @@ test("importer CSS uses one icon button style for toolbar actions", function () 
   assert.match(source, /\.ujg-esi-dropzone-dragover/);
 });
 
+test("More children label stays at the start of a wide run and truncates in a narrow run", function () {
+  const source = read("ujg-excel-story-importer.css");
+  const button = source.match(/\.ujg-esi-registry \.ujg-esi-icon-button\.ujg-esi-more-children\s*\{([^}]+)\}/)[1];
+  const label = source.match(/\.ujg-esi-more-children span\s*\{([^}]+)\}/)[1];
+  assert.match(button, /justify-content:\s*flex-start/);
+  assert.match(button, /text-align:\s*left/);
+  assert.match(label, /min-width:\s*0/);
+  assert.match(label, /overflow:\s*hidden/);
+  assert.match(label, /text-overflow:\s*ellipsis/);
+  assert.match(label, /white-space:\s*nowrap/);
+});
+
 test("importer CSS renders story and child statuses as one compact block", function () {
   const source = read("ujg-excel-story-importer.css");
 

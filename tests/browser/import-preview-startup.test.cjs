@@ -43,6 +43,7 @@ test("the shared preview URL opens a populated tree without manual import or syn
   assert.ok(doc.querySelector(".ujg-esi-child-row"), (doc.querySelector(".ujg-esi-sync-error")?.textContent || doc.querySelector("main").textContent.slice(0,800)) + " | " + errors.join(" | "));
   assert.ok(doc.querySelector(".ujg-esi-more-children"));
   assert.equal(doc.querySelectorAll(".ujg-esi-create-row").length,2);
+  assert.match(doc.querySelector(".ujg-esi-parent-row .ujg-esi-cell-owner").textContent, /Орлова Н\./, "The multiline source owner header must populate the grid");
   assert.ok(doc.querySelector(".ujg-esi-parent-row.is-failed"));
   assert.ok(doc.querySelector(".ujg-esi-import-warning"));
   const readsBefore = dom.window.issueReadCalls;

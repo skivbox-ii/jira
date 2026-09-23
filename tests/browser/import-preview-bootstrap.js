@@ -1,12 +1,13 @@
 (function() {
   var rendering = modules._ujgESI_rendering;
   var originalInit = rendering.init, originalRender = rendering.render;
-  var callbacks, phase = new URLSearchParams(location.search).has("empty") ? "manual" : "waiting";
+  var callbacks, currentState, phase = new URLSearchParams(location.search).has("empty") ? "manual" : "waiting";
   rendering.init = function(container, services) {
     callbacks = services;
     return originalInit(container, services);
   };
   rendering.render = function(state) {
+    currentState = state;
     if (phase === "loading" && !state.loading && state.rows.length) {
       phase = "syncing";
       state.rows.forEach(function(row) {
@@ -24,8 +25,7 @@
     if (!response.ok) throw new Error("Не удалось загрузить демонстрационный Excel.");
     return response.arrayBuffer();
   }).then(function(buffer) {
-    callbacks.onProjectChange("EVOSCADA");
-    callbacks.onEpicChange("EVOSCADA-100");
+    if (!currentState.projectKey) callbacks.onProjectChange("EVOSCADA");
     phase = "loading";
     callbacks.onFileChange(new File([buffer], "График замечаний.xlsx", {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
   }).catch(function(error) {

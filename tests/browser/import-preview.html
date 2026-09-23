@@ -12,6 +12,7 @@
 <script src="/test/jquery.js"></script>
 <script src="/test/xlsx.js"></script>
 <script src="/test/jszip.js"></script>
+<script src="/test/mermaid.js"></script>
 <script src="/test/fixture.js"></script>
 <script>
 window.modules = {jquery: jQuery};
@@ -20,7 +21,7 @@ window.issueReadCalls = 0;
 window.offlineApi = {
   baseUrl: "https://jira.example.test",
   getProjects: function(){return Promise.resolve([{key:"EVOSCADA",name:"EVO-SCADA"}]);},
-  getProjectEpics: function(){return Promise.resolve({issues:[{key:"EVOSCADA-100",fields:{summary:"Замечания ИИ ТСВ"}}]});},
+  getProjectEpics: function(){return Promise.resolve({issues:[{key:"EVOSCADA-100",fields:{summary:"Замечания ИИ ТСВ"}},{key:"EVOSCADA-200",fields:{summary:"Приёмочные испытания"}}]});},
   getProjectCreateMeta: function(){return Promise.resolve({projects:[]});},
   getIssuesByKeys: function(keys){window.issueReadCalls++;return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
   getProjectIssues: function(){window.issueReadCalls++;return Promise.resolve({issues:Object.values(fixtureIssues).filter(function(issue){return issue.fields.issuetype.name === "История";})});},

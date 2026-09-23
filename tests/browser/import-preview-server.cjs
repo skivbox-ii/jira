@@ -4,7 +4,7 @@ const path = require("node:path");
 const XLSX = require("xlsx");
 const root = path.join(__dirname, "../..");
 const issues = {};
-const rows = [["№", "Замечание", "Модуль", "Приоритет", "Исполнитель", "Jira", "Статус в Jira", "Исполнитель в Jira"]];
+const rows = [["№", "Замечание", "Модуль", "Приоритет", "Ответственный от\nТНТ", "Jira", "Статус в Jira", "Исполнитель в Jira"]];
 rows.push([815, "После смены пользователя сбрасывается масштаб мнемосхемы", "Интерфейс", "Средний", "Орлова Н.", "", "", ""]);
 rows.push([816, "При переключении вкладок пропадает выбранный фильтр", "Интерфейс", "Средний", "Смирнов Д.", "", "", ""]);
 const descriptions = ["Драйвер МЭК устанавливает сигналу недостоверность только на основе флага IV. Учитывать OV и NT.", "Интерфейс просмотра настроек МЭК-соединений", "Сохранение настроек попапов после обновления", "Плановая линия на участке профиля", "Автомасштабирование при переходе между ТУ", "Курсор и границы осей X и Y"];
@@ -24,13 +24,17 @@ for (let i = 0; i < 68; i++) {
   const name = ["Иванов И.","Сидоров А.","Соколова А."][i % 3];
   rows.push([id,description,i % 2 ? "Интерфейс" : "МЭК","Средний",i % 2 ? "Орлова Н." : "Смирнов Д.",key,status,name]);
   const parent = issue(key, id + ". " + description, status, name, "История");
-  if (i === 0) parent.fields.summary = "744. МЭК: признак недостоверности";
+  if (i === 0) {
+    parent.fields.summary = "744. МЭК: признак недостоверности";
+    parent.fields.description = "Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Лист|Замечания|\n|Строка Excel|4|\n|ID|744|\n|Ответственный|Смирнов Д.|\n|Замечание|Учитывать признаки качества IV, OV и NT.|\n|Приоритет|Средний|";
+  }
   issues[key] = parent;
   for (let j = 0; j < (i === 0 ? 23 : 2); j++) {
     const childKey = i === 0 ? (["EVOSCADA-18057","EVOSCADA-18080","EVOSCADA-18368","EVOSCADA-18371","EVOSCADA-18743"][j] || "EVOSCADA-" + (34000+j)) : "EVOSCADA-" + (30000 + i * 10 + j);
     const role = j % 2 ? "QA" : "BE";
     const sampleTitle = i === 0 ? ["МЭК: качество OV и NT","Проверка качества OV и NT","МЭК: флаги SB, BL, NT, IV","OPC: проверка качества","МЭК: обработка флага SB"][j] : "";
     const child = issue(childKey, "[" + role + "] " + id + ". " + (sampleTitle || description), j % 2 ? "Тестирование" : "Готово", i === 1 && j === 1 ? "" : j % 2 ? "Соколова А." : "Петров П.", "Задача разработки");
+    if (i === 0 && j === 0) child.fields.description += "\n\n```mermaid\nflowchart LR\n    A[Сигнал МЭК] --> B{IV / OV / NT}\n    B --> C[Недостоверное качество]\n    B --> D[Журнал и OPC UA]\n```";
     issues[childKey] = child;
     parent.fields.issuelinks.push({type:{name:"Child",outward:"is parent of",inward:"is child of"},outwardIssue:{key:childKey,fields:child.fields}});
   }
@@ -51,6 +55,7 @@ const files = {
   "/test/jquery.js": [require.resolve("jquery/dist/jquery.js"),"text/javascript"],
   "/test/xlsx.js": [require.resolve("xlsx/dist/xlsx.full.min.js"),"text/javascript"],
   "/test/jszip.js": [require.resolve("jszip/dist/jszip.min.js"),"text/javascript"],
+  "/test/mermaid.js": [require.resolve("mermaid/dist/mermaid.min.js"),"text/javascript"],
   "/ujg-excel-story-importer.js": [path.join(root,"ujg-excel-story-importer.js"),"text/javascript"],
   "/ujg-excel-story-importer.css": [path.join(root,"ujg-excel-story-importer.css"),"text/css"]
 };

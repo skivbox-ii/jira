@@ -21,6 +21,72 @@ function loadRemarkId() {
   return loadAmdModule(path.join(MODULE_DIR, "remark-id.js"), {});
 }
 
+function loadRegistry() {
+  return loadAmdModule(path.join(MODULE_DIR, "registry.js"), {"_ujgESI_remarkId":loadRemarkId()});
+}
+
+test("default owner mapping accepts exact TNT header with a line break", function () {
+  const parser = loadParser(), registry = loadRegistry();
+  const result = parser.parseWorkbook({SheetNames:["Лист"],Sheets:{"Лист":{__rows:[
+    ["№","Замечание","Ответственный от\nТНТ","Примечание"],
+    ["31","Не открывается форма","Анна","сохранить"],
+  ]}}});
+  assert.equal(result.headerColumns["Ответственный"],3);
+  assert.equal(result.rows[0].sourceColumnIndexes["Ответственный"],3);
+  assert.equal(result.rows[0].sourceColumns["Ответственный"],"Анна");
+  assert.equal(result.rows[0].sourceColumns["Примечание"],"сохранить");
+  assert.equal(registry.buildRows(result.rows)[0].owner,"Анна");
+  assert.equal(registry.buildRows(result.rows)[0].assignee,"");
+});
+
+test("exact default owner header wins and retains alias column value", function () {
+  const parser = loadParser(), registry = loadRegistry();
+  const result = parser.parseWorkbook({SheetNames:["Лист"],Sheets:{"Лист":{__rows:[
+    ["Замечание","Ответственный от ТНТ","Ответственный"],
+    ["Падает отчет","Алиса","Борис"],
+  ]}}});
+  assert.equal(result.headerColumns["Ответственный"],3);
+  assert.equal(result.rows[0].sourceColumns["Ответственный"],"Борис");
+  assert.equal(result.rows[0].sourceColumns["Ответственный от ТНТ"],"Алиса");
+  assert.equal(registry.buildRows(result.rows)[0].owner,"Борис");
+});
+
+test("custom owner mapping wins and alias remains an independent source column", function () {
+  const parser = loadParser(), registry = loadRegistry();
+  const result = parser.parseWorkbook({SheetNames:["Лист"],Sheets:{"Лист":{__rows:[
+    ["Замечание","Ответственный от ТНТ","Владелец"],
+    ["Падает отчет","Алиса","Борис"],
+  ]}}}, {columnMap:{owner:"Владелец"}});
+  assert.equal(result.headerColumns["Ответственный"],3);
+  assert.equal(result.rows[0].sourceColumns["Ответственный"],"Борис");
+  assert.equal(result.rows[0].sourceColumns["Ответственный от ТНТ"],"Алиса");
+  assert.equal(registry.buildRows(result.rows)[0].owner,"Борис");
+});
+
+test("duplicate TNT alias columns retain both values and first owner index", function () {
+  const parser = loadParser();
+  const result = parser.parseWorkbook({SheetNames:["Лист"],Sheets:{"Лист":{__rows:[
+    ["Замечание","Ответственный от ТНТ","Ответственный от\nТНТ"],
+    ["Падает отчет","Алиса","Борис"],
+  ]}}});
+  assert.equal(result.headerColumns["Ответственный"],2);
+  assert.equal(result.rows[0].sourceColumns["Ответственный"],"Алиса");
+  assert.equal(result.rows[0].sourceColumns["Ответственный от ТНТ (колонка 3)"],"Борис");
+});
+
+test("owner alias does not claim a header explicitly mapped to Jira assignee", function () {
+  const parser = loadParser(), registry = loadRegistry();
+  const result = parser.parseWorkbook({SheetNames:["Лист"],Sheets:{"Лист":{__rows:[
+    ["Замечание","Ответственный от\nТНТ","Jira"],
+    ["Падает отчет","Алиса","PR-10"],
+  ]}}}, {columnMap:{assigneeInJira:"Ответственный от ТНТ"}});
+  assert.equal(result.headerColumns["Исполнитель в Jira"],2);
+  assert.equal(result.headerColumns["Ответственный"],undefined);
+  assert.equal(result.rows[0].sourceColumns["Исполнитель в Jira"],"Алиса");
+  assert.equal(registry.buildRows(result.rows)[0].owner,"");
+  assert.equal(registry.buildRows(result.rows)[0].assignee,"Алиса");
+});
+
 test("parseWorkbook keeps headerless rows containing optional ID or owner words", function () {
   const parser = loadParser();
   const remarkId = loadRemarkId();

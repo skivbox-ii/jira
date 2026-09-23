@@ -6,11 +6,118 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
   var grid;
+  var mermaidLoad;
+  var mermaidRenderSequence = 0;
+  var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
+
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (mermaidLoad) return mermaidLoad;
+    mermaidLoad = new Promise(function(resolve, reject) {
+      var script = document.createElement("script"), settled = false;
+      var timer = setTimeout(function() { finish(new Error("Mermaid timed out")); }, 8000);
+      function finish(error) {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        if (error) reject(error); else resolve(window.mermaid);
+      }
+      script.src = "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js";
+      script.async = true;
+      script.onload = function() { finish(window.mermaid ? null : new Error("Mermaid unavailable")); };
+      script.onerror = function() { finish(new Error("Mermaid load failed")); };
+      document.head.appendChild(script);
+    }).catch(function(error) { mermaidLoad = null; throw error; });
+    return mermaidLoad;
+  }
+
+  function renderDiagram($node, source) {
+    if (/%%\{|^---\s*$|\b(?:https?:|data:|click\s|href\s|image\s*:|img\s*:)/im.test(source)) return;
+    // Mermaid can fetch assets while rendering, before the SVG is sanitized.
+    if (/@\s*\{|url\s*\(|@\s*import\b|!\s*\[|<\s*\/?\s*(?:img|image|iframe|video|audio|source|link|style|script|object|embed)\b/i.test(source)) return;
+    var renderId = "ujg-esi-mermaid-" + (++mermaidRenderSequence) + "-" + Math.random().toString(36).slice(2);
+    function cleanupRender() {
+      ["d" + renderId, "i" + renderId, renderId].forEach(function(id) {
+        var node = document.getElementById(id);
+        if (node) node.remove();
+      });
+    }
+    loadMermaid().then(function(lib) {
+      if (!$node[0] || !$node[0].isConnected) return;
+      lib.initialize({
+        startOnLoad: false, securityLevel: "strict", htmlLabels: false, suppressErrorRendering: true,
+        secure: ["securityLevel", "startOnLoad", "secure", "htmlLabels", "flowchart", "suppressErrorRendering"],
+        flowchart: { htmlLabels: false }
+      });
+      return lib.render(renderId, source);
+    }).then(function(result) {
+      cleanupRender();
+      if (!result || !$node[0] || !$node[0].isConnected) return;
+      var svg = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement;
+      if (svg.localName !== "svg" || svg.querySelector("parsererror")) return;
+      svg.querySelectorAll("script,foreignObject,image,feImage,use,a,iframe,animate,set").forEach(function(node) { node.remove(); });
+      [svg].concat(Array.from(svg.querySelectorAll("*"))).forEach(function(node) {
+        Array.from(node.attributes).forEach(function(attr) {
+          if (/^on/i.test(attr.name) || /href/i.test(attr.name) || /url\s*\(\s*(?!['"]?#)/i.test(attr.value)) node.removeAttribute(attr.name);
+        });
+      });
+      svg.querySelectorAll("style").forEach(function(node) {
+        if (/@import|url\s*\(\s*(?!['"]?#)/i.test(node.textContent)) node.remove();
+      });
+      $node.empty().append(document.importNode(svg, true));
+    }).catch(function() { cleanupRender(); /* The source remains readable. */ });
+  }
+
+  function wikiRowEnds(line, marker) {
+    if (!line.endsWith(marker)) return false;
+    var slashes = 0;
+    for (var i = line.length - marker.length - 1; i >= 0 && line[i] === "\\"; i--) slashes++;
+    return slashes % 2 === 0;
+  }
+
+  function wikiCells(line, marker) {
+    if (!line.startsWith(marker) || !wikiRowEnds(line, marker)) return null;
+    var cells = [], current = "";
+    for (var i = marker.length; i < line.length - marker.length; i++) {
+      var ch = line[i];
+      if (ch === "\\" && (line[i + 1] === "|" || line[i + 1] === "\\")) { current += line[++i]; continue; }
+      if (ch === "|" && (marker === "|" || line[i + 1] === "|")) {
+        cells.push(current.trim()); current = "";
+        if (marker === "||") i++;
+      } else current += ch;
+    }
+    cells.push(current.trim());
+    return cells;
+  }
 
   function init(container, svc) {
     $root = container;
     services = svc || {};
     grid = gridModule.create();
+    $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
+      if (event.key !== "Escape" || event.isPropagationStopped()) return;
+      if (grid.dismissPopover()) { event.stopPropagation(); return; }
+      if (!fullscreen) return;
+      if ($(event.target).closest("[role='dialog'],.ujg-esi-grid-menu").length) return;
+      toggleFullscreen();
+    });
+  }
+
+  function toggleFullscreen() {
+    if (!fullscreen) {
+      fullscreenHost = $root.closest(".dashboard-item-content, .gadget, .ujg-gadget-wrapper");
+      if (!fullscreenHost.length) fullscreenHost = $root;
+      fullscreenStyle = fullscreenHost.attr("style");
+      fullscreenScroll = { top: fullscreenHost.scrollTop(), left: fullscreenHost.scrollLeft() };
+      fullscreenHost.addClass("ujg-esi-fullscreen");
+      fullscreen = true;
+    } else {
+      fullscreenHost.removeClass("ujg-esi-fullscreen");
+      if (fullscreenStyle == null) fullscreenHost.removeAttr("style"); else fullscreenHost.attr("style", fullscreenStyle);
+      fullscreenHost.scrollTop(fullscreenScroll.top).scrollLeft(fullscreenScroll.left);
+      fullscreen = false;
+    }
+    $root.find(".ujg-esi-fullscreen-button").empty().append(icon(fullscreen ? "Minimize2" : "Expand"))
+      .attr({ title: fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", "aria-label": fullscreen ? "Выйти из полноэкранного режима" : "На весь экран" });
   }
 
   function scheduleEpicSearch(query) {
@@ -141,12 +248,42 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
 
   function renderJiraWiki(text) {
     var $wrap = $("<div/>").addClass("ujg-esi-jira-wiki-preview");
-    String(text || "").split(/\n/).forEach(function(line) {
+    var lines = String(text || "").split(/\n/), $table = null, $lastCell = null;
+    for (var index = 0; index < lines.length; index++) {
+      var line = lines[index];
       var trimmed = line.trim();
       var $line;
+      var fence = /^```mermaid\s*$/i.test(trimmed) ? "```" : /^\{code:mermaid\}\s*$/i.test(trimmed) ? "{code}" : /^\{mermaid\}\s*$/i.test(trimmed) ? "{mermaid}" : null;
+      if (fence) {
+        var source = [];
+        while (++index < lines.length && lines[index].trim() !== fence) source.push(lines[index]);
+        var raw = source.join("\n"), $diagram = $("<div/>").addClass("ujg-esi-mermaid-diagram").append($("<pre/>").text(raw));
+        $wrap.append($diagram);
+        if (index < lines.length) renderDiagram($diagram, raw);
+        $table = null; $lastCell = null; continue;
+      }
+      if (trimmed.charAt(0) === "|" && !wikiRowEnds(trimmed, "|")) {
+        while (index + 1 < lines.length && !wikiRowEnds(line.trim(), "|")) line += "\n" + lines[++index];
+        trimmed = line.trim();
+      }
+      var headers = wikiCells(trimmed, "||"), cells = headers ? null : wikiCells(trimmed, "|");
+      if (headers || cells) {
+        if (!$table) { $table = $("<table/>").addClass("ujg-esi-wiki-table"); $wrap.append($table); }
+        var $row = $("<tr/>");
+        (headers || cells).forEach(function(value) {
+          $lastCell = $(headers ? "<th/>" : "<td/>");
+          value.replace(/\\?&#124;/gi, "|").split("\n").forEach(function(part, partIndex) {
+            if (partIndex) $lastCell.append($("<br/>"));
+            wikiInline($lastCell, part);
+          });
+          $row.append($lastCell);
+        });
+        $table.append($row); continue;
+      }
+      $table = null; $lastCell = null;
       if (!trimmed) {
         $wrap.append($("<div/>").addClass("ujg-esi-wiki-blank").html("&nbsp;"));
-        return;
+        continue;
       }
       if (/^h[1-6]\.\s+/.test(trimmed)) {
         $line = $("<h4/>").text(trimmed.replace(/^h[1-6]\.\s+/, ""));
@@ -161,7 +298,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
         wikiInline($line, line);
       }
       $wrap.append($line);
-    });
+    }
     return $wrap;
   }
 
@@ -1211,9 +1348,13 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("projectKey", value);
     }));
     appendConfirmControl($fields, "Тип Jira", appendIssueTypePicker("ujg-esi-confirm-issue-type", "story-type", dialog.issueType || "Story", state, false));
-    appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
+    var epicOptions = [{ value: "", label: "Без Epic" }].concat((state.epics || []).map(function(epic) {
       return { value: epic.key || "", label: epicLabel(epic) };
-    })), function(value) {
+    }));
+    if (dialog.epicKey && !epicOptions.some(function(option) { return option.value === dialog.epicKey; })) {
+      epicOptions.push({ value: dialog.epicKey, label: dialog.epicText || dialog.epicKey });
+    }
+    appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", epicOptions, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
     appendConfirmControl($fields, "Название", appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
@@ -1600,13 +1741,14 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     appendExcelActions($toolbar, s);
     if (s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
-      $tools.append(gridModule.button("Expand", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
+      $tools.append(gridModule.button("ChevronsUpDown", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
       var $summary = $("<details/>").addClass("ujg-esi-import-summary");
       $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
       appendCounters($summary, s);
       if (s.syncSummary) $summary.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
       $tools.append($summary); $toolbar.append($tools);
     }
+    $toolbar.append(gridModule.button(fullscreen ? "Minimize2" : "Expand", fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", toggleFullscreen).addClass("ujg-esi-fullscreen-button"));
     $root.append($toolbar);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));

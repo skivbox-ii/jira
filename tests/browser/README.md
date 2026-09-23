@@ -5,7 +5,7 @@ These fixtures use synthetic remarks and an in-memory Jira API substitute. They 
 Install test-only dependencies outside the repository:
 
 ```sh
-npm install --prefix /tmp/ujg-import-registry-test --no-save jquery@3.7.1 jsdom@26.1.0 xlsx@0.18.5 jszip@3.10.1 playwright@1.62.1
+npm install --prefix /tmp/ujg-import-registry-test --no-save jquery@3.7.1 jsdom@26.1.0 xlsx@0.18.5 jszip@3.10.1 mermaid@11.15.0 playwright@1.62.1
 export NODE_PATH=/tmp/ujg-import-registry-test/node_modules
 node --test tests/browser/excel-story-importer-grid.test.cjs
 node tests/browser/import-preview-server.cjs
@@ -19,6 +19,8 @@ node --test tests/browser/import-preview-startup.test.cjs
 ```
 
 The default preview at `http://127.0.0.1:4317/` automatically imports and synchronizes its synthetic workbook against the in-memory API. It includes new, failed and partially created remarks, a 23-child tree, and compact expandable groups. No production startup behavior is changed. Use `/?empty=1` for the original manual-upload workflow; `/fixture.xlsx` provides the synthetic workbook.
+
+The first parent description contains a Jira wiki table; its first BE child contains a Mermaid flowchart. The preview serves the pinned Mermaid bundle locally so diagram checks remain offline. The workbook uses the multiline `Ответственный от ТНТ` header found in the production source. Project/Epic and column preferences survive reloads; the column menu can reset the layout.
 
 Descriptions, user search and the explicit Jira-only view also use local fixtures. Hovering or focusing a task opens its already-loaded description without another issue request. The page's Content Security Policy blocks external connections; creation APIs still throw instead of sending writes. Owner edits in this preview modify source data only, not Jira assignees.
 
