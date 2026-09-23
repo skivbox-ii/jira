@@ -115,6 +115,47 @@ test("explicit sync enriches Story and child fields without extra requests or is
   assert.deepEqual(plain(row.childStatuses), []);
 });
 
+for (const mode of ["excel", "jira"]) {
+  for (const { reverse, bare } of [{ reverse: false }, { reverse: true }, { reverse: false, bare: true }, { reverse: true, bare: true }]) {
+    test(mode + " tree follows parent relations without including backlinks (reverse=" + reverse + ", bare=" + !!bare + ")", async function () {
+      const childSide = reverse ? "inwardIssue" : "outwardIssue";
+      const parentSide = reverse ? "outwardIssue" : "inwardIssue";
+      const parentLabel = bare ? "parent" : "is parent of";
+      const childLabel = bare ? "child" : "is child of";
+      const type = { name: bare ? "Child" : "Parent-Child", inward: reverse ? parentLabel : childLabel, outward: reverse ? childLabel : parentLabel };
+      const parent = { key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [
+        { type, [childSide]: { key: "TEST-2", fields: { summary: "[BE] Child" } } },
+        { type, [childSide]: { key: "TEST-3", fields: { summary: "[QA] Child" } } },
+        { type, [parentSide]: { key: "TEST-99", fields: { summary: "Parent, not a child" } } },
+        { type: { name: "Blocks", outward: "blocks", inward: "is blocked by" }, outwardIssue: { key: "TEST-98" } },
+      ] } };
+      const requested = [];
+      const app = await loadImporter([{ jiraKey: "TEST-1", sourceColumns: {} }], {
+        getProjectIssues: () => Promise.resolve({ issues: [parent] }),
+        getIssuesByKeys(keys) {
+          requested.push(Array.from(keys));
+          return Promise.resolve({ issues: keys[0] === "TEST-1" ? [parent] : keys.map(key => ({ key, fields: {
+            summary: key === "TEST-2" ? "[BE] Child" : "[QA] Child", description: "Loaded " + key,
+            status: { name: "Done", statusCategory: { key: "done" } }, assignee: { displayName: "Developer" },
+          } })) });
+        },
+        createIssue() { assert.fail("Loading a tree must not create issues"); },
+        updateIssue() { assert.fail("Loading a tree must not update issues"); },
+      });
+      if (mode === "jira") {
+        app.callbacks.onProjectChange("TEST");
+        app.callbacks.onViewModeChange("jira");
+        app.callbacks.onLoadRegistry();
+      } else app.callbacks.onSyncJira();
+      await flush(); await flush();
+      assert.deepEqual(requested, mode === "jira" ? [["TEST-2", "TEST-3"]] : [["TEST-1"], ["TEST-2", "TEST-3"]]);
+      assert.deepEqual(plain(app.state.rows[0].childStatuses.map(child => [child.key, child.role, child.description, child.done])), [
+        ["TEST-2", "BE", "Loaded TEST-2", true], ["TEST-3", "QA", "Loaded TEST-3", true],
+      ]);
+    });
+  }
+}
+
 const transition = history("2026-02-01T10:00:00+0300", "3", "In Progress", "1", "Open");
 const complete = histories => ({ startAt: 0, total: histories.length, histories });
 const statusDateCases = [

@@ -5369,6 +5369,15 @@ define("_ujgESI_main", [
     );
   }
 
+  function pointsToChild(type, relation) {
+    var normalized = normalizeLinkName(relation);
+    // Jira's direction label describes the current issue relative to the linked one.
+    if (normalized === "is_parent_of" || normalized === "parent_of" || normalized === "is_parent" || normalized === "parent" || normalized === "has_children") return true;
+    if (normalized === "is_child_of" || normalized === "child_of" || normalized === "is_child" || normalized === "child_of_story") return false;
+    if (normalized === "child" && (normalizeLinkName(type.inward) === "parent" || normalizeLinkName(type.outward) === "parent")) return false;
+    return isChildLinkName(relation) || isChildLinkName(type && type.name);
+  }
+
   function issueSummaryName(issue) {
     var fields = issue && issue.fields ? issue.fields : {};
     if (fields.summary != null && String(fields.summary).trim()) return String(fields.summary).trim();
@@ -5423,21 +5432,19 @@ define("_ujgESI_main", [
     var seen = {};
     var out = [];
 
-    function push(linkName, linkedIssue) {
+    function push(linkedIssue) {
       var key = linkedIssue && linkedIssue.key != null ? String(linkedIssue.key).trim().toUpperCase() : "";
       var summary = issueSummaryName(linkedIssue);
       var identity = key || summary + "|" + issueStatusName(linkedIssue) + "|" + issueAssigneeName(linkedIssue);
-      if (!isChildLinkName(linkName) || !linkedIssue || !identity || seen[identity]) return;
+      if (!linkedIssue || !identity || seen[identity]) return;
       seen[identity] = true;
       out.push(linkedIssue);
     }
 
     links.forEach(function(link) {
       var type = link && link.type ? link.type : {};
-      push(type.name, link && link.inwardIssue);
-      push(type.inward, link && link.inwardIssue);
-      push(type.name, link && link.outwardIssue);
-      push(type.outward, link && link.outwardIssue);
+      if (pointsToChild(type, type.inward)) push(link && link.inwardIssue);
+      if (pointsToChild(type, type.outward)) push(link && link.outwardIssue);
     });
     return out;
   }
