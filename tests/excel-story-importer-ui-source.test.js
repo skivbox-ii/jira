@@ -86,6 +86,36 @@ test("More children label stays at the start of a wide run and truncates in a na
   assert.match(label, /white-space:\s*nowrap/);
 });
 
+test("workflow badges stay on one line and truncate within narrow columns", function () {
+  const source = read("ujg-excel-story-importer.css");
+  const badge = source.match(/\.ujg-esi-workflow-status\s*\{([^}]+)\}/)[1];
+  assert.match(badge, /max-width:\s*100%/);
+  assert.match(badge, /box-sizing:\s*border-box/);
+  assert.match(badge, /white-space:\s*nowrap/);
+  assert.match(badge, /overflow:\s*hidden/);
+  assert.match(badge, /text-overflow:\s*ellipsis/);
+});
+
+test("two-column wiki tables reserve readable field width without constraining multi-column tables", function () {
+  const source = read("ujg-excel-story-importer.css");
+  const selector = String.raw`\.ujg-esi-wiki-table:has\(tr > :nth-child\(2\)\):not\(:has\(tr > :nth-child\(3\)\)\)`;
+  const tablePattern = new RegExp(selector + String.raw`\s*\{([^}]+)\}`);
+  const fieldPattern = new RegExp(selector + String.raw` tr > :first-child\s*\{([^}]+)\}`);
+  const table = source.match(tablePattern);
+  assert.ok(table, "field sizing must be limited to tables with two columns");
+  assert.match(table[1], /width:\s*100%/);
+  assert.match(table[1], /table-layout:\s*fixed/);
+  const field = source.match(fieldPattern);
+  assert.ok(field);
+  assert.match(field[1], /width:\s*132px/);
+  assert.match(field[1], /overflow-wrap:\s*break-word/);
+  assert.match(field[1], /word-break:\s*normal/);
+  const mobile = source.slice(source.indexOf("@media (max-width: 600px)")).match(fieldPattern);
+  assert.ok(mobile, "mobile field width must shrink within the popup");
+  assert.match(mobile[1], /width:\s*40%/);
+  assert.doesNotMatch(source.match(/\.ujg-esi-wiki-table\s*\{([^}]+)\}/)[1], /table-layout:\s*fixed/);
+});
+
 test("importer CSS renders story and child statuses as one compact block", function () {
   const source = read("ujg-excel-story-importer.css");
 

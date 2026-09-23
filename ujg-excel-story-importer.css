@@ -112,6 +112,8 @@
 .ujg-esi-wiki-table { border-collapse: collapse; width: max-content; max-width: 100%; margin: 8px 0; }
 .ujg-esi-wiki-table th, .ujg-esi-wiki-table td { border: 1px solid #cbd4df; padding: 5px 8px; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ujg-esi-wiki-table th { background: #f2f4f7; text-align: left; }
+.ujg-esi-wiki-table:has(tr > :nth-child(2)):not(:has(tr > :nth-child(3))) { width: 100%; table-layout: fixed; }
+.ujg-esi-wiki-table:has(tr > :nth-child(2)):not(:has(tr > :nth-child(3))) tr > :first-child { width: 132px; overflow-wrap: break-word; word-break: normal; }
 .ujg-esi-mermaid-diagram { overflow: auto; margin: 8px 0; }
 .ujg-esi-mermaid-diagram pre { margin: 0; padding: 8px; background: #f5f7f9; white-space: pre-wrap; }
 .ujg-esi-mermaid-diagram svg { display: block; max-width: 100%; height: auto; }
@@ -124,7 +126,7 @@
 .ujg-esi-blocked-marker svg { width: 12px; height: 12px; }
 .ujg-esi-avatar { flex: 0 0 20px; height: 20px; line-height: 20px; border-radius: 50%; font-size: 9px; text-align: center; color: #245784; background: #e1edf8; }
 .ujg-esi-unassigned { color: #b73f32; }
-.ujg-esi-workflow-status { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #e8ecf0; color: #485665; line-height: 16px; font-size: 11px; }
+.ujg-esi-workflow-status { display: inline-block; max-width: 100%; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 5px; border-radius: 3px; background: #e8ecf0; color: #485665; line-height: 16px; font-size: 11px; }
 .ujg-esi-workflow-status.is-done { color: #126448; background: #d9f0e3; }
 .ujg-esi-workflow-status.is-progress { color: #0758a8; background: #ddecfc; }
 .ujg-esi-import-state { display: inline-block; border: 1px solid #e6c99d; padding: 0 4px; border-radius: 3px; color: #916119; font-size: 11px; }
@@ -201,6 +203,7 @@
   .ujg-esi-registry-table th:nth-child(3), .ujg-esi-registry-table th:last-child { left: auto; right: auto; z-index: 3; }
 }
 @media (max-width: 600px) {
+  .ujg-esi-wiki-table:has(tr > :nth-child(2)):not(:has(tr > :nth-child(3))) tr > :first-child { width: 40%; }
   .ujg-esi-toolbar.ujg-esi-compact-toolbar { gap: 4px; }
   .ujg-esi-compact-toolbar h2 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
