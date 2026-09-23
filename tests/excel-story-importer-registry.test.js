@@ -89,3 +89,17 @@ test("ID aliases and numeric zero identify the same remark regardless of column 
     assert.equal(r.remarkId({sourceColumns:cols}), Object.values(cols)[0].toString());
   }
 });
+
+test("priority sorting follows severity, retains the tree, and leaves missing values last", () => {
+  const r = registry();
+  const input = ["Низкий", "Высокий", "Средний", "Критический", "", "Особый", "Блокер"].map((priority, index) => ({
+    id: String(index), jiraKey: "P-" + index, storyDetails: { priority },
+    childStatuses: [{ key: "C-1", priority: "Low" }, { key: "C-2", priority: "High" }]
+  }));
+  const rows = r.buildRows(input);
+  const desc = r.selectGroups(rows, {}, { column: "priority", direction: "desc" });
+  assert.deepEqual(Array.from(desc, group => group.parent.priority), ["Блокер", "Критический", "Высокий", "Средний", "Низкий", "Особый", ""]);
+  assert.deepEqual(Array.from(desc[0].children, child => child.priority), ["High", "Low"]);
+  const asc = r.selectGroups(rows, {}, { column: "priority", direction: "asc" });
+  assert.deepEqual(Array.from(asc, group => group.parent.priority), ["Низкий", "Средний", "Высокий", "Критический", "Блокер", "Особый", ""]);
+});

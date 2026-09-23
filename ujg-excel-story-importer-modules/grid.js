@@ -2,13 +2,13 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
   "use strict";
   var sequence = 0;
   var columns = [
-    ["remarkId", "ID", 66], ["remark", "Замечание из Excel", 260], ["owner", "Ответственный", 144],
-    ["module", "Модуль", 110], ["importState", "Импорт", 136], ["key", "Ключ Jira", 146],
-    ["type", "Тип", 90], ["role", "Роль", 68], ["summary", "Тема задачи", 270],
-    ["status", "Статус Jira", 142], ["age", "В статусе", 105], ["assignee", "Исполнитель", 154],
-    ["priority", "Приоритет", 100], ["updated", "Обновлено", 104]
+    ["remarkId", "ID", 54], ["remark", "Замечание из Excel", 236], ["owner", "Ответственный", 138],
+    ["module", "Модуль", 110], ["sourceStatus", "Статус Excel", 112], ["importState", "Импорт", 136], ["key", "Ключ Jira", 152],
+    ["type", "Тип", 58], ["role", "Роль", 64], ["summary", "Тема задачи", 276],
+    ["status", "Статус Jira", 112], ["age", "В статусе", 94], ["assignee", "Исполнитель", 124],
+    ["priority", "Приоритет", 94], ["updated", "Обновлено", 94]
   ];
-  var sourceFields = ["remarkId", "remark", "owner", "module", "importState"];
+  var sourceFields = ["remarkId", "remark", "owner", "module", "sourceStatus", "importState"];
   function button(name, label, fn) {
     return $("<button/>").attr({ type: "button", title: label, "aria-label": label }).addClass("ujg-esi-icon-button").append(icon(name)).on("click", fn);
   }
@@ -30,8 +30,65 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
   function create() {
     var id = ++sequence;
     var state, hooks, $host, $viewport, $menu, menuAnchor;
-    var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null);
-    var hidden = { module: true, importState: true }, page = 0, pageSize = 50;
+    var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
+    var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
+    var hidden = { module: true, sourceStatus: true, importState: true }, page = 0, pageSize = 50;
+
+    function closeDescription(focus) {
+      clearTimeout(descriptionTimer);
+      if ($description) $description.remove();
+      $description = null; descriptionPinned = false;
+      if (descriptionAnchor) {
+        $(descriptionAnchor).removeAttr("aria-controls").attr("aria-expanded", "false");
+        if (focus && document.contains(descriptionAnchor)) {
+          skipDescriptionFocus = true; descriptionAnchor.focus(); skipDescriptionFocus = false;
+        }
+      }
+      descriptionAnchor = null;
+    }
+    function deferDescriptionClose() {
+      clearTimeout(descriptionTimer);
+      if (!descriptionPinned) descriptionTimer = setTimeout(function() { closeDescription(); }, 180);
+    }
+    function showDescription(anchor, entry, pinned) {
+      closeDescription(); closeMenu();
+      descriptionAnchor = anchor; descriptionPinned = !!pinned;
+      var descriptionId = "ujg-esi-description-" + id;
+      $(anchor).attr({ "aria-controls": descriptionId, "aria-expanded": "true" });
+      $description = $("<section/>").addClass("ujg-esi-description-popover").attr({ id: descriptionId, role: "dialog", "aria-label": "Описание " + (entry.key || entry.remarkId || "замечания") });
+      var $head = $("<div/>").addClass("ujg-esi-description-head");
+      if (entry.key) $head.append($("<a/>").attr({ href: (state.baseUrl || "").replace(/\/+$/, "") + "/browse/" + encodeURIComponent(entry.key), target: "_blank", rel: "noopener noreferrer" }).text(entry.key));
+      else $head.append($("<span/>").text("Замечание " + entry.remarkId));
+      $head.append(button("X", "Закрыть описание", function() { closeDescription(true); }));
+      $description.append($head, $("<h3/>").text(entry.summary || entry.remark), $("<div/>").addClass("ujg-esi-description-meta").text([entry.role, entry.status, entry.assignee, entry.age].filter(Boolean).join(" · ")));
+      var content = entry.key ? entry.description : entry.remark;
+      var $body = $("<div/>").addClass("ujg-esi-description-body");
+      if (content) $body.append(hooks.renderDescription ? hooks.renderDescription(content) : $("<p/>").text(content));
+      else $body.append($("<p/>").addClass("ujg-esi-description-empty").text(entry.descriptionLoaded ? "Описание не заполнено" : "Описание не загружено"));
+      $description.append($body).on("mouseenter focusin", function() { clearTimeout(descriptionTimer); }).on("mouseleave", deferDescriptionClose).on("keydown", function(event) {
+        if (event.key === "Escape") { event.stopPropagation(); closeDescription(true); }
+        if (event.key === "Tab" && event.shiftKey && event.target === $description.find("a,button").first()[0]) { event.preventDefault(); closeDescription(true); }
+      }).on("focusout", function(event) {
+        if (!event.relatedTarget || !$description[0].contains(event.relatedTarget)) closeDescription();
+      });
+      $host.append($description);
+      var rect = anchor.getBoundingClientRect(), width = Math.min(560, Math.max(240, window.innerWidth - 24));
+      $description.css({ width: width, left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)), top: 12, maxHeight: Math.max(160, window.innerHeight - 24) });
+      var height = $description.outerHeight();
+      $description.css("top", Math.max(12, Math.min(rect.bottom + 7, window.innerHeight - height - 12)));
+    }
+    function descriptionTarget($target, entry) {
+      return $target.attr({ tabindex: "0", role: "button", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-label": "Описание: " + entry.summary })
+        .on("mouseenter", function() { var anchor = this; clearTimeout(descriptionTimer); descriptionTimer = setTimeout(function() { showDescription(anchor, entry); }, 250); })
+        .on("mouseleave blur", deferDescriptionClose)
+        .on("focus", function() { if (!skipDescriptionFocus) showDescription(this, entry); })
+        .on("click", function(event) { event.stopPropagation(); showDescription(this, entry, true); })
+        .on("keydown", function(event) {
+          if (event.key === "Escape") { event.stopPropagation(); closeDescription(); }
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); showDescription(this, entry, true); $description.find("a,button").first().trigger("focus"); }
+          if (event.key === "Tab" && !event.shiftKey && $description && descriptionAnchor === this) { event.preventDefault(); $description.find("a,button").first().trigger("focus"); }
+        });
+    }
 
     function closeMenu(focus) {
       if ($menu) $menu.remove();
@@ -43,6 +100,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       menuAnchor = null;
     }
     function popup(anchor, title) {
+      closeDescription();
       closeMenu();
       menuAnchor = anchor;
       $(anchor).attr("aria-expanded", "true");
@@ -53,19 +111,21 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       $menu.on("keydown", function(event) { if (event.key === "Escape") { event.stopPropagation(); closeMenu(true); } });
       return $menu;
     }
-    function refresh() { closeMenu(); draw(); }
+    function refresh() { closeMenu(); closeDescription(); draw(); }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
-      var active = Array.isArray(filters[key]);
+      var active = Array.isArray(filters[key]) || key === "status" && !!filters.excludeDone;
+      var excludeDone = !!filters.excludeDone;
       var options = registry.values(rows, key, filters);
       (filters[key] || []).forEach(function(value) { if (options.indexOf(value) === -1) options.push(value); });
       options.sort(registry.compare);
-      var selected = active ? filters[key].slice() : options.slice();
+      var selected = Array.isArray(filters[key]) ? filters[key].slice() : options.slice();
       var $box = popup(anchor, "Фильтр: " + column[1]);
-      [ ["asc", "ArrowDownAZ", "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", "Сортировка по убыванию"] ].forEach(function(item) {
-        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
+      [ ["asc", "ArrowDownAZ", key === "priority" ? "Сначала низкий приоритет" : "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", key === "priority" ? "Сначала высокий приоритет" : "Сортировка по убыванию"] ].forEach(function(item) {
+        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
       });
-      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") delete filters.excludeDone; page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые" }).prop("checked", excludeDone).on("change", function() { excludeDone = this.checked; }), $("<span/>").text("Исключить готовые")));
       var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
       var $chips = $("<div/>").addClass("ujg-esi-filter-chips");
       var $all = $("<input/>").attr({ type: "checkbox", "aria-label": "Выделить все найденные значения" });
@@ -107,6 +167,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
         update();
       });
       var $apply = $("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() {
+        if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; }
         var allValues = registry.values(rows, key, {});
         if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
         page = 0; refresh();
@@ -117,23 +178,35 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
     }
     function cell(entry, key) {
       var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
+      if (key === "owner" && hooks.editOwner) return $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(person(value), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
       if (key === "owner" || key === "assignee") return $td.append(person(value)).attr("title", value || "Не указан");
       if (key === "remark") {
         $td.append($("<div/>").addClass("ujg-esi-source-text").text(value));
-        $td.attr("title", value).append($("<small/>").text([entry.module, "Excel: " + entry.source.excelRowNumber].filter(Boolean).join(" · ")));
+        $td.attr("title", value).append($("<small/>").text([entry.module, entry.source.excelRowNumber ? "Excel: " + entry.source.excelRowNumber : ""].filter(Boolean).join(" · ")));
         if (entry.source.status === "partial") $td.append($("<small/>").addClass("ujg-esi-import-warning").append(icon("TriangleAlert"), document.createTextNode("Частично создано")));
         return $td;
       }
       if (key === "key") {
+        if (entry.isChild) $td.append($("<span/>").addClass("ujg-esi-tree-mark").attr("aria-hidden", "true"));
         if (value) return $td.append($("<a/>").attr({ href: (state.baseUrl || "").replace(/\/+$/, "") + "/browse/" + encodeURIComponent(value), target: "_blank", rel: "noopener noreferrer" }).text(value));
         return $td.append($("<span/>").addClass("ujg-esi-import-state").toggleClass("is-error", entry.source.status === "failed").text(entry.importState));
       }
       if (key === "summary") {
-        if (entry.isChild) $td.append($("<span/>").addClass("ujg-esi-tree-mark").attr("aria-hidden", "true"));
-        return $td.append($("<span/>").addClass("ujg-esi-issue-summary-text").text(value || "—")).attr("title", value);
+        $td.append(descriptionTarget($("<span/>").addClass("ujg-esi-issue-summary-text").text(value || "—"), entry));
+        if (!entry.key) $td.append($("<small/>").addClass("ujg-esi-draft-label").text("Черновик"));
+        return $td;
       }
-      if (key === "status" && value) return $td.append($("<span/>").addClass("ujg-esi-workflow-status is-" + statusClass(entry)).text(value)).attr("title", entry.blocked ? "Задача заблокирована" : value);
-      if (key === "type" && value) return $td.append($("<span/>").addClass("ujg-esi-issue-type").toggleClass("is-story", !entry.isChild).append(icon(entry.isChild ? "CheckSquare" : "Bookmark")), $("<span/>").text(value)).attr("title", value);
+      if (key === "status") {
+        if (entry.linkedToParent === false) $td.append($("<span/>").addClass("ujg-esi-blocked-marker").attr({role:"img", "aria-label":"Связь с основной задачей не создана", title:entry.linkError || "Связь с основной задачей не создана"}).append(icon("TriangleAlert")));
+        if (entry.blocked) $td.append($("<span/>").addClass("ujg-esi-blocked-marker").attr({role:"img", "aria-label":"Заблокирована", title:"Заблокирована"}).append(icon("TriangleAlert")));
+        if (value) $td.append($("<span/>").addClass("ujg-esi-workflow-status is-" + statusClass(entry)).text(value));
+        return $td.attr("title", value);
+      }
+      if (key === "type" && value) return $td.append($("<span/>").addClass("ujg-esi-issue-type").toggleClass("is-story", !entry.isChild).toggleClass("is-qa", entry.role === "QA").attr({ role: "img", "aria-label": value }).append(icon(entry.isChild ? "CheckSquare" : "Bookmark"))).attr("title", value);
+      if (key === "priority" && value) {
+        var priority = /выс|крит|high|critical|blocker/i.test(value) ? "high" : /низ|незнач|low|minor|trivial/i.test(value) ? "low" : /сред|medium|normal/i.test(value) ? "medium" : "";
+        if (priority) return $td.append($("<span/>").addClass("ujg-esi-priority is-" + priority).attr({ role: "img", "aria-label": value }).append(icon(priority === "high" ? "ArrowUp" : priority === "low" ? "ArrowDown" : "Equal"))).attr("title", value);
+      }
       if (key === "age") return $td.text(value || "—").attr("title", entry.statusSince ? "В статусе с " + new Date(entry.statusSince).toLocaleString("ru-RU") : entry.ageReason);
       if (key === "updated" && value) { var date = new Date(value); return $td.text(isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU")).attr("title", value); }
       return $td.text(value || "—").attr("title", value || "");
@@ -147,52 +220,67 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       var pages = Math.max(1, Math.ceil(groups.length / pageSize));
       page = Math.max(0, Math.min(page, pages - 1));
       var $table = $("<table/>").addClass("ujg-esi-registry-table").attr("aria-label", "Замечания и связанные задачи Jira");
-      var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "30px"));
-      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("Expand", "Развернуть все", function() { collapsed = Object.create(null); refresh(); })));
+      var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "28px"));
+      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("Expand", "Развернуть все", function() { collapsed = Object.create(null); rows.forEach(function(row) { fullChildren[row.groupId] = true; }); refresh(); })));
       visible.forEach(function(column) {
         $colgroup.append($("<col/>").css("width", column[2] + "px"));
-        var active = Array.isArray(filters[column[0]]), sorted = sort && sort.column === column[0];
-        var caption = "Фильтр: " + column[1];
+        var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!filters.excludeDone, sorted = sort && sort.column === column[0];
+        var heading = column[0] === "remark" && state.viewMode === "jira" ? "Замечание" : column[1];
+        var caption = "Фильтр: " + heading;
         var $filter = button(active ? "Funnel" : "ChevronDown", caption, function(event) { event.stopPropagation(); filterMenu(this, column); })
           .addClass("ujg-esi-header-filter").toggleClass("is-active", active).attr({ "data-filter": column[0], "aria-haspopup": "dialog", "aria-expanded": "false" });
         if (active && (column[0] === "owner" || column[0] === "assignee")) $filter.append($("<b/>").text(filters[column[0]].length));
+        var $sort = $("<button/>").addClass("ujg-esi-header-sort").attr({ type: "button", "data-sort": column[0], title: "Сортировка: " + heading, "aria-label": "Сортировка: " + heading })
+          .append($("<span/>").text(heading), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null)
+          .on("click", function() {
+            sort = { column: column[0], direction: sorted ? (sort.direction === "asc" ? "desc" : "asc") : column[0] === "priority" ? "desc" : "asc" };
+            page = 0; refresh(); $host.find('[data-sort="' + column[0] + '"]').trigger("focus");
+          });
         $head.append($("<th/>").attr({ scope: "col", "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
-          .append($("<span/>").text(column[1]), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null, $filter));
+          .append($sort, $filter));
       });
-      $colgroup.append($("<col/>").css("width", "118px"));
-      $head.append($("<th/>").attr("scope", "col").text("Действия"));
+      $colgroup.append($("<col/>").css("width", "72px"));
+      $head.append($("<th/>").attr({scope: "col", "aria-label": "Действия", title: "Действия"}).addClass("ujg-esi-actions-head").append(icon("WandSparkles"), icon("Plus")));
       $table.append($colgroup, $("<thead/>").append($head));
       var $body = $("<tbody/>");
       groups.slice(page * pageSize, (page + 1) * pageSize).forEach(function(group) {
         var parent = group.parent, force = Object.keys(filters).length > 0;
+        if (!sort) group.children.sort(function(a, b) { return registry.compare(a.key, b.key); });
         var opened = force || !collapsed[parent.groupId];
-        var children = opened ? group.children : [];
+        var children = opened ? (force || fullChildren[parent.groupId] ? group.children : group.children.slice(0, 5)) : [];
+        var remaining = opened ? group.children.length - children.length : 0;
+        var span = children.length + 1 + (remaining ? 1 : 0);
         [parent].concat(children).forEach(function(entry, rowNumber) {
           var $tr = $("<tr/>").addClass(entry.isChild ? "ujg-esi-child-row" : "ujg-esi-parent-row").attr({ "data-key": entry.key, "data-source-index": entry.rowIndex });
           $tr.toggleClass("is-context", rowNumber === 0 && group.contextOnly).toggleClass("is-new", !parent.key).toggleClass("is-failed", parent.source.status === "failed");
+          $tr.toggleClass("is-collapsed", !opened).toggleClass("is-last-child", entry.isChild && rowNumber === children.length && !remaining);
           if (!rowNumber) {
-            var $toggle = $("<td/>").attr("rowspan", children.length + 1).addClass("ujg-esi-expand-cell");
-            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.source.excelRowNumber), function() { if (!force) { collapsed[parent.groupId] = opened; refresh(); } }).attr("aria-expanded", String(opened)).prop("disabled", force));
+            var $toggle = $("<td/>").attr("rowspan", span).addClass("ujg-esi-expand-cell");
+            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.key || parent.source.excelRowNumber || ""), function() { if (!force) { collapsed[parent.groupId] = opened; refresh(); } }).attr("aria-expanded", String(opened)).prop("disabled", force));
             $tr.append($toggle);
           }
           visible.forEach(function(column) {
             var isSource = sourceFields.indexOf(column[0]) !== -1;
             if (rowNumber && isSource) return;
             var $cell = cell(entry, column[0]);
-            if (isSource) $cell.attr("rowspan", children.length + 1).addClass("ujg-esi-source-cell");
+            if (isSource) $cell.attr("rowspan", span).addClass("ujg-esi-source-cell");
             $tr.append($cell);
           });
           if (!rowNumber) {
-            var $action = $("<td/>").attr("rowspan", children.length + 1).addClass("ujg-esi-registry-actions");
+            var $action = $("<td/>").attr("rowspan", span).addClass("ujg-esi-registry-actions");
             hooks.appendActions($action, parent.source, parent.rowIndex);
             $tr.append($action);
           }
           $body.append($tr);
         });
+        if (remaining) {
+          var $more = button("ChevronDown", "Ещё " + remaining + " связанных задач", function() { fullChildren[parent.groupId] = true; refresh(); }).addClass("ujg-esi-more-children").append($("<span/>").text("Ещё " + remaining + " связанных задач"));
+          $body.append($("<tr/>").addClass("ujg-esi-more-row").attr("data-source-index", parent.rowIndex).append($("<td/>").attr("colspan", visible.filter(function(column) { return sourceFields.indexOf(column[0]) === -1; }).length).append($more)));
+        }
       });
       if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 2).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
       $table.append($body);
-      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); });
+      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); closeDescription(); });
       $host.append($viewport);
       var $footer = $("<div/>").addClass("ujg-esi-grid-footer");
       $footer.append($("<span/>").text(groups.length ? (page * pageSize + 1) + "–" + Math.min((page + 1) * pageSize, groups.length) + " из " + groups.length : "0 замечаний"));
@@ -207,19 +295,26 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
     return {
       mount: function($parent, nextState, nextHooks) {
         state = nextState; hooks = nextHooks;
-        closeMenu();
-        if (sourceRows !== state.rows) { sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); page = 0; }
+        closeMenu(); closeDescription();
+        if (sourceRows !== state.rows) {
+          sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
+          var linked = 0;
+          (state.rows || []).forEach(function(row, index) {
+            if ((row.createdKey || row.jiraKey) && linked++ >= 3 && row.status !== "partial") collapsed[String(row.id || index)] = true;
+          });
+        }
         rows = registry.buildRows(state.rows);
         $host = $("<div/>").addClass("ujg-esi-registry"); $parent.append($host); $viewport = null;
         $(document).off("click.ujgRegistry" + id).on("click.ujgRegistry" + id, function(event) {
           if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
+          if ($description && !$.contains($description[0], event.target) && event.target !== $description[0] && event.target !== descriptionAnchor) closeDescription();
         });
         draw();
       },
       toggleAll: function() {
         var collapse = !Object.keys(collapsed).length;
         collapsed = Object.create(null);
-        if (collapse) rows.forEach(function(row) { collapsed[row.groupId] = true; });
+        rows.forEach(function(row) { if (collapse) collapsed[row.groupId] = true; else fullChildren[row.groupId] = true; });
         refresh();
       },
       columnsMenu: function(anchor) {

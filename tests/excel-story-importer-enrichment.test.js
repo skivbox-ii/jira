@@ -6,7 +6,7 @@ const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules"
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 const plain = value => JSON.parse(JSON.stringify(value));
 
-async function loadImporter(rows, api) {
+async function loadImporter(rows, api, creatorOverride, patcherOverride) {
   const config = loadAmdModule(path.join(MODULE_DIR, "config.js"), {});
   const description = loadAmdModule(path.join(MODULE_DIR, "description.js"), {});
   const creator = loadAmdModule(path.join(MODULE_DIR, "creator.js"), {
@@ -27,9 +27,9 @@ async function loadImporter(rows, api) {
       readWorkbookFromBuffer: () => Promise.resolve({ SheetNames: ["Sheet1"] }),
     },
     _ujgESI_parser: { parseWorkbook: () => ({ sheetName: "Sheet1", rows }) },
-    _ujgESI_creator: creator,
+    _ujgESI_creator: creatorOverride || creator,
     _ujgESI_mappingStore: null,
-    _ujgESI_xlsxPatcher: { patchWorkbook: () => Promise.resolve(new ArrayBuffer(1)) },
+    _ujgESI_xlsxPatcher: patcherOverride || { patchWorkbook: () => Promise.resolve(new ArrayBuffer(1)) },
     _ujgESI_rendering: {
       init: (_container, callbacks) => { app.callbacks = callbacks; },
       render: state => { app.state = state; },
@@ -53,7 +53,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
   let issues = [{
     key: "TEST-1",
     fields: {
-      summary: "Existing Story", status: { id: "3", name: "In Progress" },
+      summary: "Existing Story", description: "Story detail", status: { id: "3", name: "In Progress" },
       assignee: { displayName: "Иван" }, priority: { name: "High" }, issuetype: { name: "Story" },
       created: "2026-01-01T10:00:00.000+0300", updated: "2026-03-03T10:00:00.000+0300",
       issuelinks: [{ type: { name: "Child" }, outwardIssue: { key: "TEST-2", fields: { summary: "[FE] Existing child" } } }],
@@ -66,7 +66,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
   }];
   const child = {
     key: "TEST-2", fields: {
-      summary: "[FE] Existing child", status: { id: "1", name: "Open", statusCategory: { key: "new" } },
+      summary: "[FE] Existing child", description: "Child detail", status: { id: "1", name: "Open", statusCategory: { key: "new" } },
       assignee: { name: "developer" }, priority: { name: "Low" }, issuetype: { name: "Task" },
       created: "2026-02-01T00:00:00Z", updated: "2026-02-02T00:00:00Z",
     }, changelog: { startAt: 0, total: 0, histories: [] },
@@ -91,14 +91,14 @@ test("explicit sync enriches Story and child fields without extra requests or is
   ]);
   assert.equal(app.state.syncError, "");
   assert.deepEqual(plain(row.storyDetails), {
-    key: "TEST-1", summary: "Existing Story", status: "In Progress", assignee: "Иван",
+    key: "TEST-1", summary: "Existing Story", description: "Story detail", descriptionLoaded: true, status: "In Progress", assignee: "Иван",
     statusCategory: "", statusState: "progress", done: false,
     priority: "High", issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
   });
   assert.match(row.storyDetails.statusSinceReason, /истор|переход/i);
   assert.deepEqual(plain(row.childStatuses[0]), {
-    role: "FE", key: "TEST-2", summary: "[FE] Existing child", status: "Open",
+    role: "FE", key: "TEST-2", summary: "[FE] Existing child", description: "Child detail", descriptionLoaded: true, status: "Open", linkedToParent: true,
     statusCategory: "new", statusState: "todo", done: false, assignee: "developer", blocked: false,
     priority: "Low", issueType: "Task", updated: "2026-02-02T00:00:00Z",
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
@@ -172,7 +172,40 @@ for (const scenario of statusDateCases) {
   });
 }
 
-test("API expands changelog only when requested and retains one existing search per nonempty key set", async function () {
+for (const scenario of [
+  { name: "Jira JSON error", error: { status: 400, statusText: "error", responseJSON: { errorMessages: ["expand must be an array"] } }, expected: "HTTP 400: expand must be an array" },
+  { name: "field errors", error: { status: 400, statusText: "error", responseJSON: { errorMessages: [], errors: { jql: "Invalid JQL" } } }, expected: "HTTP 400: Invalid JQL" },
+  { name: "JSON response text", error: { status: 400, responseText: '{"errorMessages":["Invalid search"]}' }, expected: "HTTP 400: Invalid search" },
+  { name: "HTML gateway response", error: { status: 502, statusText: "Bad Gateway", responseText: "<html>gateway diagnostics</html>" }, expected: "HTTP 502: Bad Gateway" },
+  { name: "local failure", error: new Error("Workbook export failed"), expected: "Workbook export failed" },
+]) {
+  test("sync displays actionable failure: " + scenario.name, async function () {
+    const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Keep this row", sourceColumns: {} }], {
+      getIssuesByKeys: () => Promise.reject(scenario.error),
+    });
+    app.callbacks.onSyncJira();
+    await flush(); await flush();
+    assert.equal(app.state.syncError, "Не удалось синхронизировать Jira: " + scenario.expected);
+    assert.equal(app.state.syncLoading, false);
+    assert.equal(app.state.exportBuffer, null);
+    assert.equal(app.state.rows[0].summary, "Keep this row");
+  });
+}
+
+test("Jira registry displays search rejection details", async function () {
+  const app = await loadImporter([], {
+    getProjectIssues: () => Promise.reject({ status: 400, statusText: "error", responseJSON: { errorMessages: ["expand must be an array"] } }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onViewModeChange("jira");
+  app.callbacks.onLoadRegistry();
+  await flush(); await flush();
+  assert.equal(app.state.registryError, "Не удалось загрузить Jira: HTTP 400: expand must be an array");
+  assert.equal(app.state.registryLoading, false);
+});
+
+test("API serializes POST search expand as an array only when requested", async function () {
   const calls = [];
   const api = loadAmdModule(path.join(MODULE_DIR, "api.js"), {
     jquery: { ajax(options) { calls.push(options); return Promise.resolve({ issues: [] }); } },
@@ -185,15 +218,417 @@ test("API expands changelog only when requested and retains one existing search 
   assert.equal(calls[0].url, "https://jira.invalid/rest/api/2/search");
   assert.equal(calls[0].type, "POST");
   const body = JSON.parse(calls[0].data);
-  assert.equal(body.expand, "changelog");
+  assert.deepEqual(body.expand, ["changelog"]);
   assert.equal(body.jql, "key in (TEST-1)");
   assert.equal(body.maxResults, 1);
-  for (const field of ["summary", "status", "assignee", "priority", "issuetype", "updated", "created", "issuelinks", "resolution", "resolutiondate", "customfield_42", "customfield_10020", "customfield_10007"]) {
+  for (const field of ["summary", "description", "status", "assignee", "priority", "issuetype", "updated", "created", "issuelinks", "resolution", "resolutiondate", "customfield_42", "customfield_10020", "customfield_10007"]) {
     assert.ok(body.fields.includes(field), field);
   }
   await api.getIssuesByKeys(["TEST-2"]);
   assert.equal(calls.length, 2);
   assert.equal(JSON.parse(calls[1].data).expand, undefined);
+});
+
+test("project issue API pages bounded Story searches with enrichment fields", async function () {
+  const calls = [];
+  const api = loadAmdModule(path.join(MODULE_DIR, "api.js"), {
+    jquery: { ajax(options) {
+      const body = JSON.parse(options.data);
+      calls.push(body);
+      return Promise.resolve({ issues: Array.from({ length: body.startAt ? 1 : 100 }, (_, index) => ({ key: "TEST-" + (body.startAt + index) })), total: 101 });
+    } },
+    _ujgESI_config: { baseUrl: "https://jira.invalid", EPIC_LINK_FIELD: "customfield_10109" },
+  });
+  const data = await api.getProjectIssues("TEST", "TEST-9");
+  assert.equal(data.issues.length, 101);
+  assert.deepEqual(calls.map(call => call.startAt), [0, 100]);
+  assert.match(calls[0].jql, /project = TEST.*issuetype = Story.*cf\[10109\] = TEST-9/);
+  for (const call of calls) assert.deepEqual(call.expand, ["changelog"]);
+  assert.ok(calls[0].fields.includes("description"));
+});
+
+test("project issue API caps a large registry and reports the actual loaded count", async function () {
+  const calls = [];
+  const api = loadAmdModule(path.join(MODULE_DIR, "api.js"), {
+    jquery: { ajax(options) {
+      const body = JSON.parse(options.data);
+      calls.push(body);
+      return Promise.resolve({ issues: Array.from({ length: 100 }, (_, index) => ({ key: "TEST-" + (body.startAt + index) })), total: 1001 });
+    } },
+    _ujgESI_config: { baseUrl: "https://jira.invalid", EPIC_LINK_FIELD: "customfield_10109" },
+  });
+  const data = await api.getProjectIssues("TEST", "");
+  assert.equal(calls.length, 10);
+  assert.equal(data.issues.length, 1000);
+  assert.equal(data.total, 1001);
+  assert.equal(data.truncated, true);
+});
+
+test("Jira registry loads explicitly, enriches linked children, and preserves workbook rows", async function () {
+  const calls = [];
+  const app = await loadImporter([{ summary: "Excel remark", sourceColumns: { "№": 42 } }], {
+    getProjectIssues(project, epic) {
+      calls.push([project, epic]);
+      return Promise.resolve({ issues: [{ key: "TEST-1", fields: {
+        summary: "Existing Story", description: "Story body", issuetype: { name: "Story" },
+        issuelinks: [{ type: { name: "Child" }, outwardIssue: { key: "TEST-2", fields: { summary: "[FE] child" } } }],
+      } }] });
+    },
+    getIssuesByKeys(keys) {
+      assert.deepEqual(Array.from(keys), ["TEST-2"]);
+      return Promise.resolve({ issues: [{ key: "TEST-2", fields: { summary: "[FE] child", description: "Child body" } }] });
+    },
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onViewModeChange("jira");
+  assert.equal(calls.length, 0);
+  assert.equal(app.state.rows.length, 0);
+  app.callbacks.onLoadRegistry();
+  assert.equal(app.state.registryLoading, true);
+  await flush(); await flush();
+  assert.deepEqual(calls, [["TEST", ""]]);
+  assert.equal(app.state.rows[0].storyDetails.description, "Story body");
+  assert.equal(app.state.rows[0].childStatuses[0].description, "Child body");
+  app.callbacks.onViewModeChange("excel");
+  assert.equal(app.state.rows[0].summary, "Excel remark");
+  app.callbacks.onViewModeChange("jira");
+  assert.equal(app.state.rows[0].jiraKey, "TEST-1");
+});
+
+test("registry warns with loaded and total counts when Jira results are truncated", async function () {
+  const app = await loadImporter([], {
+    getProjectIssues: () => Promise.resolve({
+      issues: [{ key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" } } }],
+      total: 1001,
+      truncated: true,
+    }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onViewModeChange("jira");
+  app.callbacks.onLoadRegistry();
+  await flush(); await flush();
+  assert.equal(app.state.rows.length, 1);
+  assert.match(app.state.registryWarning, /1 из 1001/);
+  assert.equal(app.state.registryError, "");
+});
+
+test("late registry response cannot replace rows after project scope changes", async function () {
+  let resolveSearch;
+  const app = await loadImporter([{ summary: "Excel remark", sourceColumns: {} }], {
+    getProjectIssues: () => new Promise(resolve => { resolveSearch = resolve; }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onViewModeChange("jira");
+  app.callbacks.onLoadRegistry();
+  app.callbacks.onProjectChange("OTHER");
+  resolveSearch({ issues: [{ key: "TEST-1", fields: { summary: "Old scope", issuetype: { name: "Story" } } }] });
+  await flush(); await flush();
+  assert.equal(app.state.rows.length, 0);
+  assert.equal(app.state.registryLoading, false);
+  app.callbacks.onViewModeChange("excel");
+  assert.equal(app.state.rows[0].summary, "Excel remark");
+});
+
+test("switching views during workbook sync cancels stale enrichment and export", async function () {
+  let resolveIssues;
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Excel remark", sourceColumns: {} }], {
+    getIssuesByKeys: () => new Promise(resolve => { resolveIssues = resolve; }),
+  });
+  app.callbacks.onSyncJira();
+  await flush();
+  app.callbacks.onViewModeChange("jira");
+  resolveIssues({ issues: [{ key: "TEST-1", fields: { summary: "Late Story" } }] });
+  await flush(); await flush();
+  assert.equal(app.state.registryLoading, false);
+  assert.equal(app.state.syncLoading, false);
+  assert.equal(app.state.exportBuffer, null);
+  app.callbacks.onViewModeChange("excel");
+  assert.equal(app.state.rows[0].storyDetails, undefined);
+});
+
+test("row owner picker updates local owner and Story default without assigning Jira", async function () {
+  const app = await loadImporter([{ summary: "Remark", sourceColumns: { "Ответственный": "Original text" } }], {
+    searchUsers: () => Promise.resolve({ users: [{ accountId: "owner-1", displayName: "Owner One" }] }),
+    createIssue() { assert.fail("Owner selection must not write Jira"); },
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onRowOwnerSearch(0, "Owner");
+  await flush();
+  app.callbacks.onDialogAssigneeSelect("row-owner-0", "owner-1");
+  assert.equal(app.state.rows[0].sourceColumns["Ответственный"], "Owner One");
+  assert.equal(app.state.rows[0].ownerAssignee.accountId, "owner-1");
+  app.callbacks.onCreateRow(0);
+  assert.equal(app.state.createDialog.assigneeId, "owner-1");
+  app.callbacks.onCloseUserPicker();
+  assert.equal(app.state.rows[0].ownerAssigneeId, "owner-1");
+});
+
+test("owner selection and clearing patch the mapped Excel owner column", async function () {
+  const patches = [];
+  const row = { excelRowNumber: 7, jiraKey: "TEST-1", sourceColumns: { "Ответственный": "Original", "Исполнитель": "Fallback" } };
+  const app = await loadImporter([row], {
+    searchUsers: () => Promise.resolve({ users: [{ accountId: "owner-1", displayName: "Owner One" }] }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story" } }] }),
+  }, null, { patchWorkbook(_buffer, patch) { patches.push(plain(patch)); return Promise.resolve(new ArrayBuffer(1)); } });
+  app.state.mappingSettings.columnMap.owner = "Owner mapped";
+  app.callbacks.onRowOwnerSearch(0, "Owner");
+  await flush();
+  app.callbacks.onDialogAssigneeSelect("row-owner-0", "owner-1");
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.equal(patches[0].rows[0].values["Owner mapped"], "Owner One");
+  app.callbacks.onDialogAssigneeClear("row-owner-0");
+  assert.equal(app.state.rows[0].sourceColumns["Ответственный"], "");
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.equal(patches[1].rows[0].values["Owner mapped"], "");
+  assert.equal(app.state.rows[0].sourceColumns["Исполнитель"], "Fallback");
+});
+
+test("owner export changes only the mapped worksheet column when both owner headers exist", async function () {
+  const patcher = loadAmdModule(path.join(MODULE_DIR, "xlsx-patcher.js"), { _ujgESI_config: {} });
+  const worksheet = '<worksheet><sheetData>' +
+    '<row r="1"><c r="A1" t="inlineStr"><is><t>Ответственный</t></is></c><c r="B1" t="inlineStr"><is><t>Owner mapped</t></is></c></row>' +
+    '<row r="2"><c r="A2" t="inlineStr"><is><t>Preserve original column</t></is></c><c r="B2" t="inlineStr"><is><t>Mapped old owner</t></is></c></row>' +
+    '</sheetData></worksheet>';
+  const outputs = [];
+  const app = await loadImporter([{ excelRowNumber: 2, jiraKey: "TEST-1", sourceColumns: { "Ответственный": "Mapped old owner" } }], {
+    searchUsers: () => Promise.resolve({ users: [{ accountId: "owner-1", displayName: "New Owner" }] }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story" } }] }),
+  }, null, { patchWorkbook(_buffer, patch) {
+    outputs.push(patcher.patchWorksheetXml(worksheet, patch));
+    return Promise.resolve(new ArrayBuffer(1));
+  } });
+  app.state.mappingSettings.columnMap.owner = "Owner mapped";
+  app.state.parseMeta.headerRowNumber = 1;
+  app.state.parseMeta.headerColumns = { "Ответственный": 2 };
+  app.callbacks.onRowOwnerSearch(0, "New Owner");
+  await flush();
+  app.callbacks.onDialogAssigneeSelect("row-owner-0", "owner-1");
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.match(outputs[0], /<c r="A2"[^>]*><is><t>Preserve original column<\/t><\/is><\/c>/);
+  assert.match(outputs[0], /<c r="B2"[^>]*><is><t>New Owner<\/t><\/is><\/c>/);
+  app.callbacks.onDialogAssigneeClear("row-owner-0");
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.match(outputs[1], /<c r="A2"[^>]*><is><t>Preserve original column<\/t><\/is><\/c>/);
+  assert.match(outputs[1], /<c r="B2"[^>]*><is><t><\/t><\/is><\/c>/);
+});
+
+test("owner edit invalidates a pending export so its late result cannot replace a fresh export", async function () {
+  let resolveOldPatch;
+  const patches = [];
+  const oldBuffer = new ArrayBuffer(1);
+  const freshBuffer = new ArrayBuffer(2);
+  const app = await loadImporter([{ excelRowNumber: 2, jiraKey: "TEST-1", ownerEdited: true, sourceColumns: { "Ответственный": "Old owner" } }], {
+    getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story" } }] }),
+  }, null, { patchWorkbook(_buffer, patch) {
+    patches.push(plain(patch));
+    return patches.length === 1 ? new Promise(resolve => { resolveOldPatch = resolve; }) : Promise.resolve(freshBuffer);
+  } });
+  app.callbacks.onSyncJira();
+  await flush();
+  assert.equal(typeof resolveOldPatch, "function");
+  app.callbacks.onDialogAssigneeClear("row-owner-0");
+  assert.equal(app.state.syncLoading, false);
+  assert.equal(app.state.exportBuffer, null);
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.equal(app.state.exportBuffer, freshBuffer);
+  resolveOldPatch(oldBuffer);
+  await flush();
+  assert.equal(app.state.exportBuffer, freshBuffer);
+  assert.equal(patches[1].rows[0].values["Ответственный"], "");
+});
+
+test("modal project override creates Story in the chosen project", async function () {
+  const calls = [];
+  const app = await loadImporter([{ summary: "Remark", sourceColumns: {} }], {}, {
+    createRow(_api, _row, options) {
+      calls.push(options);
+      return Promise.resolve({ ok: true, createdKey: "OTHER-1", createdChildren: [], errors: [] });
+    },
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onCreateRow(0);
+  app.callbacks.onDialogFieldChange("projectKey", "OTHER");
+  assert.equal(app.state.projectKey, "TEST");
+  app.callbacks.onConfirmCreate();
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].projectKey, "OTHER");
+});
+
+test("existing Story opens child-only dialog and keeps partial created children without duplicate parent", async function () {
+  const calls = [];
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {}, {
+    createRow() { assert.fail("Existing Story must not be recreated"); },
+    createAdditionalTasks(_api, row, options) {
+      calls.push({ row, options });
+      return Promise.resolve({ ok: false, partial: true, createdKey: "TEST-1", createdChildren: [{ key: "TEST-3", role: "FE", summary: "[FE] Remark", description: "Body" }], errors: ["QA failed"] });
+    },
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onAddChildTasks(0);
+  assert.equal(app.state.createDialog.mode, "children");
+  assert.equal(app.state.createDialog.parentKey, "TEST-1");
+  assert.ok(app.state.createDialog.childTasks.every(task => !task.enabled));
+  app.callbacks.onConfirmCreate();
+  assert.equal(calls.length, 0);
+  assert.match(app.state.error, /Выберите/);
+  app.callbacks.onDialogChildToggle(1, true);
+  app.callbacks.onConfirmCreate();
+  app.callbacks.onConfirmCreate();
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.childTasks.filter(task => task.enabled).length, 1);
+  assert.equal(calls[0].options.summary, "Remark");
+  assert.equal(app.state.rows[0].createdKey, "TEST-1");
+  assert.equal(app.state.rows[0].status, "partial");
+  assert.equal(app.state.rows[0].childStatuses[0].key, "TEST-3");
+  assert.equal(app.state.rows[0].createdChildren[0].key, "TEST-3");
+  assert.deepEqual(Array.from(app.state.rows[0].errors), ["QA failed"]);
+});
+
+test("failed parent link metadata and child key survive a later Jira sync", async function () {
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {
+    getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [] } }] }),
+  }, {
+    createAdditionalTasks: () => Promise.resolve({
+      ok: false, partial: true, createdKey: "TEST-1", errors: ["link denied"],
+      createdChildren: [{ key: "TEST-3", role: "FE", summary: "[FE] Remark", linkedToParent: false, linkError: "link denied" }],
+    }),
+  });
+  app.callbacks.onAddChildTasks(0);
+  app.callbacks.onDialogChildToggle(1, true);
+  app.callbacks.onConfirmCreate();
+  await flush();
+  assert.equal(app.state.rows[0].childStatuses[0].linkedToParent, false);
+  assert.equal(app.state.rows[0].childStatuses[0].linkError, "link denied");
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.equal(app.state.rows[0].childStatuses[0].key, "TEST-3");
+  assert.equal(app.state.rows[0].childStatuses[0].linkedToParent, false);
+  assert.equal(app.state.rows[0].createdChildren[0].key, "TEST-3");
+});
+
+test("failed-link child remains visible after manual registry refresh", async function () {
+  const app = await loadImporter([], {
+    getProjectIssues: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [] } }] }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+  }, {
+    createAdditionalTasks: () => Promise.resolve({
+      ok: false, partial: true, createdKey: "TEST-1", errors: ["link denied"],
+      createdChildren: [{ key: "TEST-3", role: "FE", summary: "[FE] Story", linkedToParent: false, linkError: "link denied" }],
+    }),
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onViewModeChange("jira");
+  app.callbacks.onLoadRegistry();
+  await flush(); await flush();
+  app.callbacks.onAddChildTasks(0);
+  app.callbacks.onDialogChildToggle(1, true);
+  app.callbacks.onConfirmCreate();
+  await flush();
+  app.callbacks.onLoadRegistry();
+  await flush(); await flush();
+  assert.equal(app.state.rows[0].childStatuses[0].key, "TEST-3");
+  assert.equal(app.state.rows[0].childStatuses[0].linkedToParent, false);
+  assert.equal(app.state.rows[0].childStatuses[0].linkError, "link denied");
+});
+
+for (const scope of ["project", "epic"]) {
+  test("Jira-only created children survive a " + scope + " scope round trip", async function () {
+    const app = await loadImporter([], {
+      getProjectIssues: (project, epic) => Promise.resolve({ issues: [{
+        key: project !== "TEST" ? "OTHER-1" : epic ? "TEST-2" : "TEST-1",
+        fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [] },
+      }] }),
+      getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+    }, {
+      createAdditionalTasks: () => Promise.resolve({
+        ok: false, partial: true, createdKey: "TEST-1", errors: ["link denied"],
+        createdChildren: [{ key: "TEST-3", role: "FE", summary: "[FE] Story", linkedToParent: false, linkError: "link denied" }],
+      }),
+    });
+    app.callbacks.onProjectChange("TEST");
+    app.callbacks.onViewModeChange("jira");
+    app.callbacks.onLoadRegistry();
+    await flush(); await flush();
+    app.callbacks.onAddChildTasks(0);
+    app.callbacks.onDialogChildToggle(1, true);
+    app.callbacks.onConfirmCreate();
+    await flush();
+    if (scope === "project") app.callbacks.onProjectChange("OTHER");
+    else app.callbacks.onEpicSelect("TEST-99");
+    app.callbacks.onLoadRegistry();
+    await flush(); await flush();
+    assert.equal(app.state.rows[0].childStatuses.length, 0, "Other parents must not inherit child records");
+    if (scope === "project") app.callbacks.onProjectChange("TEST");
+    else app.callbacks.onEpicSelect("");
+    app.callbacks.onLoadRegistry();
+    await flush(); await flush();
+    assert.equal(app.state.rows[0].createdChildren.length, 1);
+    assert.equal(app.state.rows[0].childStatuses[0].key, "TEST-3");
+    assert.equal(app.state.rows[0].childStatuses[0].linkedToParent, false);
+    assert.equal(app.state.rows[0].childStatuses[0].linkError, "link denied");
+  });
+}
+
+test("controller passes existing Story to real creator and creates only selected child", async function () {
+  const payloads = [];
+  const links = [];
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Source remark", sourceColumns: {} }], {
+    createIssue(payload) {
+      payloads.push(plain(payload));
+      return Promise.resolve({ key: "TEST-2" });
+    },
+    createIssueLink(payload) { links.push(plain(payload)); return Promise.resolve({}); },
+    getIssueLinkTypes: () => Promise.resolve({ issueLinkTypes: [{ name: "Child", outward: "child of", inward: "parent of" }] }),
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onAddChildTasks(0);
+  app.callbacks.onDialogChildToggle(0, true);
+  app.callbacks.onConfirmCreate();
+  await flush(); await flush(); await flush();
+  assert.equal(payloads.length, 1);
+  assert.match(payloads[0].fields.summary, /Source remark/);
+  assert.equal(links.length, 1);
+  assert.equal(app.state.rows[0].createdKey, "TEST-1");
+  assert.equal(app.state.rows[0].childStatuses[0].key, "TEST-2");
+});
+
+test("existing parent supplies child project when no project is selected", async function () {
+  const calls = [];
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {}, {
+    createAdditionalTasks(_api, _row, options) {
+      calls.push(options);
+      return Promise.resolve({ ok: true, createdKey: "TEST-1", createdChildren: [], errors: [] });
+    },
+  });
+  app.callbacks.onAddChildTasks(0);
+  assert.equal(app.state.createDialog.projectKey, "TEST");
+  app.callbacks.onDialogChildToggle(0, true);
+  app.callbacks.onConfirmCreate();
+  await flush();
+  assert.equal(calls[0].projectKey, "TEST");
+});
+
+test("synchronous child creator failure releases the row for retry", async function () {
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {}, {
+    createAdditionalTasks() { throw new Error("transport setup failed"); },
+  });
+  app.callbacks.onAddChildTasks(0);
+  app.callbacks.onDialogChildToggle(0, true);
+  app.callbacks.onConfirmCreate();
+  await flush();
+  assert.equal(app.state.rows[0].status, "failed");
+  assert.match(app.state.rows[0].errors[0], /transport setup failed/);
+  app.callbacks.onAddChildTasks(0);
+  assert.equal(app.state.createDialog.mode, "children");
 });
 
 test("create preview and edits keep remark numbers through confirmation without altering source text", async function () {

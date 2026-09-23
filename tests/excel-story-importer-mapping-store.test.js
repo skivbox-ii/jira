@@ -19,7 +19,7 @@ function createLocalStorage() {
 }
 
 function loadStore($, localStorage, window) {
-  const config = {
+  const config = Object.assign({}, loadAmdModule(path.join(MODULE_DIR, "config.js"), {}), {
     baseUrl: "https://jira.example.com",
     MAPPING_STORAGE_KEY: "ujg-esi-mapping-settings-test",
     CREATE_TEMPLATE_ROLES: [
@@ -37,7 +37,7 @@ function loadStore($, localStorage, window) {
       story: "Story prompt",
       SE: "SE prompt",
     },
-  };
+  });
   return loadAmdModule(
     path.join(MODULE_DIR, "mapping-store.js"),
     {
@@ -95,6 +95,9 @@ test("mapping store loads and saves mappings only in localStorage", async functi
   assert.equal(loaded.moduleComponentMap["Примитивы"], "Primitive Component");
   assert.equal(loaded.priorityMap["Срочно"], "Highest");
   assert.equal(loaded.columnMap.summary, "Тема");
+  assert.equal(loaded.columnMap.jira, "Тикет");
+  assert.equal(loaded.columnMap.remarkId, "ID");
+  assert.equal(loaded.columnMap.owner, "Ответственный");
   assert.equal(loaded.tableStart.headerMarker, "Тема");
   assert.equal(loaded.sheetName, "Замечания");
   assert.equal(loaded.storyAssigneeId, "story-acc");
@@ -147,6 +150,20 @@ test("mapping store loads and saves mappings only in localStorage", async functi
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.llmPrompts.story, "Updated story prompt");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assigneeId, "se-name");
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.roles[0].assignee.displayName, "SE User");
+});
+
+test("mapping store retains explicit ID, owner, and arbitrary column mappings across save and load", async function () {
+  const localStorage = createLocalStorage();
+  const store = loadStore({}, localStorage, { location: { search: "" } }).create();
+  await store.save({ columnMap: {
+    remarkId: "Код", owner: "Владелец", summary: "Тема", jira: "Тикет", custom: "Неизвестное поле",
+  } });
+  const loaded = await store.load();
+  assert.equal(loaded.columnMap.remarkId, "Код");
+  assert.equal(loaded.columnMap.owner, "Владелец");
+  assert.equal(loaded.columnMap.summary, "Тема");
+  assert.equal(loaded.columnMap.jira, "Тикет");
+  assert.equal(loaded.columnMap.custom, "Неизвестное поле");
 });
 
 test("mapping store keeps draft mapping rows with empty Jira value", async function () {

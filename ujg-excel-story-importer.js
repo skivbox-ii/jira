@@ -373,8 +373,10 @@ define("_ujgESI_config", [], function() {
   };
 
   var COLUMN_MAP = {
+    remarkId: "ID",
     summary: "Замечание",
     jira: "Jira",
+    owner: "Ответственный",
     module: "Модуль",
     priority: "Приоритет",
     statusInJira: "Статус в Jira",
@@ -823,8 +825,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function defaultColumnMap() {
     return {
+      remarkId: "ID",
       summary: config.SUMMARY_COLUMN,
       jira: config.JIRA_COLUMN,
+      owner: "Ответственный",
       module: "Модуль",
       priority: "Приоритет",
       statusInJira: "Статус в Jira",
@@ -858,8 +862,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   function canonicalColumnName(excelName, settings) {
     var text = cellText(excelName);
     var map = settings && settings.columnMap ? settings.columnMap : {};
+    if (text && cellText(map.remarkId) === text) return "ID";
     if (text && cellText(map.summary) === text) return config.SUMMARY_COLUMN;
     if (text && cellText(map.jira) === text) return config.JIRA_COLUMN;
+    if (text && cellText(map.owner) === text) return "Ответственный";
     if (text && cellText(map.module) === text) return "Модуль";
     if (text && cellText(map.priority) === text) return "Приоритет";
     if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
@@ -883,9 +889,37 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   }
 
   function headerNames(row, settings) {
-    return (row || []).map(function(value, index) {
+    var raw = (row || []).map(cellText);
+    var names = raw.map(function(value, index) {
       var text = canonicalColumnName(value, settings);
       return text || "Колонка " + String(index + 1);
+    });
+    var preferred = {
+      ID: settings.columnMap.remarkId,
+      "Замечание": settings.columnMap.summary,
+      Jira: settings.columnMap.jira,
+      "Ответственный": settings.columnMap.owner,
+      "Модуль": settings.columnMap.module,
+      "Приоритет": settings.columnMap.priority,
+      "Статус в Jira": settings.columnMap.statusInJira,
+      "Исполнитель в Jira": settings.columnMap.assigneeInJira,
+      "Спринт": settings.columnMap.sprintInJira,
+    };
+    var selected = {};
+    names.forEach(function(name, index) {
+      if (!Object.prototype.hasOwnProperty.call(selected, name) || raw[index] === preferred[name]) {
+        if (!Object.prototype.hasOwnProperty.call(selected, name) || raw[selected[name]] !== preferred[name]) selected[name] = index;
+      }
+    });
+    var used = {};
+    Object.keys(selected).forEach(function(name) { used[name] = true; });
+    return names.map(function(name, index) {
+      if (selected[name] === index) return name;
+      var base = (raw[index] || name) + " (колонка " + String(index + 1) + ")";
+      var unique = base;
+      while (used[unique]) unique += "*";
+      used[unique] = true;
+      return unique;
     });
   }
 
@@ -1047,12 +1081,13 @@ define("_ujgESI_remarkId", [], function() {
     var columns = row && row.sourceColumns || {};
     var names = Object.keys(columns);
     var result = "";
-    ["№", "id", "номер замечания", "номер"].some(function(wanted) {
+    var mappedId = row && row.sourceColumnIndexes && Object.prototype.hasOwnProperty.call(row.sourceColumnIndexes, "ID");
+    (mappedId ? ["id", "№", "номер замечания", "номер"] : ["№", "id", "номер замечания", "номер"]).some(function(wanted) {
       return names.some(function(name) {
         var value = columns[name];
         if (name.trim().toLowerCase() !== wanted || (typeof value !== "string" && typeof value !== "number")) return false;
         value = String(value).trim().replace(/^(?:№|#)\s*/, "");
-        if (!value || value.length > 64 || !/\d/.test(value) || !/^[a-zа-яё0-9][a-zа-яё0-9._\/-]*$/i.test(value)) return false;
+        if (!value || value.length > 64 || (!/\d/.test(value) && !(mappedId && name === "ID")) || !/^[a-zа-яё0-9][a-zа-яё0-9._\/-]*$/i.test(value)) return false;
         result = value;
         return true;
       });
@@ -1349,7 +1384,9 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (!api || typeof api.createIssueLink !== "function") {
       return Promise.resolve({ ok: false, error: "Jira issue link API is not available" });
     }
-    return Promise.resolve(api.createIssueLink(payload)).then(
+    return Promise.resolve().then(function() {
+      return api.createIssueLink(payload);
+    }).then(
       function() {
         return { ok: true };
       },
@@ -1380,21 +1417,65 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     });
   }
 
-  function linkTestingTasksBlockedBy(api, created, index, errors) {
+  function linkTestingTasksBlockedBy(api, created, index, errors, existingBlockers) {
     var testing;
     var blockers;
     if (index >= created.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
     }
     testing = created[index];
-    if (!isTestingRole(testing && testing.role)) {
-      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+    if (!isTestingRole(testing && testing.role) || testing.linkedToParent === false) {
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors, existingBlockers);
     }
-    blockers = created.filter(function(child) {
-      return child && child.key && child.key !== testing.key && !isTestingRole(child.role);
+    var seen = {};
+    blockers = created.concat(existingBlockers || []).filter(function(child) {
+      if (!child || !child.key || child.linkedToParent === false || child.key === testing.key || isTestingRole(child.role) || seen[child.key]) return false;
+      seen[child.key] = true;
+      return true;
     });
     return linkTestingBlockedBySequential(api, testing, blockers, 0, errors).then(function() {
-      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors, existingBlockers);
+    });
+  }
+
+  function preparedRoles(row, storySummary, tasks) {
+    return tasks.filter(function(role) {
+      return role && role.enabled !== false;
+    }).map(function(role) {
+      var out = {};
+      Object.keys(role).forEach(function(name) { out[name] = role[name]; });
+      out.summary = summaryWithRemarkId(row, out.summary != null ? out.summary : childSummary(role, storySummary), role);
+      return out;
+    });
+  }
+
+  function publicCreatedChildren(created) {
+    return (created || []).map(function(child) {
+      var fields = child.fields || {};
+      var out = {
+        key: child.key,
+        role: child.role.role,
+        summary: fields.summary,
+        description: fields.description,
+        issueType: fields.issuetype && fields.issuetype.name,
+        linkedToParent: child.linkedToParent === true,
+      };
+      if (child.linkError) out.linkError = child.linkError;
+      if (child.role.enabled != null) out.enabled = child.role.enabled;
+      if (child.role.assignee != null) out.assignee = child.role.assignee;
+      if (child.role.originalEstimate != null) out.originalEstimate = child.role.originalEstimate;
+      if (child.role.remainingEstimate != null) out.remainingEstimate = child.role.remainingEstimate;
+      return out;
+    });
+  }
+
+  function knownExistingChildren(row, parentKey) {
+    var created = row && Array.isArray(row.createdChildren) ? row.createdChildren : [];
+    var synced = row && String(row.jiraKey || "").trim() === parentKey && Array.isArray(row.childStatuses) ? row.childStatuses : [];
+    return created.concat(synced).filter(function(child) {
+      return child && createdKey(child) && child.role && child.linkedToParent !== false;
+    }).map(function(child) {
+      return { key: createdKey(child), role: typeof child.role === "object" ? child.role : { role: child.role } };
     });
   }
 
@@ -1403,16 +1484,24 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors, created: created });
     }
-    return Promise.resolve(api.createIssue({ fields: subtaskFields(projectKey, parentKey, roles[index], storySummary) })).then(
+    var fields = subtaskFields(projectKey, parentKey, roles[index], storySummary);
+    return Promise.resolve().then(function() {
+      return api.createIssue({ fields: fields });
+    }).then(
       function(res) {
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
           return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
         }
-        created.push({ key: key, role: roles[index] });
+        var child = { key: key, role: roles[index], fields: fields, linkedToParent: false };
+        created.push(child);
         return linkChildIssue(api, parentKey, key, childLinkType).then(function(link) {
-          if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
+          child.linkedToParent = link.ok;
+          if (!link.ok) {
+            child.linkError = link.error;
+            errors.push(roles[index].role + " link: " + link.error);
+          }
           return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
         });
       },
@@ -1423,10 +1512,38 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     );
   }
 
+  function createAdditionalTasks(api, row, options) {
+    var opts = options || {};
+    var parentKey = row && createdKey({ key: row.createdKey || row.jiraKey });
+    var tasks = Array.isArray(opts.childTasks) ? opts.childTasks : [];
+    var errors = [];
+    if (!parentKey) errors.push("Existing Story parent key is required");
+    if (!String(opts.projectKey || "").trim()) errors.push("Project key is required");
+    if (!tasks.some(function(role) { return role && role.enabled !== false; })) errors.push("At least one enabled child task is required");
+    if (!api || typeof api.createIssue !== "function") errors.push("Jira API is not available");
+    if (errors.length) return Promise.resolve({ ok: false, partial: false, createdKey: parentKey || "", createdChildren: [], errors: errors });
+
+    var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
+    var roles = preparedRoles(row, storySummary, tasks);
+    return resolveChildLinkType(api).then(function(childLinkType) {
+      return createSubtasksSequential(api, opts.projectKey, parentKey, storySummary, roles, 0, [], [], childLinkType);
+    }).then(function(sub) {
+      return linkTestingTasksBlockedBy(api, sub.created, 0, sub.errors, knownExistingChildren(row, parentKey)).then(function() {
+        return {
+          ok: sub.errors.length === 0,
+          partial: sub.errors.length > 0 && sub.created.length > 0,
+          createdKey: parentKey,
+          createdChildren: publicCreatedChildren(sub.created),
+          errors: sub.errors,
+        };
+      });
+    });
+  }
+
   function createRow(api, row, options) {
     var opts = options || {};
-    if (row && (row.alreadyLinked || row.jiraKey)) {
-      return Promise.resolve({ ok: true, skipped: true, createdKey: row.jiraKey || "" });
+    if (row && (row.alreadyLinked || row.jiraKey || row.createdKey)) {
+      return Promise.resolve({ ok: true, skipped: true, createdKey: row.createdKey || row.jiraKey || "", createdChildren: [] });
     }
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
@@ -1435,7 +1552,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
       var key = createdKey(res);
       warnings = warnings || [];
       if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
-      if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
+      if (!opts.createSubtasks) return { ok: true, createdKey: key, createdChildren: [], errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
       var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
       var roles = Array.isArray(opts.childTasks)
         ? opts.childTasks
@@ -1447,18 +1564,11 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
             out.summary = childSummary(role, storySummary);
             return out;
           });
-      roles = roles.filter(function(role) {
-        return !role || role.enabled !== false;
-      }).map(function(role) {
-        var out = {};
-        Object.keys(role || {}).forEach(function(name) { out[name] = role[name]; });
-        var summary = out.summary != null ? out.summary : childSummary(role, storySummary);
-        out.summary = summaryWithRemarkId(row, summary, role);
-        return out;
-      });
+      roles = preparedRoles(row, storySummary, roles);
       return resolveChildLinkType(api).then(function(childLinkType) {
         return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType).then(function(sub) {
           return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
+            linked.created = sub.created;
             return linked;
           });
         });
@@ -1467,6 +1577,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
           ok: sub.errors.length === 0,
           partial: sub.errors.length > 0,
           createdKey: key,
+          createdChildren: publicCreatedChildren(sub.created),
           errors: warnings.concat(sub.errors),
           epicLinkSkipped: !!epicLinkSkipped,
         };
@@ -1495,6 +1606,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   return {
     createRow: createRow,
+    createAdditionalTasks: createAdditionalTasks,
     storyFields: storyFields,
     subtaskFields: subtaskFields,
     childSummary: childSummary,
@@ -1519,6 +1631,12 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
   function toJqlToken(value) {
     var token = String(value || "");
     return /^[A-Za-z0-9_-]+$/.test(token) ? token : quoteJqlString(token);
+  }
+
+  function epicLinkJqlField(value) {
+    var field = String(value || "").trim();
+    var match = /^customfield_(\d+)$/i.exec(field) || /^cf\[(\d+)\]$/i.exec(field);
+    return match ? "cf[" + match[1] + "]" : quoteJqlString(field);
   }
 
   function uniqueIssueKeys(keys) {
@@ -1549,6 +1667,14 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return tokens.map(function(token) {
       return "(summary ~ " + quoteJqlString(token) + " OR description ~ " + quoteJqlString(token) + ")";
     }).join(" AND ");
+  }
+
+  function issueFields() {
+    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "priority", "issuetype", "updated", "created"];
+    [config.SPRINT_FIELD, "customfield_10020", "customfield_10007"].forEach(function(field) {
+      if (field && fields.indexOf(field) < 0) fields.push(field);
+    });
+    return fields;
   }
 
   return {
@@ -1621,10 +1747,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys, options) {
       var list = uniqueIssueKeys(keys);
-      var fields = ["summary", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "priority", "issuetype", "updated", "created"];
-      if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
-      if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
-      if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
+      var fields = issueFields();
       if (!list.length) return Promise.resolve({ issues: [] });
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/search",
@@ -1634,10 +1757,38 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: JSON.stringify({
           jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
           fields: fields,
-          expand: options && options.expand === "changelog" ? "changelog" : undefined,
+          expand: options && options.expand === "changelog" ? ["changelog"] : undefined,
           maxResults: list.length,
         }),
       });
+    },
+    getProjectIssues: function(projectKey, epicKey) {
+      var project = projectKey != null ? String(projectKey).trim() : "";
+      var epic = epicKey != null ? String(epicKey).trim() : "";
+      var jql;
+      var issues = [];
+      var pageSize = 100;
+      var maxIssues = 1000;
+      if (!project) return Promise.resolve({ issues: [] });
+      jql = "project = " + toJqlToken(project) + " AND issuetype = Story";
+      if (epic && config.EPIC_LINK_FIELD) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + " = " + toJqlToken(epic);
+      jql += " ORDER BY key DESC";
+      function page(startAt) {
+        return Promise.resolve($.ajax({
+          url: config.baseUrl + "/rest/api/2/search",
+          type: "POST",
+          contentType: "application/json",
+          dataType: "json",
+          data: JSON.stringify({ jql: jql, fields: issueFields(), expand: ["changelog"], startAt: startAt, maxResults: Math.min(pageSize, maxIssues - startAt) }),
+        })).then(function(data) {
+          var batch = data && Array.isArray(data.issues) ? data.issues : [];
+          issues = issues.concat(batch);
+          var next = startAt + batch.length;
+          if (batch.length && next < Number(data && data.total) && next < maxIssues) return page(next);
+          return { issues: issues, total: data && data.total != null ? Number(data.total) : issues.length, truncated: next < Number(data && data.total) };
+        });
+      }
+      return page(0);
     },
     searchIssueBySummary: function(projectKey, summaryText) {
       var text = summaryText != null ? String(summaryText).trim() : "";
@@ -2439,6 +2590,22 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
 
   function text(value) { return value == null ? "" : String(value).trim(); }
   function compare(a, b) { return text(a).localeCompare(text(b), "ru", { numeric: true, sensitivity: "base" }); }
+  function priorityRank(value) {
+    value = text(value).toLocaleLowerCase();
+    if (/blocker|блокер|блокир/.test(value)) return 6;
+    if (/highest|critical|крит|наивыс/.test(value)) return 5;
+    if (/high|major|высок|значительн/.test(value) && !/незнач/.test(value)) return 4;
+    if (/medium|normal|средн|обычн/.test(value)) return 3;
+    if (/lowest|trivial|самый низ|незнач/.test(value)) return 1;
+    if (/low|minor|низк/.test(value)) return 2;
+    return null;
+  }
+  function comparePriority(a, b, direction) {
+    if (!text(a) || !text(b)) return text(a) ? -1 : text(b) ? 1 : 0;
+    var ar = priorityRank(a), br = priorityRank(b), sign = direction === "desc" ? -1 : 1;
+    if (ar == null || br == null) return ar == null && br == null ? compare(a, b) * sign : ar == null ? 1 : -1;
+    return (ar - br) * sign;
+  }
   function importStatus(row) {
     if (row.status === "creating") return "Создается";
     if (row.status === "partial") return "Частично создано";
@@ -2469,19 +2636,21 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
         var ms = isFinite(since) && since <= now ? now - since : null;
         return {
           source: row, rowIndex: index, groupId: groupId, uid: groupId + ":" + (child ? childIndex : "story"), isChild: !!child,
-          remarkId: remarkId(row), remark: text(row.summary), owner: text(cols["Ответственный"] || cols["Исполнитель"]),
-          module: text(cols["Модуль"]), importState: importStatus(row), key: key,
+          remarkId: remarkId(row), remark: text(row.summary), owner: text(Object.prototype.hasOwnProperty.call(cols, "Ответственный") ? cols["Ответственный"] : cols["Исполнитель"]),
+          module: text(cols["Модуль"]), sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
           type: key ? text(details.issueType) : "",
           role: child ? text(details.role) : "",
           summary: text(details.summary || (child ? "" : row.summary)),
+          description: text(details.description), descriptionLoaded: typeof details.descriptionLoaded === "boolean" ? details.descriptionLoaded : details.description != null,
           status: key ? text(synced || child ? details.status : cols["Статус в Jira"]) : "",
           assignee: key ? text(synced || child ? details.assignee : cols["Исполнитель в Jira"]) : "",
           priority: text(synced || child ? details.priority : cols["Приоритет"]),
           updated: key ? text(details.updated) : "", age: ageText(ms), ageMs: ms,
           statusSince: text(details.statusSince), ageReason: text(details.statusSinceReason) || "История переходов не загружена",
-          done: details.done === true || /done|готов|закры|resolved|снят/i.test(text(details.status)),
+          done: typeof details.done === "boolean" ? details.done : details.statusCategory ? details.statusCategory === "done" : /^(done|готово|закрыт[ао]?|closed|resolved|снят[ао]?)$/i.test(text(details.status || cols["Статус в Jira"])),
           statusState: text(details.statusState), statusCategory: text(details.statusCategory),
           blocked: !!details.blocked,
+          linkedToParent: details.linkedToParent, linkError: text(details.linkError),
         };
       }
       result.push(entry(row.storyDetails, false));
@@ -2491,6 +2660,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
   }
   function matches(row, filters, except) {
     return Object.keys(filters || {}).every(function(key) {
+      if (key === "excludeDone") return except === "status" || !filters[key] || !row.done;
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }
@@ -2516,6 +2686,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
       function value(row) { return sort.column === "age" ? row.ageMs : row[sort.column]; }
       function cmp(a, b) {
         var av = value(a), bv = value(b);
+        if (sort.column === "priority") return comparePriority(av, bv, sort.direction);
         var result = sort.column === "age" ? (av == null ? -1 : av) - (bv == null ? -1 : bv) : compare(av, bv);
         return result * (sort.direction === "desc" ? -1 : 1);
       }
@@ -2534,6 +2705,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
 define("_ujgESI_icons", [], function() {
   "use strict";
   var nodes = {"ChevronDown":[["path",{"d":"m6 9 6 6 6-6"}]],"ChevronRight":[["path",{"d":"m9 18 6-6-6-6"}]],"Plus":[["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],"WandSparkles":[["path",{"d":"m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"}],["path",{"d":"m14 7 3 3"}],["path",{"d":"M5 6v4"}],["path",{"d":"M19 14v4"}],["path",{"d":"M10 2v2"}],["path",{"d":"M7 8H3"}],["path",{"d":"M21 16h-4"}],["path",{"d":"M11 3H9"}]],"Upload":[["path",{"d":"M12 3v12"}],["path",{"d":"m17 8-5-5-5 5"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}]],"Download":[["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],"Settings":[["path",{"d":"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"}],["circle",{"cx":"12","cy":"12","r":"3"}]],"RefreshCw":[["path",{"d":"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}],["path",{"d":"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"}],["path",{"d":"M8 16H3v5"}]],"Info":[["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],"Columns3":[["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}],["path",{"d":"M9 3v18"}],["path",{"d":"M15 3v18"}]],"Expand":[["path",{"d":"m15 15 6 6"}],["path",{"d":"m15 9 6-6"}],["path",{"d":"M21 16v5h-5"}],["path",{"d":"M21 8V3h-5"}],["path",{"d":"M3 16v5h5"}],["path",{"d":"m3 21 6-6"}],["path",{"d":"M3 8V3h5"}],["path",{"d":"M9 9 3 3"}]],"Minimize2":[["path",{"d":"m14 10 7-7"}],["path",{"d":"M20 10h-6V4"}],["path",{"d":"m3 21 7-7"}],["path",{"d":"M4 14h6v6"}]],"X":[["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],"Funnel":[["path",{"d":"M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"}]],"FunnelX":[["path",{"d":"M12.531 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14v6a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341l.427-.473"}],["path",{"d":"m16.5 3.5 5 5"}],["path",{"d":"m21.5 3.5-5 5"}]],"ArrowDownAZ":[["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"ArrowUpAZ":[["path",{"d":"m3 8 4-4 4 4"}],["path",{"d":"M7 4v16"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"Search":[["path",{"d":"m21 21-4.34-4.34"}],["circle",{"cx":"11","cy":"11","r":"8"}]],"TriangleAlert":[["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],"ExternalLink":[["path",{"d":"M15 3h6v6"}],["path",{"d":"M10 14 21 3"}],["path",{"d":"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}]],"Bookmark":[["path",{"d":"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"}]],"CheckSquare":[["path",{"d":"M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"}],["path",{"d":"m9 11 3 3L22 4"}]],"ChevronLeft":[["path",{"d":"m15 18-6-6 6-6"}]],"ArrowUp":[["path",{"d":"m5 12 7-7 7 7"}],["path",{"d":"M12 19V5"}]],"ArrowDown":[["path",{"d":"M12 5v14"}],["path",{"d":"m19 12-7 7-7-7"}]]};
+  nodes.Equal = [["line",{"x1":"5","x2":"19","y1":"9","y2":"9"}],["line",{"x1":"5","x2":"19","y1":"15","y2":"15"}]];
   return function(name) {
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     var attrs = { viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" };
@@ -2552,13 +2724,13 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
   "use strict";
   var sequence = 0;
   var columns = [
-    ["remarkId", "ID", 66], ["remark", "Замечание из Excel", 260], ["owner", "Ответственный", 144],
-    ["module", "Модуль", 110], ["importState", "Импорт", 136], ["key", "Ключ Jira", 146],
-    ["type", "Тип", 90], ["role", "Роль", 68], ["summary", "Тема задачи", 270],
-    ["status", "Статус Jira", 142], ["age", "В статусе", 105], ["assignee", "Исполнитель", 154],
-    ["priority", "Приоритет", 100], ["updated", "Обновлено", 104]
+    ["remarkId", "ID", 54], ["remark", "Замечание из Excel", 236], ["owner", "Ответственный", 138],
+    ["module", "Модуль", 110], ["sourceStatus", "Статус Excel", 112], ["importState", "Импорт", 136], ["key", "Ключ Jira", 152],
+    ["type", "Тип", 58], ["role", "Роль", 64], ["summary", "Тема задачи", 276],
+    ["status", "Статус Jira", 112], ["age", "В статусе", 94], ["assignee", "Исполнитель", 124],
+    ["priority", "Приоритет", 94], ["updated", "Обновлено", 94]
   ];
-  var sourceFields = ["remarkId", "remark", "owner", "module", "importState"];
+  var sourceFields = ["remarkId", "remark", "owner", "module", "sourceStatus", "importState"];
   function button(name, label, fn) {
     return $("<button/>").attr({ type: "button", title: label, "aria-label": label }).addClass("ujg-esi-icon-button").append(icon(name)).on("click", fn);
   }
@@ -2580,8 +2752,65 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
   function create() {
     var id = ++sequence;
     var state, hooks, $host, $viewport, $menu, menuAnchor;
-    var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null);
-    var hidden = { module: true, importState: true }, page = 0, pageSize = 50;
+    var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
+    var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
+    var hidden = { module: true, sourceStatus: true, importState: true }, page = 0, pageSize = 50;
+
+    function closeDescription(focus) {
+      clearTimeout(descriptionTimer);
+      if ($description) $description.remove();
+      $description = null; descriptionPinned = false;
+      if (descriptionAnchor) {
+        $(descriptionAnchor).removeAttr("aria-controls").attr("aria-expanded", "false");
+        if (focus && document.contains(descriptionAnchor)) {
+          skipDescriptionFocus = true; descriptionAnchor.focus(); skipDescriptionFocus = false;
+        }
+      }
+      descriptionAnchor = null;
+    }
+    function deferDescriptionClose() {
+      clearTimeout(descriptionTimer);
+      if (!descriptionPinned) descriptionTimer = setTimeout(function() { closeDescription(); }, 180);
+    }
+    function showDescription(anchor, entry, pinned) {
+      closeDescription(); closeMenu();
+      descriptionAnchor = anchor; descriptionPinned = !!pinned;
+      var descriptionId = "ujg-esi-description-" + id;
+      $(anchor).attr({ "aria-controls": descriptionId, "aria-expanded": "true" });
+      $description = $("<section/>").addClass("ujg-esi-description-popover").attr({ id: descriptionId, role: "dialog", "aria-label": "Описание " + (entry.key || entry.remarkId || "замечания") });
+      var $head = $("<div/>").addClass("ujg-esi-description-head");
+      if (entry.key) $head.append($("<a/>").attr({ href: (state.baseUrl || "").replace(/\/+$/, "") + "/browse/" + encodeURIComponent(entry.key), target: "_blank", rel: "noopener noreferrer" }).text(entry.key));
+      else $head.append($("<span/>").text("Замечание " + entry.remarkId));
+      $head.append(button("X", "Закрыть описание", function() { closeDescription(true); }));
+      $description.append($head, $("<h3/>").text(entry.summary || entry.remark), $("<div/>").addClass("ujg-esi-description-meta").text([entry.role, entry.status, entry.assignee, entry.age].filter(Boolean).join(" · ")));
+      var content = entry.key ? entry.description : entry.remark;
+      var $body = $("<div/>").addClass("ujg-esi-description-body");
+      if (content) $body.append(hooks.renderDescription ? hooks.renderDescription(content) : $("<p/>").text(content));
+      else $body.append($("<p/>").addClass("ujg-esi-description-empty").text(entry.descriptionLoaded ? "Описание не заполнено" : "Описание не загружено"));
+      $description.append($body).on("mouseenter focusin", function() { clearTimeout(descriptionTimer); }).on("mouseleave", deferDescriptionClose).on("keydown", function(event) {
+        if (event.key === "Escape") { event.stopPropagation(); closeDescription(true); }
+        if (event.key === "Tab" && event.shiftKey && event.target === $description.find("a,button").first()[0]) { event.preventDefault(); closeDescription(true); }
+      }).on("focusout", function(event) {
+        if (!event.relatedTarget || !$description[0].contains(event.relatedTarget)) closeDescription();
+      });
+      $host.append($description);
+      var rect = anchor.getBoundingClientRect(), width = Math.min(560, Math.max(240, window.innerWidth - 24));
+      $description.css({ width: width, left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)), top: 12, maxHeight: Math.max(160, window.innerHeight - 24) });
+      var height = $description.outerHeight();
+      $description.css("top", Math.max(12, Math.min(rect.bottom + 7, window.innerHeight - height - 12)));
+    }
+    function descriptionTarget($target, entry) {
+      return $target.attr({ tabindex: "0", role: "button", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-label": "Описание: " + entry.summary })
+        .on("mouseenter", function() { var anchor = this; clearTimeout(descriptionTimer); descriptionTimer = setTimeout(function() { showDescription(anchor, entry); }, 250); })
+        .on("mouseleave blur", deferDescriptionClose)
+        .on("focus", function() { if (!skipDescriptionFocus) showDescription(this, entry); })
+        .on("click", function(event) { event.stopPropagation(); showDescription(this, entry, true); })
+        .on("keydown", function(event) {
+          if (event.key === "Escape") { event.stopPropagation(); closeDescription(); }
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); showDescription(this, entry, true); $description.find("a,button").first().trigger("focus"); }
+          if (event.key === "Tab" && !event.shiftKey && $description && descriptionAnchor === this) { event.preventDefault(); $description.find("a,button").first().trigger("focus"); }
+        });
+    }
 
     function closeMenu(focus) {
       if ($menu) $menu.remove();
@@ -2593,6 +2822,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       menuAnchor = null;
     }
     function popup(anchor, title) {
+      closeDescription();
       closeMenu();
       menuAnchor = anchor;
       $(anchor).attr("aria-expanded", "true");
@@ -2603,19 +2833,21 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       $menu.on("keydown", function(event) { if (event.key === "Escape") { event.stopPropagation(); closeMenu(true); } });
       return $menu;
     }
-    function refresh() { closeMenu(); draw(); }
+    function refresh() { closeMenu(); closeDescription(); draw(); }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
-      var active = Array.isArray(filters[key]);
+      var active = Array.isArray(filters[key]) || key === "status" && !!filters.excludeDone;
+      var excludeDone = !!filters.excludeDone;
       var options = registry.values(rows, key, filters);
       (filters[key] || []).forEach(function(value) { if (options.indexOf(value) === -1) options.push(value); });
       options.sort(registry.compare);
-      var selected = active ? filters[key].slice() : options.slice();
+      var selected = Array.isArray(filters[key]) ? filters[key].slice() : options.slice();
       var $box = popup(anchor, "Фильтр: " + column[1]);
-      [ ["asc", "ArrowDownAZ", "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", "Сортировка по убыванию"] ].forEach(function(item) {
-        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
+      [ ["asc", "ArrowDownAZ", key === "priority" ? "Сначала низкий приоритет" : "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", key === "priority" ? "Сначала высокий приоритет" : "Сортировка по убыванию"] ].forEach(function(item) {
+        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
       });
-      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") delete filters.excludeDone; page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые" }).prop("checked", excludeDone).on("change", function() { excludeDone = this.checked; }), $("<span/>").text("Исключить готовые")));
       var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
       var $chips = $("<div/>").addClass("ujg-esi-filter-chips");
       var $all = $("<input/>").attr({ type: "checkbox", "aria-label": "Выделить все найденные значения" });
@@ -2657,6 +2889,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
         update();
       });
       var $apply = $("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() {
+        if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; }
         var allValues = registry.values(rows, key, {});
         if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
         page = 0; refresh();
@@ -2667,23 +2900,35 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
     }
     function cell(entry, key) {
       var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
+      if (key === "owner" && hooks.editOwner) return $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(person(value), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
       if (key === "owner" || key === "assignee") return $td.append(person(value)).attr("title", value || "Не указан");
       if (key === "remark") {
         $td.append($("<div/>").addClass("ujg-esi-source-text").text(value));
-        $td.attr("title", value).append($("<small/>").text([entry.module, "Excel: " + entry.source.excelRowNumber].filter(Boolean).join(" · ")));
+        $td.attr("title", value).append($("<small/>").text([entry.module, entry.source.excelRowNumber ? "Excel: " + entry.source.excelRowNumber : ""].filter(Boolean).join(" · ")));
         if (entry.source.status === "partial") $td.append($("<small/>").addClass("ujg-esi-import-warning").append(icon("TriangleAlert"), document.createTextNode("Частично создано")));
         return $td;
       }
       if (key === "key") {
+        if (entry.isChild) $td.append($("<span/>").addClass("ujg-esi-tree-mark").attr("aria-hidden", "true"));
         if (value) return $td.append($("<a/>").attr({ href: (state.baseUrl || "").replace(/\/+$/, "") + "/browse/" + encodeURIComponent(value), target: "_blank", rel: "noopener noreferrer" }).text(value));
         return $td.append($("<span/>").addClass("ujg-esi-import-state").toggleClass("is-error", entry.source.status === "failed").text(entry.importState));
       }
       if (key === "summary") {
-        if (entry.isChild) $td.append($("<span/>").addClass("ujg-esi-tree-mark").attr("aria-hidden", "true"));
-        return $td.append($("<span/>").addClass("ujg-esi-issue-summary-text").text(value || "—")).attr("title", value);
+        $td.append(descriptionTarget($("<span/>").addClass("ujg-esi-issue-summary-text").text(value || "—"), entry));
+        if (!entry.key) $td.append($("<small/>").addClass("ujg-esi-draft-label").text("Черновик"));
+        return $td;
       }
-      if (key === "status" && value) return $td.append($("<span/>").addClass("ujg-esi-workflow-status is-" + statusClass(entry)).text(value)).attr("title", entry.blocked ? "Задача заблокирована" : value);
-      if (key === "type" && value) return $td.append($("<span/>").addClass("ujg-esi-issue-type").toggleClass("is-story", !entry.isChild).append(icon(entry.isChild ? "CheckSquare" : "Bookmark")), $("<span/>").text(value)).attr("title", value);
+      if (key === "status") {
+        if (entry.linkedToParent === false) $td.append($("<span/>").addClass("ujg-esi-blocked-marker").attr({role:"img", "aria-label":"Связь с основной задачей не создана", title:entry.linkError || "Связь с основной задачей не создана"}).append(icon("TriangleAlert")));
+        if (entry.blocked) $td.append($("<span/>").addClass("ujg-esi-blocked-marker").attr({role:"img", "aria-label":"Заблокирована", title:"Заблокирована"}).append(icon("TriangleAlert")));
+        if (value) $td.append($("<span/>").addClass("ujg-esi-workflow-status is-" + statusClass(entry)).text(value));
+        return $td.attr("title", value);
+      }
+      if (key === "type" && value) return $td.append($("<span/>").addClass("ujg-esi-issue-type").toggleClass("is-story", !entry.isChild).toggleClass("is-qa", entry.role === "QA").attr({ role: "img", "aria-label": value }).append(icon(entry.isChild ? "CheckSquare" : "Bookmark"))).attr("title", value);
+      if (key === "priority" && value) {
+        var priority = /выс|крит|high|critical|blocker/i.test(value) ? "high" : /низ|незнач|low|minor|trivial/i.test(value) ? "low" : /сред|medium|normal/i.test(value) ? "medium" : "";
+        if (priority) return $td.append($("<span/>").addClass("ujg-esi-priority is-" + priority).attr({ role: "img", "aria-label": value }).append(icon(priority === "high" ? "ArrowUp" : priority === "low" ? "ArrowDown" : "Equal"))).attr("title", value);
+      }
       if (key === "age") return $td.text(value || "—").attr("title", entry.statusSince ? "В статусе с " + new Date(entry.statusSince).toLocaleString("ru-RU") : entry.ageReason);
       if (key === "updated" && value) { var date = new Date(value); return $td.text(isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU")).attr("title", value); }
       return $td.text(value || "—").attr("title", value || "");
@@ -2697,52 +2942,67 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       var pages = Math.max(1, Math.ceil(groups.length / pageSize));
       page = Math.max(0, Math.min(page, pages - 1));
       var $table = $("<table/>").addClass("ujg-esi-registry-table").attr("aria-label", "Замечания и связанные задачи Jira");
-      var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "30px"));
-      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("Expand", "Развернуть все", function() { collapsed = Object.create(null); refresh(); })));
+      var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "28px"));
+      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("Expand", "Развернуть все", function() { collapsed = Object.create(null); rows.forEach(function(row) { fullChildren[row.groupId] = true; }); refresh(); })));
       visible.forEach(function(column) {
         $colgroup.append($("<col/>").css("width", column[2] + "px"));
-        var active = Array.isArray(filters[column[0]]), sorted = sort && sort.column === column[0];
-        var caption = "Фильтр: " + column[1];
+        var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!filters.excludeDone, sorted = sort && sort.column === column[0];
+        var heading = column[0] === "remark" && state.viewMode === "jira" ? "Замечание" : column[1];
+        var caption = "Фильтр: " + heading;
         var $filter = button(active ? "Funnel" : "ChevronDown", caption, function(event) { event.stopPropagation(); filterMenu(this, column); })
           .addClass("ujg-esi-header-filter").toggleClass("is-active", active).attr({ "data-filter": column[0], "aria-haspopup": "dialog", "aria-expanded": "false" });
         if (active && (column[0] === "owner" || column[0] === "assignee")) $filter.append($("<b/>").text(filters[column[0]].length));
+        var $sort = $("<button/>").addClass("ujg-esi-header-sort").attr({ type: "button", "data-sort": column[0], title: "Сортировка: " + heading, "aria-label": "Сортировка: " + heading })
+          .append($("<span/>").text(heading), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null)
+          .on("click", function() {
+            sort = { column: column[0], direction: sorted ? (sort.direction === "asc" ? "desc" : "asc") : column[0] === "priority" ? "desc" : "asc" };
+            page = 0; refresh(); $host.find('[data-sort="' + column[0] + '"]').trigger("focus");
+          });
         $head.append($("<th/>").attr({ scope: "col", "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
-          .append($("<span/>").text(column[1]), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null, $filter));
+          .append($sort, $filter));
       });
-      $colgroup.append($("<col/>").css("width", "118px"));
-      $head.append($("<th/>").attr("scope", "col").text("Действия"));
+      $colgroup.append($("<col/>").css("width", "72px"));
+      $head.append($("<th/>").attr({scope: "col", "aria-label": "Действия", title: "Действия"}).addClass("ujg-esi-actions-head").append(icon("WandSparkles"), icon("Plus")));
       $table.append($colgroup, $("<thead/>").append($head));
       var $body = $("<tbody/>");
       groups.slice(page * pageSize, (page + 1) * pageSize).forEach(function(group) {
         var parent = group.parent, force = Object.keys(filters).length > 0;
+        if (!sort) group.children.sort(function(a, b) { return registry.compare(a.key, b.key); });
         var opened = force || !collapsed[parent.groupId];
-        var children = opened ? group.children : [];
+        var children = opened ? (force || fullChildren[parent.groupId] ? group.children : group.children.slice(0, 5)) : [];
+        var remaining = opened ? group.children.length - children.length : 0;
+        var span = children.length + 1 + (remaining ? 1 : 0);
         [parent].concat(children).forEach(function(entry, rowNumber) {
           var $tr = $("<tr/>").addClass(entry.isChild ? "ujg-esi-child-row" : "ujg-esi-parent-row").attr({ "data-key": entry.key, "data-source-index": entry.rowIndex });
           $tr.toggleClass("is-context", rowNumber === 0 && group.contextOnly).toggleClass("is-new", !parent.key).toggleClass("is-failed", parent.source.status === "failed");
+          $tr.toggleClass("is-collapsed", !opened).toggleClass("is-last-child", entry.isChild && rowNumber === children.length && !remaining);
           if (!rowNumber) {
-            var $toggle = $("<td/>").attr("rowspan", children.length + 1).addClass("ujg-esi-expand-cell");
-            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.source.excelRowNumber), function() { if (!force) { collapsed[parent.groupId] = opened; refresh(); } }).attr("aria-expanded", String(opened)).prop("disabled", force));
+            var $toggle = $("<td/>").attr("rowspan", span).addClass("ujg-esi-expand-cell");
+            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.key || parent.source.excelRowNumber || ""), function() { if (!force) { collapsed[parent.groupId] = opened; refresh(); } }).attr("aria-expanded", String(opened)).prop("disabled", force));
             $tr.append($toggle);
           }
           visible.forEach(function(column) {
             var isSource = sourceFields.indexOf(column[0]) !== -1;
             if (rowNumber && isSource) return;
             var $cell = cell(entry, column[0]);
-            if (isSource) $cell.attr("rowspan", children.length + 1).addClass("ujg-esi-source-cell");
+            if (isSource) $cell.attr("rowspan", span).addClass("ujg-esi-source-cell");
             $tr.append($cell);
           });
           if (!rowNumber) {
-            var $action = $("<td/>").attr("rowspan", children.length + 1).addClass("ujg-esi-registry-actions");
+            var $action = $("<td/>").attr("rowspan", span).addClass("ujg-esi-registry-actions");
             hooks.appendActions($action, parent.source, parent.rowIndex);
             $tr.append($action);
           }
           $body.append($tr);
         });
+        if (remaining) {
+          var $more = button("ChevronDown", "Ещё " + remaining + " связанных задач", function() { fullChildren[parent.groupId] = true; refresh(); }).addClass("ujg-esi-more-children").append($("<span/>").text("Ещё " + remaining + " связанных задач"));
+          $body.append($("<tr/>").addClass("ujg-esi-more-row").attr("data-source-index", parent.rowIndex).append($("<td/>").attr("colspan", visible.filter(function(column) { return sourceFields.indexOf(column[0]) === -1; }).length).append($more)));
+        }
       });
       if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 2).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
       $table.append($body);
-      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); });
+      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); closeDescription(); });
       $host.append($viewport);
       var $footer = $("<div/>").addClass("ujg-esi-grid-footer");
       $footer.append($("<span/>").text(groups.length ? (page * pageSize + 1) + "–" + Math.min((page + 1) * pageSize, groups.length) + " из " + groups.length : "0 замечаний"));
@@ -2757,19 +3017,26 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
     return {
       mount: function($parent, nextState, nextHooks) {
         state = nextState; hooks = nextHooks;
-        closeMenu();
-        if (sourceRows !== state.rows) { sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); page = 0; }
+        closeMenu(); closeDescription();
+        if (sourceRows !== state.rows) {
+          sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
+          var linked = 0;
+          (state.rows || []).forEach(function(row, index) {
+            if ((row.createdKey || row.jiraKey) && linked++ >= 3 && row.status !== "partial") collapsed[String(row.id || index)] = true;
+          });
+        }
         rows = registry.buildRows(state.rows);
         $host = $("<div/>").addClass("ujg-esi-registry"); $parent.append($host); $viewport = null;
         $(document).off("click.ujgRegistry" + id).on("click.ujgRegistry" + id, function(event) {
           if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
+          if ($description && !$.contains($description[0], event.target) && event.target !== $description[0] && event.target !== descriptionAnchor) closeDescription();
         });
         draw();
       },
       toggleAll: function() {
         var collapse = !Object.keys(collapsed).length;
         collapsed = Object.create(null);
-        if (collapse) rows.forEach(function(row) { collapsed[row.groupId] = true; });
+        rows.forEach(function(row) { if (collapse) collapsed[row.groupId] = true; else fullChildren[row.groupId] = true; });
         refresh();
       },
       columnsMenu: function(anchor) {
@@ -3146,7 +3413,11 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     var $actions = $("<div/>").addClass("ujg-esi-toolbar-actions");
     appendFileInput($actions);
     appendMappingButton($actions);
-    appendSyncActions($actions, state);
+    if (state.viewMode === "jira") {
+      $actions.append(gridModule.button("RefreshCw", "Загрузить замечания из Jira", function() {
+        if (services && services.onLoadRegistry) services.onLoadRegistry();
+      }).prop("disabled", !state.projectKey || !!state.registryLoading));
+    } else appendSyncActions($actions, state);
     $field.append($actions);
     $toolbar.append($field);
   }
@@ -3210,8 +3481,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   function columnMappingRows(settings) {
     var map = settings && settings.columnMap ? settings.columnMap : {};
     return [
+      { key: "remarkId", label: "ID замечания", value: map.remarkId || "ID" },
       { key: "summary", label: "Название / Summary", value: map.summary || "Замечание" },
       { key: "jira", label: "Jira key", value: map.jira || "Jira" },
+      { key: "owner", label: "Ответственный за замечание", value: map.owner || "Ответственный" },
       { key: "module", label: "Модуль", value: map.module || "Модуль" },
       { key: "priority", label: "Приоритет", value: map.priority || "Приоритет" },
       { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
@@ -3309,17 +3582,19 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   function appendRowActions($td, row, state, index) {
     var canCreate = canCreateRow(row, state);
     var actionStatus = rowActionStatusText(row, state);
+    var linked = !!(row.jiraKey || row.createdKey);
+    var actionLabel = linked ? "Добавить задачу" : "Создать";
     var $button = $("<button/>")
-      .attr("type", "button")
-      .attr("title", actionStatus)
-      .addClass("ujg-esi-create-row")
-      .append(icon("Plus"), $("<span/>").text("Создать"));
-    if (!canCreate) $button.prop("disabled", true);
+      .attr({type: "button", title: actionLabel, "aria-label": actionLabel})
+      .addClass("ujg-esi-icon-button " + (linked ? "ujg-esi-add-child" : "ujg-esi-create-row"))
+      .append(icon("Plus"));
+    $button.prop("disabled", linked ? row.status === "creating" || !!state.registryLoading : !canCreate);
     $button.on("click", function() {
-      if (services && services.onCreateRow) services.onCreateRow(index);
+      if (linked) { if (services && services.onAddChildTasks) services.onAddChildTasks(index); }
+      else if (services && services.onCreateRow) services.onCreateRow(index);
     });
     var $actions = $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index));
-    if (!(row.alreadyLinked || row.jiraKey || row.createdKey || row.status === "created")) $actions.append($button);
+    if (linked || !(row.alreadyLinked || row.status === "created")) $actions.append($button);
     $td.attr("title", actionStatus).append($actions);
     if (row.errors && row.errors.length) {
       var $details = $("<details/>").addClass("ujg-esi-error-details");
@@ -3982,7 +4257,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
       .attr("role", "dialog")
       .attr("aria-modal", "true");
     var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
+    var childrenMode = dialog.mode === "children";
 
+    if (!childrenMode) {
     appendConfirmControl($fields, "Проект", appendSelect("ujg-esi-confirm-project", dialog.projectKey, (state.projects || []).map(function(project) {
       return { value: project.key || "", label: projectLabel(project) };
     }), function(value) {
@@ -4005,11 +4282,18 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("remainingEstimate", value);
     }));
     if (dialog.childTasks && dialog.childTasks.length) appendConfirmControl($fields, "Связь", $("<span/>").text("child of Story"));
+    } else {
+      $fields.addClass("ujg-esi-confirm-parent");
+      appendConfirmControl($fields, "Основная задача", $("<span/>").text(dialog.parentKey + " · " + (dialog.parentSummary || "")));
+      var parent = state.rows && state.rows[dialog.rowIndex];
+      var existing = parent && parent.childStatuses || [];
+      if (existing.length) appendConfirmControl($fields, "Уже связаны", $("<span/>").text(existing.map(function(task) { return task.key + (task.role ? " [" + task.role + "]" : ""); }).join(", ")));
+    }
 
     $modal.append(
       $("<div/>")
         .addClass("ujg-esi-confirm-head")
-        .append($("<h3/>").text("Подтвердите создание"), $("<button/>")
+        .append($("<h3/>").text(childrenMode ? "Добавить задачи к " + dialog.parentKey : "Подтвердите создание"), $("<button/>")
           .attr("type", "button")
           .addClass("ujg-esi-confirm-close")
           .attr("aria-label", "Закрыть")
@@ -4019,7 +4303,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
           }))
     );
     $modal.append($fields);
-    if (dialog.epicKey && dialog.epicLinkAllowed === false) {
+    if (!childrenMode && dialog.epicKey && dialog.epicLinkAllowed === false) {
       $modal.append(
         $("<div/>")
           .addClass("ujg-esi-confirm-epic-warning")
@@ -4028,8 +4312,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     }
     if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
-    $modal.append($("<h4/>").text("Описание"));
-    appendConfirmSourceRows($modal, dialog.sourceRows, state);
+    if (!childrenMode) {
+      $modal.append($("<h4/>").text("Описание"));
+      appendConfirmSourceRows($modal, dialog.sourceRows, state);
+    }
     $modal.append($("<h4/>").text("Дочерние задачи"));
     appendConfirmChildTasks($modal, dialog.childTasks, state);
     $modal.append(
@@ -4046,6 +4332,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
           $("<button/>")
             .attr("type", "button")
             .addClass("ujg-esi-confirm-create")
+            .prop("disabled", childrenMode && !(dialog.childTasks || []).some(function(task) { return task.enabled !== false; }))
             .text("Создать в Jira")
             .on("click", function() {
               if (services && services.onConfirmCreate) services.onConfirmCreate();
@@ -4318,24 +4605,53 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
     if (!rows.length) {
       $wrap.addClass("ujg-esi-preview-empty");
-      appendDropzone($wrap);
+      if (state.viewMode === "jira") $wrap.text(state.registryLoading ? "Загрузка замечаний..." : "Нет загруженных замечаний");
+      else appendDropzone($wrap);
       $parent.append($wrap);
       return;
     }
-    grid.mount($parent, state, { appendActions: function($td, row, index) { appendRowActions($td, row, state, index); } });
+    grid.mount($parent, state, {
+      appendActions: function($td, row, index) { appendRowActions($td, row, state, index); },
+      renderDescription: renderJiraWiki,
+      editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); }
+    });
   }
 
+  function appendRowOwnerPopover($parent, state) {
+    var picker = state.userPicker || {}, match = /^row-owner-(\d+)$/.exec(picker.target || "");
+    if (!match) return;
+    var index = Number(match[1]), row = state.rows && state.rows[index];
+    if (!row) return;
+    var $anchor = $parent.find('[data-owner-index="' + index + '"]');
+    if (!$anchor.length) return;
+    var $popup = $("<div/>").addClass("ujg-esi-row-owner-popover").attr({role:"dialog", "aria-label":"Ответственный за замечание"});
+    $popup.append($("<div/>").addClass("ujg-esi-description-head").append($("<strong/>").text("Ответственный"), gridModule.button("X", "Закрыть выбор ответственного", function() { if (services.onCloseUserPicker) services.onCloseUserPicker(); })));
+    $popup.append(appendAssigneePicker("ujg-esi-row-owner-picker", picker.target, row.ownerAssigneeId || "", row.ownerAssigneeLabel || "", state, false));
+    $popup.on("keydown", function(event) { if (event.key === "Escape" && services.onCloseUserPicker) { event.stopPropagation(); services.onCloseUserPicker(); } });
+    $parent.append($popup);
+    var rect = $anchor[0].getBoundingClientRect(), width = Math.min(310, window.innerWidth - 24);
+    $popup.css({ width: width, left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)), top: Math.max(12, Math.min(rect.bottom + 4, window.innerHeight - 340)) });
+    $(document).off("click.ujgEsiOwner").on("click.ujgEsiOwner", function(event) {
+      if (!$(event.target).closest(".ujg-esi-row-owner-popover,[data-owner-index]").length && services.onCloseUserPicker) services.onCloseUserPicker();
+    });
+  }
 
   function render(state) {
     if (!$root || !$root.length) return;
     var scrollState = captureScrollState();
+    $(document).off("click.ujgEsiOwner");
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
     $toolbar.append($("<h2/>").text("Импорт замечаний"));
+    var $modes = $("<div/>").addClass("ujg-esi-view-modes").attr({ role:"group", "aria-label":"Источник замечаний" });
+    [["excel", "Excel"], ["jira", "Jira"]].forEach(function(mode) {
+      $modes.append($("<button/>").attr({type:"button", "aria-label":"Режим " + mode[1], "aria-pressed":String((s.viewMode || "excel") === mode[0])}).text(mode[1]).on("click", function() { if (services.onViewModeChange) services.onViewModeChange(mode[0]); }));
+    });
+    $toolbar.append($modes);
     appendProjectSelect($toolbar, s);
     appendEpicPicker($toolbar, s);
-    if (s.parseMeta) appendParseMeta($toolbar, s);
+    if (s.parseMeta && s.viewMode !== "jira") appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
     if (s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
@@ -4350,8 +4666,11 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
+    if (s.registryError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.registryError));
+    if (s.viewMode === "jira" && s.registryWarning) $root.append($("<div/>").addClass("ujg-esi-registry-warning").attr("role", "status").text(s.registryWarning));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
+    appendRowOwnerPopover($root, s);
     appendConfirmModal($root, s);
     appendLlmReviewDialog($root, s, "summary");
     appendLlmReviewDialog($root, s, "remark");
@@ -4386,6 +4705,21 @@ define("_ujgESI_main", [
   "_ujgShared_llmClient",
 ], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient) {
   "use strict";
+
+  function searchErrorText(err) {
+    var body = err && err.responseJSON;
+    if (!body && err && err.responseText) {
+      try { body = JSON.parse(err.responseText); } catch (ignore) { body = null; }
+    }
+    var parts = body && Array.isArray(body.errorMessages) ? body.errorMessages.filter(Boolean).map(String) : [];
+    if (body && body.errors && typeof body.errors === "object") {
+      Object.keys(body.errors).forEach(function(key) {
+        if (body.errors[key]) parts.push(String(body.errors[key]));
+      });
+    }
+    var message = parts.length ? parts.join(" ") : err && err.message ? err.message : err && err.statusText ? err.statusText : "request failed";
+    return (err && Number(err.status) > 0 ? "HTTP " + Number(err.status) + ": " : "") + message;
+  }
 
   function copyRow(row) {
     var out = {};
@@ -5002,6 +5336,8 @@ define("_ujgESI_main", [
     return {
       key: issueKey(issue),
       summary: issueSummaryName(issue),
+      description: issueDescriptionName(issue),
+      descriptionLoaded: Object.prototype.hasOwnProperty.call(fields, "description"),
       status: issueStatusName(issue),
       statusState: issueIsDone(issue) ? "done" : issueStatusState(issue),
       statusCategory: issueStatusCategoryKey(issue),
@@ -5142,7 +5478,10 @@ define("_ujgESI_main", [
         role: childRoleFromSummary(summary),
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
         summary: summary,
+        description: details.description,
+        descriptionLoaded: details.descriptionLoaded,
         status: status,
+        linkedToParent: true,
         statusCategory: issueStatusCategoryKey(resolved),
         statusState: done ? "done" : issueStatusState(resolved),
         done: done,
@@ -5276,6 +5615,10 @@ define("_ujgESI_main", [
       epics: [],
       epicKey: "",
       rows: [],
+      viewMode: "excel",
+      registryLoading: false,
+      registryError: "",
+      registryWarning: "",
       createSubtasks: true,
       loading: false,
       error: "",
@@ -5327,6 +5670,12 @@ define("_ujgESI_main", [
       },
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
+    var excelRows = state.rows;
+    var registryRows = [];
+    var createdChildrenByParent = Object.create(null);
+    var registrySeq = 0;
+    var syncSeq = 0;
+    var createInFlight = false;
 
     function hasOwn(obj, key) {
       return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
@@ -5379,6 +5728,8 @@ define("_ujgESI_main", [
     }
 
     function resetExportState() {
+      syncSeq += 1;
+      state.syncLoading = false;
       state.exportBuffer = null;
       state.exportFileName = "";
       state.syncError = "";
@@ -5387,7 +5738,8 @@ define("_ujgESI_main", [
 
     function parseLoadedWorkbook() {
       var parsed = parser.parseWorkbook(state.sourceWorkbook, state.mappingSettings);
-      state.rows = (parsed.rows || []).map(copyRow);
+      excelRows = (parsed.rows || []).map(copyRow);
+      if (state.viewMode === "excel") state.rows = excelRows;
       state.parseMeta = {
         sheetName: parsed.sheetName,
         headerRowNumber: parsed.headerRowNumber,
@@ -5453,6 +5805,14 @@ define("_ujgESI_main", [
       setExportValue(values, settings, "Статус в Jira", "statusInJira", syncedValue(synced, "Статус в Jira"));
       setExportValue(values, settings, "Исполнитель в Jira", "assigneeInJira", syncedValue(synced, "Исполнитель в Jira"));
       setExportValue(values, settings, "Спринт", "sprintInJira", syncedValue(synced, "Спринт"));
+      if (row && row.ownerEdited) {
+        var ownerColumn = settings && settings.columnMap && settings.columnMap.owner != null
+          ? String(settings.columnMap.owner).trim()
+          : "";
+        values[ownerColumn || "Ответственный"] = row.sourceColumns && row.sourceColumns["Ответственный"] != null
+          ? String(row.sourceColumns["Ответственный"])
+          : "";
+      }
       return {
         excelRowNumber: row && row.excelRowNumber,
         values: values,
@@ -5493,15 +5853,16 @@ define("_ujgESI_main", [
       return keys.length === 1 ? keys[0] : "";
     }
 
-    function tryMatchRowsBySummary() {
+    function tryMatchRowsBySummary(active) {
       var rows = state.rows || [];
       var projectKey = projectKeyForSummarySearch();
       var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
       var chain = Promise.resolve();
 
       function matchByCandidates(row, candidates, index) {
-        if (index >= candidates.length) return Promise.resolve(null);
+        if ((active && !active()) || index >= candidates.length) return Promise.resolve(null);
         return promiseOf(api.searchIssueBySummary(projectKey, candidates[index])).then(function(data) {
+          if (active && !active()) return null;
           var issue = bestSummaryIssueMatch(data, row.summary);
           if (issue) return issue;
           return matchByCandidates(row, candidates, index + 1);
@@ -5512,10 +5873,11 @@ define("_ujgESI_main", [
         chain = chain.then(function() {
           var key = issueKeyFromRow(row);
           var searchCandidates;
-          if (key || !canSearch || !row || !row.summary) return;
+          if ((active && !active()) || key || !canSearch || !row || !row.summary) return;
           searchCandidates = summarySearchCandidates(row.summary);
           if (!searchCandidates.length) return;
           return matchByCandidates(row, searchCandidates, 0).then(function(issue) {
+            if (active && !active()) return;
             var foundKey = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
             if (!foundKey) return;
             row.jiraKey = foundKey;
@@ -5550,6 +5912,10 @@ define("_ujgESI_main", [
       var key = target != null ? String(target) : "";
       var dialog = state.createDialog;
       var match;
+      match = /^row-owner-(\d+)$/.exec(key);
+      if (match && state.rows[Number(match[1])]) {
+        return { node: state.rows[Number(match[1])], idKey: "ownerAssigneeId", labelKey: "ownerAssigneeLabel", assigneeKey: "ownerAssignee", mapping: false, owner: true };
+      }
       if (dialog && key === "story") return { node: dialog, idKey: "assigneeId", labelKey: "assigneeLabel", assigneeKey: "assignee", mapping: false };
       match = /^child-(\d+)$/.exec(key);
       if (dialog && match && dialog.childTasks && dialog.childTasks[Number(match[1])]) {
@@ -5579,11 +5945,23 @@ define("_ujgESI_main", [
         node[ref.idKey] = "";
         node[ref.labelKey] = "";
         node[ref.assigneeKey] = null;
+        if (ref.owner) {
+          node.sourceColumns = node.sourceColumns || {};
+          node.sourceColumns["Ответственный"] = "";
+          node.ownerEdited = true;
+          if (state.viewMode === "excel") resetExportState();
+        }
         return !!ref.mapping;
       }
       node[ref.idKey] = userRow.id || "";
       node[ref.labelKey] = userRow.label || userLabel(raw) || userRow.id || "";
       node[ref.assigneeKey] = raw;
+      if (ref.owner) {
+        node.sourceColumns = node.sourceColumns || {};
+        node.sourceColumns["Ответственный"] = node[ref.labelKey];
+        node.ownerEdited = true;
+        if (state.viewMode === "excel") resetExportState();
+      }
       return !!ref.mapping;
     }
 
@@ -6073,6 +6451,8 @@ define("_ujgESI_main", [
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
+        mode: "story",
+        scopeProjectKey: state.projectKey,
         rowIndex: index,
         issueType: issueType,
         projectKey: state.projectKey,
@@ -6081,9 +6461,9 @@ define("_ujgESI_main", [
         epicText: selectedEpicText(),
         epicLinkAllowed: projectEpicLinkAllowed(state.projectKey, issueType),
         summary: summary,
-        assigneeId: settings.storyAssigneeId || "",
-        assigneeLabel: settings.storyAssigneeLabel || "",
-        assignee: assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
+        assigneeId: row && row.ownerAssignee ? row.ownerAssigneeId || "" : settings.storyAssigneeId || "",
+        assigneeLabel: row && row.ownerAssignee ? row.ownerAssigneeLabel || "" : settings.storyAssigneeLabel || "",
+        assignee: row && row.ownerAssignee ? copyAssignee(row.ownerAssignee) : assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
         originalEstimate: estimate,
         remainingEstimate: estimate,
         createSubtasks: state.createSubtasks !== false,
@@ -6316,8 +6696,123 @@ define("_ujgESI_main", [
       );
     }
 
+    function invalidateRegistry() {
+      registrySeq += 1;
+      registryRows = [];
+      state.registryLoading = false;
+      state.registryError = "";
+      state.registryWarning = "";
+      if (state.viewMode === "jira") state.rows = registryRows;
+    }
+
+    function onViewModeChange(mode) {
+      var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
+      if (!next || next === state.viewMode) return;
+      if (state.viewMode === "excel") excelRows = state.rows;
+      if (state.viewMode === "jira") registryRows = state.rows;
+      if (next !== "excel" && state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
+      if (next === "excel" && state.registryLoading) {
+        registrySeq += 1;
+        state.registryLoading = false;
+      }
+      state.viewMode = next;
+      state.rows = next === "jira" ? registryRows : excelRows;
+      state.createDialog = null;
+      state.summaryDialog = null;
+      state.descriptionDialog = null;
+      closeUserPicker();
+      render();
+    }
+
+    function onLoadRegistry() {
+      var project = state.projectKey;
+      var epic = state.epicKey;
+      var seq;
+      if (state.viewMode !== "jira" || state.registryLoading) return;
+      if (!project) {
+        state.registryError = "Выберите проект перед загрузкой Jira.";
+        render();
+        return;
+      }
+      if (!api || typeof api.getProjectIssues !== "function" || typeof api.getIssuesByKeys !== "function") {
+        state.registryError = "API реестра Jira недоступен.";
+        render();
+        return;
+      }
+      seq = ++registrySeq;
+      state.registryLoading = true;
+      state.registryError = "";
+      state.registryWarning = "";
+      state.createDialog = null;
+      closeUserPicker();
+      render();
+      promiseOf(api.getProjectIssues(project, epic)).then(function(data) {
+        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return null;
+        var fetched = normalizeIssues(data);
+        var parents = fetched.filter(isStoryIssue);
+        var total = data && Number(data.total);
+        var warning = data && data.truncated && isFinite(total) && total > fetched.length
+          ? "Загружено " + fetched.length + " из " + total + " задач Jira; остальные не показаны (лимит 1000)."
+          : "";
+        var childKeys = childIssueKeysFromIssues(parents);
+        var children = {};
+        var chain = Promise.resolve();
+        for (var offset = 0; offset < childKeys.length; offset += 100) {
+          (function(batch) {
+            chain = chain.then(function() {
+              if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+              return promiseOf(api.getIssuesByKeys(copyArrayForHost(batch), { expand: "changelog" })).then(function(childData) {
+                var found = issueMapByKey(childData);
+                Object.keys(found).forEach(function(key) { children[key] = found[key]; });
+              });
+            });
+          })(childKeys.slice(offset, offset + 100));
+        }
+        return chain.then(function() { return { parents: parents, children: children, warning: warning }; });
+      }).then(function(data) {
+        if (!data || seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+        registryRows = data.parents.map(function(issue) {
+          var key = issueKey(issue);
+          var createdChildren = knownCreatedChildrenForKey(key);
+          var fetchedChildren = issueChildStatusRows(issue, data.children);
+          markFetchedChildrenLinked(createdChildren, fetchedChildren);
+          var children = mergeKnownChildStatuses(fetchedChildren, createdChildren);
+          return {
+            id: key,
+            jiraKey: key,
+            alreadyLinked: true,
+            summary: issueSummaryName(issue),
+            sourceColumns: { "Ответственный": issueAssigneeName(issue), "Исполнитель в Jira": issueAssigneeName(issue) },
+            storyDetails: issueDetails(issue),
+            childStatuses: children,
+            createdChildren: createdChildren,
+            statusTitle: issueChildStatusTitleFromRows(children),
+            errors: [],
+          };
+        });
+        state.rows = registryRows;
+        state.registryLoading = false;
+        state.registryError = "";
+        state.registryWarning = data.warning;
+        render();
+      }).then(null, function(err) {
+        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+        state.registryLoading = false;
+        state.registryError = "Не удалось загрузить Jira: " + searchErrorText(err);
+        render();
+      });
+    }
+
     function onProjectChange(projectKey) {
+      if (state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
       state.projectKey = projectKey != null ? String(projectKey) : "";
+      invalidateRegistry();
       state.error = "";
       state.createDialog = null;
       writeStoredProjectKey(state.projectKey);
@@ -6340,7 +6835,12 @@ define("_ujgESI_main", [
     }
 
     function onEpicSelect(epicKey) {
+      if (state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
       state.epicKey = epicKey != null ? String(epicKey) : "";
+      invalidateRegistry();
       state.createDialog = null;
       closeEpicPicker();
       closeUserPicker();
@@ -6350,6 +6850,11 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      if (state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
+      if (state.viewMode !== "excel") onViewModeChange("excel");
       state.loading = true;
       state.error = "";
       state.sourceFileBuffer = null;
@@ -6583,6 +7088,90 @@ define("_ujgESI_main", [
       saveMappings({ render: false });
     }
 
+    function mergeCreatedChildren(existing, incoming) {
+      var out = Array.isArray(existing) ? existing.slice() : [];
+      var byKey = {};
+      out.forEach(function(child) {
+        var key = child && child.key ? String(child.key).trim().toUpperCase() : "";
+        if (key) byKey[key] = child;
+      });
+      (incoming || []).forEach(function(child) {
+        var key = child && child.key ? String(child.key).trim().toUpperCase() : "";
+        if (!key) return;
+        if (!byKey[key]) {
+          out.push(child);
+          byKey[key] = child;
+          return;
+        }
+        Object.keys(child).forEach(function(name) { byKey[key][name] = child[name]; });
+        if (child.linkedToParent === true && !child.linkError) delete byKey[key].linkError;
+      });
+      return out;
+    }
+
+    function knownCreatedChildrenForKey(parentKey) {
+      parentKey = normalizeIssueKey(parentKey);
+      if (!parentKey) return [];
+      var children = mergeCreatedChildren([], createdChildrenByParent[parentKey]);
+      excelRows.concat(registryRows).forEach(function(row) {
+        if (issueKeyFromRow(row) === parentKey) children = mergeCreatedChildren(children, row.createdChildren);
+      });
+      createdChildrenByParent[parentKey] = children;
+      return children;
+    }
+
+    function createdChildStatus(child) {
+      return {
+        key: String(child.key).trim().toUpperCase(),
+        role: child.role || "",
+        summary: child.summary || "",
+        description: child.description || "",
+        descriptionLoaded: Object.prototype.hasOwnProperty.call(child, "description"),
+        assignee: child.assignee && typeof child.assignee === "object" ? userLabel(child.assignee) : child.assignee || "",
+        issueType: child.issueType || "",
+        linkedToParent: child.linkedToParent,
+        linkError: child.linkError || "",
+        status: "",
+        statusState: "",
+        done: false,
+      };
+    }
+
+    function mergeKnownChildStatuses(statuses, createdChildren) {
+      var out = Array.isArray(statuses) ? statuses.slice() : [];
+      var byKey = {};
+      out.forEach(function(status) {
+        var key = status && status.key ? String(status.key).trim().toUpperCase() : "";
+        if (key) byKey[key] = status;
+      });
+      (createdChildren || []).forEach(function(child) {
+        var key = child && child.key ? String(child.key).trim().toUpperCase() : "";
+        var known = byKey[key];
+        if (!key) return;
+        if (!known) {
+          known = createdChildStatus(child);
+          out.push(known);
+          byKey[key] = known;
+        } else if (known.linkedToParent !== true && child.linkedToParent != null) {
+          known.linkedToParent = child.linkedToParent;
+          known.linkError = child.linkError || "";
+        }
+      });
+      return out;
+    }
+
+    function markFetchedChildrenLinked(createdChildren, statuses) {
+      var linked = {};
+      (statuses || []).forEach(function(status) {
+        if (status && status.key) linked[String(status.key).trim().toUpperCase()] = true;
+      });
+      (createdChildren || []).forEach(function(child) {
+        if (!child || !linked[String(child.key || "").trim().toUpperCase()]) return;
+        child.linkedToParent = true;
+        delete child.linkError;
+      });
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       if (row.createdKey) {
@@ -6590,9 +7179,14 @@ define("_ujgESI_main", [
         row.alreadyLinked = true;
         row.sourceColumns = row.sourceColumns || {};
         row.sourceColumns[jiraColumnName()] = row.createdKey;
-        resetExportState();
+        if (excelRows.indexOf(row) !== -1) resetExportState();
       }
       row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
+      row.createdChildren = mergeCreatedChildren(row.createdChildren, result && result.createdChildren);
+      var parentKey = issueKeyFromRow(row);
+      if (parentKey) createdChildrenByParent[parentKey] = mergeCreatedChildren(createdChildrenByParent[parentKey], row.createdChildren);
+      row.childStatuses = mergeKnownChildStatuses(row.childStatuses, row.createdChildren);
+      row.statusTitle = issueChildStatusTitleFromRows(row.childStatuses);
       if (result && result.partial) {
         row.status = "partial";
       } else if (result && result.ok) {
@@ -6604,6 +7198,10 @@ define("_ujgESI_main", [
     }
 
     function onSyncJira() {
+      if (state.viewMode !== "excel") return;
+      var rows = state.rows;
+      var seq;
+      function active() { return seq === syncSeq && state.viewMode === "excel" && state.rows === rows; }
       if (state.syncLoading) return;
       if (!state.rows.length) {
         state.syncError = "Сначала загрузите Excel.";
@@ -6630,17 +7228,20 @@ define("_ujgESI_main", [
         return;
       }
       state.syncLoading = true;
+      seq = ++syncSeq;
       state.syncError = "";
       state.syncSummary = "";
       state.exportBuffer = null;
       state.exportFileName = "";
       closeUserPicker();
       render();
-      promiseOf(tryMatchRowsBySummary()).then(function() {
+      promiseOf(tryMatchRowsBySummary(active)).then(function() {
+        if (!active()) return null;
         var keys = uniqueKeys(state.rows);
         if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
         return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys), { expand: "changelog" }));
       }).then(function(data) {
+        if (!active() || !data) return null;
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
         var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys), { expand: "changelog" })) : Promise.resolve({ issues: [] });
@@ -6651,14 +7252,16 @@ define("_ujgESI_main", [
           };
         });
       }).then(function(syncData) {
+        if (!active() || !syncData) return null;
         var issues = issueMapByKey(syncData.data);
         var childIssues = syncData.childIssues || {};
         var synced = 0;
         (state.rows || []).forEach(function(row) {
-          row.childStatuses = [];
+          var key = issueKeyFromRow(row);
+          row.createdChildren = mergeCreatedChildren(row.createdChildren, knownCreatedChildrenForKey(key));
+          row.childStatuses = mergeKnownChildStatuses([], row.createdChildren);
           row.storyDetails = null;
           row.statusTitle = "";
-          var key = issueKeyFromRow(row);
           var issue = issues[key];
           if (!issue) return;
           row.storyDetails = issueDetails(issue);
@@ -6671,8 +7274,9 @@ define("_ujgESI_main", [
           var assigneeName = issueAssigneeName(issue);
           var sprintNameValue = issueSprintName(issue);
           var childStatuses = issueChildStatusRows(issue, childIssues);
-          row.childStatuses = childStatuses;
-          row.statusTitle = issueChildStatusTitleFromRows(childStatuses);
+          markFetchedChildrenLinked(row.createdChildren, childStatuses);
+          row.childStatuses = mergeKnownChildStatuses(childStatuses, row.createdChildren);
+          row.statusTitle = issueChildStatusTitleFromRows(row.childStatuses);
           if (nonBlank(statusName)) {
             row.sourceColumns["Статус в Jira"] = statusName;
             row.syncedColumns["Статус в Jira"] = statusName;
@@ -6693,6 +7297,7 @@ define("_ujgESI_main", [
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
           rows: patchRowsForExport(state.rows, state.mappingSettings),
         })).then(function(buffer) {
+          if (!active()) return;
           state.exportBuffer = buffer;
           state.exportFileName = syncedFileName(state.sourceFileName);
           state.syncLoading = false;
@@ -6702,10 +7307,11 @@ define("_ujgESI_main", [
         });
       }).then(null,
         function(err) {
+          if (!active()) return;
           state.syncLoading = false;
           state.exportBuffer = null;
           state.exportFileName = "";
-          state.syncError = "Не удалось синхронизировать Jira: " + (err && err.message ? err.message : err && err.statusText ? err.statusText : "request failed");
+          state.syncError = "Не удалось синхронизировать Jira: " + searchErrorText(err);
           state.syncSummary = "";
           render();
         }
@@ -6713,6 +7319,7 @@ define("_ujgESI_main", [
     }
 
     function onDownloadPatchedExcel() {
+      if (state.viewMode !== "excel") return;
       var blob = state.exportBuffer;
       var urlApi = typeof URL !== "undefined" ? URL : typeof webkitURL !== "undefined" ? webkitURL : null;
       var a;
@@ -6739,7 +7346,8 @@ define("_ujgESI_main", [
 
     function createConfirmedRow(dialog) {
       var row = dialog ? state.rows[dialog.rowIndex] : null;
-      if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "story" || dialog.scopeProjectKey !== state.projectKey || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      createInFlight = true;
       row.status = "creating";
       row.errors = [];
       state.createDialog = null;
@@ -6747,8 +7355,8 @@ define("_ujgESI_main", [
       state.descriptionDialog = null;
       closeUserPicker();
       render();
-      promiseOf(
-        creator.createRow(api, row, {
+      Promise.resolve().then(function() {
+        return creator.createRow(api, row, {
           projectKey: dialog.projectKey,
           epicKey: dialog.epicKey,
           epicLinkAllowed: dialog.epicLinkAllowed,
@@ -6761,16 +7369,62 @@ define("_ujgESI_main", [
           createSubtasks: dialog.createSubtasks,
           childTasks: dialog.childTasks,
           mappings: state.mappingSettings,
-        })
-      ).then(function(result) {
+        });
+      }).then(function(result) {
+        createInFlight = false;
         completeCreate(row, result);
+      }, function(err) {
+        createInFlight = false;
+        completeCreate(row, { ok: false, errors: [err && err.message ? err.message : "request failed"] });
+      });
+    }
+
+    function createConfirmedChildren(dialog) {
+      var row = dialog ? state.rows[dialog.rowIndex] : null;
+      var parentKey = row ? issueKeyFromRow(row) : "";
+      if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "children" || dialog.scopeProjectKey !== state.projectKey || !parentKey || parentKey !== dialog.parentKey || dialog.projectKey !== issueProjectKey(parentKey) || row.status === "creating") return;
+      if (!(dialog.childTasks || []).some(function(task) { return task && task.enabled; })) {
+        state.error = "Выберите хотя бы одну дочернюю задачу.";
+        render();
+        return;
+      }
+      if (!creator || typeof creator.createAdditionalTasks !== "function") {
+        state.error = "Создание дочерних задач недоступно.";
+        render();
+        return;
+      }
+      createInFlight = true;
+      row.status = "creating";
+      row.errors = [];
+      state.error = "";
+      state.createDialog = null;
+      state.summaryDialog = null;
+      state.descriptionDialog = null;
+      closeUserPicker();
+      render();
+      Promise.resolve().then(function() {
+        return creator.createAdditionalTasks(api, row, {
+          projectKey: dialog.projectKey,
+          parentKey: parentKey,
+          parentSummary: dialog.parentSummary,
+          summary: dialog.parentSummary,
+          sourceRows: dialog.sourceRows,
+          childTasks: dialog.childTasks,
+          mappings: state.mappingSettings,
+        });
+      }).then(function(result) {
+        createInFlight = false;
+        completeCreate(row, result);
+      }, function(err) {
+        createInFlight = false;
+        completeCreate(row, { ok: false, createdKey: parentKey, errors: [err && err.message ? err.message : "request failed"] });
       });
     }
 
     function onCreateRow(index) {
       var i = Number(index);
       var row = state.rows[i];
-      if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      if (!row || createInFlight || state.viewMode !== "excel" || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
       if (!state.projectKey) {
         state.error = "Выберите проект перед созданием.";
         render();
@@ -6781,11 +7435,49 @@ define("_ujgESI_main", [
       render();
     }
 
+    function onAddChildTasks(index) {
+      var i = Number(index);
+      var row = state.rows[i];
+      var parentKey = issueKeyFromRow(row);
+      var parentProject = issueProjectKey(parentKey);
+      var dialog;
+      if (!row || createInFlight || row.status === "creating" || !parentKey || !parentProject) return;
+      dialog = buildCreateDialog(row, i);
+      dialog.mode = "children";
+      dialog.scopeProjectKey = state.projectKey;
+      dialog.projectKey = parentProject;
+      dialog.projectText = selectedProjectTextFor(parentProject);
+      dialog.parentKey = parentKey;
+      dialog.parentSummary = row.storyDetails && row.storyDetails.summary || row.summary || "";
+      dialog.summary = dialog.parentSummary;
+      dialog.createSubtasks = true;
+      dialog.childTasks = copyRoles(state.mappingSettings.roles).map(function(role) {
+        var task = {
+          enabled: false,
+          role: role.role || "",
+          issueType: role.issueType || "Task",
+          summary: childSummary(role, dialog.parentSummary),
+          assigneeId: role.assigneeId || "",
+          assigneeLabel: role.assigneeLabel || "",
+          assignee: assigneeFromSettings(role.assigneeId, role.assignee),
+          originalEstimate: role.originalEstimate || "1h",
+          remainingEstimate: role.remainingEstimate || "1h",
+          description: role.description || defaultChildDescription(),
+        };
+        return task;
+      });
+      dialog.existingChildren = Array.isArray(row.childStatuses) ? row.childStatuses.slice() : [];
+      state.error = "";
+      state.createDialog = dialog;
+      render();
+    }
+
     function onDialogFieldChange(field, value) {
       var dialog = state.createDialog;
       var key = field != null ? String(field) : "";
       var shouldRender = false;
       if (!dialog) return;
+      if (dialog.mode === "children") return;
       if (key === "summary") {
         dialog.summary = numberedSummary(state.rows[dialog.rowIndex], value);
         (dialog.childTasks || []).forEach(function(task) {
@@ -6822,7 +7514,7 @@ define("_ujgESI_main", [
     function onDialogSourceChange(index, value) {
       var dialog = state.createDialog;
       var i = Number(index);
-      if (!dialog || !dialog.sourceRows || !dialog.sourceRows[i]) return;
+      if (!dialog || dialog.mode === "children" || !dialog.sourceRows || !dialog.sourceRows[i]) return;
       applyDialogSourceValue(dialog, i, value);
     }
 
@@ -7291,6 +7983,15 @@ define("_ujgESI_main", [
       loadAssigneeSearch(target, query);
     }
 
+    function onRowOwnerSearch(index, query) {
+      return loadAssigneeSearch("row-owner-" + Number(index), query);
+    }
+
+    function onCloseUserPicker() {
+      closeUserPicker();
+      render();
+    }
+
     function onDialogAssigneeSelect(target, userId) {
       var id = userId != null ? String(userId) : "";
       var row = (state.userPicker.rows || []).filter(function(user) {
@@ -7334,7 +8035,8 @@ define("_ujgESI_main", [
     function onConfirmCreate() {
       var dialog = state.createDialog;
       if (!dialog) return;
-      createConfirmedRow(dialog);
+      if (dialog.mode === "children") createConfirmedChildren(dialog);
+      else createConfirmedRow(dialog);
     }
 
     function onCancelCreate() {
@@ -7372,8 +8074,11 @@ define("_ujgESI_main", [
       onMappingLlmRemarkPromptChange: onMappingLlmRemarkPromptChange,
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
+      onViewModeChange: onViewModeChange,
+      onLoadRegistry: onLoadRegistry,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
+      onAddChildTasks: onAddChildTasks,
       onConfirmCreate: onConfirmCreate,
       onCancelCreate: onCancelCreate,
       onDialogFieldChange: onDialogFieldChange,
@@ -7399,8 +8104,10 @@ define("_ujgESI_main", [
       onRemarkDialogCancel: onRemarkDialogCancel,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
+      onRowOwnerSearch: onRowOwnerSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,
       onDialogAssigneeClear: onDialogAssigneeClear,
+      onCloseUserPicker: onCloseUserPicker,
       onIssueTypeFocus: onIssueTypeFocus,
       onIssueTypeSearch: onIssueTypeSearch,
       onIssueTypeSelect: onIssueTypeSelect,

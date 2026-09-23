@@ -12,6 +12,21 @@ define("_ujgESI_main", [
 ], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient) {
   "use strict";
 
+  function searchErrorText(err) {
+    var body = err && err.responseJSON;
+    if (!body && err && err.responseText) {
+      try { body = JSON.parse(err.responseText); } catch (ignore) { body = null; }
+    }
+    var parts = body && Array.isArray(body.errorMessages) ? body.errorMessages.filter(Boolean).map(String) : [];
+    if (body && body.errors && typeof body.errors === "object") {
+      Object.keys(body.errors).forEach(function(key) {
+        if (body.errors[key]) parts.push(String(body.errors[key]));
+      });
+    }
+    var message = parts.length ? parts.join(" ") : err && err.message ? err.message : err && err.statusText ? err.statusText : "request failed";
+    return (err && Number(err.status) > 0 ? "HTTP " + Number(err.status) + ": " : "") + message;
+  }
+
   function copyRow(row) {
     var out = {};
     Object.keys(row || {}).forEach(function(key) {
@@ -627,6 +642,8 @@ define("_ujgESI_main", [
     return {
       key: issueKey(issue),
       summary: issueSummaryName(issue),
+      description: issueDescriptionName(issue),
+      descriptionLoaded: Object.prototype.hasOwnProperty.call(fields, "description"),
       status: issueStatusName(issue),
       statusState: issueIsDone(issue) ? "done" : issueStatusState(issue),
       statusCategory: issueStatusCategoryKey(issue),
@@ -767,7 +784,10 @@ define("_ujgESI_main", [
         role: childRoleFromSummary(summary),
         key: key || (resolved && resolved.key != null ? String(resolved.key).trim().toUpperCase() : ""),
         summary: summary,
+        description: details.description,
+        descriptionLoaded: details.descriptionLoaded,
         status: status,
+        linkedToParent: true,
         statusCategory: issueStatusCategoryKey(resolved),
         statusState: done ? "done" : issueStatusState(resolved),
         done: done,
@@ -901,6 +921,10 @@ define("_ujgESI_main", [
       epics: [],
       epicKey: "",
       rows: [],
+      viewMode: "excel",
+      registryLoading: false,
+      registryError: "",
+      registryWarning: "",
       createSubtasks: true,
       loading: false,
       error: "",
@@ -952,6 +976,12 @@ define("_ujgESI_main", [
       },
       baseUrl: api && api.baseUrl ? api.baseUrl : "",
     };
+    var excelRows = state.rows;
+    var registryRows = [];
+    var createdChildrenByParent = Object.create(null);
+    var registrySeq = 0;
+    var syncSeq = 0;
+    var createInFlight = false;
 
     function hasOwn(obj, key) {
       return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
@@ -1004,6 +1034,8 @@ define("_ujgESI_main", [
     }
 
     function resetExportState() {
+      syncSeq += 1;
+      state.syncLoading = false;
       state.exportBuffer = null;
       state.exportFileName = "";
       state.syncError = "";
@@ -1012,7 +1044,8 @@ define("_ujgESI_main", [
 
     function parseLoadedWorkbook() {
       var parsed = parser.parseWorkbook(state.sourceWorkbook, state.mappingSettings);
-      state.rows = (parsed.rows || []).map(copyRow);
+      excelRows = (parsed.rows || []).map(copyRow);
+      if (state.viewMode === "excel") state.rows = excelRows;
       state.parseMeta = {
         sheetName: parsed.sheetName,
         headerRowNumber: parsed.headerRowNumber,
@@ -1078,6 +1111,14 @@ define("_ujgESI_main", [
       setExportValue(values, settings, "Статус в Jira", "statusInJira", syncedValue(synced, "Статус в Jira"));
       setExportValue(values, settings, "Исполнитель в Jira", "assigneeInJira", syncedValue(synced, "Исполнитель в Jira"));
       setExportValue(values, settings, "Спринт", "sprintInJira", syncedValue(synced, "Спринт"));
+      if (row && row.ownerEdited) {
+        var ownerColumn = settings && settings.columnMap && settings.columnMap.owner != null
+          ? String(settings.columnMap.owner).trim()
+          : "";
+        values[ownerColumn || "Ответственный"] = row.sourceColumns && row.sourceColumns["Ответственный"] != null
+          ? String(row.sourceColumns["Ответственный"])
+          : "";
+      }
       return {
         excelRowNumber: row && row.excelRowNumber,
         values: values,
@@ -1118,15 +1159,16 @@ define("_ujgESI_main", [
       return keys.length === 1 ? keys[0] : "";
     }
 
-    function tryMatchRowsBySummary() {
+    function tryMatchRowsBySummary(active) {
       var rows = state.rows || [];
       var projectKey = projectKeyForSummarySearch();
       var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
       var chain = Promise.resolve();
 
       function matchByCandidates(row, candidates, index) {
-        if (index >= candidates.length) return Promise.resolve(null);
+        if ((active && !active()) || index >= candidates.length) return Promise.resolve(null);
         return promiseOf(api.searchIssueBySummary(projectKey, candidates[index])).then(function(data) {
+          if (active && !active()) return null;
           var issue = bestSummaryIssueMatch(data, row.summary);
           if (issue) return issue;
           return matchByCandidates(row, candidates, index + 1);
@@ -1137,10 +1179,11 @@ define("_ujgESI_main", [
         chain = chain.then(function() {
           var key = issueKeyFromRow(row);
           var searchCandidates;
-          if (key || !canSearch || !row || !row.summary) return;
+          if ((active && !active()) || key || !canSearch || !row || !row.summary) return;
           searchCandidates = summarySearchCandidates(row.summary);
           if (!searchCandidates.length) return;
           return matchByCandidates(row, searchCandidates, 0).then(function(issue) {
+            if (active && !active()) return;
             var foundKey = issue && issue.key != null ? String(issue.key).trim().toUpperCase() : "";
             if (!foundKey) return;
             row.jiraKey = foundKey;
@@ -1175,6 +1218,10 @@ define("_ujgESI_main", [
       var key = target != null ? String(target) : "";
       var dialog = state.createDialog;
       var match;
+      match = /^row-owner-(\d+)$/.exec(key);
+      if (match && state.rows[Number(match[1])]) {
+        return { node: state.rows[Number(match[1])], idKey: "ownerAssigneeId", labelKey: "ownerAssigneeLabel", assigneeKey: "ownerAssignee", mapping: false, owner: true };
+      }
       if (dialog && key === "story") return { node: dialog, idKey: "assigneeId", labelKey: "assigneeLabel", assigneeKey: "assignee", mapping: false };
       match = /^child-(\d+)$/.exec(key);
       if (dialog && match && dialog.childTasks && dialog.childTasks[Number(match[1])]) {
@@ -1204,11 +1251,23 @@ define("_ujgESI_main", [
         node[ref.idKey] = "";
         node[ref.labelKey] = "";
         node[ref.assigneeKey] = null;
+        if (ref.owner) {
+          node.sourceColumns = node.sourceColumns || {};
+          node.sourceColumns["Ответственный"] = "";
+          node.ownerEdited = true;
+          if (state.viewMode === "excel") resetExportState();
+        }
         return !!ref.mapping;
       }
       node[ref.idKey] = userRow.id || "";
       node[ref.labelKey] = userRow.label || userLabel(raw) || userRow.id || "";
       node[ref.assigneeKey] = raw;
+      if (ref.owner) {
+        node.sourceColumns = node.sourceColumns || {};
+        node.sourceColumns["Ответственный"] = node[ref.labelKey];
+        node.ownerEdited = true;
+        if (state.viewMode === "excel") resetExportState();
+      }
       return !!ref.mapping;
     }
 
@@ -1698,6 +1757,8 @@ define("_ujgESI_main", [
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
       var issueType = config && config.STORY_ISSUE_TYPE ? config.STORY_ISSUE_TYPE : "Story";
       return {
+        mode: "story",
+        scopeProjectKey: state.projectKey,
         rowIndex: index,
         issueType: issueType,
         projectKey: state.projectKey,
@@ -1706,9 +1767,9 @@ define("_ujgESI_main", [
         epicText: selectedEpicText(),
         epicLinkAllowed: projectEpicLinkAllowed(state.projectKey, issueType),
         summary: summary,
-        assigneeId: settings.storyAssigneeId || "",
-        assigneeLabel: settings.storyAssigneeLabel || "",
-        assignee: assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
+        assigneeId: row && row.ownerAssignee ? row.ownerAssigneeId || "" : settings.storyAssigneeId || "",
+        assigneeLabel: row && row.ownerAssignee ? row.ownerAssigneeLabel || "" : settings.storyAssigneeLabel || "",
+        assignee: row && row.ownerAssignee ? copyAssignee(row.ownerAssignee) : assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
         originalEstimate: estimate,
         remainingEstimate: estimate,
         createSubtasks: state.createSubtasks !== false,
@@ -1941,8 +2002,123 @@ define("_ujgESI_main", [
       );
     }
 
+    function invalidateRegistry() {
+      registrySeq += 1;
+      registryRows = [];
+      state.registryLoading = false;
+      state.registryError = "";
+      state.registryWarning = "";
+      if (state.viewMode === "jira") state.rows = registryRows;
+    }
+
+    function onViewModeChange(mode) {
+      var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
+      if (!next || next === state.viewMode) return;
+      if (state.viewMode === "excel") excelRows = state.rows;
+      if (state.viewMode === "jira") registryRows = state.rows;
+      if (next !== "excel" && state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
+      if (next === "excel" && state.registryLoading) {
+        registrySeq += 1;
+        state.registryLoading = false;
+      }
+      state.viewMode = next;
+      state.rows = next === "jira" ? registryRows : excelRows;
+      state.createDialog = null;
+      state.summaryDialog = null;
+      state.descriptionDialog = null;
+      closeUserPicker();
+      render();
+    }
+
+    function onLoadRegistry() {
+      var project = state.projectKey;
+      var epic = state.epicKey;
+      var seq;
+      if (state.viewMode !== "jira" || state.registryLoading) return;
+      if (!project) {
+        state.registryError = "Выберите проект перед загрузкой Jira.";
+        render();
+        return;
+      }
+      if (!api || typeof api.getProjectIssues !== "function" || typeof api.getIssuesByKeys !== "function") {
+        state.registryError = "API реестра Jira недоступен.";
+        render();
+        return;
+      }
+      seq = ++registrySeq;
+      state.registryLoading = true;
+      state.registryError = "";
+      state.registryWarning = "";
+      state.createDialog = null;
+      closeUserPicker();
+      render();
+      promiseOf(api.getProjectIssues(project, epic)).then(function(data) {
+        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return null;
+        var fetched = normalizeIssues(data);
+        var parents = fetched.filter(isStoryIssue);
+        var total = data && Number(data.total);
+        var warning = data && data.truncated && isFinite(total) && total > fetched.length
+          ? "Загружено " + fetched.length + " из " + total + " задач Jira; остальные не показаны (лимит 1000)."
+          : "";
+        var childKeys = childIssueKeysFromIssues(parents);
+        var children = {};
+        var chain = Promise.resolve();
+        for (var offset = 0; offset < childKeys.length; offset += 100) {
+          (function(batch) {
+            chain = chain.then(function() {
+              if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+              return promiseOf(api.getIssuesByKeys(copyArrayForHost(batch), { expand: "changelog" })).then(function(childData) {
+                var found = issueMapByKey(childData);
+                Object.keys(found).forEach(function(key) { children[key] = found[key]; });
+              });
+            });
+          })(childKeys.slice(offset, offset + 100));
+        }
+        return chain.then(function() { return { parents: parents, children: children, warning: warning }; });
+      }).then(function(data) {
+        if (!data || seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+        registryRows = data.parents.map(function(issue) {
+          var key = issueKey(issue);
+          var createdChildren = knownCreatedChildrenForKey(key);
+          var fetchedChildren = issueChildStatusRows(issue, data.children);
+          markFetchedChildrenLinked(createdChildren, fetchedChildren);
+          var children = mergeKnownChildStatuses(fetchedChildren, createdChildren);
+          return {
+            id: key,
+            jiraKey: key,
+            alreadyLinked: true,
+            summary: issueSummaryName(issue),
+            sourceColumns: { "Ответственный": issueAssigneeName(issue), "Исполнитель в Jira": issueAssigneeName(issue) },
+            storyDetails: issueDetails(issue),
+            childStatuses: children,
+            createdChildren: createdChildren,
+            statusTitle: issueChildStatusTitleFromRows(children),
+            errors: [],
+          };
+        });
+        state.rows = registryRows;
+        state.registryLoading = false;
+        state.registryError = "";
+        state.registryWarning = data.warning;
+        render();
+      }).then(null, function(err) {
+        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+        state.registryLoading = false;
+        state.registryError = "Не удалось загрузить Jira: " + searchErrorText(err);
+        render();
+      });
+    }
+
     function onProjectChange(projectKey) {
+      if (state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
       state.projectKey = projectKey != null ? String(projectKey) : "";
+      invalidateRegistry();
       state.error = "";
       state.createDialog = null;
       writeStoredProjectKey(state.projectKey);
@@ -1965,7 +2141,12 @@ define("_ujgESI_main", [
     }
 
     function onEpicSelect(epicKey) {
+      if (state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
       state.epicKey = epicKey != null ? String(epicKey) : "";
+      invalidateRegistry();
       state.createDialog = null;
       closeEpicPicker();
       closeUserPicker();
@@ -1975,6 +2156,11 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      if (state.syncLoading) {
+        syncSeq += 1;
+        state.syncLoading = false;
+      }
+      if (state.viewMode !== "excel") onViewModeChange("excel");
       state.loading = true;
       state.error = "";
       state.sourceFileBuffer = null;
@@ -2208,6 +2394,90 @@ define("_ujgESI_main", [
       saveMappings({ render: false });
     }
 
+    function mergeCreatedChildren(existing, incoming) {
+      var out = Array.isArray(existing) ? existing.slice() : [];
+      var byKey = {};
+      out.forEach(function(child) {
+        var key = child && child.key ? String(child.key).trim().toUpperCase() : "";
+        if (key) byKey[key] = child;
+      });
+      (incoming || []).forEach(function(child) {
+        var key = child && child.key ? String(child.key).trim().toUpperCase() : "";
+        if (!key) return;
+        if (!byKey[key]) {
+          out.push(child);
+          byKey[key] = child;
+          return;
+        }
+        Object.keys(child).forEach(function(name) { byKey[key][name] = child[name]; });
+        if (child.linkedToParent === true && !child.linkError) delete byKey[key].linkError;
+      });
+      return out;
+    }
+
+    function knownCreatedChildrenForKey(parentKey) {
+      parentKey = normalizeIssueKey(parentKey);
+      if (!parentKey) return [];
+      var children = mergeCreatedChildren([], createdChildrenByParent[parentKey]);
+      excelRows.concat(registryRows).forEach(function(row) {
+        if (issueKeyFromRow(row) === parentKey) children = mergeCreatedChildren(children, row.createdChildren);
+      });
+      createdChildrenByParent[parentKey] = children;
+      return children;
+    }
+
+    function createdChildStatus(child) {
+      return {
+        key: String(child.key).trim().toUpperCase(),
+        role: child.role || "",
+        summary: child.summary || "",
+        description: child.description || "",
+        descriptionLoaded: Object.prototype.hasOwnProperty.call(child, "description"),
+        assignee: child.assignee && typeof child.assignee === "object" ? userLabel(child.assignee) : child.assignee || "",
+        issueType: child.issueType || "",
+        linkedToParent: child.linkedToParent,
+        linkError: child.linkError || "",
+        status: "",
+        statusState: "",
+        done: false,
+      };
+    }
+
+    function mergeKnownChildStatuses(statuses, createdChildren) {
+      var out = Array.isArray(statuses) ? statuses.slice() : [];
+      var byKey = {};
+      out.forEach(function(status) {
+        var key = status && status.key ? String(status.key).trim().toUpperCase() : "";
+        if (key) byKey[key] = status;
+      });
+      (createdChildren || []).forEach(function(child) {
+        var key = child && child.key ? String(child.key).trim().toUpperCase() : "";
+        var known = byKey[key];
+        if (!key) return;
+        if (!known) {
+          known = createdChildStatus(child);
+          out.push(known);
+          byKey[key] = known;
+        } else if (known.linkedToParent !== true && child.linkedToParent != null) {
+          known.linkedToParent = child.linkedToParent;
+          known.linkError = child.linkError || "";
+        }
+      });
+      return out;
+    }
+
+    function markFetchedChildrenLinked(createdChildren, statuses) {
+      var linked = {};
+      (statuses || []).forEach(function(status) {
+        if (status && status.key) linked[String(status.key).trim().toUpperCase()] = true;
+      });
+      (createdChildren || []).forEach(function(child) {
+        if (!child || !linked[String(child.key || "").trim().toUpperCase()]) return;
+        child.linkedToParent = true;
+        delete child.linkError;
+      });
+    }
+
     function completeCreate(row, result) {
       row.createdKey = result && result.createdKey ? String(result.createdKey) : row.createdKey || "";
       if (row.createdKey) {
@@ -2215,9 +2485,14 @@ define("_ujgESI_main", [
         row.alreadyLinked = true;
         row.sourceColumns = row.sourceColumns || {};
         row.sourceColumns[jiraColumnName()] = row.createdKey;
-        resetExportState();
+        if (excelRows.indexOf(row) !== -1) resetExportState();
       }
       row.errors = result && Array.isArray(result.errors) ? result.errors.slice() : [];
+      row.createdChildren = mergeCreatedChildren(row.createdChildren, result && result.createdChildren);
+      var parentKey = issueKeyFromRow(row);
+      if (parentKey) createdChildrenByParent[parentKey] = mergeCreatedChildren(createdChildrenByParent[parentKey], row.createdChildren);
+      row.childStatuses = mergeKnownChildStatuses(row.childStatuses, row.createdChildren);
+      row.statusTitle = issueChildStatusTitleFromRows(row.childStatuses);
       if (result && result.partial) {
         row.status = "partial";
       } else if (result && result.ok) {
@@ -2229,6 +2504,10 @@ define("_ujgESI_main", [
     }
 
     function onSyncJira() {
+      if (state.viewMode !== "excel") return;
+      var rows = state.rows;
+      var seq;
+      function active() { return seq === syncSeq && state.viewMode === "excel" && state.rows === rows; }
       if (state.syncLoading) return;
       if (!state.rows.length) {
         state.syncError = "Сначала загрузите Excel.";
@@ -2255,17 +2534,20 @@ define("_ujgESI_main", [
         return;
       }
       state.syncLoading = true;
+      seq = ++syncSeq;
       state.syncError = "";
       state.syncSummary = "";
       state.exportBuffer = null;
       state.exportFileName = "";
       closeUserPicker();
       render();
-      promiseOf(tryMatchRowsBySummary()).then(function() {
+      promiseOf(tryMatchRowsBySummary(active)).then(function() {
+        if (!active()) return null;
         var keys = uniqueKeys(state.rows);
         if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
         return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys), { expand: "changelog" }));
       }).then(function(data) {
+        if (!active() || !data) return null;
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
         var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys), { expand: "changelog" })) : Promise.resolve({ issues: [] });
@@ -2276,14 +2558,16 @@ define("_ujgESI_main", [
           };
         });
       }).then(function(syncData) {
+        if (!active() || !syncData) return null;
         var issues = issueMapByKey(syncData.data);
         var childIssues = syncData.childIssues || {};
         var synced = 0;
         (state.rows || []).forEach(function(row) {
-          row.childStatuses = [];
+          var key = issueKeyFromRow(row);
+          row.createdChildren = mergeCreatedChildren(row.createdChildren, knownCreatedChildrenForKey(key));
+          row.childStatuses = mergeKnownChildStatuses([], row.createdChildren);
           row.storyDetails = null;
           row.statusTitle = "";
-          var key = issueKeyFromRow(row);
           var issue = issues[key];
           if (!issue) return;
           row.storyDetails = issueDetails(issue);
@@ -2296,8 +2580,9 @@ define("_ujgESI_main", [
           var assigneeName = issueAssigneeName(issue);
           var sprintNameValue = issueSprintName(issue);
           var childStatuses = issueChildStatusRows(issue, childIssues);
-          row.childStatuses = childStatuses;
-          row.statusTitle = issueChildStatusTitleFromRows(childStatuses);
+          markFetchedChildrenLinked(row.createdChildren, childStatuses);
+          row.childStatuses = mergeKnownChildStatuses(childStatuses, row.createdChildren);
+          row.statusTitle = issueChildStatusTitleFromRows(row.childStatuses);
           if (nonBlank(statusName)) {
             row.sourceColumns["Статус в Jira"] = statusName;
             row.syncedColumns["Статус в Jira"] = statusName;
@@ -2318,6 +2603,7 @@ define("_ujgESI_main", [
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
           rows: patchRowsForExport(state.rows, state.mappingSettings),
         })).then(function(buffer) {
+          if (!active()) return;
           state.exportBuffer = buffer;
           state.exportFileName = syncedFileName(state.sourceFileName);
           state.syncLoading = false;
@@ -2327,10 +2613,11 @@ define("_ujgESI_main", [
         });
       }).then(null,
         function(err) {
+          if (!active()) return;
           state.syncLoading = false;
           state.exportBuffer = null;
           state.exportFileName = "";
-          state.syncError = "Не удалось синхронизировать Jira: " + (err && err.message ? err.message : err && err.statusText ? err.statusText : "request failed");
+          state.syncError = "Не удалось синхронизировать Jira: " + searchErrorText(err);
           state.syncSummary = "";
           render();
         }
@@ -2338,6 +2625,7 @@ define("_ujgESI_main", [
     }
 
     function onDownloadPatchedExcel() {
+      if (state.viewMode !== "excel") return;
       var blob = state.exportBuffer;
       var urlApi = typeof URL !== "undefined" ? URL : typeof webkitURL !== "undefined" ? webkitURL : null;
       var a;
@@ -2364,7 +2652,8 @@ define("_ujgESI_main", [
 
     function createConfirmedRow(dialog) {
       var row = dialog ? state.rows[dialog.rowIndex] : null;
-      if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "story" || dialog.scopeProjectKey !== state.projectKey || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      createInFlight = true;
       row.status = "creating";
       row.errors = [];
       state.createDialog = null;
@@ -2372,8 +2661,8 @@ define("_ujgESI_main", [
       state.descriptionDialog = null;
       closeUserPicker();
       render();
-      promiseOf(
-        creator.createRow(api, row, {
+      Promise.resolve().then(function() {
+        return creator.createRow(api, row, {
           projectKey: dialog.projectKey,
           epicKey: dialog.epicKey,
           epicLinkAllowed: dialog.epicLinkAllowed,
@@ -2386,16 +2675,62 @@ define("_ujgESI_main", [
           createSubtasks: dialog.createSubtasks,
           childTasks: dialog.childTasks,
           mappings: state.mappingSettings,
-        })
-      ).then(function(result) {
+        });
+      }).then(function(result) {
+        createInFlight = false;
         completeCreate(row, result);
+      }, function(err) {
+        createInFlight = false;
+        completeCreate(row, { ok: false, errors: [err && err.message ? err.message : "request failed"] });
+      });
+    }
+
+    function createConfirmedChildren(dialog) {
+      var row = dialog ? state.rows[dialog.rowIndex] : null;
+      var parentKey = row ? issueKeyFromRow(row) : "";
+      if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "children" || dialog.scopeProjectKey !== state.projectKey || !parentKey || parentKey !== dialog.parentKey || dialog.projectKey !== issueProjectKey(parentKey) || row.status === "creating") return;
+      if (!(dialog.childTasks || []).some(function(task) { return task && task.enabled; })) {
+        state.error = "Выберите хотя бы одну дочернюю задачу.";
+        render();
+        return;
+      }
+      if (!creator || typeof creator.createAdditionalTasks !== "function") {
+        state.error = "Создание дочерних задач недоступно.";
+        render();
+        return;
+      }
+      createInFlight = true;
+      row.status = "creating";
+      row.errors = [];
+      state.error = "";
+      state.createDialog = null;
+      state.summaryDialog = null;
+      state.descriptionDialog = null;
+      closeUserPicker();
+      render();
+      Promise.resolve().then(function() {
+        return creator.createAdditionalTasks(api, row, {
+          projectKey: dialog.projectKey,
+          parentKey: parentKey,
+          parentSummary: dialog.parentSummary,
+          summary: dialog.parentSummary,
+          sourceRows: dialog.sourceRows,
+          childTasks: dialog.childTasks,
+          mappings: state.mappingSettings,
+        });
+      }).then(function(result) {
+        createInFlight = false;
+        completeCreate(row, result);
+      }, function(err) {
+        createInFlight = false;
+        completeCreate(row, { ok: false, createdKey: parentKey, errors: [err && err.message ? err.message : "request failed"] });
       });
     }
 
     function onCreateRow(index) {
       var i = Number(index);
       var row = state.rows[i];
-      if (!row || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      if (!row || createInFlight || state.viewMode !== "excel" || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
       if (!state.projectKey) {
         state.error = "Выберите проект перед созданием.";
         render();
@@ -2406,11 +2741,49 @@ define("_ujgESI_main", [
       render();
     }
 
+    function onAddChildTasks(index) {
+      var i = Number(index);
+      var row = state.rows[i];
+      var parentKey = issueKeyFromRow(row);
+      var parentProject = issueProjectKey(parentKey);
+      var dialog;
+      if (!row || createInFlight || row.status === "creating" || !parentKey || !parentProject) return;
+      dialog = buildCreateDialog(row, i);
+      dialog.mode = "children";
+      dialog.scopeProjectKey = state.projectKey;
+      dialog.projectKey = parentProject;
+      dialog.projectText = selectedProjectTextFor(parentProject);
+      dialog.parentKey = parentKey;
+      dialog.parentSummary = row.storyDetails && row.storyDetails.summary || row.summary || "";
+      dialog.summary = dialog.parentSummary;
+      dialog.createSubtasks = true;
+      dialog.childTasks = copyRoles(state.mappingSettings.roles).map(function(role) {
+        var task = {
+          enabled: false,
+          role: role.role || "",
+          issueType: role.issueType || "Task",
+          summary: childSummary(role, dialog.parentSummary),
+          assigneeId: role.assigneeId || "",
+          assigneeLabel: role.assigneeLabel || "",
+          assignee: assigneeFromSettings(role.assigneeId, role.assignee),
+          originalEstimate: role.originalEstimate || "1h",
+          remainingEstimate: role.remainingEstimate || "1h",
+          description: role.description || defaultChildDescription(),
+        };
+        return task;
+      });
+      dialog.existingChildren = Array.isArray(row.childStatuses) ? row.childStatuses.slice() : [];
+      state.error = "";
+      state.createDialog = dialog;
+      render();
+    }
+
     function onDialogFieldChange(field, value) {
       var dialog = state.createDialog;
       var key = field != null ? String(field) : "";
       var shouldRender = false;
       if (!dialog) return;
+      if (dialog.mode === "children") return;
       if (key === "summary") {
         dialog.summary = numberedSummary(state.rows[dialog.rowIndex], value);
         (dialog.childTasks || []).forEach(function(task) {
@@ -2447,7 +2820,7 @@ define("_ujgESI_main", [
     function onDialogSourceChange(index, value) {
       var dialog = state.createDialog;
       var i = Number(index);
-      if (!dialog || !dialog.sourceRows || !dialog.sourceRows[i]) return;
+      if (!dialog || dialog.mode === "children" || !dialog.sourceRows || !dialog.sourceRows[i]) return;
       applyDialogSourceValue(dialog, i, value);
     }
 
@@ -2916,6 +3289,15 @@ define("_ujgESI_main", [
       loadAssigneeSearch(target, query);
     }
 
+    function onRowOwnerSearch(index, query) {
+      return loadAssigneeSearch("row-owner-" + Number(index), query);
+    }
+
+    function onCloseUserPicker() {
+      closeUserPicker();
+      render();
+    }
+
     function onDialogAssigneeSelect(target, userId) {
       var id = userId != null ? String(userId) : "";
       var row = (state.userPicker.rows || []).filter(function(user) {
@@ -2959,7 +3341,8 @@ define("_ujgESI_main", [
     function onConfirmCreate() {
       var dialog = state.createDialog;
       if (!dialog) return;
-      createConfirmedRow(dialog);
+      if (dialog.mode === "children") createConfirmedChildren(dialog);
+      else createConfirmedRow(dialog);
     }
 
     function onCancelCreate() {
@@ -2997,8 +3380,11 @@ define("_ujgESI_main", [
       onMappingLlmRemarkPromptChange: onMappingLlmRemarkPromptChange,
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
+      onViewModeChange: onViewModeChange,
+      onLoadRegistry: onLoadRegistry,
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
+      onAddChildTasks: onAddChildTasks,
       onConfirmCreate: onConfirmCreate,
       onCancelCreate: onCancelCreate,
       onDialogFieldChange: onDialogFieldChange,
@@ -3024,8 +3410,10 @@ define("_ujgESI_main", [
       onRemarkDialogCancel: onRemarkDialogCancel,
       onDialogAssigneeFocus: onDialogAssigneeFocus,
       onDialogAssigneeSearch: onDialogAssigneeSearch,
+      onRowOwnerSearch: onRowOwnerSearch,
       onDialogAssigneeSelect: onDialogAssigneeSelect,
       onDialogAssigneeClear: onDialogAssigneeClear,
+      onCloseUserPicker: onCloseUserPicker,
       onIssueTypeFocus: onIssueTypeFocus,
       onIssueTypeSearch: onIssueTypeSearch,
       onIssueTypeSelect: onIssueTypeSelect,

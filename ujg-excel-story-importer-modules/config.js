@@ -71,8 +71,10 @@ define("_ujgESI_config", [], function() {
   };
 
   var COLUMN_MAP = {
+    remarkId: "ID",
     summary: "Замечание",
     jira: "Jira",
+    owner: "Ответственный",
     module: "Модуль",
     priority: "Приоритет",
     statusInJira: "Статус в Jira",

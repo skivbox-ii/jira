@@ -17,6 +17,141 @@ function loadParser() {
   });
 }
 
+function loadRemarkId() {
+  return loadAmdModule(path.join(MODULE_DIR, "remark-id.js"), {});
+}
+
+test("parseWorkbook keeps headerless rows containing optional ID or owner words", function () {
+  const parser = loadParser();
+  const remarkId = loadRemarkId();
+  const result = parser.parseWorkbook({
+    SheetNames: ["Лист"],
+    Sheets: { "Лист": { __rows: [
+      ["17", "Actual issue", "", "Ответственный"],
+      ["18", "Another issue", "", "ID"],
+    ] } },
+  });
+
+  assert.equal(result.headerRowNumber, 0);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0].sourceColumns["№"], "17");
+  assert.equal(result.rows[0].sourceColumns["Колонка 4"], "Ответственный");
+  assert.equal(result.rows[1].sourceColumns["Колонка 4"], "ID");
+  assert.equal(remarkId(result.rows[0]), "17");
+});
+
+test("parseWorkbook accepts alphabetic mapped IDs while legacy aliases remain conservative", function () {
+  const parser = loadParser();
+  const remarkId = loadRemarkId();
+  const result = parser.parseWorkbook({
+    SheetNames: ["Лист"],
+    Sheets: { "Лист": { __rows: [
+      ["Код", "Замечание"],
+      ["ALPHA", "Actual issue"],
+      ["BAD VALUE", "Another issue"],
+    ] } },
+  }, { columnMap: { remarkId: "Код" } });
+
+  assert.equal(result.rows[0].sourceColumns.ID, "ALPHA");
+  assert.equal(remarkId(result.rows[0]), "ALPHA");
+  assert.equal(remarkId(result.rows[1]), "");
+  assert.equal(remarkId({ sourceColumns: { "№": "ALPHA" } }), "");
+  assert.equal(remarkId({ sourceColumns: { ID: "ALPHA" } }), "");
+});
+
+test("parseWorkbook maps custom source ID and owner, including zero IDs", function () {
+  const parser = loadParser();
+  const remarkId = loadRemarkId();
+  const workbook = {
+    SheetNames: ["Журнал"],
+    Sheets: { "Журнал": { __rows: [
+      ["Код замечания", "Текст", "Владелец", "Тикет", "Доп. поле"],
+      [0, "Нет доступа", "Анна", "ABC-12", "сохранить"],
+      ["A-7", "Ошибка формы", "Борис", "", "тоже"],
+    ] } },
+  };
+  const result = parser.parseWorkbook(workbook, {
+    columnMap: { remarkId: "Код замечания", summary: "Текст", owner: "Владелец", jira: "Тикет" },
+    tableStart: { headerMarker: "Текст" },
+  });
+
+  assert.equal(result.headerColumns.ID, 1);
+  assert.equal(result.headerColumns["Ответственный"], 3);
+  assert.equal(result.rows[0].sourceColumns.ID, "0");
+  assert.equal(result.rows[0].sourceColumns["Ответственный"], "Анна");
+  assert.equal(result.rows[0].sourceColumns["Доп. поле"], "сохранить");
+  assert.equal(result.rows[0].jiraKey, "ABC-12");
+  assert.equal(remarkId(result.rows[0]), "0");
+  assert.equal(remarkId(result.rows[1]), "A-7");
+});
+
+test("parseWorkbook retains legacy ID aliases when mapped ID header is absent", function () {
+  const parser = loadParser();
+  const remarkId = loadRemarkId();
+  for (const header of ["№", "номер", "Номер замечания"]) {
+    const result = parser.parseWorkbook({
+      SheetNames: ["Лист"],
+      Sheets: { "Лист": { __rows: [[header, "Замечание"], ["B-12", "Текст замечания"]] } },
+    }, { columnMap: { remarkId: "Код замечания" } });
+    assert.equal(result.rows[0].sourceColumns[header], "B-12");
+    assert.equal(remarkId(result.rows[0]), "B-12");
+  }
+});
+
+test("parseWorkbook prefers explicitly mapped ID over a separate raw ID and retains both values", function () {
+  const parser = loadParser();
+  const remarkId = loadRemarkId();
+  const result = parser.parseWorkbook({
+    SheetNames: ["Лист"],
+    Sheets: { "Лист": { __rows: [
+      ["ID", "Код замечания", "Замечание", "Ответственный", "Другое"],
+      ["OLD-4", "NEW-9", "Сбой экспорта", "Анна", "данные"],
+    ] } },
+  }, { columnMap: { remarkId: "Код замечания" } });
+  const row = result.rows[0];
+
+  assert.equal(result.headerColumns.ID, 2);
+  assert.equal(row.sourceColumns.ID, "NEW-9");
+  assert.equal(remarkId(row), "NEW-9");
+  assert.equal(row.sourceColumns["ID (колонка 1)"], "OLD-4");
+  assert.equal(row.sourceColumns.Другое, "данные");
+});
+
+test("parseWorkbook keeps duplicate mapped headers as separate source columns", function () {
+  const parser = loadParser();
+  const result = parser.parseWorkbook({
+    SheetNames: ["Лист"],
+    Sheets: { "Лист": { __rows: [
+      ["Код", "Замечание", "Код"],
+      ["A-1", "Сбой экспорта", "B-2"],
+    ] } },
+  }, { columnMap: { remarkId: "Код" } });
+
+  assert.equal(result.rows[0].sourceColumns.ID, "A-1");
+  assert.equal(result.rows[0].sourceColumns["Код (колонка 3)"], "B-2");
+});
+
+test("parseWorkbook upgrades old column settings and prefers source ID over legacy number", function () {
+  const parser = loadParser();
+  const remarkId = loadRemarkId();
+  const result = parser.parseWorkbook({
+    SheetNames: ["Лист"],
+    Sheets: { "Лист": { __rows: [
+      ["№", "ID", "Тема", "Тикет", "Ответственный", "Примечание"],
+      ["17", "A-17", "Падает отчет", "ABC-17", "Анна", "проверить"],
+    ] } },
+  }, {
+    columnMap: { summary: "Тема", jira: "Тикет" },
+    tableStart: { headerMarker: "Тема" },
+  });
+
+  assert.equal(result.rows[0].sourceColumns["№"], "17");
+  assert.equal(result.rows[0].sourceColumns.ID, "A-17");
+  assert.equal(result.rows[0].sourceColumns["Ответственный"], "Анна");
+  assert.equal(result.rows[0].sourceColumns["Примечание"], "проверить");
+  assert.equal(remarkId(result.rows[0]), "A-17");
+});
+
 test("parseWorkbook finds remarks header below non-data rows", function () {
   const parser = loadParser();
   const workbook = {

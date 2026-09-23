@@ -285,7 +285,9 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (!api || typeof api.createIssueLink !== "function") {
       return Promise.resolve({ ok: false, error: "Jira issue link API is not available" });
     }
-    return Promise.resolve(api.createIssueLink(payload)).then(
+    return Promise.resolve().then(function() {
+      return api.createIssueLink(payload);
+    }).then(
       function() {
         return { ok: true };
       },
@@ -316,21 +318,65 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     });
   }
 
-  function linkTestingTasksBlockedBy(api, created, index, errors) {
+  function linkTestingTasksBlockedBy(api, created, index, errors, existingBlockers) {
     var testing;
     var blockers;
     if (index >= created.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors });
     }
     testing = created[index];
-    if (!isTestingRole(testing && testing.role)) {
-      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+    if (!isTestingRole(testing && testing.role) || testing.linkedToParent === false) {
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors, existingBlockers);
     }
-    blockers = created.filter(function(child) {
-      return child && child.key && child.key !== testing.key && !isTestingRole(child.role);
+    var seen = {};
+    blockers = created.concat(existingBlockers || []).filter(function(child) {
+      if (!child || !child.key || child.linkedToParent === false || child.key === testing.key || isTestingRole(child.role) || seen[child.key]) return false;
+      seen[child.key] = true;
+      return true;
     });
     return linkTestingBlockedBySequential(api, testing, blockers, 0, errors).then(function() {
-      return linkTestingTasksBlockedBy(api, created, index + 1, errors);
+      return linkTestingTasksBlockedBy(api, created, index + 1, errors, existingBlockers);
+    });
+  }
+
+  function preparedRoles(row, storySummary, tasks) {
+    return tasks.filter(function(role) {
+      return role && role.enabled !== false;
+    }).map(function(role) {
+      var out = {};
+      Object.keys(role).forEach(function(name) { out[name] = role[name]; });
+      out.summary = summaryWithRemarkId(row, out.summary != null ? out.summary : childSummary(role, storySummary), role);
+      return out;
+    });
+  }
+
+  function publicCreatedChildren(created) {
+    return (created || []).map(function(child) {
+      var fields = child.fields || {};
+      var out = {
+        key: child.key,
+        role: child.role.role,
+        summary: fields.summary,
+        description: fields.description,
+        issueType: fields.issuetype && fields.issuetype.name,
+        linkedToParent: child.linkedToParent === true,
+      };
+      if (child.linkError) out.linkError = child.linkError;
+      if (child.role.enabled != null) out.enabled = child.role.enabled;
+      if (child.role.assignee != null) out.assignee = child.role.assignee;
+      if (child.role.originalEstimate != null) out.originalEstimate = child.role.originalEstimate;
+      if (child.role.remainingEstimate != null) out.remainingEstimate = child.role.remainingEstimate;
+      return out;
+    });
+  }
+
+  function knownExistingChildren(row, parentKey) {
+    var created = row && Array.isArray(row.createdChildren) ? row.createdChildren : [];
+    var synced = row && String(row.jiraKey || "").trim() === parentKey && Array.isArray(row.childStatuses) ? row.childStatuses : [];
+    return created.concat(synced).filter(function(child) {
+      return child && createdKey(child) && child.role && child.linkedToParent !== false;
+    }).map(function(child) {
+      return { key: createdKey(child), role: typeof child.role === "object" ? child.role : { role: child.role } };
     });
   }
 
@@ -339,16 +385,24 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors, created: created });
     }
-    return Promise.resolve(api.createIssue({ fields: subtaskFields(projectKey, parentKey, roles[index], storySummary) })).then(
+    var fields = subtaskFields(projectKey, parentKey, roles[index], storySummary);
+    return Promise.resolve().then(function() {
+      return api.createIssue({ fields: fields });
+    }).then(
       function(res) {
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
           return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
         }
-        created.push({ key: key, role: roles[index] });
+        var child = { key: key, role: roles[index], fields: fields, linkedToParent: false };
+        created.push(child);
         return linkChildIssue(api, parentKey, key, childLinkType).then(function(link) {
-          if (!link.ok) errors.push(roles[index].role + " link: " + link.error);
+          child.linkedToParent = link.ok;
+          if (!link.ok) {
+            child.linkError = link.error;
+            errors.push(roles[index].role + " link: " + link.error);
+          }
           return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
         });
       },
@@ -359,10 +413,38 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     );
   }
 
+  function createAdditionalTasks(api, row, options) {
+    var opts = options || {};
+    var parentKey = row && createdKey({ key: row.createdKey || row.jiraKey });
+    var tasks = Array.isArray(opts.childTasks) ? opts.childTasks : [];
+    var errors = [];
+    if (!parentKey) errors.push("Existing Story parent key is required");
+    if (!String(opts.projectKey || "").trim()) errors.push("Project key is required");
+    if (!tasks.some(function(role) { return role && role.enabled !== false; })) errors.push("At least one enabled child task is required");
+    if (!api || typeof api.createIssue !== "function") errors.push("Jira API is not available");
+    if (errors.length) return Promise.resolve({ ok: false, partial: false, createdKey: parentKey || "", createdChildren: [], errors: errors });
+
+    var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
+    var roles = preparedRoles(row, storySummary, tasks);
+    return resolveChildLinkType(api).then(function(childLinkType) {
+      return createSubtasksSequential(api, opts.projectKey, parentKey, storySummary, roles, 0, [], [], childLinkType);
+    }).then(function(sub) {
+      return linkTestingTasksBlockedBy(api, sub.created, 0, sub.errors, knownExistingChildren(row, parentKey)).then(function() {
+        return {
+          ok: sub.errors.length === 0,
+          partial: sub.errors.length > 0 && sub.created.length > 0,
+          createdKey: parentKey,
+          createdChildren: publicCreatedChildren(sub.created),
+          errors: sub.errors,
+        };
+      });
+    });
+  }
+
   function createRow(api, row, options) {
     var opts = options || {};
-    if (row && (row.alreadyLinked || row.jiraKey)) {
-      return Promise.resolve({ ok: true, skipped: true, createdKey: row.jiraKey || "" });
+    if (row && (row.alreadyLinked || row.jiraKey || row.createdKey)) {
+      return Promise.resolve({ ok: true, skipped: true, createdKey: row.createdKey || row.jiraKey || "", createdChildren: [] });
     }
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
@@ -371,7 +453,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
       var key = createdKey(res);
       warnings = warnings || [];
       if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
-      if (!opts.createSubtasks) return { ok: true, createdKey: key, errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
+      if (!opts.createSubtasks) return { ok: true, createdKey: key, createdChildren: [], errors: warnings, epicLinkSkipped: !!epicLinkSkipped };
       var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
       var roles = Array.isArray(opts.childTasks)
         ? opts.childTasks
@@ -383,18 +465,11 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
             out.summary = childSummary(role, storySummary);
             return out;
           });
-      roles = roles.filter(function(role) {
-        return !role || role.enabled !== false;
-      }).map(function(role) {
-        var out = {};
-        Object.keys(role || {}).forEach(function(name) { out[name] = role[name]; });
-        var summary = out.summary != null ? out.summary : childSummary(role, storySummary);
-        out.summary = summaryWithRemarkId(row, summary, role);
-        return out;
-      });
+      roles = preparedRoles(row, storySummary, roles);
       return resolveChildLinkType(api).then(function(childLinkType) {
         return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType).then(function(sub) {
           return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
+            linked.created = sub.created;
             return linked;
           });
         });
@@ -403,6 +478,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
           ok: sub.errors.length === 0,
           partial: sub.errors.length > 0,
           createdKey: key,
+          createdChildren: publicCreatedChildren(sub.created),
           errors: warnings.concat(sub.errors),
           epicLinkSkipped: !!epicLinkSkipped,
         };
@@ -431,6 +507,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   return {
     createRow: createRow,
+    createAdditionalTasks: createAdditionalTasks,
     storyFields: storyFields,
     subtaskFields: subtaskFields,
     childSummary: childSummary,

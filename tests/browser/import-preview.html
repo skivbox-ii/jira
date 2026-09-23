@@ -2,6 +2,7 @@
 <html lang="ru">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'">
 <title>Импорт замечаний · локальная проверка</title>
 <link rel="stylesheet" href="/ujg-excel-story-importer.css">
 <style>body{margin:0;background:#fff;font-family:Arial,sans-serif}nav{height:38px;display:flex;align-items:center;padding:0 16px;gap:30px;background:#0754ad;color:white;font-size:13px}nav strong{font-size:17px}main{padding:8px}footer{padding:5px 12px;color:#768291;font-size:11px}</style>
@@ -15,13 +16,15 @@
 <script>
 window.modules = {jquery: jQuery};
 window.mutationCalls = 0;
+window.issueReadCalls = 0;
 window.offlineApi = {
   baseUrl: "https://jira.example.test",
   getProjects: function(){return Promise.resolve([{key:"EVOSCADA",name:"EVO-SCADA"}]);},
   getProjectEpics: function(){return Promise.resolve({issues:[{key:"EVOSCADA-100",fields:{summary:"Замечания ИИ ТСВ"}}]});},
   getProjectCreateMeta: function(){return Promise.resolve({projects:[]});},
-  getIssuesByKeys: function(keys){return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
-  searchUsers: function(){return Promise.resolve({users:[]});},
+  getIssuesByKeys: function(keys){window.issueReadCalls++;return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
+  getProjectIssues: function(){window.issueReadCalls++;return Promise.resolve({issues:Object.values(fixtureIssues).filter(function(issue){return issue.fields.issuetype.name === "История";})});},
+  searchUsers: function(query){return Promise.resolve({users:[{name:"ivanov",displayName:"Иванов Иван"},{name:"petrov",displayName:"Петров Павел"},{name:"sokolova",displayName:"Соколова Анна"},{name:"orlova",displayName:"Орлова Наталья"}].filter(function(user){return (user.name+" "+user.displayName).toLowerCase().includes(String(query || "").toLowerCase());})});},
   createIssue: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");},
   createIssueLink: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");}
 };
@@ -29,5 +32,5 @@ window.define = function(name,deps,factory){modules[name] = name === "_ujgESI_ap
 window.define.amd = true;
 </script>
 <script src="/ujg-excel-story-importer.js"></script>
-<script>new modules._ujgExcelStoryImporter({getGadgetContentEl:function(){return jQuery("#root");},resize:function(){}});</script>
+<script src="/test/preview-bootstrap.js"></script>
 </html>

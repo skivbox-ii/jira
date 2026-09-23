@@ -549,3 +549,320 @@ test("storyFields applies editable mapping settings from create options", functi
   assert.equal(fields.components[0].name, "Primitive Component");
   assert.equal(fields.priority.name, "Highest");
 });
+
+test("createAdditionalTasks uses existing Story and creates only enabled selected children", async function () {
+  const creator = loadCreator();
+  const created = [];
+  const links = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue(payload) {
+      created.push(payload.fields);
+      return Promise.resolve({ key: "EVOSCADA-300" });
+    },
+    createIssueLink(payload) {
+      links.push(payload);
+      return Promise.resolve({});
+    },
+  }, { jiraKey: "EVOSCADA-200", summary: "Original", sourceColumns: { "№": 42 } }, {
+    projectKey: "EVOSCADA",
+    summary: "Edited",
+    childTasks: [
+      { role: "FE", issueType: "Task", summary: "[FE] Edited", description: "New UI", assignee: { name: "fe-user" }, enabled: true },
+      { role: "BE", issueType: "Task", summary: "[BE] Edited", enabled: false },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.partial, false);
+  assert.equal(result.createdKey, "EVOSCADA-200");
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(created.map(fields => fields.summary), ["[FE] №42 Edited"]);
+  assert.equal(created[0].description, "New UI");
+  assert.equal(created[0].assignee.name, "fe-user");
+  assert.deepEqual(links.map(link => [link.type.name, link.outwardIssue.key, link.inwardIssue.key]), [
+    ["Child", "EVOSCADA-200", "EVOSCADA-300"],
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.createdChildren)), [{
+    key: "EVOSCADA-300", role: "FE", summary: "[FE] №42 Edited", description: "New UI",
+    assignee: { name: "fe-user" }, issueType: "Task", enabled: true, linkedToParent: true,
+  }]);
+});
+
+test("createAdditionalTasks validates parent and enabled tasks before Jira writes", async function () {
+  const creator = loadCreator();
+  let writes = 0;
+  const api = { createIssue() { writes++; return Promise.resolve({ key: "NEW-1" }); } };
+  const selected = { projectKey: "EVOSCADA", childTasks: [{ role: "QA", issueType: "Task", enabled: true }] };
+  const missingParent = await creator.createAdditionalTasks(api, { summary: "No Story" }, selected);
+  const noSelection = await creator.createAdditionalTasks(api, { createdKey: "EVOSCADA-200" }, {
+    projectKey: "EVOSCADA", childTasks: [{ role: "QA", enabled: false }],
+  });
+  const noTasks = await creator.createAdditionalTasks(api, { jiraKey: "EVOSCADA-200" }, { projectKey: "EVOSCADA" });
+  const noProject = await creator.createAdditionalTasks(api, { jiraKey: "EVOSCADA-200" }, {
+    childTasks: [{ role: "FE", issueType: "Task" }],
+  });
+
+  assert.equal(missingParent.ok, false);
+  assert.match(missingParent.errors.join(" "), /parent|Story/i);
+  assert.equal(noSelection.ok, false);
+  assert.equal(noTasks.ok, false);
+  assert.equal(noProject.ok, false);
+  assert.equal(writes, 0);
+});
+
+test("createAdditionalTasks retains child keys after link and create failures without retrying", async function () {
+  const creator = loadCreator();
+  const attempted = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue(payload) {
+      attempted.push(payload.fields.summary);
+      if (attempted.length === 2) return Promise.reject(new Error("timeout"));
+      return Promise.resolve({ key: "EVOSCADA-" + (300 + attempted.length) });
+    },
+    createIssueLink() { return Promise.reject(new Error("link denied")); },
+  }, { createdKey: "EVOSCADA-200", summary: "Parent" }, {
+    projectKey: "EVOSCADA",
+    childTasks: [
+      { role: "FE", issueType: "Task", summary: "First" },
+      { role: "BE", issueType: "Task", summary: "Uncertain" },
+      { role: "QA", issueType: "Task", summary: "Third" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, true);
+  assert.equal(result.createdKey, "EVOSCADA-200");
+  assert.deepEqual(attempted, ["First", "Uncertain", "Third"]);
+  assert.deepEqual(Array.from(result.createdChildren, child => child.key), ["EVOSCADA-301", "EVOSCADA-303"]);
+  assert.deepEqual(Array.from(result.createdChildren, child => child.linkedToParent), [false, false]);
+  assert.match(result.createdChildren[0].linkError, /link denied/);
+  assert.match(result.errors.join(" "), /link denied/);
+  assert.match(result.errors.join(" "), /timeout/);
+});
+
+test("createAdditionalTasks reports full failure when no child key is known", async function () {
+  const creator = loadCreator();
+  let attempts = 0;
+  const result = await creator.createAdditionalTasks({
+    createIssue() { attempts++; return Promise.reject(new Error("timeout")); },
+  }, { jiraKey: "EVOSCADA-200", summary: "Parent" }, {
+    projectKey: "EVOSCADA", childTasks: [{ role: "FE", issueType: "Task", summary: "Work" }],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, false);
+  assert.equal(result.createdKey, "EVOSCADA-200");
+  assert.equal(result.createdChildren.length, 0);
+  assert.equal(attempts, 1);
+});
+
+test("createAdditionalTasks retains earlier child keys when a later create throws synchronously", async function () {
+  const creator = loadCreator();
+  const attempts = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue(payload) {
+      attempts.push(payload.fields.summary);
+      if (payload.fields.summary === "Second") throw new Error("sync create failure");
+      return { key: "EVOSCADA-" + (300 + attempts.length) };
+    },
+    createIssueLink() { return {}; },
+  }, { jiraKey: "EVOSCADA-200", summary: "Parent" }, {
+    projectKey: "EVOSCADA",
+    childTasks: [
+      { role: "FE", issueType: "Task", summary: "First" },
+      { role: "BE", issueType: "Task", summary: "Second" },
+      { role: "QA", issueType: "Task", summary: "Third" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, true);
+  assert.equal(result.createdKey, "EVOSCADA-200");
+  assert.deepEqual(attempts, ["First", "Second", "Third"]);
+  assert.deepEqual(Array.from(result.createdChildren, child => [child.key, child.linkedToParent]), [
+    ["EVOSCADA-301", true], ["EVOSCADA-303", true],
+  ]);
+  assert.match(result.errors.join(" "), /sync create failure/);
+});
+
+test("createAdditionalTasks reports parent link failure on child after synchronous throw", async function () {
+  const creator = loadCreator();
+  const attempts = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue(payload) {
+      attempts.push(payload.fields.summary);
+      return { key: "EVOSCADA-" + (300 + attempts.length) };
+    },
+    createIssueLink(payload) {
+      if (payload.inwardIssue.key === "EVOSCADA-301") throw new Error("sync link failure");
+      return {};
+    },
+  }, { jiraKey: "EVOSCADA-200", summary: "Parent" }, {
+    projectKey: "EVOSCADA",
+    childTasks: [
+      { role: "FE", issueType: "Task", summary: "First" },
+      { role: "BE", issueType: "Task", summary: "Second" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, true);
+  assert.deepEqual(attempts, ["First", "Second"]);
+  assert.deepEqual(Array.from(result.createdChildren, child => child.key), ["EVOSCADA-301", "EVOSCADA-302"]);
+  assert.equal(result.createdChildren[0].linkedToParent, false);
+  assert.match(result.createdChildren[0].linkError, /sync link failure/);
+  assert.equal(result.createdChildren[1].linkedToParent, true);
+  assert.equal(result.createdChildren[1].linkError, undefined);
+  assert.match(result.errors.join(" "), /sync link failure/);
+});
+
+test("createAdditionalTasks links new QA to safely known non-QA children only", async function () {
+  const creator = loadCreator();
+  const links = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue() { return Promise.resolve({ key: "EVOSCADA-400" }); },
+    createIssueLink(payload) { links.push(payload); return Promise.resolve({}); },
+  }, {
+    jiraKey: "EVOSCADA-200", summary: "Parent",
+    createdChildren: [
+      { key: "EVOSCADA-201", role: "FE" },
+      { key: "EVOSCADA-202", role: "QA" },
+      { key: "", role: "BE" },
+    ],
+    childStatuses: [
+      { key: "EVOSCADA-203", role: "BE" },
+      { key: "EVOSCADA-204", role: "QA" },
+      { key: "EVOSCADA-205", role: "" },
+    ],
+  }, { projectKey: "EVOSCADA", childTasks: [{ role: "QA", issueType: "Task", summary: "Another QA" }] });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(links.map(link => [link.type.name, link.outwardIssue.key, link.inwardIssue.key]), [
+    ["Child", "EVOSCADA-200", "EVOSCADA-400"],
+    ["Blocks", "EVOSCADA-400", "EVOSCADA-201"],
+    ["Blocks", "EVOSCADA-400", "EVOSCADA-203"],
+  ]);
+  assert.deepEqual(Array.from(result.createdChildren, child => child.key), ["EVOSCADA-400"]);
+});
+
+test("createAdditionalTasks ignores synced children from a different parent key", async function () {
+  const creator = loadCreator();
+  const links = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue() { return Promise.resolve({ key: "EVOSCADA-400" }); },
+    createIssueLink(payload) { links.push(payload); return Promise.resolve({}); },
+  }, {
+    createdKey: "EVOSCADA-200", jiraKey: "EVOSCADA-100", summary: "Parent",
+    childStatuses: [{ key: "EVOSCADA-101", role: "BE" }],
+  }, { projectKey: "EVOSCADA", childTasks: [{ role: "QA", issueType: "Task", summary: "New QA" }] });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(links.map(link => link.type.name), ["Child"]);
+});
+
+test("createAdditionalTasks excludes explicitly orphaned prior children from new QA blockers", async function () {
+  const creator = loadCreator();
+  const links = [];
+  const result = await creator.createAdditionalTasks({
+    createIssue() { return { key: "EVOSCADA-400" }; },
+    createIssueLink(payload) { links.push(payload); return {}; },
+  }, {
+    jiraKey: "EVOSCADA-200", summary: "Parent",
+    createdChildren: [
+      { key: "EVOSCADA-201", role: "FE", linkedToParent: false },
+      { key: "EVOSCADA-202", role: "BE", linkedToParent: true },
+      { key: "EVOSCADA-203", role: "SE" },
+    ],
+  }, { projectKey: "EVOSCADA", childTasks: [{ role: "QA", issueType: "Task", summary: "New QA" }] });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(links.filter(link => link.type.name === "Blocks").map(link => link.inwardIssue.key), [
+    "EVOSCADA-202", "EVOSCADA-203",
+  ]);
+});
+
+test("createAdditionalTasks excludes newly created children whose parent link failed from QA blockers", async function () {
+  const creator = loadCreator();
+  const links = [];
+  let creates = 0;
+  const result = await creator.createAdditionalTasks({
+    createIssue() { creates++; return { key: "EVOSCADA-" + (300 + creates) }; },
+    createIssueLink(payload) {
+      links.push(payload);
+      if (payload.type.name === "Child" && payload.inwardIssue.key === "EVOSCADA-301") {
+        return Promise.reject(new Error("parent link denied"));
+      }
+      return {};
+    },
+  }, { jiraKey: "EVOSCADA-200", summary: "Parent" }, {
+    projectKey: "EVOSCADA",
+    childTasks: [
+      { role: "FE", issueType: "Task", summary: "New FE" },
+      { role: "QA", issueType: "Task", summary: "New QA" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, true);
+  assert.equal(result.createdChildren[0].linkedToParent, false);
+  assert.equal(result.createdChildren[1].linkedToParent, true);
+  assert.deepEqual(links.map(link => link.type.name), ["Child", "Child"]);
+});
+
+test("createRow returns created child keys on partial failure and skips createdKey rows", async function () {
+  const creator = loadCreator();
+  let writes = 0;
+  const api = {
+    createIssue() { writes++; return Promise.resolve({ key: "EVOSCADA-" + writes }); },
+    createIssueLink() { return Promise.reject(new Error("link denied")); },
+  };
+  const result = await creator.createRow(api, { summary: "New Story" }, {
+    projectKey: "EVOSCADA", createSubtasks: true,
+    childTasks: [{ role: "FE", issueType: "Task", summary: "FE work" }],
+  });
+  const skipped = await creator.createRow(api, { createdKey: "EVOSCADA-1", summary: "Existing Story" }, {
+    projectKey: "EVOSCADA", createSubtasks: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, true);
+  assert.equal(result.createdKey, "EVOSCADA-1");
+  assert.deepEqual(Array.from(result.createdChildren, child => child.key), ["EVOSCADA-2"]);
+  assert.equal(result.createdChildren[0].linkedToParent, false);
+  assert.match(result.createdChildren[0].linkError, /link denied/);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.createdKey, "EVOSCADA-1");
+  assert.equal(writes, 2);
+});
+
+test("an unlinked new QA task does not receive blocker links", async function () {
+  const creator = loadCreator();
+  const links = [];
+  let creates = 0;
+  const result = await creator.createAdditionalTasks({
+    createIssue() { return { key: "EVOSCADA-" + (++creates + 300) }; },
+    createIssueLink(payload) {
+      links.push(payload);
+      if (payload.type.name === "Child" && payload.inwardIssue.key === "EVOSCADA-302") return Promise.reject(new Error("QA parent link denied"));
+      return {};
+    },
+  }, { jiraKey: "EVOSCADA-200", summary: "Parent" }, {
+    projectKey: "EVOSCADA", childTasks: [{role:"FE",issueType:"Task"}, {role:"QA",issueType:"Task"}],
+  });
+  assert.equal(result.partial, true);
+  assert.equal(result.createdChildren[0].linkedToParent, true);
+  assert.equal(result.createdChildren[1].linkedToParent, false);
+  assert.deepEqual(links.map(link => link.type.name), ["Child", "Child"]);
+});
+
+test("createRow does not repeat Story creation after an uncertain Jira error", async function () {
+  const creator = loadCreator();
+  let attempts = 0;
+  const result = await creator.createRow({
+    createIssue() { attempts++; return Promise.reject(new Error("timeout")); },
+  }, { summary: "New Story" }, { projectKey: "EVOSCADA", epicKey: "EVOSCADA-100" });
+
+  assert.equal(result.ok, false);
+  assert.equal(attempts, 1);
+  assert.match(result.errors.join(" "), /timeout/);
+});

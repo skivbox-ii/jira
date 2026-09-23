@@ -358,7 +358,11 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     var $actions = $("<div/>").addClass("ujg-esi-toolbar-actions");
     appendFileInput($actions);
     appendMappingButton($actions);
-    appendSyncActions($actions, state);
+    if (state.viewMode === "jira") {
+      $actions.append(gridModule.button("RefreshCw", "Загрузить замечания из Jira", function() {
+        if (services && services.onLoadRegistry) services.onLoadRegistry();
+      }).prop("disabled", !state.projectKey || !!state.registryLoading));
+    } else appendSyncActions($actions, state);
     $field.append($actions);
     $toolbar.append($field);
   }
@@ -422,8 +426,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   function columnMappingRows(settings) {
     var map = settings && settings.columnMap ? settings.columnMap : {};
     return [
+      { key: "remarkId", label: "ID замечания", value: map.remarkId || "ID" },
       { key: "summary", label: "Название / Summary", value: map.summary || "Замечание" },
       { key: "jira", label: "Jira key", value: map.jira || "Jira" },
+      { key: "owner", label: "Ответственный за замечание", value: map.owner || "Ответственный" },
       { key: "module", label: "Модуль", value: map.module || "Модуль" },
       { key: "priority", label: "Приоритет", value: map.priority || "Приоритет" },
       { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
@@ -521,17 +527,19 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   function appendRowActions($td, row, state, index) {
     var canCreate = canCreateRow(row, state);
     var actionStatus = rowActionStatusText(row, state);
+    var linked = !!(row.jiraKey || row.createdKey);
+    var actionLabel = linked ? "Добавить задачу" : "Создать";
     var $button = $("<button/>")
-      .attr("type", "button")
-      .attr("title", actionStatus)
-      .addClass("ujg-esi-create-row")
-      .append(icon("Plus"), $("<span/>").text("Создать"));
-    if (!canCreate) $button.prop("disabled", true);
+      .attr({type: "button", title: actionLabel, "aria-label": actionLabel})
+      .addClass("ujg-esi-icon-button " + (linked ? "ujg-esi-add-child" : "ujg-esi-create-row"))
+      .append(icon("Plus"));
+    $button.prop("disabled", linked ? row.status === "creating" || !!state.registryLoading : !canCreate);
     $button.on("click", function() {
-      if (services && services.onCreateRow) services.onCreateRow(index);
+      if (linked) { if (services && services.onAddChildTasks) services.onAddChildTasks(index); }
+      else if (services && services.onCreateRow) services.onCreateRow(index);
     });
     var $actions = $("<div/>").addClass("ujg-esi-action-buttons").append(appendRowAiButton(row, state, index));
-    if (!(row.alreadyLinked || row.jiraKey || row.createdKey || row.status === "created")) $actions.append($button);
+    if (linked || !(row.alreadyLinked || row.status === "created")) $actions.append($button);
     $td.attr("title", actionStatus).append($actions);
     if (row.errors && row.errors.length) {
       var $details = $("<details/>").addClass("ujg-esi-error-details");
@@ -1194,7 +1202,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
       .attr("role", "dialog")
       .attr("aria-modal", "true");
     var $fields = $("<dl/>").addClass("ujg-esi-confirm-fields");
+    var childrenMode = dialog.mode === "children";
 
+    if (!childrenMode) {
     appendConfirmControl($fields, "Проект", appendSelect("ujg-esi-confirm-project", dialog.projectKey, (state.projects || []).map(function(project) {
       return { value: project.key || "", label: projectLabel(project) };
     }), function(value) {
@@ -1217,11 +1227,18 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("remainingEstimate", value);
     }));
     if (dialog.childTasks && dialog.childTasks.length) appendConfirmControl($fields, "Связь", $("<span/>").text("child of Story"));
+    } else {
+      $fields.addClass("ujg-esi-confirm-parent");
+      appendConfirmControl($fields, "Основная задача", $("<span/>").text(dialog.parentKey + " · " + (dialog.parentSummary || "")));
+      var parent = state.rows && state.rows[dialog.rowIndex];
+      var existing = parent && parent.childStatuses || [];
+      if (existing.length) appendConfirmControl($fields, "Уже связаны", $("<span/>").text(existing.map(function(task) { return task.key + (task.role ? " [" + task.role + "]" : ""); }).join(", ")));
+    }
 
     $modal.append(
       $("<div/>")
         .addClass("ujg-esi-confirm-head")
-        .append($("<h3/>").text("Подтвердите создание"), $("<button/>")
+        .append($("<h3/>").text(childrenMode ? "Добавить задачи к " + dialog.parentKey : "Подтвердите создание"), $("<button/>")
           .attr("type", "button")
           .addClass("ujg-esi-confirm-close")
           .attr("aria-label", "Закрыть")
@@ -1231,7 +1248,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
           }))
     );
     $modal.append($fields);
-    if (dialog.epicKey && dialog.epicLinkAllowed === false) {
+    if (!childrenMode && dialog.epicKey && dialog.epicLinkAllowed === false) {
       $modal.append(
         $("<div/>")
           .addClass("ujg-esi-confirm-epic-warning")
@@ -1240,8 +1257,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     }
     if (state.usersError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.usersError));
     if (state.llmError) $modal.append($("<div/>").addClass("ujg-esi-confirm-users-error").text(state.llmError));
-    $modal.append($("<h4/>").text("Описание"));
-    appendConfirmSourceRows($modal, dialog.sourceRows, state);
+    if (!childrenMode) {
+      $modal.append($("<h4/>").text("Описание"));
+      appendConfirmSourceRows($modal, dialog.sourceRows, state);
+    }
     $modal.append($("<h4/>").text("Дочерние задачи"));
     appendConfirmChildTasks($modal, dialog.childTasks, state);
     $modal.append(
@@ -1258,6 +1277,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
           $("<button/>")
             .attr("type", "button")
             .addClass("ujg-esi-confirm-create")
+            .prop("disabled", childrenMode && !(dialog.childTasks || []).some(function(task) { return task.enabled !== false; }))
             .text("Создать в Jira")
             .on("click", function() {
               if (services && services.onConfirmCreate) services.onConfirmCreate();
@@ -1530,24 +1550,53 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     var $wrap = $("<div/>").addClass("ujg-esi-preview");
     if (!rows.length) {
       $wrap.addClass("ujg-esi-preview-empty");
-      appendDropzone($wrap);
+      if (state.viewMode === "jira") $wrap.text(state.registryLoading ? "Загрузка замечаний..." : "Нет загруженных замечаний");
+      else appendDropzone($wrap);
       $parent.append($wrap);
       return;
     }
-    grid.mount($parent, state, { appendActions: function($td, row, index) { appendRowActions($td, row, state, index); } });
+    grid.mount($parent, state, {
+      appendActions: function($td, row, index) { appendRowActions($td, row, state, index); },
+      renderDescription: renderJiraWiki,
+      editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); }
+    });
   }
 
+  function appendRowOwnerPopover($parent, state) {
+    var picker = state.userPicker || {}, match = /^row-owner-(\d+)$/.exec(picker.target || "");
+    if (!match) return;
+    var index = Number(match[1]), row = state.rows && state.rows[index];
+    if (!row) return;
+    var $anchor = $parent.find('[data-owner-index="' + index + '"]');
+    if (!$anchor.length) return;
+    var $popup = $("<div/>").addClass("ujg-esi-row-owner-popover").attr({role:"dialog", "aria-label":"Ответственный за замечание"});
+    $popup.append($("<div/>").addClass("ujg-esi-description-head").append($("<strong/>").text("Ответственный"), gridModule.button("X", "Закрыть выбор ответственного", function() { if (services.onCloseUserPicker) services.onCloseUserPicker(); })));
+    $popup.append(appendAssigneePicker("ujg-esi-row-owner-picker", picker.target, row.ownerAssigneeId || "", row.ownerAssigneeLabel || "", state, false));
+    $popup.on("keydown", function(event) { if (event.key === "Escape" && services.onCloseUserPicker) { event.stopPropagation(); services.onCloseUserPicker(); } });
+    $parent.append($popup);
+    var rect = $anchor[0].getBoundingClientRect(), width = Math.min(310, window.innerWidth - 24);
+    $popup.css({ width: width, left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)), top: Math.max(12, Math.min(rect.bottom + 4, window.innerHeight - 340)) });
+    $(document).off("click.ujgEsiOwner").on("click.ujgEsiOwner", function(event) {
+      if (!$(event.target).closest(".ujg-esi-row-owner-popover,[data-owner-index]").length && services.onCloseUserPicker) services.onCloseUserPicker();
+    });
+  }
 
   function render(state) {
     if (!$root || !$root.length) return;
     var scrollState = captureScrollState();
+    $(document).off("click.ujgEsiOwner");
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
     $toolbar.append($("<h2/>").text("Импорт замечаний"));
+    var $modes = $("<div/>").addClass("ujg-esi-view-modes").attr({ role:"group", "aria-label":"Источник замечаний" });
+    [["excel", "Excel"], ["jira", "Jira"]].forEach(function(mode) {
+      $modes.append($("<button/>").attr({type:"button", "aria-label":"Режим " + mode[1], "aria-pressed":String((s.viewMode || "excel") === mode[0])}).text(mode[1]).on("click", function() { if (services.onViewModeChange) services.onViewModeChange(mode[0]); }));
+    });
+    $toolbar.append($modes);
     appendProjectSelect($toolbar, s);
     appendEpicPicker($toolbar, s);
-    if (s.parseMeta) appendParseMeta($toolbar, s);
+    if (s.parseMeta && s.viewMode !== "jira") appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
     if (s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
@@ -1562,8 +1611,11 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
+    if (s.registryError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.registryError));
+    if (s.viewMode === "jira" && s.registryWarning) $root.append($("<div/>").addClass("ujg-esi-registry-warning").attr("role", "status").text(s.registryWarning));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     appendPreview($root, s);
+    appendRowOwnerPopover($root, s);
     appendConfirmModal($root, s);
     appendLlmReviewDialog($root, s, "summary");
     appendLlmReviewDialog($root, s, "remark");

@@ -29,8 +29,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function defaultColumnMap() {
     return {
+      remarkId: "ID",
       summary: config.SUMMARY_COLUMN,
       jira: config.JIRA_COLUMN,
+      owner: "Ответственный",
       module: "Модуль",
       priority: "Приоритет",
       statusInJira: "Статус в Jira",
@@ -64,8 +66,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   function canonicalColumnName(excelName, settings) {
     var text = cellText(excelName);
     var map = settings && settings.columnMap ? settings.columnMap : {};
+    if (text && cellText(map.remarkId) === text) return "ID";
     if (text && cellText(map.summary) === text) return config.SUMMARY_COLUMN;
     if (text && cellText(map.jira) === text) return config.JIRA_COLUMN;
+    if (text && cellText(map.owner) === text) return "Ответственный";
     if (text && cellText(map.module) === text) return "Модуль";
     if (text && cellText(map.priority) === text) return "Приоритет";
     if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
@@ -89,9 +93,37 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   }
 
   function headerNames(row, settings) {
-    return (row || []).map(function(value, index) {
+    var raw = (row || []).map(cellText);
+    var names = raw.map(function(value, index) {
       var text = canonicalColumnName(value, settings);
       return text || "Колонка " + String(index + 1);
+    });
+    var preferred = {
+      ID: settings.columnMap.remarkId,
+      "Замечание": settings.columnMap.summary,
+      Jira: settings.columnMap.jira,
+      "Ответственный": settings.columnMap.owner,
+      "Модуль": settings.columnMap.module,
+      "Приоритет": settings.columnMap.priority,
+      "Статус в Jira": settings.columnMap.statusInJira,
+      "Исполнитель в Jira": settings.columnMap.assigneeInJira,
+      "Спринт": settings.columnMap.sprintInJira,
+    };
+    var selected = {};
+    names.forEach(function(name, index) {
+      if (!Object.prototype.hasOwnProperty.call(selected, name) || raw[index] === preferred[name]) {
+        if (!Object.prototype.hasOwnProperty.call(selected, name) || raw[selected[name]] !== preferred[name]) selected[name] = index;
+      }
+    });
+    var used = {};
+    Object.keys(selected).forEach(function(name) { used[name] = true; });
+    return names.map(function(name, index) {
+      if (selected[name] === index) return name;
+      var base = (raw[index] || name) + " (колонка " + String(index + 1) + ")";
+      var unique = base;
+      while (used[unique]) unique += "*";
+      used[unique] = true;
+      return unique;
     });
   }
 
