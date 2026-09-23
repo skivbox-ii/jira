@@ -16,7 +16,8 @@ function issue(key, title, status, person, type) {
   const description = /^\[QA\]/.test(title)
     ? "h2. Проверка качества сигнала\nПроверить обработку признаков недостоверности в драйвере МЭК и отображение качества в OPC UA.\nh3. Сценарии проверки\n* Передать сигнал с флагами OV и NT.\n* Проверить отображение состояния в журнале и контейнере МЭК.\n* Повторить проверку после переподключения.\nh3. Ожидаемый результат\nКачество сигнала и его описание соответствуют полученным флагам; результат зафиксирован в протоколе тестирования."
     : "h2. " + title + "\n" + (type === "История" ? "Исходное замечание из журнала приёмки." : "Реализовать изменение и проверить обработку граничных состояний.") + "\nh3. Критерии приёмки\n* Изменение сохраняется после обновления.\n* Существующие сценарии работают без регрессий.";
-  return {key, fields:{summary:title,description, status:{id:statusId,name:status,statusCategory:{key:statusId === "3" ? "done" : statusId === "2" ? "indeterminate" : "new"}}, assignee:person ? {name:person,displayName:person} : null, priority:{name:number % 7 === 0 ? "Высокий" : "Средний"}, issuetype:{name:type},created:"2026-09-01T09:00:00Z",updated:"2026-09-22T10:00:00Z",issuelinks:[]},changelog:{startAt:0,total:1,histories:[{id:key+"-h",created:since,items:[{field:"status",from:"0",fromString:"Новая",to:statusId,toString:status}]}]}};
+  const username = {"Иванов И.":"ivanov", "Сидоров А.":"sidorov", "Соколова А.":"sokolova", "Петров П.":"petrov", "Орлова Н.":"orlova"}[person] || person;
+  return {key, fields:{summary:title,description, status:{id:statusId,name:status,statusCategory:{key:statusId === "3" ? "done" : statusId === "2" ? "indeterminate" : "new"}}, assignee:person ? {name:username,displayName:person} : null, priority:{name:number % 7 === 0 ? "Высокий" : "Средний"}, issuetype:{name:type},created:"2026-09-01T09:00:00Z",updated:"2026-09-22T10:00:00Z",issuelinks:[]},changelog:{startAt:0,total:1,histories:[{id:key+"-h",created:since,items:[{field:"status",from:"0",fromString:"Новая",to:statusId,toString:status}]}]}};
 }
 for (let i = 0; i < 68; i++) {
   const id = 744 + i, key = keys[i] || "EVOSCADA-" + (24000 + i), description = descriptions[i % descriptions.length];
@@ -33,7 +34,7 @@ for (let i = 0; i < 68; i++) {
     const childKey = i === 0 ? (["EVOSCADA-18057","EVOSCADA-18080","EVOSCADA-18368","EVOSCADA-18371","EVOSCADA-18743"][j] || "EVOSCADA-" + (34000+j)) : "EVOSCADA-" + (30000 + i * 10 + j);
     const role = j % 2 ? "QA" : "BE";
     const sampleTitle = i === 0 ? ["МЭК: качество OV и NT","Проверка качества OV и NT","МЭК: флаги SB, BL, NT, IV","OPC: проверка качества","МЭК: обработка флага SB"][j] : "";
-    const child = issue(childKey, "[" + role + "] " + id + ". " + (sampleTitle || description), j % 2 ? "Тестирование" : "Готово", i === 1 && j === 1 ? "" : j % 2 ? "Соколова А." : "Петров П.", "Задача разработки");
+    const child = issue(childKey, "[" + role + "] " + id + ". " + (sampleTitle || description), i === 1 && j === 0 ? "В работе" : j % 2 ? "Тестирование" : "Готово", i === 1 && j === 1 ? "" : j % 2 ? "Соколова А." : "Петров П.", "Задача разработки");
     if (i === 0 && j === 0) child.fields.description += "\n\n```mermaid\nflowchart LR\n    A[Сигнал МЭК] --> B{IV / OV / NT}\n    B --> C[Недостоверное качество]\n    B --> D[Журнал и OPC UA]\n```";
     issues[childKey] = child;
     parent.fields.issuelinks.push({type:{name:"Child",outward:"is parent of",inward:"is child of"},outwardIssue:{key:childKey,fields:child.fields}});

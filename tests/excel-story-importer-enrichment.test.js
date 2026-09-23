@@ -34,6 +34,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       init: (_container, callbacks) => { app.callbacks = callbacks; },
       render: state => { app.state = state; },
     },
+    _ujgESI_teams: null,
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });
@@ -48,13 +49,21 @@ function history(created, to, toString, from, fromString) {
   return { created, items: [{ field: "status", to, toString, from, fromString }] };
 }
 
+test("ready-for-testing without a status category remains an open testing task", async () => {
+  const issue = {key:"TEST-1",fields:{summary:"Work",status:{name:"Готово к тестированию"}}};
+  const app = await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}], {getIssuesByKeys:()=>Promise.resolve({issues:[issue]})});
+  app.callbacks.onSyncJira(); await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails.done, false);
+  assert.equal(app.state.rows[0].storyDetails.statusState, "progress");
+});
+
 test("explicit sync enriches Story and child fields without extra requests or issue writes", async function () {
   const calls = [];
   let issues = [{
     key: "TEST-1",
     fields: {
       summary: "Existing Story", description: "Story detail", status: { id: "3", name: "In Progress" },
-      assignee: { displayName: "Иван" }, priority: { name: "High" }, issuetype: { name: "Story" },
+      assignee: { displayName: "Иван", name: "ivan", key: "JIRAUSER100" }, priority: { name: "High" }, issuetype: { name: "Story" },
       created: "2026-01-01T10:00:00.000+0300", updated: "2026-03-03T10:00:00.000+0300",
       issuelinks: [{ type: { name: "Child" }, outwardIssue: { key: "TEST-2", fields: { summary: "[FE] Existing child" } } }],
     },
@@ -93,6 +102,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
   assert.deepEqual(plain(row.storyDetails), {
     key: "TEST-1", summary: "Existing Story", description: "Story detail", descriptionLoaded: true, status: "In Progress", assignee: "Иван",
     statusCategory: "", statusState: "progress", done: false,
+    assigneeIdentifiers: ["JIRAUSER100", "ivan"],
     priority: "High", issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
   });
@@ -100,6 +110,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
   assert.deepEqual(plain(row.childStatuses[0]), {
     role: "FE", key: "TEST-2", summary: "[FE] Existing child", description: "Child detail", descriptionLoaded: true, status: "Open", linkedToParent: true,
     statusCategory: "new", statusState: "todo", done: false, assignee: "developer", blocked: false,
+    assigneeIdentifiers: ["developer"],
     priority: "Low", issueType: "Task", updated: "2026-02-02T00:00:00Z",
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
   });

@@ -20,6 +20,8 @@ var MODULE_ORDER = [
   "xlsx-patcher.js",
   "registry.js",
   "icons.js",
+  "teams.js",
+  "teams-ui.js",
   "grid.js",
   "rendering.js",
   "main.js",

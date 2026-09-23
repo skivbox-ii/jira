@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], function($, gridModule, icon) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi"], function($, gridModule, icon, teamsUi) {
   "use strict";
 
   var $root;
@@ -556,7 +556,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
 
   function activeMappingBlock(state) {
     var block = state && state.activeMappingBlock ? String(state.activeMappingBlock) : "";
-    if (block === "priorities" || block === "roles" || block === "columns" || block === "tableStart" || block === "llmPrompts") return block;
+    if (block === "priorities" || block === "roles" || block === "columns" || block === "tableStart" || block === "llmPrompts" || block === "teams") return block;
     return "modules";
   }
 
@@ -578,6 +578,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
   function mappingBlockRows(settings) {
     var maps = settings || {};
     return [
+      { key: "teams", title: "Команды", subtitle: "Участники и направления · локально" },
       {
         key: "modules",
         title: "Модуль → Component",
@@ -1135,7 +1136,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     $parent.append($head, $storyAssignee, $table);
   }
 
-  function appendLlmPromptMappings($parent, settings) {
+  function appendLlmPromptMappings($parent, settings, state) {
     var prompts = settings && settings.llmPrompts ? settings.llmPrompts : {};
     var descriptionPrompts = settings && settings.llmDescriptionPrompts ? settings.llmDescriptionPrompts : {};
     var order = ["story", "SE", "FE", "BE", "QA", "DevOps"];
@@ -1193,7 +1194,16 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
           )
       );
     });
-    $parent.append($head, $project, $remark, $wrap, $descriptionHead, $descriptionWrap);
+    var $connection = $("<div/>").addClass("ujg-esi-llm-connection");
+    $connection.append(gridModule.button("RefreshCw", "Сбросить LLM", function() { services.onLlmResetRequest(); }).append($("<span/>").text("Сбросить LLM")).prop("disabled", !!state.llmLoadingTarget));
+    if (state.llmResetConfirm) {
+      $connection.append($("<p/>").text("Удалить адрес API, модель и ключ LLM? Подключение общее для виджетов в этом браузере. Промпты, команды и настройки таблицы сохранятся."));
+      $connection.append($("<button/>").attr("type", "button").text("Удалить подключение").prop("disabled", !!state.llmLoadingTarget).on("click", function() { services.onLlmResetConfirm(); }));
+      $connection.append($("<button/>").attr("type", "button").text("Отмена").on("click", function() { services.onLlmResetCancel(); }));
+    }
+    if (state.llmResetNotice) $connection.append($("<p/>").attr("role", "status").text(state.llmResetNotice));
+    if (state.llmResetError) $connection.append($("<p/>").attr("role", "alert").addClass("ujg-esi-mapping-error").text(state.llmResetError));
+    $parent.append($head, $connection, $project, $remark, $wrap, $descriptionHead, $descriptionWrap);
   }
 
   function appendMappingOverlay($parent, state) {
@@ -1214,12 +1224,12 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
             if (services && services.onCloseMappings) services.onCloseMappings();
           }),
         $("<span/>").addClass("ujg-esi-mapping-header-icon").html("&#9881;"),
-        $("<h1/>").text("Мапинг Excel Import")
+        $("<h1/>").text("Настройки импорта")
       );
     var $main = $("<div/>").addClass("ujg-esi-mapping-main");
     var $left = $("<div/>").addClass("ujg-esi-mapping-left");
     var $right = $("<div/>").addClass("ujg-esi-mapping-right");
-    $left.append($("<div/>").addClass("ujg-esi-mapping-section-title").text("Блоки мапинга"));
+    $left.append($("<div/>").addClass("ujg-esi-mapping-section-title").text("Разделы"));
     mappingBlockRows(settings).forEach(function(block) {
       appendMappingBlock($left, block, active === block.key);
     });
@@ -1232,7 +1242,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     } else if (active === "roles") {
       appendMappingRoles($right, settings, state);
     } else if (active === "llmPrompts") {
-      appendLlmPromptMappings($right, settings);
+      appendLlmPromptMappings($right, settings, state);
+    } else if (active === "teams" && teamsUi) {
+      if (state.projectKey) teamsUi.render($right, state, services);
+      else $right.append($("<p/>").text("Проект не выбран"));
     } else {
       appendMappingPairs($right, "modules", "Модуль → Component", mapEntries(settings.moduleComponentMap), state);
     }
@@ -1724,6 +1737,13 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
 
   function render(state) {
     if (!$root || !$root.length) return;
+    var $active = $(document.activeElement), $teamRow = $active.closest(".ujg-esi-team-row");
+    var teamControl = ["name", "roles", "search", "member-row", "chip", "members-button", "direction"].filter(function(name) { return $active.hasClass("ujg-esi-team-" + name); })[0];
+    var teamFocus = $teamRow.length && teamControl ? {
+      id: $teamRow.attr("data-team-id"), control: teamControl, user: $active.attr("data-user-id"),
+      draft: $active.is("input") ? $active.val() : null,
+      start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd
+    } : null;
     var scrollState = captureScrollState();
     $(document).off("click.ujgEsiOwner");
     $root.empty();
@@ -1763,6 +1783,17 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons"], functio
     appendLlmReviewDialog($root, s, "remark");
     appendDescriptionReviewDialog($root, s);
     appendMappingOverlay($root, s);
+    if (teamFocus) {
+      var $newRow = $root.find(".ujg-esi-team-row").filter(function() { return $(this).attr("data-team-id") === teamFocus.id; });
+      var $replacement = $newRow.find(".ujg-esi-team-" + teamFocus.control).filter(function() { return !teamFocus.user || $(this).attr("data-user-id") === teamFocus.user; }).first();
+      if (!$replacement.length && teamFocus.user) $replacement = $newRow.find(".ujg-esi-team-member-row").filter(function() { return $(this).attr("data-user-id") === teamFocus.user; }).first();
+      if (!$replacement.length && teamFocus.user) $replacement = $newRow.find(".ujg-esi-team-search").first();
+      if ($replacement.length) {
+        if (teamFocus.draft !== null) $replacement.val(teamFocus.draft);
+        $replacement[0].focus();
+        if (teamFocus.start != null && $replacement[0].setSelectionRange) $replacement[0].setSelectionRange(teamFocus.start, teamFocus.end);
+      }
+    }
     restoreScrollState(scrollState);
   }
 

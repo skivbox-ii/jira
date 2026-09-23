@@ -98,6 +98,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": null,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -168,6 +169,7 @@ test("project selection is stored in localStorage and restored on next load", as
       "_ujgESI_mappingStore": null,
       "_ujgESI_xlsxPatcher": null,
       "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
     }, { localStorage: storage });
     new Gadget({
@@ -250,6 +252,7 @@ test("epic picker search opens filtered epic choices and select stores epic key"
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": null,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -371,6 +374,7 @@ test("story and child summary LLM dialogs use full Excel remark when mapped summ
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": null,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": llmClient,
   });
 
@@ -608,6 +612,7 @@ test("row create opens confirmation before creating without Epic", async functio
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": llmClient,
   });
 
@@ -1047,6 +1052,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -1200,6 +1206,7 @@ test("sync from Jira does not blank existing sprint when issue has no sprint fie
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -1336,6 +1343,7 @@ test("sync from Jira tries to find missing Jira key by summary in selected proje
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -1483,6 +1491,7 @@ test("sync from Jira finds missing key by summary using project inferred from ex
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -1622,6 +1631,7 @@ test("sync from Jira picks the story when summary search also returns linked chi
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -1750,6 +1760,7 @@ test("sync from Jira retries shorter summary searches when the long Russian quer
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -1886,6 +1897,7 @@ test("sync from Jira picks the closest story when text search returns several st
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -2021,6 +2033,7 @@ test("sync from Jira prefers exact remark text found in issue description over s
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -2139,6 +2152,7 @@ test("column mapping changes reparse the loaded workbook before Jira sync export
     "_ujgESI_mappingStore": null,
     "_ujgESI_xlsxPatcher": xlsxPatcher,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
   });
 
@@ -2345,6 +2359,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
     "_ujgESI_parser": parser,
     "_ujgESI_creator": creator,
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
     "_ujgESI_mappingStore": mappingStore,
     "_ujgESI_xlsxPatcher": null,
@@ -2541,6 +2556,7 @@ test("mapping text input changes save without rerendering the focused editor", a
     "_ujgESI_parser": {},
     "_ujgESI_creator": {},
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
     "_ujgESI_mappingStore": mappingStore,
     "_ujgESI_xlsxPatcher": null,
@@ -2731,6 +2747,7 @@ test("meta sheet picker saves selected sheet and reparses current workbook", asy
     "_ujgESI_parser": parser,
     "_ujgESI_creator": {},
     "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
     "_ujgShared_llmClient": null,
     "_ujgESI_mappingStore": mappingStore,
     "_ujgESI_xlsxPatcher": null,

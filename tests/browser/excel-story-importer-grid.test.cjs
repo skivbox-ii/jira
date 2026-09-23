@@ -12,7 +12,7 @@ function setup() {
   w.scrollTo = () => {};
   const $ = jquery(w), modules = { jquery: $ };
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
-  for (const file of ["remark-id", "registry", "icons", "grid", "rendering"]) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
+  for (const file of ["remark-id", "registry", "icons", "teams", "teams-ui", "grid", "rendering"]) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
   const calls = [];
   const state = {
     projectKey: "P", projects: [{ key: "P", name: "Project" }], epics: [], baseUrl: "https://jira.example.test",
@@ -31,12 +31,64 @@ function setup() {
     onCreateRow: index => calls.push(["create", index]), onRowImproveRemark: index => calls.push(["correct", index]),
     onAddChildTasks: index => calls.push(["children", index]),
     onDialogAssigneeFocus: target => calls.push(["owner", target]),
-    onViewModeChange: mode => calls.push(["mode", mode]), onLoadRegistry: () => calls.push(["load"])
+    onViewModeChange: mode => calls.push(["mode", mode]), onLoadRegistry: () => calls.push(["load"]),
+    onLlmResetRequest: () => calls.push(["reset-request"]), onLlmResetConfirm: () => calls.push(["reset-confirm"]), onLlmResetCancel: () => calls.push(["reset-cancel"])
   });
   modules._ujgESI_rendering.render(state);
   return { dom, $, state, calls, render: () => modules._ujgESI_rendering.render(state) };
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
+
+test("owner cell retains coordinator and shows current work independently of collapsed or filtered children", t => {
+  const {dom,$,state,render} = setup(); t.after(()=>dom.window.close());
+  state.rows[1].childStatuses.push({key:"P-13",role:"QA",status:"Testing",assignee:"Alice"});
+  render();
+  const owner = $("tr[data-key='P-10'] .ujg-esi-cell-owner");
+  assert.match(owner.text(), /Owner/);
+  assert.match(owner.text(), /Сейчас/);
+  assert.match(owner.text(), /Разработка/);
+  assert.match(owner.text(), /Тестирование/);
+  owner.find(".ujg-esi-current-work").trigger("click");
+  assert.match($(".ujg-esi-work-details").text(), /P-11.*Bob/s);
+  assert.match($(".ujg-esi-work-details").text(), /P-13.*Alice/s);
+  assert.doesNotMatch($(".ujg-esi-work-details").text(), /P-12/);
+});
+
+test("LLM reset settings show scoped confirmation and disable reset during a request", t => {
+  const {dom,$,state,calls,render} = setup(); t.after(()=>dom.window.close());
+  state.mappingEditorOpen = true; state.activeMappingBlock = "llmPrompts"; render();
+  $("button[aria-label='Сбросить LLM']").trigger("click");
+  assert.deepEqual(calls, [["reset-request"]]);
+  state.llmResetConfirm = true; render();
+  assert.match($(".ujg-esi-llm-connection").text(), /общее для виджетов/);
+  $(".ujg-esi-llm-connection button").filter(function(){return $(this).text()==="Отмена";}).trigger("click");
+  assert.deepEqual(calls[1], ["reset-cancel"]);
+  state.llmLoadingTarget = "story"; render();
+  assert.equal($("button[aria-label='Сбросить LLM']").prop("disabled"), true);
+});
+
+test("team search completion preserves an uncommitted name draft and keyboard member focus", t => {
+  const {dom,$,state,render} = setup(); t.after(()=>dom.window.close());
+  state.mappingEditorOpen = true; state.activeMappingBlock = "teams";
+  const user = {id:"bob",label:"Bob",identifiers:["bob"]};
+  state.teams = [{id:"be",name:"BE",direction:"development",roles:["BE"],members:[],color:"#3973B9"}];
+  state.teamMemberPicker = {teamId:"be",query:""}; state.teamUsers = [];
+  render();
+  $(".ujg-esi-team-name").val("Backend draft").trigger("focus");
+  $(".ujg-esi-team-name")[0].setSelectionRange(7, 7);
+  state.teamUsers = [user]; render();
+  assert.equal($(".ujg-esi-team-name").val(), "Backend draft");
+  assert.equal(dom.window.document.activeElement, $(".ujg-esi-team-name")[0]);
+  assert.equal(dom.window.document.activeElement.selectionStart, 7);
+  $(".ujg-esi-team-member-row").trigger("focus");
+  state.teams[0].members = [user]; render();
+  assert.equal(dom.window.document.activeElement, $(".ujg-esi-team-member-row")[0]);
+  assert.equal($(".ujg-esi-team-member-row").attr("aria-pressed"), "true");
+  state.teamMemberPicker.query = "Alice"; render();
+  $(".ujg-esi-team-chip").trigger("focus");
+  state.teams[0].members = []; render();
+  assert.equal(dom.window.document.activeElement, $(".ujg-esi-team-search")[0]);
+});
 
 test("new remarks offer creation, existing and partial rows never offer duplicate creation", t => {
   const { dom, $, calls } = setup(); t.after(() => dom.window.close());

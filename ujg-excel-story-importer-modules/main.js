@@ -9,7 +9,8 @@ define("_ujgESI_main", [
   "_ujgESI_xlsxPatcher",
   "_ujgESI_rendering",
   "_ujgShared_llmClient",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient) {
+  "_ujgESI_teams",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -70,6 +71,12 @@ define("_ujgESI_main", [
         return { id: id, label: label, raw: user };
       })
       .filter(Boolean);
+  }
+
+  function userIdentifiers(user) {
+    return ["accountId", "key", "name", "username"].map(function(field) {
+      return user && user[field] != null ? String(user[field]).trim() : "";
+    }).filter(function(id, index, all) { return id && all.indexOf(id) === index; });
   }
 
   function mergeUsers(existing, incoming) {
@@ -555,7 +562,7 @@ define("_ujgESI_main", [
     if (categoryKey === "indeterminate" || categoryColor === "yellow" || categoryId === "4") return "progress";
     if (categoryKey === "new" || /blue|gray|grey/.test(categoryColor) || categoryId === "2") return "todo";
     var statusText = issueStatusName(issue).toLowerCase();
-    if (/\bdone\b|\bresolved\b|\bclosed\b|\bcancelled\b|\bcanceled\b|готов|закрыт|снят|выполн|принят/.test(statusText)) return "done";
+    if (/^(done|resolved|closed|cancelled|canceled|готов[оа]?|закрыт[ао]?|снят[ао]?|выполнен[ао]?|принят[ао]?)$/.test(statusText.trim())) return "done";
     if (/progress|review|testing|тест|работ|разработ|исполн|провер|ревью/.test(statusText)) return "progress";
     if (/todo|open|backlog|нов|выдан|ожид/.test(statusText)) return "todo";
     return categoryName ? "" : "";
@@ -699,6 +706,7 @@ define("_ujgESI_main", [
       statusCategory: issueStatusCategoryKey(issue),
       done: issueIsDone(issue),
       assignee: issueAssigneeName(issue),
+      assigneeIdentifiers: userIdentifiers(fields.assignee),
       priority: name(fields.priority),
       issueType: name(fields.issuetype),
       updated: fields.updated != null ? String(fields.updated) : "",
@@ -849,6 +857,7 @@ define("_ujgESI_main", [
         statusState: done ? "done" : issueStatusState(resolved),
         done: done,
         assignee: assignee,
+        assigneeIdentifiers: details.assigneeIdentifiers,
         blocked: issueIsBlocked(resolved, mergedIssueMap),
         priority: details.priority,
         issueType: details.issueType,
@@ -993,6 +1002,15 @@ define("_ujgESI_main", [
       descriptionDialog: null,
       llmLoadingTarget: "",
       llmError: "",
+      llmResetConfirm: false,
+      llmResetNotice: "",
+      llmResetError: "",
+      teams: teamsModule ? teamsModule.defaults() : [],
+      teamsError: "",
+      teamUsers: [],
+      teamUsersLoading: false,
+      teamUsersError: "",
+      teamMemberPicker: { teamId: "", query: "" },
       users: [],
       usersLoading: false,
       usersError: "",
@@ -1045,6 +1063,7 @@ define("_ujgESI_main", [
     var projectSelectionChanged = false;
     var epicChoices = Object.create(null);
     var createInFlight = false;
+    var teamSearchSeq = 0;
 
     function hasOwn(obj, key) {
       return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
@@ -1068,6 +1087,99 @@ define("_ujgESI_main", [
       }
       if (typeof prompt === "function") return prompt;
       return null;
+    }
+
+    function loadTeams() {
+      teamSearchSeq += 1;
+      state.teamUsers = [];
+      state.teamUsersLoading = false;
+      state.teamUsersError = "";
+      state.teamsError = "";
+      state.teamMemberPicker = { teamId: "", query: "" };
+      if (!teamsModule) return;
+      try { state.teams = teamsModule.load(getStorageRef(), state.preferencesStorageKey, state.projectKey); }
+      catch (err) { state.teams = teamsModule.defaults(); state.teamsError = "Локальное хранилище недоступно: " + searchErrorText(err); }
+    }
+
+    function saveTeams(next) {
+      if (!teamsModule || !state.projectKey) return;
+      state.teamsError = "";
+      try { state.teams = teamsModule.save(getStorageRef(), state.preferencesStorageKey, state.projectKey, next); }
+      catch (err) { state.teamsError = "Команды не сохранены: " + searchErrorText(err); }
+      render();
+    }
+
+    function onTeamAdd() {
+      saveTeams(state.teams.concat([{ id: "team-" + Date.now(), name: "Новая команда", direction: "other", roles: [], members: [] }]));
+    }
+
+    function onTeamRemove(id) {
+      saveTeams(state.teams.filter(function(team) { return team.id !== id; }));
+    }
+
+    function onTeamChange(id, field, value) {
+      if (["name", "direction", "roles", "color"].indexOf(field) < 0) return;
+      saveTeams(state.teams.map(function(team) {
+        if (team.id !== id) return team;
+        var updated = Object.assign({}, team); updated[field] = value; return updated;
+      }));
+    }
+
+    function onTeamMemberToggle(id, user) {
+      if (!user || !user.id) return;
+      saveTeams(state.teams.map(function(team) {
+        if (team.id !== id) return team;
+        var matches = function(member) { return member.id === user.id || (member.identifiers || []).some(function(key) { return (user.identifiers || []).indexOf(key) >= 0; }); };
+        var members = team.members.some(matches) ? team.members.filter(function(member) { return !matches(member); }) : team.members.concat([user]);
+        return Object.assign({}, team, { members: members });
+      }));
+    }
+
+    function onTeamMembersSearch(id, query) {
+      if (!state.projectKey || !state.teams.some(function(team) { return team.id === id; })) return;
+      var seq = ++teamSearchSeq, project = state.projectKey;
+      state.teamMemberPicker = { teamId: id, query: String(query || "") };
+      state.teamUsersLoading = true; state.teamUsersError = "";
+      render();
+      var request;
+      try { request = api.searchUsers(String(query || "")); }
+      catch (err) { request = Promise.reject(err); }
+      promiseOf(request).then(function(data) {
+        if (seq !== teamSearchSeq || project !== state.projectKey) return;
+        state.teamUsers = normalizeUsers(data).map(function(user) { return { id: user.id, label: user.label, identifiers: userIdentifiers(user.raw) }; });
+        state.teamUsersLoading = false; render();
+      }, function(err) {
+        if (seq !== teamSearchSeq || project !== state.projectKey) return;
+        state.teamUsersLoading = false; state.teamUsersError = "Не удалось загрузить пользователей: " + searchErrorText(err); render();
+      });
+    }
+
+    function onTeamMembersOpen(id) {
+      if (state.teamMemberPicker.teamId === id) {
+        teamSearchSeq += 1; state.teamUsersLoading = false;
+        state.teamMemberPicker = { teamId: "", query: "" }; render(); return;
+      }
+      onTeamMembersSearch(id, "");
+    }
+
+    function onLlmResetRequest() {
+      if (state.llmLoadingTarget) return;
+      state.llmResetConfirm = true; state.llmResetNotice = ""; state.llmResetError = ""; render();
+    }
+
+    function onLlmResetCancel() { state.llmResetConfirm = false; render(); }
+
+    function onLlmResetConfirm() {
+      if (!state.llmResetConfirm || state.llmLoadingTarget) return;
+      state.llmResetError = ""; state.llmResetNotice = "";
+      try {
+        var storage = getStorageRef();
+        if (!storage || typeof storage.removeItem !== "function") throw new Error("localStorage недоступен");
+        storage.removeItem(config.LLM_CONFIG_STORAGE_KEY);
+        state.llmResetConfirm = false; state.llmError = "";
+        state.llmResetNotice = "Настройки подключения LLM сброшены. Следующий вызов AI запросит новые данные.";
+      } catch (err) { state.llmResetError = "Не удалось сбросить LLM: " + searchErrorText(err); }
+      render();
     }
 
     function selectedProjectText() {
@@ -1949,6 +2061,7 @@ define("_ujgESI_main", [
             state.epicKey = rememberedEpic(state.projectKey);
           }
           state.loading = false;
+          loadTeams();
           render();
           if (state.projectKey) {
             loadEpics(state.projectKey);
@@ -2213,6 +2326,7 @@ define("_ujgESI_main", [
       }
       state.projectKey = projectKey != null ? String(projectKey).trim() : "";
       state.epicKey = rememberedEpic(state.projectKey);
+      loadTeams();
       invalidateRegistry();
       state.error = "";
       state.createDialog = null;
@@ -2348,7 +2462,7 @@ define("_ujgESI_main", [
 
     function onMappingBlockSelect(block) {
       var key = block != null ? String(block) : "";
-      state.activeMappingBlock = key === "priorities" || key === "roles" || key === "columns" || key === "tableStart" || key === "llmPrompts" ? key : "modules";
+      state.activeMappingBlock = key === "priorities" || key === "roles" || key === "columns" || key === "tableStart" || key === "llmPrompts" || key === "teams" ? key : "modules";
       render();
     }
 
@@ -3465,6 +3579,15 @@ define("_ujgESI_main", [
       onOpenMappings: onOpenMappings,
       onCloseMappings: onCloseMappings,
       onMappingBlockSelect: onMappingBlockSelect,
+      onTeamAdd: onTeamAdd,
+      onTeamRemove: onTeamRemove,
+      onTeamChange: onTeamChange,
+      onTeamMemberToggle: onTeamMemberToggle,
+      onTeamMembersOpen: onTeamMembersOpen,
+      onTeamMembersSearch: onTeamMembersSearch,
+      onLlmResetRequest: onLlmResetRequest,
+      onLlmResetCancel: onLlmResetCancel,
+      onLlmResetConfirm: onLlmResetConfirm,
       onMappingPairAdd: onMappingPairAdd,
       onMappingPairChange: onMappingPairChange,
       onMappingPairRemove: onMappingPairRemove,

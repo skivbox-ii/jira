@@ -1,4 +1,4 @@
-define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function($, registry, icon) {
+define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_teams"], function($, registry, icon, teamsModule) {
   "use strict";
   var sequence = 0;
   var columns = [
@@ -230,10 +230,55 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons"], function
       $box.append($("<div/>").addClass("ujg-esi-filter-actions").append($apply, $("<button/>").attr("type", "button").text("Отмена").on("click", function() { closeMenu(true); })));
       update(); $search.trigger("focus");
     }
+    function teamPerson(value, identifiers) {
+      var $person = person(value), names = [];
+      (state.teams || []).forEach(function(team) {
+        if (!(team.members || []).some(function(member) { return [member.id].concat(member.identifiers || []).some(function(id) { return (identifiers || []).indexOf(id) >= 0; }); })) return;
+        names.push(team.name);
+        if (teamsModule.colors.indexOf(team.color) >= 0) $person.append($("<i/>").addClass("ujg-esi-person-team").css("background-color", team.color).attr({title:team.name,"aria-label":team.name}));
+      });
+      if (names.length) $person.attr("title", value + " · " + names.join(", "));
+      return $person;
+    }
+    function workSummary(entry) {
+      if (!teamsModule) return null;
+      var work = teamsModule.currentWork(entry.source, state.teams);
+      var caption = "Текущая работа по замечанию " + (entry.remarkId || entry.key || "");
+      var $button = $("<button/>").attr({type:"button", "aria-label":caption, "aria-haspopup":"dialog", "aria-expanded":"false"}).addClass("ujg-esi-current-work");
+      $button.append($("<span/>").addClass("ujg-esi-current-label").text("Сейчас: "));
+      work.groups.forEach(function(group) { $button.append($("<span/>").addClass("ujg-esi-work-phase is-" + group.direction).text(group.label + " · " + group.count)); });
+      if (!work.groups.length) $button.append($("<span/>").addClass("ujg-esi-work-empty").text(work.message));
+      if (work.warnings.length) $button.append(icon("TriangleAlert"));
+      $button.on("click", function() {
+        var $box = popup(this, caption).addClass("ujg-esi-work-details");
+        $box.append($("<div/>").addClass("ujg-esi-work-heading").append($("<strong/>").text("Текущая работа"), button("X", "Закрыть текущую работу", function() { closeMenu(true); })));
+        if (work.parent.key) $box.append($("<p/>").addClass("ujg-esi-work-parent").text([work.parent.key, work.parent.status, work.parent.assignee].filter(Boolean).join(" · ")));
+        if (!work.groups.length) $box.append($("<p/>").text(work.message));
+        work.groups.forEach(function(group) {
+          $box.append($("<h4/>").text(group.label + " · " + group.count));
+          group.tasks.forEach(function(task) {
+            var $task = $("<div/>").addClass("ujg-esi-work-task");
+            if (task.key) $task.append($("<a/>").attr({href:(state.baseUrl || "").replace(/\/+$/, "") + "/browse/" + encodeURIComponent(task.key),target:"_blank",rel:"noopener noreferrer"}).text(task.key));
+            $task.append($("<span/>").text(task.summary), $("<small/>").text([task.status, task.assignee || "Не назначен"].join(" · ")), $("<small/>").addClass("ujg-esi-work-basis").text(task.basis));
+            $box.append($task);
+          });
+        });
+        work.warnings.forEach(function(warning) { $box.append($("<p/>").addClass("ujg-esi-work-warning").text(warning)); });
+        var rect = this.getBoundingClientRect(), width = Math.min(430, window.innerWidth - 24);
+        $box.css({position:"fixed",width:width,left:Math.max(12,Math.min(rect.left,window.innerWidth-width-12)),top:12,maxHeight:window.innerHeight-24});
+        $box.css("top",Math.max(12,Math.min(rect.bottom+4,window.innerHeight-$box.outerHeight()-12)));
+        $box.find("button").first().trigger("focus");
+      });
+      return $button;
+    }
     function cell(entry, key) {
       var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
-      if (key === "owner" && hooks.editOwner) return $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(person(value), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
-      if (key === "owner" || key === "assignee") return $td.append(person(value)).attr("title", value || "Не указан");
+      if (key === "owner") {
+        if (hooks.editOwner) $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(person(value), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
+        else $td.append(person(value));
+        return $td.append(workSummary(entry));
+      }
+      if (key === "assignee") return $td.append(teamPerson(value, entry.assigneeIdentifiers)).attr("title", value || "Не указан");
       if (key === "remark") {
         $td.append($("<div/>").addClass("ujg-esi-source-text").text(value));
         $td.attr("title", value).append($("<small/>").text([entry.module, entry.source.excelRowNumber ? "Excel: " + entry.source.excelRowNumber : ""].filter(Boolean).join(" · ")));

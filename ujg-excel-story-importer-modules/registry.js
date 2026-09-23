@@ -57,6 +57,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
           description: text(details.description), descriptionLoaded: typeof details.descriptionLoaded === "boolean" ? details.descriptionLoaded : details.description != null,
           status: key ? text(synced || child ? details.status : cols["Статус в Jira"]) : "",
           assignee: key ? text(synced || child ? details.assignee : cols["Исполнитель в Jira"]) : "",
+          assigneeIdentifiers: Array.isArray(details.assigneeIdentifiers) ? details.assigneeIdentifiers.slice() : [],
           priority: text(synced || child ? details.priority : cols["Приоритет"]),
           updated: key ? text(details.updated) : "", age: ageText(ms), ageMs: ms,
           statusSince: text(details.statusSince), ageReason: text(details.statusSinceReason) || "История переходов не загружена",

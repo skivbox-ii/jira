@@ -232,7 +232,8 @@ test("rendering module exposes daily-diligence style mapping settings overlay", 
 
   assert.match(source, /ujg-esi-mapping-overlay/);
   assert.match(source, /ujg-esi-mapping-close/);
-  assert.match(source, /Блоки мапинга/);
+  assert.match(source, /Настройки импорта/);
+  assert.match(source, /Разделы/);
   assert.match(source, /Модуль → Component/);
   assert.match(source, /Приоритет → Priority/);
   assert.match(source, /Колонки Excel/);
