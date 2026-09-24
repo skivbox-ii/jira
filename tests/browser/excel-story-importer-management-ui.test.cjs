@@ -128,8 +128,132 @@ test("remark turnaround uses root creation and certified milestone", t => {
   const x=setup(); t.after(()=>x.dom.window.close());
   x.report.groups[0].management.tasks.unshift({key:"P-1",summary:"Remark one",role:"",created:"2026-09-22T11:00:00Z",spentSeconds:0,worklogs:[],comments:[]});
   const panel=x.ui.render(x.report,"completed",x.state,x.services);
-  assert.match(panel.find(".ujg-esi-management-turnaround").text(),/Создание замечания/);
+  assert.match(panel.find(".ujg-esi-management-turnaround").text(),/От создания до полной готовности/);
   assert.match(panel.find(".ujg-esi-management-turnaround").text(),/2 д/);
+});
+
+test("completed preview and full report show root creation and the same group-completion milestone in Moscow time", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  const group=x.report.groups[0];
+  group.management.tasks.unshift({key:"P-1",created:"2026-09-16T08:15:00Z",completedAt:"2026-09-20T07:00:00Z"});
+  group.management.tasks[1].completedAt="2026-09-24T16:00:00Z";
+  const preview=x.ui.preview(x.report,"completed",x.state,x.services);
+  const panel=x.ui.render(x.report,"completed",x.state,x.services);
+  const definition="В выбранный день достигнута полная готовность замечания: готовы исходная история и все связанные задачи.";
+  assert.equal(preview.find(".ujg-esi-management-definition").text(),definition);
+  assert.equal(panel.find(".ujg-esi-management-header .ujg-esi-management-definition").text(),definition);
+  for (const view of [preview,panel]) {
+    const chronology=view.find(".ujg-esi-management-chronology").first();
+    assert.match(chronology.find(".ujg-esi-management-created").text(),/Создано в Jira.*16\.09\.2026 11:15 МСК/);
+    assert.match(chronology.find(".ujg-esi-management-completed-at").text(),/Полная готовность.*24\.09\.2026 14:00 МСК/);
+    assert.match(chronology.text(),/От создания до полной готовности.*8 д 2 ч 45 мин/);
+    assert.doesNotMatch(chronology.text(),/20\.09|19:00/);
+    assert.doesNotMatch(view.text(),/До завершения:|Завершено за день|Создание замечания →/);
+  }
+  assert.match(panel.find(".ujg-esi-management-transition > strong").text(),/Замечание полностью готово/);
+  assert.match(panel.find(".ujg-esi-management-transition").text(),/Последние переходы задач.*P-2.*QA.*Автор перехода: Ира/);
+  assert.doesNotMatch(preview.find(".ujg-esi-management-preview-outcome").text(),/Завершил:/);
+});
+
+test("completion outcome summaries use safe Jira links and role badges in preview and full report", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.groups[0].management.completed[0].events[0].author.label='Ира <img src=x onerror="alert(1)">';
+  for (const summary of [
+    x.ui.preview(x.report,"completed",x.state,x.services).find(".ujg-esi-management-preview-outcome"),
+    x.ui.render(x.report,"completed",x.state,x.services).find(".ujg-esi-management-outcomes")
+  ]) {
+    assert.equal(summary.find("a[href='https://jira.example.test/base/browse/P-2']").length,1);
+    assert.equal(summary.find(".ujg-esi-management-role.role-qa").length,1);
+    assert.match(summary.text(),/Автор перехода: Ира <img/);
+    assert.equal(summary.find("img,script").length,0);
+  }
+});
+
+for (const created of [undefined,null,"","not-a-date","2026-02-30T08:15:00Z","2026-09-16T08:15:00"]) {
+  test(`missing or invalid root creation stays unknown: ${String(created)}`, t => {
+    const x=setup(); t.after(()=>x.dom.window.close());
+    if (created !== undefined) x.report.groups[0].management.tasks.unshift({key:"P-1",created});
+    for (const view of [x.ui.preview(x.report,"completed",x.state,x.services),x.ui.render(x.report,"completed",x.state,x.services)]) {
+      const chronology=view.find(".ujg-esi-management-chronology").first();
+      assert.match(chronology.find(".ujg-esi-management-created").text(),/Создано в Jira.*Нет данных/);
+      assert.match(chronology.find(".ujg-esi-management-completed-at").text(),/24\.09\.2026 14:00 МСК/);
+      assert.match(chronology.find(".ujg-esi-management-turnaround").text(),/От создания до полной готовности.*Нет данных/);
+      assert.doesNotMatch(chronology.text(),/NaN|Invalid|1970|23\.09/);
+    }
+  });
+}
+
+test("repeated completions use the first valid milestone for dates and averages and keep subsequent transitions chronological", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  const group=x.report.groups[0];
+  group.management.tasks.unshift({key:"P-1",created:"2026-09-22T11:00:00Z"});
+  group.management.completed=[{at:"2026-09-24T15:00:00Z",events:[]},{at:"invalid",events:[]},group.management.completed[0],{at:"2026-09-24T13:00:00Z",events:[]}];
+  group.management.reopened=[{at:"2026-09-24T16:00:00Z",events:[]},{at:"2026-09-24T12:00:00Z",events:[]},{at:"2026-09-24T14:00:00Z",events:[]}];
+  const originalCompleted=JSON.stringify(group.management.completed), originalReopened=JSON.stringify(group.management.reopened);
+  const preview=x.ui.preview(x.report,"completed",x.state,x.services);
+  const panel=x.ui.render(x.report,"completed",x.state,x.services);
+  for (const view of [preview,panel]) {
+    const chronology=view.find(".ujg-esi-management-chronology").first();
+    assert.match(chronology.find(".ujg-esi-management-completed-at").text(),/24\.09\.2026 14:00 МСК.*Первое достижение за выбранный день/);
+    assert.match(chronology.find(".ujg-esi-management-turnaround").text(),/2 д 0 ч 0 мин/);
+    assert.doesNotMatch(view.text(),/Invalid|Завершено за день|До завершения:/);
+  }
+  assert.match(preview.find(".ujg-esi-management-preview-average").text(),/2 д 0 ч 0 мин.*1 из 1/);
+  const history=preview.find(".ujg-esi-management-completion-history").text();
+  assert.match(history,/Возврат в работу.*15:00.*Повторная полная готовность.*16:00.*Возврат в работу.*17:00.*Повторная полная готовность.*18:00.*Возврат в работу.*19:00/);
+  assert.deepEqual(panel.find(".ujg-esi-management-transition > time").map((i,node)=>x.$(node).text()).get(),[
+    "24.09.2026 14:00 МСК","24.09.2026 15:00 МСК","24.09.2026 16:00 МСК","24.09.2026 17:00 МСК","24.09.2026 18:00 МСК","24.09.2026 19:00 МСК"
+  ]);
+  assert.equal(preview.find(".ujg-esi-management-preview-item.is-completed").length,0);
+  assert.match(preview.find(".ujg-esi-management-preview-milestone").text(),/Полная готовность достигнута.*Позже возвращено в работу: 24\.09\.2026 19:00 МСК/);
+  assert.equal(JSON.stringify(group.management.completed),originalCompleted);
+  assert.equal(JSON.stringify(group.management.reopened),originalReopened);
+});
+
+test("invalid group completion never borrows a task completion date or turnaround", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  const group=x.report.groups[0];
+  group.management.tasks.unshift({key:"P-1",created:"2026-09-22T11:00:00Z",completedAt:"2026-09-24T10:00:00Z"});
+  group.management.completed=[{at:"2026-09-31T11:00:00Z",events:[]}];
+  for (const view of [x.ui.preview(x.report,"completed",x.state,x.services),x.ui.render(x.report,"completed",x.state,x.services)]) {
+    const chronology=view.find(".ujg-esi-management-chronology").first();
+    assert.match(chronology.find(".ujg-esi-management-created").text(),/22\.09\.2026 14:00 МСК/);
+    assert.match(chronology.find(".ujg-esi-management-completed-at").text(),/Полная готовность.*Нет данных/);
+    assert.match(chronology.find(".ujg-esi-management-turnaround").text(),/Нет данных/);
+    assert.equal(view.find(".ujg-esi-management-preview-item.is-completed").length,0);
+  }
+});
+
+test("a completed linked task alone does not imply full remark readiness", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.groups[0].management.completed=[];
+  assert.equal(x.ui.preview(x.report,"completed",x.state,x.services).find(".ujg-esi-management-preview-item").length,0);
+  assert.equal(x.ui.preview(x.report,"changed",x.state,x.services).find(".ujg-esi-management-preview-milestone").length,0);
+  assert.equal(x.ui.render(x.report,"changed",x.state,x.services).find(".ujg-esi-management-transition").length,0);
+});
+
+test("real activity report waits for the root and all linked tasks before displaying group completion", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  function task(key,role,created,finished,author) {
+    const snapshot=realActivity.capture({key,fields:{created,updated:"2026-09-24T12:00:00Z",status:{id:"2",name:"Done",statusCategory:{key:"done"}}},
+      changelog:{startAt:0,total:1,histories:[{id:key,created:finished,author:{displayName:author},items:[{field:"status",from:"1",to:"2",fromString:"Open",toString:"Done"}]}]}});
+    snapshot.capturedAt="2026-09-24T12:00:00Z";
+    return {key,role,summary:key,status:"Done",statusCategory:"done",activity:snapshot};
+  }
+  const root=task("P-1","","2026-09-16T08:15:00Z","2026-09-24T11:00:00Z","Root closer");
+  const qa=task("P-2","QA","2026-09-17T08:00:00Z","2026-09-24T09:00:00Z","QA closer");
+  const be=task("P-3","BE","2026-09-17T08:00:00Z","2026-09-24T10:00:00Z","BE closer");
+  const rows=[{jiraKey:root.key,summary:"Remark",storyDetails:root,childStatuses:[qa,be]}];
+  const early=realActivity.summarize(rows,[],{date:"2026-09-24",now:"2026-09-24T09:30:00Z"});
+  assert.equal(x.ui.preview(early,"completed",x.state,x.services).find(".ujg-esi-management-preview-item").length,0);
+  const report=realActivity.summarize(rows,[],{date:"2026-09-24",now:"2026-09-24T12:00:00Z"});
+  assert.equal(report.metrics.completed,1);
+  const preview=x.ui.preview(report,"completed",x.state,x.services);
+  assert.match(preview.find(".ujg-esi-management-created").text(),/16\.09\.2026 11:15 МСК/);
+  assert.match(preview.find(".ujg-esi-management-completed-at").text(),/24\.09\.2026 14:00 МСК/);
+  assert.match(preview.find(".ujg-esi-management-turnaround").text(),/8 д 2 ч 45 мин/);
+  assert.match(preview.find(".ujg-esi-management-preview-outcome").text(),/P-1.*Автор перехода: Root closer/);
+  assert.doesNotMatch(preview.find(".ujg-esi-management-preview-outcome").text(),/QA closer/);
 });
 
 test("preview carries certified outcomes and shows every remark", t => {
@@ -169,7 +293,7 @@ test("preview counts child roles and separates work authors from completion auth
   assert.match(row.find(".ujg-esi-management-preview-workers").text(),/Борис.*Анна|Анна.*Борис/);
   assert.match(row.find(".ujg-esi-management-preview-workers").text(),/Мария/);
   assert.doesNotMatch(row.find(".ujg-esi-management-preview-workers").text(),/Ира/);
-  assert.match(row.find(".ujg-esi-management-preview-outcome").text(),/Завершил: Ира/);
+  assert.match(row.find(".ujg-esi-management-preview-outcome").text(),/Автор перехода: Ира/);
   assert.match(row.find(".ujg-esi-management-preview-effort").text(),/5 ч.*частичн/i);
   assert.match(row.find(".ujg-esi-management-preview-elapsed").text(),/2 д/);
   assert.match(preview.find(".ujg-esi-management-preview-average").text(),/1 из 1/);
@@ -245,7 +369,7 @@ test("later reopening does not make a completed-day preview look currently ready
   x.report.groups[0].management.reopened.push({at:"2026-09-24T12:00:00Z",events:[]});
   const row=x.ui.preview(x.report,"completed",x.state,x.services).find(".ujg-esi-management-preview-item").first();
   assert.equal(row.hasClass("is-completed"),false);
-  assert.match(row.find(".ujg-esi-management-preview-milestone").text(),/Завершено за день.*Позже возобновлено/);
+  assert.match(row.find(".ujg-esi-management-preview-milestone").text(),/Полная готовность достигнута.*Позже возвращено в работу: 24\.09\.2026 15:00 МСК/);
 });
 
 test("preview keeps unknown child evidence explicit and refuses unsafe task links", t => {
@@ -309,7 +433,7 @@ test("unusual team names do not corrupt worklog team totals", t => {
 test("detail leads with outcomes and a compact task table with expandable evidence", t => {
   const x=setup(); t.after(()=>x.dom.window.close());
   const panel=x.ui.render(x.report,"completed",x.state,x.services);
-  assert.match(panel.find(".ujg-esi-management-outcomes").text(),/Завершено/);
+  assert.match(panel.find(".ujg-esi-management-outcomes").text(),/Полная готовность достигнута/);
   assert.equal(panel.find(".ujg-esi-management-task-table tbody tr").length,1);
   assert.match(panel.find(".ujg-esi-management-task-table").text(),/Ира/);
   assert.equal(panel.find("details.ujg-esi-management-task").length,1);

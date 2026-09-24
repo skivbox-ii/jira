@@ -1,13 +1,21 @@
 define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
   "use strict";
   var titles = {changed:"Изменённые замечания",newRemarks:"Новые замечания",completed:"Завершённые замечания",reopened:"Возобновлённые замечания",events:"Все события"};
+  var completedDefinition = "В выбранный день достигнута полная готовность замечания: готовы исходная история и все связанные задачи.";
   var reopenedDefinition = "Повторное открытие после полной готовности исходной истории и всех связанных задач.";
   function list(value) { return Array.isArray(value) ? value : []; }
   function value(input) { return input == null || input === "" ? "Нет данных" : String(input); }
   function person(input) { return value(input && typeof input === "object" ? input.label : input); }
+  function timestamp(input) {
+    if (typeof input === "number") return isFinite(new Date(input).getTime()) ? input : NaN;
+    if (typeof input !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(input)) return NaN;
+    var day = new Date(input.slice(0,10) + "T00:00:00Z");
+    if (!isFinite(day.getTime()) || day.toISOString().slice(0,10) !== input.slice(0,10) || +input.slice(11,13) > 23 || +input.slice(14,16) > 59 || +input.slice(17,19) > 59) return NaN;
+    return Date.parse(input);
+  }
   function dateTime(input) {
-    var stamp = typeof input === "number" ? input : Date.parse(input);
-    if (!isFinite(stamp)) return "Нет данных";
+    var stamp = timestamp(input);
+    if (!isFinite(stamp) || !isFinite(new Date(stamp + 10800000).getTime())) return "Нет данных";
     var date = new Date(stamp + 10800000).toISOString();
     return date.slice(8,10) + "." + date.slice(5,7) + "." + date.slice(0,4) + " " + date.slice(11,16) + " МСК";
   }
@@ -60,6 +68,21 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     return $("<div/>").addClass("ujg-esi-management-event").append(textNode("time","",fullTime === "Нет данных" ? fullTime : fullTime.slice(11,16)).attr({title:fullTime,datetime:event.at}),keyNode(event.issueKey,state.baseUrl),roleNode(event.role,event.summary,event.roleColor),richText(eventStatement(event),state),textNode("span","ujg-esi-management-event-author",person(event.author)));
   }
   function management(group) { return group && group.management || {}; }
+  function certifiedTransitions(group, kind) {
+    return list(management(group)[kind]).filter(function(item) { return item && isFinite(timestamp(item.at)); })
+      .sort(function(a,b) { return timestamp(a.at) - timestamp(b.at); });
+  }
+  function completionTimeline(group) {
+    return ["completed","reopened"].reduce(function(entries,kind) {
+      return entries.concat(certifiedTransitions(group,kind).map(function(transition) { return {kind:kind,transition:transition}; }));
+    },[]).sort(function(a,b) { return timestamp(a.transition.at) - timestamp(b.transition.at); });
+  }
+  function completionLabel(group) {
+    var completed = certifiedTransitions(group,"completed"), reopened = certifiedTransitions(group,"reopened");
+    if (!completed.length) return "Полная готовность: Нет данных";
+    var lastCompletion = completed[completed.length-1], lastReturn = reopened[reopened.length-1];
+    return "Полная готовность достигнута" + (lastReturn && timestamp(lastReturn.at) > timestamp(lastCompletion.at) ? " · Позже возвращено в работу: " + dateTime(lastReturn.at) : "");
+  }
   function selectedGroups(report, metric) {
     return list(report && report.groups).filter(function(group) {
       var item = management(group);
@@ -76,11 +99,18 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     return $("<span/>").addClass("ujg-esi-management-group-label").append(textNode("strong","",group.key),textNode("span","ujg-esi-management-remark-id",group.remarkId),textNode("span","ujg-esi-management-summary",group.summary));
   }
   function outcome(group, metric) {
-    var info = management(group), transitions = list(info[metric]), parts = [];
+    var info = management(group), transitions = certifiedTransitions(group,metric), parts = [];
     if (metric === "completed" || metric === "reopened") {
       transitions.forEach(function(item) {
+        if (metric === "completed") {
+          parts.push((transitions.length > 1 ? dateTime(item.at) + " · " : "") + "Последние переходы задач: " + (list(item.events).map(function(event) {
+            var role = roleNode(event.role,event.summary).text();
+            return value(event.issueKey) + " · " + (/^(BE|FE|QA|DE|BF)$/.test(role) ? "[" + role + "]" : role) + " · Автор перехода: " + person(event.author);
+          }).join("; ") || "Нет данных"));
+          return;
+        }
         var roles = list(item.events).map(function(event) { return String(event.role || "").toUpperCase(); }).filter(Boolean);
-        parts.push((roles.length ? roles.join(", ") + " · " : "") + dateTime(item.at) + (item.events && item.events[0] ? " · " + (metric === "completed" ? "Завершил: " : "Возобновил: ") + person(item.events[0].author) : ""));
+        parts.push((roles.length ? roles.join(", ") + " · " : "") + dateTime(item.at) + (item.events && item.events[0] ? " · Возобновил: " + person(item.events[0].author) : ""));
       });
     } else {
       if (metric === "events") parts.push("Событий " + list(group.events).length);
@@ -107,9 +137,29 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     return report && report.coverage && report.coverage.isComplete === true ? $() : textNode("p","ujg-esi-management-warning","История неполна: показаны подтверждённые данные, итог может быть больше.");
   }
   function turnaround(group) {
-    var info = management(group), root = list(info.tasks).filter(function(task) { return task.key === group.key; })[0], milestone = list(info.completed)[0];
-    var start = root && Date.parse(root.created), end = milestone && Date.parse(milestone.at);
+    var info = management(group), root = list(info.tasks).filter(function(task) { return task.key === group.key; })[0], milestone = certifiedTransitions(group,"completed")[0];
+    var start = timestamp(root && root.created), end = timestamp(milestone && milestone.at);
     return isFinite(start) && isFinite(end) && end >= start ? (end-start)/1000 : null;
+  }
+  function completionChronology(group, preview) {
+    var root = list(management(group).tasks).filter(function(task) { return task.key === group.key; })[0];
+    var completed = certifiedTransitions(group,"completed"), milestone = completed[0];
+    var $chronology = $("<div/>").addClass("ujg-esi-management-chronology");
+    if (preview) $chronology.addClass("ujg-esi-management-preview-chronology");
+    var $end = fact("Полная готовность",dateTime(milestone && milestone.at)).addClass("ujg-esi-management-completed-at");
+    if (completed.length > 1) $end.find("dd").append(textNode("small","ujg-esi-management-milestone-note","Первое достижение за выбранный день"));
+    var $elapsed = fact("От создания до полной готовности",calendarDuration(turnaround(group))).addClass("ujg-esi-management-turnaround");
+    if (preview) $elapsed.addClass("ujg-esi-management-preview-elapsed");
+    $chronology.append($("<dl/>").addClass("ujg-esi-management-facts").append(
+      fact("Создано в Jira",dateTime(root && root.created)).addClass("ujg-esi-management-created"),$end,$elapsed));
+    if (preview && milestone) {
+      var $history = $("<div/>").addClass("ujg-esi-management-completion-history");
+      completionTimeline(group).filter(function(item) { return timestamp(item.transition.at) > timestamp(milestone.at); }).forEach(function(item) {
+        $history.append($("<div/>").append(textNode("span","",item.kind === "completed" ? "Повторная полная готовность" : "Возврат в работу"),textNode("time","",dateTime(item.transition.at))));
+      });
+      if ($history.children().length) $chronology.append($history);
+    }
+    return $chronology;
   }
   function workAuthors(tasks) {
     var names = [], incomplete = false;
@@ -126,14 +176,14 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
   function previewItem(group, metric, state, report) {
     var info = management(group), allTasks = list(info.tasks), tasks = allTasks.filter(function(task) { return task.key !== group.key; });
     var $row = $("<div/>").addClass("ujg-esi-management-preview-item");
-    var completions = list(info.completed), completionAt = completions.map(function(item) { return Date.parse(item.at); }).filter(isFinite);
+    var completions = certifiedTransitions(group,"completed"), completionAt = completions.map(function(item) { return timestamp(item.at); });
     var latestCompletion = completionAt.length ? Math.max.apply(null,completionAt) : null;
-    var laterReopened = latestCompletion != null && list(info.reopened).some(function(item) { return Date.parse(item.at) > latestCompletion; });
-    if (completions.length) {
+    var laterReopened = latestCompletion != null && list(info.reopened).some(function(item) { return !isFinite(timestamp(item && item.at)) || timestamp(item.at) > latestCompletion; });
+    if (list(info.completed).length) {
       if (!laterReopened && latestCompletion != null) $row.addClass("is-completed");
-      $row.append(textNode("div","ujg-esi-management-preview-milestone","Завершено за день" + (laterReopened ? " · Позже возобновлено" : "")));
+      $row.append(textNode("div","ujg-esi-management-preview-milestone",completionLabel(group)));
     }
-    $row.append(groupLabel(group,state),textNode("div","ujg-esi-management-preview-outcome",outcome(group,metric)));
+    $row.append(groupLabel(group,state),$("<div/>").addClass("ujg-esi-management-preview-outcome").append(richText(outcome(group,metric),state)));
     var roles = Object.create(null), $roles = $("<div/>").addClass("ujg-esi-management-preview-roles");
     tasks.forEach(function(task) {
       var name = roleNode(task.role,task.summary).text();
@@ -169,8 +219,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
       if (typeof task.spentSeconds === "number" && isFinite(task.spentSeconds) && task.spentSeconds >= 0) known.push(task.spentSeconds);
     });
     $row.append(textNode("div","ujg-esi-management-preview-workers","Работали по замечанию: " + workAuthors(allTasks)));
-    var elapsed = turnaround(group);
-    if (list(info.completed).length) $row.append(textNode("div","ujg-esi-management-preview-elapsed","До завершения: " + (elapsed == null ? "Нет данных" : calendarDuration(elapsed))));
+    if (list(info.completed).length) $row.append(completionChronology(group,true));
     else {
       var root = allTasks.filter(function(task) { return task.key === group.key; })[0];
       var start = root && Date.parse(root.created), cutoff = Date.parse(report && report.asOf);
@@ -184,10 +233,11 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     state = state || {}; services = services || {};
     var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-preview");
     $root.append(textNode("strong","ujg-esi-management-preview-title",titles[metric] || "Сводка"),warning(report));
+    if (metric === "completed") $root.append(textNode("p","ujg-esi-management-definition",completedDefinition));
     if (metric === "reopened") $root.append(textNode("p","ujg-esi-management-definition",reopenedDefinition));
     if (metric === "completed" && groups.length) {
       var elapsed = groups.map(turnaround).filter(function(seconds) { return seconds != null; });
-      $root.append(textNode("p","ujg-esi-management-preview-average","Среднее время завершения: " + (elapsed.length ? calendarDuration(elapsed.reduce(function(sum,seconds) { return sum + seconds; },0)/elapsed.length) : "Нет данных") + " (" + elapsed.length + " из " + groups.length + " замечаний с известным временем)"));
+      $root.append(textNode("p","ujg-esi-management-preview-average","Среднее время от создания до первой полной готовности за выбранный день: " + (elapsed.length ? calendarDuration(elapsed.reduce(function(sum,seconds) { return sum + seconds; },0)/elapsed.length) : "Нет данных") + " (" + elapsed.length + " из " + groups.length + " замечаний с известным временем)"));
     }
     var $scroll = $("<div/>").addClass("ujg-esi-management-preview-scroll");
     if (!groups.length) $scroll.append(textNode("p","ujg-esi-management-empty",report.coverage && report.coverage.isComplete ? "За выбранный день таких замечаний нет" : "Нет подтверждённых данных"));
@@ -241,20 +291,18 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     var info = management(group), $root = $("<div/>").addClass("ujg-esi-management-detail");
     $root.append($("<h3/>").append(groupLabel(group,state)));
     var $outcomes = $("<div/>").addClass("ujg-esi-management-outcomes");
-    $outcomes.append(textNode("strong","","За день"),textNode("span","",(metric === "completed" ? "Завершено: " : metric === "reopened" ? "Возобновлено: " : "") + outcome(group,metric)));
+    $outcomes.append(textNode("strong","",metric === "completed" ? completionLabel(group) : "За день"),$("<span/>").append(richText((metric === "reopened" ? "Возобновлено: " : "") + outcome(group,metric),state)));
     $root.append($outcomes);
+    if (list(info.completed).length) $root.append(completionChronology(group,false));
     if (group.currentStatus) $root.append(textNode("p","ujg-esi-management-muted","Исходная история сейчас: " + (activity.statusLabel ? activity.statusLabel(group.currentStatus) : group.currentStatus)));
     if (typeof group.linkedTaskCount === "number") $root.append(textNode("p","ujg-esi-management-muted","Связанных задач: " + group.linkedTaskCount));
-    ["completed","reopened"].forEach(function(kind) {
-      list(info[kind]).forEach(function(transition) {
-        var $line = $("<div/>").addClass("ujg-esi-management-transition");
-        $line.append(textNode("strong","",kind === "completed" ? "Завершено" : "Возобновлено"),textNode("time","",dateTime(transition.at)));
-        list(transition.events).forEach(function(event) { $line.append($("<span/>").append(keyNode(event.issueKey,state.baseUrl),roleNode(event.role,event.summary,event.roleColor),textNode("span",""," · " + person(event.author)))); });
-        $root.append($line);
-      });
+    completionTimeline(group).forEach(function(item) {
+      var transition = item.transition, $line = $("<div/>").addClass("ujg-esi-management-transition is-" + item.kind);
+      $line.append(textNode("strong","",item.kind === "completed" ? "Замечание полностью готово" : "Возврат в работу"),textNode("time","",dateTime(transition.at)));
+      if (list(transition.events).length) $line.append(textNode("small","ujg-esi-management-transition-evidence",item.kind === "completed" ? "Последние переходы задач в готовность (ключ, роль, автор изменения статуса):" : "Переходы задач, вернувшие замечание в работу:"));
+      list(transition.events).forEach(function(event) { $line.append($("<span/>").append(keyNode(event.issueKey,state.baseUrl),roleNode(event.role,event.summary,event.roleColor),textNode("span",""," · Автор перехода: " + person(event.author)))); });
+      $root.append($line);
     });
-    var elapsed = turnaround(group);
-    if (elapsed != null) $root.append(textNode("p","ujg-esi-management-turnaround","Создание замечания → полная готовность: " + calendarDuration(elapsed)));
     if (list(info.reopened).length && list(info.tasks).some(function(task) { return list(task.comments).length; })) $root.append(textNode("p","ujg-esi-management-note","Доступные комментарии; причина возврата не подтверждена."));
     if (!list(info.tasks).length) $root.append(textNode("p","ujg-esi-management-empty","Данные по задачам: Нет данных"));
     var tasks = list(info.tasks), known = tasks.filter(function(task) { return typeof task.spentSeconds === "number" && isFinite(task.spentSeconds) && task.spentSeconds >= 0; });
@@ -299,6 +347,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-panel");
     var reportDate = /^\d{4}-\d{2}-\d{2}$/.test(report.date || "") ? report.date.split("-").reverse().join(".") : value(report.date);
     var $head = $("<header/>").addClass("ujg-esi-management-header").append($("<div/>").append(textNode("h2","",titles[metric] || "Сводка"),textNode("span","ujg-esi-management-date",reportDate + " · МСК")));
+    if (metric === "completed") $head.children("div").append(textNode("p","ujg-esi-management-definition",completedDefinition));
     if (metric === "reopened") $head.children("div").append(textNode("p","ujg-esi-management-definition",reopenedDefinition));
     $head.append($("<button type='button'/>").addClass("ujg-esi-management-close").attr({title:"Закрыть сводку","aria-label":"Закрыть сводку"}).append(icon("X")).on("click",function() { if (services.onClose) services.onClose(); }));
     $root.append($head,warning(report));

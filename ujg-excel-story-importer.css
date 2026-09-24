@@ -2104,8 +2104,10 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-detail-host { padding: 14px 18px 28px; }
 .ujg-esi-management-detail h3 { font-size: 15px; padding-bottom: 8px; border-bottom: 1px solid #dce3eb; }
 .ujg-esi-management-detail > p { margin: 8px 0; }
-.ujg-esi-management-transition, .ujg-esi-management-turnaround, .ujg-esi-management-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 0; border-bottom: 1px solid #e3e9ef; }
+.ujg-esi-management-transition, .ujg-esi-management-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 0; border-bottom: 1px solid #e3e9ef; }
 .ujg-esi-management-transition > strong { color: #28693b; }
+.ujg-esi-management-transition.is-reopened > strong { color: #835609; }
+.ujg-esi-management-transition-evidence { flex-basis: 100%; color: #526174; }
 .ujg-esi-management-transition > span { display: inline-flex; gap: 4px; }
 .ujg-esi-management-note { color: #785b32; }
 .ujg-esi-management-task { padding: 12px 0; border-bottom: 1px solid #cbd4df; }
@@ -2118,6 +2120,10 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-fact { min-width: 0; padding: 6px 10px 6px 0; border-bottom: 1px solid #e3e9ef; }
 .ujg-esi-management-fact dt { color: #526174; }
 .ujg-esi-management-fact dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.ujg-esi-management-chronology { min-width: 0; margin-top: 8px; }
+.ujg-esi-management-milestone-note { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; color: #526174; }
+.ujg-esi-management-completion-history > div { display: flex; flex-wrap: wrap; gap: 2px 6px; margin-top: 5px; }
+.ujg-esi-management-completion-history time { font-weight: 600; }
 .ujg-esi-management-worklogs, .ujg-esi-management-comments { margin-top: 10px; }
 .ujg-esi-management-task h5 { margin-bottom: 5px; font-size: 12px; }
 .ujg-esi-management-log { display: grid; grid-template-columns: 150px 1fr 1fr 100px; gap: 8px; padding: 4px 0; border-bottom: 1px solid #e3e9ef; }
@@ -2144,9 +2150,12 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-preview-role-count { grid-column: 1; grid-row: 1 / span 3; align-self: start; }
 .ujg-esi-management-preview-role-tasks { display: flex; flex-wrap: wrap; gap: 3px 8px; grid-column: 2; }
 .ujg-esi-management-preview-role-workers, .ujg-esi-management-preview-role-completers, .ujg-esi-management-preview-role-assignees { grid-column: 2; color: #526174; }
-.ujg-esi-management-preview-elapsed { grid-column: 3; grid-row: 1; font-weight: 600; }
-.ujg-esi-management-preview-effort { grid-column: 3; grid-row: 2; }
-.ujg-esi-management-preview-workers { grid-column: 3; grid-row: 3; color: #526174; }
+.ujg-esi-management-preview-chronology { grid-column: 3; grid-row: 1 / span 2; margin-top: 0; }
+.ujg-esi-management-preview-chronology .ujg-esi-management-facts { display: block; margin: 0; border: 0; }
+.ujg-esi-management-preview-chronology .ujg-esi-management-fact { padding: 0 0 7px; border: 0; }
+.ujg-esi-management-preview-item > .ujg-esi-management-preview-elapsed { grid-column: 3; grid-row: 1; font-weight: 600; }
+.ujg-esi-management-preview-effort { grid-column: 3; grid-row: 3; }
+.ujg-esi-management-preview-workers { grid-column: 3; grid-row: 4; color: #526174; }
 .ujg-esi-management-preview-average { padding: 6px 0 10px; color: #17663d; font-weight: 600; }
 .ujg-esi-management-more { padding: 6px 0; color: #526174; }
 .ujg-esi-management-preview-open { margin-top: 8px; padding: 6px 10px; border: 1px solid #075fc4; border-radius: 3px; background: #075fc4; color: #fff; font: inherit; cursor: pointer; }
@@ -2154,6 +2163,9 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-preview-outcome { margin-top: 3px; color: #34475b; overflow-wrap: anywhere; }
 @media (max-width: 800px) {
   .ujg-esi-management-preview-item { display: flex; flex-direction: column; gap: 7px; }
+  .ujg-esi-management-preview-item > .ujg-esi-management-group-label { order: -3; }
+  .ujg-esi-management-preview-milestone { order: -2; }
+  .ujg-esi-management-preview-chronology { order: -1; }
 }
 .ujg-esi-management-event-scope { display: block; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid #e3e9ef; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ujg-esi-management-event-scope:hover, .ujg-esi-management-event-scope:focus-visible { background: #eaf3fc; }
