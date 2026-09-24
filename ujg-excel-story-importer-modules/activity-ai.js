@@ -8,6 +8,7 @@ define("_ujgESI_activityAi", [], function() {
     "Не путай автора изменения с исполнителем, завершение отдельной задачи с готовностью всего замечания, " +
     "календарное время с трудозатратами. Трудозатраты относятся к текущему снимку Jira. " +
     "Причину возврата и результат тестирования не придумывай. Числа metrics вычислены кодом: не пересчитывай их. " +
+    "metrics.taskReturns — уникальные задачи с возвратом, metrics.reopened — повторно открытые полностью готовые замечания. event.returnKind: reopened — после завершения, review — с проверки, testing — с тестирования. Не смешивай эти случаи. " +
     "Отмечай неполные данные и не утверждай, что часть охватывает весь день. " +
     "Сроки взяты из текущего журнала и сравнены с сегодняшней датой deadlineReferenceDate, независимо от дня событий. История переносов сроков не восстанавливается. " +
     "Просрочку бери из deadline.state и metrics.overdue, не вычисляй её по дате создания или готовности. " +
@@ -80,6 +81,7 @@ define("_ujgESI_activityAi", [], function() {
     (report.groups || []).forEach(function(group) {
       var meta = clone(group), management = meta.management || {};
       delete meta.events;
+      if (meta.taskReturns) meta.taskReturns = meta.taskReturns.map(function(event) { return event.id; });
       delete management.tasks;
       ["completed","reopened"].forEach(function(field) {
         (management[field] || []).forEach(function(entry) { entry.events = (entry.events || []).map(function(event) { return event.id; }); });
@@ -253,7 +255,7 @@ define("_ujgESI_activityAi", [], function() {
       "; полностью завершённые замечания: " + metric("completed") + "; " +
       (coverage.isComplete ? "завершённые задачи" : "наблюдаемые завершения задач") + ": " + plan.totals.taskCompletions +
       " (исходные истории: " + plan.totals.parentCompletions + ", связанные задачи: " + plan.totals.childTaskCompletions + ")" +
-      "; возвраты замечаний: " + metric("reopened") + "; просроченные замечания: " + metric("overdue") + ".\n\n" +
+      "; возвраты задач: " + metric("taskReturns") + "; повторно открытые полностью готовые замечания: " + metric("reopened") + "; просроченные замечания: " + metric("overdue") + ".\n\n" +
       "Трудозатраты текущего снимка Jira: " + (plan.totals.effortSnapshot.knownTasks ? effort(plan.totals.effortSnapshot.knownSeconds) + " по " + plan.totals.effortSnapshot.knownTasks + " задачам" : "нет данных") +
       "; без достоверных данных: " + plan.totals.effortSnapshot.unknownTasks + "." +
       ((coverage.warnings || []).length ? "\n\nНеполнота данных: " + coverage.warnings.join("; ") + "." : "");

@@ -11,6 +11,72 @@ const complete = histories => ({startAt: 0, total: histories.length, histories})
 const person = (key, label) => ({key, displayName: label});
 const item = (field, from, to, fromString = from, toString = to) => ({field, from, to, fromString, toString});
 const history = (id, created, author, items) => ({id, created, author: person(author, author), items});
+test("task returns survive an unfinished parent and distinguish reopening from review rollback", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const child=detail(api,issue("P-2","In Progress",[
+    history("a","2026-09-24T05:00:00Z","QA",[item("status","2","3","Done","In Review")]),
+    history("b","2026-09-24T05:23:00Z","Reviewer",[item("status","3","1","In Review","In Progress")])
+  ]),"BE");
+  const result=report(api,[row(parent,[child])]);
+  assert.equal(result.metrics.reopened,0,"The whole remark was never fully ready");
+  assert.equal(result.metrics.taskReturns,1,"Count distinct tasks, not transitions");
+  assert.deepEqual(Array.from(result.groups[0].taskReturns,e=>e.returnKind),["reopened","review"]);
+  assert.equal(result.groups[0].taskReturns[1].author.label,"Reviewer");
+  assert.match(api.eventText(result.events[0]),/Переоткрыта после завершения/);
+  assert.match(api.eventText(result.events[1]),/Возвращена с проверки/);
+  assert.equal(result.returns.events,2);
+  assert.equal(result.returns.remarks,1);
+});
+test("all known unfinished destinations reopen a completed task, without guessing unknown or cancelled states", () => {
+  const api=activity();
+  for (const to of ["In Progress","In Review","Testing","Open","Выдано","Готово к тестированию","Blocked"]) {
+    assert.equal(api.returnKind({kind:"status",from:"Готово",to}),"reopened",to);
+    assert.match(api.eventText({kind:"status",from:"Готово",to}),/Переоткрыта после завершения/,to);
+  }
+  for (const [from,to] of [["Done","Done"],["Done","Cancelled"],["Done","Unknown stage"],["In Progress","In Review"],["Open","In Progress"],["Cancelled","In Progress"]]) {
+    assert.equal(api.returnKind({kind:"status",from,to}),null,from+" -> "+to);
+  }
+  assert.equal(api.returnKind({kind:"status",from:"Тестирование",to:"Выдано"}),"testing");
+  assert.equal(api.returnKind({kind:"status",from:"Custom finished",to:"Custom active",fromStatus:{name:"Custom finished",category:"done"},toStatus:{name:"Custom active",category:"indeterminate"}}),"reopened");
+  assert.equal(api.returnKind({kind:"status",from:"Done",to:"In Progress",fromStatus:{name:"Done",category:"new"}}),null,"Category overrides the label");
+});
+test("partial history exposes observed task returns as a lower bound and deduplicates shared tasks", () => {
+  const api=activity(), child=detail(api,issue("P-2","In Progress",[history("a","2026-09-24T05:23:00Z","Reviewer",[item("status","3","1","In Review","In Progress")])]),"BE");
+  const parent=detail(api,issue("P-1","Open")), other=detail(api,issue("P-3","Open"));
+  other.activity.complete=false;
+  const result=report(api,[row(parent,[child]),row(other,[child])]);
+  assert.equal(result.metrics.taskReturns,null);
+  assert.equal(result.observed.taskReturns,1);
+  assert.equal(result.returns.events,1);
+  assert.equal(result.returns.remarks,2);
+  assert.equal(result.groups[0].taskReturns.length,1);
+});
+test("status tones distinguish issued active review testing done and unknown states", () => {
+  const api=activity();
+  for (const [name,tone] of [["Выдано","todo"],["В работе","progress"],["На проверке","review"],["Тестирование","testing"],["Выполнено","done"],["Готово","done"],["Принято","done"],["Неизвестно","unknown"]]) assert.equal(api.statusTone(name),tone);
+  assert.equal(api.statusTone({name:"Custom",category:"done"}),"done");
+  assert.equal(api.statusTone({name:"Done",category:"new"}),"todo");
+});
+test("HTML export retains task return evidence and color labels", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open")), child=detail(api,issue("P-2","In Progress",[history("a","2026-09-24T05:23:00Z","Reviewer",[item("status","3","1","In Review","In Progress")])]),"BE");
+  const html=api.exportHtml(report(api,[row(parent,[child])]),{baseUrl:"https://jira.test"});
+  assert.match(html,/<th>Возвраты задач<\/th><td>1<\/td>/);
+  assert.match(html,/aria-label="Возвраты задач"/);
+  assert.match(html,/class="status is-review"/);
+  assert.match(html,/08:23 МСК.*href="https:\/\/jira.test\/browse\/P-2".*BE.*Возвращена с проверки.*Reviewer/s);
+});
+test("category overrides also govern event wording and same-name status IDs remain real transitions", () => {
+  const api=activity();
+  const terminal={kind:"status",from:"In Review",to:"In Progress",toStatus:{name:"In Progress",category:"done"}};
+  assert.equal(api.returnKind(terminal),null);
+  assert.doesNotMatch(api.eventText(terminal),/Возвращена|Взята в работу/);
+  const task=detail(api,issue("P-1","Done",[history("a","2026-09-24T05:23:00Z","Reviewer",[item("status","2","3","Done","Done")])],{fields:{status:{id:"3",name:"Done",statusCategory:{key:"new"}}}}));
+  const result=report(api,[row(task)]);
+  assert.equal(result.metrics.taskReturns,1);
+  assert.match(api.eventText(result.events[0]),/Переоткрыта после завершения/);
+  assert.equal(result.transitions.length,1);
+  assert.equal(result.transitions[0].count,1);
+});
 function issue(key, status, histories = [], extra = {}) {
   return {key, fields: {summary: key + " summary", created: "2026-09-20T00:00:00Z", updated: "2026-09-24T20:00:00Z",
     status: {id: status === "Done" ? "2" : "1", name: status, statusCategory: {key: status === "Done" ? "done" : "new"}},
@@ -715,7 +781,7 @@ test("status and assignee reconstruct backwards; author remains the change autho
   ]);
   const result = report(api, [row(detail(api, jira))]);
   assert.equal(result.coverage.isComplete, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.metrics)), {changed: 1, newRemarks: 0, completed: 1, reopened: 0, events: 2, overdue:0});
+  assert.deepEqual(JSON.parse(JSON.stringify(result.metrics)), {changed: 1, newRemarks: 0, completed: 1, reopened: 0, taskReturns:0, events: 2, overdue:0});
   assert.deepEqual(JSON.parse(JSON.stringify(result.balance)), {startOpen: 1, endOpen: 0});
   assert.equal(result.events[0].author.label, "editor");
   assert.equal(result.events[0].assignee.label, "Old");
@@ -876,7 +942,7 @@ test("review and testing returns describe the actual source status", () => {
   const api = activity();
   assert.equal(api.eventText({kind:"status",from:"In Review",to:"In Progress"}),"Возвращена с проверки · На проверке → В работе");
   assert.equal(api.eventText({kind:"status",from:"На тестировании",to:"Выдано"}),"Возвращена с тестирования · На тестировании → Выдано");
-  assert.equal(api.eventText({kind:"status",from:"Done",to:"In Progress"}),"Возвращена в работу · Выполнено → В работе");
+  assert.equal(api.eventText({kind:"status",from:"Done",to:"In Progress"}),"Переоткрыта после завершения · Выполнено → В работе");
 });
 
 test("issuance from a new status does not claim work started", () => {
@@ -932,7 +998,7 @@ test("partial coverage exposes evidenced changed and new lower bounds", () => {
   const result = report(api,[r]);
   assert.equal(result.metrics.changed,null);
   assert.equal(result.metrics.newRemarks,null);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.observed)),{changed:1,newRemarks:1,overdue:0});
+  assert.deepEqual(JSON.parse(JSON.stringify(result.observed)),{changed:1,newRemarks:1,taskReturns:0,overdue:0});
 });
 
 test("uncreated source rows do not make observed Jira totals incomplete", () => {

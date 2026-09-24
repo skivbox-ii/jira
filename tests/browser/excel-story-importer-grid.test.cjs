@@ -12,7 +12,7 @@ function setup(activityReport) {
   w.scrollTo = () => {};
   const $ = jquery(w), modules = { jquery: $ };
   modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
-  if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,statusLabel: value => value,eventText: event => event.from + " → " + event.to};
+  if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,statusLabel: value => value,statusTone: () => "unknown",eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
   const files=["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
   if (activityReport) {

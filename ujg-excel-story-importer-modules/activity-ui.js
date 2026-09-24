@@ -140,6 +140,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     }
     function resize() {
       if (!$host || !$host[0].isConnected) return;
+      if ($popover && popoverAnchor && $popover.hasClass("ujg-esi-activity-metric-preview")) placePopover(popoverAnchor);
       var $scroll = $host.find(".ujg-esi-activity-scroll"), $table = $scroll.find(".ujg-esi-activity-table");
       if (!$table.length) return;
       observedViewportWidth = $scroll[0].clientWidth;
@@ -222,6 +223,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function placePopover(anchor) {
       var rect = anchor.getBoundingClientRect(), viewportHeight = document.documentElement.clientHeight || window.innerHeight;
       if ($popover.hasClass("ujg-esi-activity-metric-preview")) {
+        var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        $popover.css({width:Math.min(Math.round(viewportWidth * 0.9),Math.max(180,viewportWidth-24)),left:Math.max(12,Math.round(viewportWidth * 0.05))});
         var below = Math.max(0,viewportHeight - rect.bottom - 16), above = Math.max(0,rect.top - 16);
         var useAbove = below < 180 && above > below, available = useAbove ? above : below;
         $popover.css("maxHeight",available);
@@ -429,8 +432,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var partialDay = report.asOf && timestamp(report.asOf) !== Number(report.end);
       var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(partialDay ? "Итоги на " + cutoff(report) + " МСК" : "Итоги за весь день"));
       var $band = $("<div/>").addClass("ujg-esi-activity-metrics");
-      [["changed","Замечаний с изменениями"],["newRemarks","Создано замечаний"],["completed","Стали готовы"],["reopened","Возвращены в работу"],["events","Событий"],["overdue","Просроченные"]].forEach(function(item) {
-        var value = metrics[item[0]], lowerBound = value == null && (item[0] === "changed" || item[0] === "newRemarks" || item[0] === "overdue") && observed[item[0]] != null;
+      [["changed","Замечаний с изменениями"],["newRemarks","Создано замечаний"],["completed","Стали готовы"],["taskReturns","Возвраты задач"],["events","Событий"],["overdue","Просроченные"]].forEach(function(item) {
+        var value = metrics[item[0]], lowerBound = value == null && (item[0] === "changed" || item[0] === "newRemarks" || item[0] === "overdue" || item[0] === "taskReturns") && observed[item[0]] != null;
         var display = value != null ? String(value) : lowerBound ? "≥" + observed[item[0]] : "—";
         var title = value != null ? item[1] : lowerBound ? item[0] === "overdue" ? "Подтверждённая просрочка; итог может быть больше" : "Зафиксировано по загруженной истории; итог может быть больше" : "Недостаточно истории для итогового значения";
         if (item[0] === "overdue") title += " · На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК";
@@ -452,19 +455,30 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var transitions = report.transitions || [], statusKeys = Object.create(null);
       transitions.forEach(function(item) { statusKeys[String(item.from)] = true; statusKeys[String(item.to)] = true; });
       var statuses = Object.keys(statusKeys).sort(function(a,b) { return activity.statusLabel(a).localeCompare(activity.statusLabel(b),"ru"); });
+      function statusBadge(value) {
+        var known = (report.events || []).reduce(function(all,event) {
+          [event.fromStatus,event.toStatus].forEach(function(status) { if (status && status.name === value && status.category) all.push(activity.statusTone(status)); });
+          return all;
+        },[]);
+        var tone = known.length ? known.every(function(item) { return item === known[0]; }) ? known[0] : "unknown" : activity.statusTone(value);
+        return $("<span/>").addClass("ujg-esi-activity-status is-" + tone).text(activity.statusLabel(value));
+      }
       if (transitions.length) {
         var $statusScroll = $("<div/>").addClass("ujg-esi-activity-matrix-scroll"), $statusMatrix = $("<table/>").addClass("ujg-esi-activity-status-matrix").attr("aria-label","Переходы статусов задач");
         var $statusHead = $("<tr/>").append($("<th/>").attr("scope","col").text("Из → В"));
-        statuses.forEach(function(value) { $statusHead.append($("<th/>").attr("scope","col").text(activity.statusLabel(value))); });
+        statuses.forEach(function(value) { $statusHead.append($("<th/>").attr("scope","col").append(statusBadge(value))); });
         var $statusBody = $("<tbody/>");
         statuses.forEach(function(from) {
-          var $row = $("<tr/>").append($("<th/>").attr("scope","row").text(activity.statusLabel(from)));
+          var $row = $("<tr/>").append($("<th/>").attr("scope","row").append(statusBadge(from)));
           statuses.forEach(function(to) {
             var match = transitions.filter(function(item) { return String(item.from) === from && String(item.to) === to; })[0];
             var $cell = $("<td/>").toggleClass("has-transfer",!!match);
             if (match) {
-              var events = matchingEvents(report,function(event) { return event.kind === "status" && String(event.from) === from && String(event.to) === to; });
-              $cell.append(eventCount(match.count,"Переход " + activity.statusLabel(from) + " → " + activity.statusLabel(to),events,state));
+              var events = matchingEvents(report,function(event) { return event.kind === "status" && String(event.from) === from && String(event.to) === to && (event.from !== event.to || event.fromId && event.toId && event.fromId !== event.toId); });
+              var hasReturn = events.some(function(event) { return !!event.returnKind; });
+              var $count = eventCount(match.count,(hasReturn ? "Возврат · " : "Переход ") + activity.statusLabel(from) + " → " + activity.statusLabel(to),events,state);
+              if (hasReturn) $count.prepend(icon("ChevronLeft"));
+              $cell.toggleClass("is-return",hasReturn).append($count);
             } else $cell.text("–");
             $row.append($cell);
           }); $statusBody.append($row);
@@ -569,7 +583,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             $("<span/>").addClass("ujg-esi-activity-group-day-label").text("За день:"),
             group.dayHighlights && group.dayHighlights.completed ? $("<span/>").addClass("ujg-esi-activity-group-badge is-done").attr("title",dayBadgeTitle).text("Завершено " + group.dayHighlights.completed) : $("<span/>"),
             group.dayHighlights && group.dayHighlights.created ? $("<span/>").addClass("ujg-esi-activity-group-badge is-created").attr("title",dayBadgeTitle).text("Создано " + group.dayHighlights.created) : $("<span/>"),
-            group.dayHighlights && group.dayHighlights.reopened ? $("<span/>").addClass("ujg-esi-activity-group-badge is-reopened").attr("title",dayBadgeTitle).text("Возвращено " + group.dayHighlights.reopened) : $("<span/>"),
+            group.taskReturns && group.taskReturns.length ? $("<span/>").addClass("ujg-esi-activity-group-badge is-reopened").append(eventCount(group.taskReturns.length,"Возвраты задач · переходов",group.taskReturns,state)) : $("<span/>"),
             group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && group.dayActivityCount ? $("<span/>").addClass("ujg-esi-activity-group-badge").attr("title",dayBadgeTitle).text("Изменено " + group.dayActivityCount) : $("<span/>"),
             group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && !group.dayActivityCount && group.dayNoopStatusCount ? $("<span/>").addClass("ujg-esi-activity-group-badge").text("Статус без изменений") : $("<span/>"),
             group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && !group.dayActivityCount && !group.dayNoopStatusCount && group.dayComplete ? $("<span/>").addClass("ujg-esi-activity-group-badge").text("Без изменений") : $("<span/>"),

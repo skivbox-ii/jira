@@ -42,6 +42,18 @@ test("metric lists use management flags and certified transitions", t => {
   assert.match(preview.text(),/История неполна/);
   assert.equal(preview.find(".ujg-esi-management-preview-open").length,1);
 });
+test("task return preview and full report show only returned tasks with author time and reason", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  const event={id:"return",kind:"status",at:"2026-09-24T05:23:00Z",issueKey:"P-3",role:"BE",from:"In Review",to:"In Progress",returnKind:"review",author:{label:"Роман"}};
+  x.report.groups[0].taskReturns=[event];
+  x.report.groups[0].events.push(event); x.report.events.push(event);
+  for (const panel of [x.ui.preview(x.report,"taskReturns",x.state,x.services),x.ui.render(x.report,"taskReturns",x.state,x.services)]) {
+    assert.equal(panel.find(".ujg-esi-management-return-events .ujg-esi-management-event").length,1);
+    assert.match(panel.find(".ujg-esi-management-return-events").text(),/08:23.*P-3.*BE.*Возвращена с проверки.*Роман/s);
+    assert.equal(panel.find(".ujg-esi-management-return-events a[href='https://jira.example.test/base/browse/P-3']").length,1);
+    assert.doesNotMatch(panel.text(),/Полная готовность достигнута/);
+  }
+});
 test("overdue preview and full report include quiet remarks ordered by overdue days", t => {
   const x=setup(); t.after(()=>x.dom.window.close());
   x.report.groups[0].deadline={date:"2026-09-22",state:"overdue",daysOverdue:2,owner:{label:"Мария"},pendingTasks:[{key:"P-2",role:"QA",summary:"Check",status:"Open",assignee:{label:"Света"},team:"QA"}]};

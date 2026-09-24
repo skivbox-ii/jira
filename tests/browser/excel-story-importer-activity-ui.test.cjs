@@ -18,6 +18,8 @@ function setup(report, configureWindow) {
   if (configureWindow) configureWindow(dom.window);
   const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0, aiOpen:0, aiUpdates:0}, modules = {jquery:$};
   modules._ujgESI_activity = {
+    statusTone:activity.statusTone,
+    returnKind:activity.returnKind,
     eventCategory:event => activity.eventCategory(event),
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
     exportHtml(value, context) { calls.exports.push({value,context}); return '<!doctype html><title>Snapshot</title>'; },
@@ -49,6 +51,38 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+test("status matrix colors both axes and marks task return cells with their evidence", t => {
+  const report=fixture(), event={...report.events[0],from:"Done",to:"In Progress",returnKind:"reopened"};
+  report.events=[event]; report.groups[0].events=[event];
+  report.transitions=[{from:"Done",to:"In Progress",count:1}];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-status-matrix th .is-done").length,2);
+  assert.equal(x.$(".ujg-esi-activity-status-matrix th .is-progress").length,2);
+  assert.equal(x.$(".ujg-esi-activity-status-matrix td.is-return").length,1);
+  const button=x.$(".ujg-esi-activity-status-matrix td.is-return button");
+  assert.match(button.attr("aria-label"),/Возврат/);
+  button.trigger("click");
+  assert.match(x.$(".ujg-esi-activity-event-popover").text(),/P-2/);
+});
+test("task return metric opens remarks with review rollbacks even when no whole remark reopened", t => {
+  const report=fixture(), event={...report.events[0],from:"In Review",to:"In Progress",returnKind:"review"};
+  report.events=[event]; report.groups[0].events=[event]; report.groups[0].taskReturns=[event];
+  report.metrics.taskReturns=1; report.metrics.reopened=0;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const button=x.$("[data-metric='taskReturns']");
+  assert.match(button.attr("aria-label"),/Возвраты задач: 1/);
+  button.trigger("click");
+  assert.match(x.$(".ujg-esi-management-dialog").text(),/P-2/);
+});
+test("same-name transition evidence excludes unchanged status records", t => {
+  const report=fixture(), changed={...report.events[0],from:"Done",to:"Done",fromId:"2",toId:"3",returnKind:"reopened"};
+  const noop={...changed,id:"noop",fromId:"3",toId:"3",returnKind:null};
+  report.events=[changed,noop]; report.groups[0].events=report.events;
+  report.transitions=[{from:"Done",to:"Done",count:1}];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-activity-status-matrix td.has-transfer button").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-popover-event").length,1);
+});
 test("compact Dynamics toolbar exposes the LLM report command without sending on render", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const command=x.$(".ujg-esi-activity-ai-command");
@@ -113,6 +147,16 @@ test("metric preview uses ninety percent of the available viewport without overf
   const box=x.$(".ujg-esi-activity-metric-preview");
   assert.equal(parseFloat(box.css("width")),1260);
   assert.ok(parseFloat(box.css("left"))+parseFloat(box.css("width"))<=1400);
+});
+test("an open metric preview refits when the window becomes narrow", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  Object.defineProperty(x.dom.window.document.documentElement,"clientWidth",{configurable:true,value:1400});
+  x.$("[data-metric='changed']").trigger("focus");
+  Object.defineProperty(x.dom.window.document.documentElement,"clientWidth",{configurable:true,value:390});
+  x.$(x.dom.window).trigger("resize");
+  const box=x.$(".ujg-esi-activity-metric-preview");
+  assert.equal(parseFloat(box.css("width")),351);
+  assert.ok(parseFloat(box.css("left"))+parseFloat(box.css("width"))<=390);
 });
 test("a tall metric preview leaves its trigger clickable and limits its scrolling height", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -358,7 +402,7 @@ test("partial daily metrics show observed lower bounds and compact unknown value
   assert.equal(x.$("[data-metric='changed'] strong").text(),"≥18");
   assert.equal(x.$("[data-metric='newRemarks'] strong").text(),"≥6");
   assert.equal(x.$("[data-metric='completed'] strong").text(),"—");
-  assert.equal(x.$("[data-metric='reopened'] strong").text(),"—");
+  assert.equal(x.$("[data-metric='taskReturns'] strong").text(),"—");
   assert.match(x.$("[data-metric='changed'] strong").attr("title"),/итог может быть больше/);
   assert.match(x.$("[data-metric='completed'] strong").attr("title"),/Недостаточно/);
 });

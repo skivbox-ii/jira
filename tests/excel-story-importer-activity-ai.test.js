@@ -4,6 +4,17 @@ const path = require("node:path");
 const load = require("./helpers/load-amd-module");
 const ai = () => load(path.join(__dirname, "../ujg-excel-story-importer-modules/activity-ai.js"), {});
 const scope = {projectKey:"P",epicKey:"P-1",baseUrl:"https://jira.test",preferencesStorageKey:"user:a",userScope:"alice",viewMode:"team"};
+test("LLM distinguishes task returns from whole remark reopening and keeps each event once", () => {
+  const source=report();
+  source.metrics.taskReturns=1;
+  source.events[0].returnKind="review";
+  source.groups[0].taskReturns=[source.events[0]];
+  const part=ai().prepare(source,scope).parts[0], payload=JSON.parse(part.userPrompt);
+  assert.equal(payload.metrics.taskReturns,1);
+  assert.deepEqual(payload.records.find(record=>record.type==="remark").data.taskReturns,[source.events[0].id]);
+  assert.match(part.systemPrompt,/taskReturns.*reopened/);
+  assert.equal((part.userPrompt.match(/"id":"P-1:h1:0"/g)||[]).length,1);
+});
 
 test("LLM context includes current journal deadlines coverage and confirmed overdue count", () => {
   const source=report();
