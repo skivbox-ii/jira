@@ -14,7 +14,7 @@ const activity = load(path.join(activityDir,"activity.js"), {
 function setup(report, configureWindow) {
   const dom = new JSDOM('<div id="root"><div class="parent-toolbar">Registry · Activity</div></div>', {runScripts:"outside-only", url:"http://localhost"});
   if (configureWindow) configureWindow(dom.window);
-  const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0}, modules = {jquery:$};
+  const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0, aiOpen:0, aiUpdates:0}, modules = {jquery:$};
   modules._ujgESI_activity = {
     eventCategory:event => activity.eventCategory(event),
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
@@ -22,6 +22,7 @@ function setup(report, configureWindow) {
     statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово",Open:"Открыто"})[value] || value; },
     eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
+  modules._ujgESI_activityAiUi = {create:() => ({update(){calls.aiUpdates++;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
   for (const file of ["icons","activity-management-ui","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const state = {rows:[{id:"row"}],teams:[],projectKey:"P",epicKey:"P-EPIC",viewMode:"jira",registryWarning:"Scope warning"};
@@ -46,6 +47,17 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+test("compact Dynamics toolbar exposes the LLM report command without sending on render", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const command=x.$(".ujg-esi-activity-ai-command");
+  assert.equal(command.length,1);
+  assert.equal(command.attr("aria-label"),"LLM-отчёт");
+  assert.match(command.text(),/LLM-отчёт/);
+  assert.equal(x.calls.aiOpen,0);
+  command.trigger("click");
+  assert.equal(x.calls.aiOpen,1);
+  assert.equal(x.calls.aiUpdates,1);
+});
 function categoryFixture() {
   const report=fixture();
   report.events.push(

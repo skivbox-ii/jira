@@ -91,6 +91,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function init(container, svc) {
+    if (activityView && activityView.destroy) activityView.destroy();
     $root = container;
     services = svc || {};
     grid = gridModule.create();
@@ -1782,7 +1783,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     var scrollState = captureScrollState();
     $(document).off("click.ujgEsiOwner");
     $(document).off("click.ujgEsiSummary");
-    if (activityView && activityView.dismissPopover) activityView.dismissPopover();
+    if (activityView && (state || {}).reportView !== "activity" && activityView.suspend) activityView.suspend();
+    else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
+    else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");

@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi"], function($, activity, icon, managementUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi"], function($, activity, icon, managementUi, activityAiUi) {
   "use strict";
   var sequence = 0;
 
@@ -61,6 +61,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     return "role-other";
   }
   function create() {
+    var aiUi = activityAiUi.create();
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
@@ -381,6 +382,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
       var report = activity.summarize(state.rows || [], state.teams || [], {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined});
+      aiUi.update(report,state,services);
       var coverage = report.coverage || {}, metrics = report.metrics || {}, observed = report.observed || {}, balance = report.balance || {};
       var journal = filtered(report), $root = $("<div/>").addClass("ujg-esi-activity");
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");
@@ -393,6 +395,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $controls.append(button("ChevronRight","Следующий день",function() { date = shiftDate(date,1); filters = {}; saveLayout(); draw(); }));
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text("00:00–" + cutoff(report) + " · МСК"));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
+      $controls.append(button("WandSparkles","LLM-отчёт",function() { closePopover(); closeManagement(); aiUi.open(this); })
+        .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
       $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
       if (state.viewMode === "jira" && state.registryWarning) $root.append($("<p/>").addClass("ujg-esi-activity-warning").text(state.registryWarning));
@@ -559,6 +563,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       });
       $journal.append($scroll.append($table.append($cols,$("<thead/>").append($head),$body)));
       $root.append($journal); $host.empty().append($root);
+      aiUi.rebindAnchor($root.find(".ujg-esi-activity-ai-command")[0]);
       resize();
       if (typeof window.ResizeObserver === "function") {
         if (!resizeObserver) resizeObserver = new window.ResizeObserver(function() {
@@ -569,7 +574,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }
       $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
     }
-    return {resize:resize,dismissPopover:dismissPopover,render:function($parent,state,services) {
+    return {resize:resize,dismissPopover:dismissPopover,suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); },destroy:function() {
+      aiUi.destroy(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+      $(window).off(namespace); $(document).off(namespace);
+    },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
       var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";

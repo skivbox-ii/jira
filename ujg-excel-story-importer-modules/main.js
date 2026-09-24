@@ -3190,6 +3190,28 @@ define("_ujgESI_main", [
       return llmClient.writeStoredConfig(storage, prompted, config.LLM_CONFIG_STORAGE_KEY);
     }
 
+    function onActivityLlmRequest(request) {
+      return Promise.resolve().then(function() {
+        if (!llmClient || typeof llmClient.requestText !== "function") throw new Error("Клиент LLM недоступен.");
+        var systemPrompt = String(request && request.systemPrompt || "");
+        var userPrompt = String(request && request.userPrompt || "");
+        if (!systemPrompt.trim() || !userPrompt.trim()) throw new Error("Запрос LLM пуст.");
+        if (llmClient.utf8ByteLength(systemPrompt) > llmClient.MAX_BASE_PROMPT_BYTES || llmClient.utf8ByteLength(userPrompt) > llmClient.MAX_USER_PROMPT_BYTES) {
+          throw new Error("Размер запроса превышает лимит LLM. Данные не отправлены и не обрезаны.");
+        }
+        var llmConfig = ensureLlmConfig();
+        if (!llmConfig) throw new Error("LLM не настроен: укажите API Base URL, модель и ключ.");
+        // Provider error bodies may echo credentials or source data; keep them out of the report.
+        return Promise.resolve().then(function() {
+          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2});
+        }).then(function(result) {
+          return {text:String(result && result.text || "")};
+        }, function() {
+          throw new Error("Не удалось получить ответ LLM. Проверьте подключение и повторите запрос.");
+        });
+      });
+    }
+
     function applyImprovedSummary(target, text) {
       var dialog = state.createDialog;
       var cleaned = cleanupLlmSummary(text);
@@ -3700,6 +3722,7 @@ define("_ujgESI_main", [
       onViewModeChange: onViewModeChange,
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
+      onActivityLlmRequest: onActivityLlmRequest,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
         state.reportView = view;

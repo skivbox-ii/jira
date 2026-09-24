@@ -1921,6 +1921,53 @@
 .ujg-esi-activity-icon-button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #cbd4df; border-radius: 3px; background: #fff; color: #42526e; cursor: pointer; }
 .ujg-esi-activity-icon-button:disabled { opacity: .5; cursor: default; }
 .ujg-esi-activity-icon-button svg { width: 15px; height: 15px; }
+.ujg-esi-activity-ai-command { width: auto; min-width: 108px; gap: 5px; padding: 0 8px; color: #075fc4; border-color: #97bde5; white-space: nowrap; }
+.ujg-esi-activity-ai-dialog { position: fixed; inset: 12px; z-index: 1000001; display: flex; flex-direction: column; min-width: 0; min-height: 0; box-sizing: border-box; border: 1px solid #aebdca; border-radius: 4px; background: #fff; color: #172b4d; box-shadow: 0 18px 50px #172b4d55; font-size: 13px; }
+.ujg-esi-activity-ai-dialog * { box-sizing: border-box; }
+.ujg-esi-ai-header, .ujg-esi-ai-actions, .ujg-esi-ai-compose { display: flex; align-items: center; gap: 10px; padding: 10px 16px; }
+.ujg-esi-ai-header { justify-content: space-between; border-bottom: 1px solid #dce3eb; }
+.ujg-esi-ai-header h2 { margin: 0; font-size: 17px; }
+.ujg-esi-ai-meta { padding: 9px 16px; color: #526174; border-bottom: 1px solid #dce3eb; overflow-wrap: anywhere; }
+.ujg-esi-activity-ai-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 4px 9px; border: 1px solid #aebdca; border-radius: 3px; background: #fff; color: #075fc4; font: inherit; cursor: pointer; }
+.ujg-esi-activity-ai-dialog button svg { width: 15px; height: 15px; flex: 0 0 15px; }
+.ujg-esi-activity-ai-dialog button:hover:not(:disabled), .ujg-esi-activity-ai-dialog button:focus-visible { background: #eaf3fc; }
+.ujg-esi-activity-ai-dialog button:disabled { opacity: .5; cursor: default; }
+.ujg-esi-activity-ai-dialog [hidden] { display: none !important; }
+.ujg-esi-ai-close { margin-left: auto; }
+.ujg-esi-ai-progress { margin: 0; color: #526174; }
+.ujg-esi-ai-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 16px 18px; overflow-wrap: anywhere; }
+.ujg-esi-ai-error, .ujg-esi-ai-partial { color: #ae2a19; }
+.ujg-esi-ai-stale { color: #835609; }
+.ujg-esi-ai-stale:empty, .ujg-esi-ai-error:empty, .ujg-esi-ai-progress:empty, .ujg-esi-ai-partial:empty { display: none; }
+.ujg-esi-ai-partial { padding: 8px; border: 1px solid #e6c99d; background: #fffaf0; }
+.ujg-esi-ai-exchange { padding: 12px 0; border-top: 1px solid #dce3eb; }
+.ujg-esi-ai-compose { border-top: 1px solid #dce3eb; align-items: stretch; }
+.ujg-esi-ai-question { flex: 1 1 auto; min-width: 0; max-height: min(180px, 25vh); resize: vertical; border: 1px solid #aebdca; border-radius: 3px; padding: 7px; font: inherit; }
+.ujg-esi-activity-ai-dialog .ujg-esi-activity-markdown { max-width: 100%; overflow-x: auto; }
+.ujg-esi-activity-markdown { line-height: 1.5; overflow-wrap: anywhere; }
+.ujg-esi-activity-markdown h1, .ujg-esi-activity-markdown h2, .ujg-esi-activity-markdown h3 { margin: 12px 0 8px; line-height: 1.5; }
+.ujg-esi-activity-markdown h1 { font-size: 20px; }
+.ujg-esi-activity-markdown h2 { font-size: 17px; }
+.ujg-esi-activity-markdown h3 { font-size: 15px; }
+.ujg-esi-activity-markdown p, .ujg-esi-activity-markdown ul, .ujg-esi-activity-markdown ol { margin: 8px 0; }
+.ujg-esi-activity-markdown ul, .ujg-esi-activity-markdown ol { padding-left: 20px; }
+.ujg-esi-activity-markdown a, .ujg-esi-activity-markdown a:visited { color: #075fc4; }
+.ujg-esi-activity-markdown-table-wrap { max-width: 100%; overflow-x: auto; margin: 8px 0; }
+.ujg-esi-activity-markdown table { width: 100%; min-width: 420px; border-collapse: collapse; }
+.ujg-esi-activity-markdown th, .ujg-esi-activity-markdown td { border: 1px solid #dce3eb; padding: 6px; text-align: left; vertical-align: top; }
+.ujg-esi-activity-markdown th { background: #f5f8fb; }
+.ujg-esi-activity-markdown code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ujg-esi-activity-markdown pre { max-width: 100%; overflow-x: auto; margin: 8px 0; padding: 8px; border: 1px solid #dce3eb; background: #f5f8fb; white-space: pre; }
+.ujg-esi-activity-markdown pre code { white-space: pre; overflow-wrap: normal; }
+@media (max-width: 500px) {
+  .ujg-esi-activity-ai-dialog { inset: 4px; }
+  .ujg-esi-ai-header, .ujg-esi-ai-actions, .ujg-esi-ai-compose { padding: 8px; }
+  .ujg-esi-ai-meta { padding: 8px; }
+  .ujg-esi-ai-content { padding: 4px 8px 12px; }
+  .ujg-esi-ai-compose { flex-wrap: wrap; }
+  .ujg-esi-ai-question { flex-basis: 100%; }
+  .ujg-esi-ai-ask { margin-left: auto; }
+}
 .ujg-esi-activity-date { width: 142px; height: 30px; padding: 4px 7px; border: 1px solid #cbd4df; border-radius: 3px; color: #172b4d; background: #fff; font: inherit; }
 .ujg-esi-activity-zone, .ujg-esi-activity-scope, .ujg-esi-activity-coverage, .ujg-esi-activity-journal-heading > span { color: #526174; }
 .ujg-esi-activity-scope, .ujg-esi-activity-warning { padding: 5px 0 9px; overflow-wrap: anywhere; }

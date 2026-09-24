@@ -2,8 +2,25 @@
   var rendering = modules._ujgESI_rendering;
   var originalInit = rendering.init, originalRender = rendering.render;
   var callbacks, currentState, phase = new URLSearchParams(location.search).has("empty") ? "manual" : "waiting";
+  window.llmPreviewCalls = [];
   rendering.init = function(container, services) {
     callbacks = services;
+    services.onActivityLlmRequest = function(request) {
+      window.llmPreviewCalls.push(request);
+      return Promise.resolve({text:[
+        "## Демонстрационный ответ",
+        "Локальная проверка интерфейса: внешний LLM не вызывался.",
+        "### Завершённые работы",
+        "- **12:05 МСК** · [QA] EVOSCADA-30041 завершила Соколова А. Исходное замечание EVOSCADA-20862 стало полностью готово.",
+        "| Направление | Задача | Учтено в снимке |",
+        "| --- | --- | --- |",
+        "| [BE] | EVOSCADA-30040 | 3 ч |",
+        "| [QA] | EVOSCADA-30041 | 1 ч 30 мин |",
+        "### Возвраты",
+        "- **09:15 МСК** · [QA] EVOSCADA-18080: Тестирование → В работе. Автор перехода: Соколова А.",
+        "Причину возврата нельзя установить только по смене статуса."
+      ].join("\n")});
+    };
     return originalInit(container, services);
   };
   rendering.render = function(state) {

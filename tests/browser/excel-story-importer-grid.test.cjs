@@ -15,7 +15,10 @@ function setup(activityReport) {
   if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,statusLabel: value => value,eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
   const files=["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
-  if (activityReport) files.push("activity-management-ui","activity-ui");
+  if (activityReport) {
+    modules._ujgESI_marked = require("../../vendor/marked-16.4.2.umd.js");
+    files.push("activity-ai","activity-markdown","activity-ai-ui","activity-management-ui","activity-ui");
+  }
   files.push("rendering");
   for (const file of files) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
   const calls = [];
@@ -640,6 +643,38 @@ function fullscreenActivityReport() {
   const events=[{id:"status-1",kind:"status",at:"2026-09-24T12:00:00Z",from:"Testing",to:"Done",role:"QA",issueKey:"P-12",assignee:{label:"Anna"}}];
   return {events,groups:[{id:"remark-1",key:"P-10",events}],transitions:[{from:"Testing",to:"Done",count:1}]};
 }
+
+test("LLM panel survives a Dynamics refresh and closes on returning to registry", t => {
+  const report=fullscreenActivityReport();
+  Object.assign(report,{date:"2026-09-24",asOf:"2026-09-24T12:00:00Z",metrics:{events:1},coverage:{complete:1,total:1},teams:[]});
+  const {dom,$,state,render}=setup(report); t.after(()=>dom.window.close());
+  state.reportView="activity"; render();
+  $("[aria-label='LLM-отчёт']").trigger("click");
+  assert.equal($(".ujg-esi-activity-ai-dialog").length,1);
+  const dialog=$(".ujg-esi-activity-ai-dialog")[0];
+  render();
+  assert.equal($(".ujg-esi-activity-ai-dialog")[0],dialog,"A refresh must update the existing session, not silently close it");
+  assert.equal(dom.window.document.body.style.overflow,"hidden");
+  state.reportView="registry"; render();
+  assert.equal($(".ujg-esi-activity-ai-dialog").length,0);
+  assert.equal(dom.window.document.body.style.overflow,"");
+});
+
+test("reinitializing the widget destroys the body-mounted LLM dialog", t => {
+  const report=fullscreenActivityReport();
+  Object.assign(report,{date:"2026-09-24",asOf:"2026-09-24T12:00:00Z",metrics:{events:1},coverage:{complete:1,total:1},teams:[]});
+  const {dom,$,state,render,modules}=setup(report); t.after(()=>dom.window.close());
+  state.reportView="activity"; render();
+  $("[aria-label='LLM-отчёт']").trigger("click");
+  assert.equal($(".ujg-esi-activity-ai-dialog").length,1);
+  assert.equal(dom.window.document.body.style.overflow,"hidden");
+  modules._ujgESI_rendering.init($(".ujg-excel-story-importer"),{});
+  assert.equal($(".ujg-esi-activity-ai-dialog").length,0);
+  assert.equal(dom.window.document.body.style.overflow,"");
+  render();
+  $("[aria-label='LLM-отчёт']").trigger("click");
+  assert.equal($(".ujg-esi-activity-ai-dialog").length,1);
+});
 
 test("management comments link Jira keys and roles, render Mermaid and keep HTML inert", async t => {
   const report=fullscreenActivityReport();

@@ -26,6 +26,10 @@ var MODULE_ORDER = [
   "statistics-ui.js",
   "activity.js",
   "activity-management-ui.js",
+  "activity-ai.js",
+  { dir: path.join(__dirname, "vendor"), file: "marked-16.4.2.umd.js", amd: "_ujgESI_marked" },
+  "activity-markdown.js",
+  "activity-ai-ui.js",
   "activity-ui.js",
   "grid.js",
   "rendering.js",
@@ -37,7 +41,11 @@ function readModule(entry) {
   var fileName = typeof entry === "object" && entry.file ? entry.file : entry;
   var filePath = path.join(dir, fileName);
   if (!fs.existsSync(filePath)) throw new Error("Module not found: " + fileName);
-  return fs.readFileSync(filePath, "utf8");
+  var source = fs.readFileSync(filePath, "utf8");
+  if (entry.amd) {
+    return 'define("' + entry.amd + '", [], function() {\nvar module = {exports:{}}, exports = module.exports;\n' + source + '\nreturn module.exports;\n});';
+  }
+  return source;
 }
 
 function build() {
