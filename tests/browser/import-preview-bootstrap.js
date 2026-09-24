@@ -1,4 +1,16 @@
 (function() {
+  // Keep the offline day complete even when the preview runs before its sample events.
+  var activity = modules._ujgESI_activity;
+  var originalCapture = activity.capture, originalSummarize = activity.summarize, originalToday = activity.today;
+  activity.capture = function() {
+    var snapshot = originalCapture.apply(activity, arguments);
+    snapshot.capturedAt = window.fixtureNow;
+    return snapshot;
+  };
+  activity.summarize = function(rows, teams, options) {
+    return originalSummarize(rows, teams, Object.assign({}, options, {now:window.fixtureNow}));
+  };
+  activity.today = function(now) { return originalToday(now == null ? window.fixtureNow : now); };
   var rendering = modules._ujgESI_rendering;
   var originalInit = rendering.init, originalRender = rendering.render;
   var callbacks, currentState, phase = new URLSearchParams(location.search).has("empty") ? "manual" : "waiting";

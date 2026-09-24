@@ -181,7 +181,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       managementAnchor = anchor; $(anchor).attr("aria-expanded","true");
       bodyOverflow = document.body.style.overflow; document.body.style.overflow = "hidden";
       $managementDialog = $("<div/>").addClass("ujg-esi-management-dialog").attr({role:"dialog","aria-modal":"true","aria-label":$(anchor).find("span").last().text(),tabindex:"-1"}).appendTo($host);
-      $managementDialog.append(managementUi.render(report,key,state,Object.assign({},currentServices,{onClose:function() { closeManagement(true); }})));
+      $managementDialog.append(managementUi.render(report,key,state,Object.assign({},currentServices,{onClose:function() { closeManagement(true); },onOpenMetric:function(nextKey) { openManagement(anchor,report,nextKey,state); }})));
+      $managementDialog.attr("aria-label",$managementDialog.find(".ujg-esi-management-header h2").first().text() || "Сводка");
       $managementDialog.on("keydown",function(event) {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeManagement(true); return; }
         if (event.key !== "Tab") return;
@@ -202,7 +203,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
       var $box = popup(anchor,$(anchor).find("span").last().text(),"ujg-esi-activity-metric-preview",Math.round(viewportWidth * 0.9));
       $box.css("left",Math.max(12,Math.round((viewportWidth - $box.outerWidth()) / 2)));
-      $box.append(managementUi.preview(report,key,state,{onOpen:function() { openManagement(anchor,report,key,state); }}));
+      $box.append(managementUi.preview(report,key,state,{onOpen:function() { openManagement(anchor,report,key,state); },onOpenMetric:function(nextKey) { openManagement(anchor,report,nextKey,state); }}));
       $box.on("mouseenter focusin",function() { clearTimeout(previewCloseTimer); })
         .on("mouseleave",schedulePreviewClose);
       placePopover(anchor);
@@ -447,7 +448,15 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $metrics.append($band,$("<p/>").addClass("ujg-esi-activity-balance").text("Открытые замечания: " + metric(balance.startOpen) + " на начало · " + metric(balance.endOpen) + " на конец"));
       if (report.deadlineCoverage) {
         var deadlines = report.deadlineCoverage;
-        $metrics.append($("<p/>").addClass("ujg-esi-activity-deadline-coverage").text("На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК · Покрытие сроками: известны " + (deadlines.known || 0) + " · без срока " + (deadlines.missing || 0) + " · ошибки " + (deadlines.invalid || 0) + " · конфликты " + (deadlines.conflict || 0) + " · состояние не подтверждено " + (deadlines.unknownState || 0) + " из " + (deadlines.total || 0) + " · Текущий срок из журнала или сохранённого описания; история переносов не учитывается"));
+        var issueCount = (deadlines.invalid || 0) + (deadlines.conflict || 0);
+        var $deadlineCoverage = $("<p/>").addClass("ujg-esi-activity-deadline-coverage").append(document.createTextNode("На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК · Покрытие сроками: известны " + (deadlines.known || 0) + " · без срока " + (deadlines.missing || 0) + " · "));
+        $deadlineCoverage.append($("<button/>").addClass("ujg-esi-activity-deadline-issues").attr({type:"button","data-metric":"deadlineIssues","aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>").text("Ошибки сроков: " + issueCount))
+          .on("click",function() { openManagement(this,report,"deadlineIssues",state); })
+          .on("mouseenter",function() { var anchor=this; clearTimeout(previewTimer); clearTimeout(previewCloseTimer); previewTimer=setTimeout(function() { previewMetric(anchor,report,"deadlineIssues",state); },160); })
+          .on("focus",function() { previewMetric(this,report,"deadlineIssues",state); })
+          .on("mouseleave blur",schedulePreviewClose));
+        $deadlineCoverage.append(document.createTextNode(" · ошибки " + (deadlines.invalid || 0) + " · конфликты " + (deadlines.conflict || 0) + " · состояние не подтверждено " + (deadlines.unknownState || 0) + " из " + (deadlines.total || 0) + " · Текущий срок из журнала или сохранённого описания; история переносов не учитывается"));
+        $metrics.append($deadlineCoverage);
       }
       if ((state.rows || []).length) $root.append($metrics);
       var $flows = $("<div/>").addClass("ujg-esi-activity-flows");

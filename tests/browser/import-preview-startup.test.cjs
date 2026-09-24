@@ -87,6 +87,21 @@ test("the shared preview URL opens a populated tree without manual import or syn
   assert.match(overdueDialog.textContent,/Оставшиеся задачи/);
   overdueDialog.querySelector('[aria-label="Закрыть сводку"]').click();
   assert.equal(dom.window.issueReadCalls,readsAfterActivityLoad,"Deadline summaries add no Jira reads");
+  const deadlineIssues=doc.querySelector('[data-metric="deadlineIssues"]');
+  assert.ok(deadlineIssues,"The coverage line exposes deadline diagnostics");
+  deadlineIssues.focus();
+  const deadlinePreview=doc.querySelector('.ujg-esi-management-preview');
+  for (const key of ["EVOSCADA-24006","EVOSCADA-24007","EVOSCADA-24008"]) {
+    assert.match(deadlinePreview.textContent,new RegExp(key),"Diagnostics includes quiet remarks");
+  }
+  assert.match(deadlinePreview.textContent,/24\/09\/26/);
+  assert.match(deadlinePreview.textContent,/31\.02\.2026/);
+  assert.match(deadlinePreview.textContent,/Excel/);
+  deadlineIssues.click();
+  const deadlineDialog=doc.querySelector('.ujg-esi-management-dialog');
+  assert.match(deadlineDialog.textContent,/24\/09\/26/);
+  deadlineDialog.querySelector('[aria-label="Закрыть сводку"]').click();
+  assert.equal(dom.window.issueReadCalls,readsAfterActivityLoad,"Diagnostics only use loaded source cells");
   const llmButton=doc.querySelector('[aria-label="LLM-отчёт"]');
   assert.ok(llmButton,"Dynamics must expose the LLM report entry point");
   llmButton.click();
@@ -115,6 +130,8 @@ test("the shared preview URL opens a populated tree without manual import or syn
   date.value = "2026-09-01";
   date.dispatchEvent(new dom.window.Event("change",{bubbles:true}));
   assert.equal(doc.querySelector('[aria-label="Дата отчёта"]').value,"2026-09-01");
+  doc.querySelector('[data-metric="deadlineIssues"]').focus();
+  assert.match(doc.querySelector('.ujg-esi-management-preview').textContent,/EVOSCADA-24008/,"Deadline diagnostics are independent of the selected event day");
   assert.equal(dom.window.issueReadCalls, readsAfterActivityLoad, "Report date changes use loaded data only");
   Array.from(doc.querySelectorAll('[role="tab"]')).find(node => node.textContent === "Реестр").click();
   assert.equal(doc.querySelectorAll(".ujg-esi-parent-row").length,50);

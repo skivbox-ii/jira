@@ -116,7 +116,8 @@ function deadlineDay(offset) {
 }
 const deadlineDates={
   "EVOSCADA-16104":deadlineDay(-1),"EVOSCADA-17906":deadlineDay(-2),
-  "EVOSCADA-20000":deadlineDay(0),"EVOSCADA-20914":deadlineDay(1),"EVOSCADA-20862":deadlineDay(-1)
+  "EVOSCADA-20000":deadlineDay(0),"EVOSCADA-20914":deadlineDay(1),"EVOSCADA-20862":deadlineDay(-1),
+  "EVOSCADA-24006":"24/09/26","EVOSCADA-24007":"31.02.2026","EVOSCADA-24008":deadlineDay(0)
 };
 rows[0].push("Срок");
 rows.slice(1).forEach(row=>{row.push(deadlineDates[row[5]] || "");});
@@ -125,6 +126,12 @@ Object.entries(deadlineDates).forEach(([key,date])=>{
   if (target.fields.description.startsWith("Импортировано из журнала замечаний.")) target.fields.description+="\n"+source;
   else target.fields.description="Импортировано из журнала замечаний.\n\n||Поле||Значение||\n"+source+"\n\n"+target.fields.description;
 });
+// Deliberately conflicting source cells exercise diagnostics without guessing a deadline.
+rows[0].push("Срок");
+rows.slice(1).forEach(row=>{row.push(row[5] === "EVOSCADA-24008" ? deadlineDay(2) : "");});
+issues["EVOSCADA-24008"].fields.description=issues["EVOSCADA-24008"].fields.description.replace(
+  "|Срок|"+deadlineDay(0)+"|", "|Срок|"+deadlineDay(0)+"|\n|Срок|"+deadlineDay(2)+"|"
+);
 const workbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Лист1");
 const excel = XLSX.write(workbook, {type:"buffer",bookType:"xlsx"});
@@ -142,7 +149,7 @@ const server = http.createServer((req,res) => {
   const pathname = new URL(req.url,"http://localhost").pathname;
   res.setHeader("Cache-Control","no-store");
   if (pathname === "/fixture.xlsx") {res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");return res.end(excel);}
-  if (pathname === "/test/fixture.js") {res.setHeader("Content-Type","text/javascript");return res.end("window.fixtureIssues=" + JSON.stringify(issues) + ";");}
+  if (pathname === "/test/fixture.js") {res.setHeader("Content-Type","text/javascript");return res.end("window.fixtureIssues=" + JSON.stringify(issues) + ";window.fixtureNow=" + JSON.stringify(activityDate+"T18:00:00+03:00") + ";");}
   if (files[pathname]) {res.setHeader("Content-Type",files[pathname][1]);return fs.createReadStream(files[pathname][0]).pipe(res);}
   res.statusCode=404;res.end("Not found");
 });

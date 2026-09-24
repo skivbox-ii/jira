@@ -232,6 +232,73 @@ test("overdue metric opens every confirmed remark despite journal filtering", t 
   assert.equal(x.$(".ujg-esi-management-dialog .ujg-esi-management-remark").length,2);
   assert.match(x.$(".ujg-esi-management-dialog .ujg-esi-management-remark").first().text(),/P-9/);
 });
+
+test("deadline issue count opens preview and full report for quiet groups regardless of journal filters", t => {
+  const report=fixture();
+  report.deadlineReferenceDate="2026-09-25";
+  report.deadlineCoverage={known:0,missing:0,invalid:1,conflict:1,unknownState:0,total:2};
+  report.metrics.overdue=null; report.observed={overdue:0};
+  report.groups[0].deadline={problem:"invalid",state:"invalid",reasonCode:"ambiguous-format",reasonLabel:"Неоднозначный формат даты",source:"excel",field:"Срок",raw:"24/09/26",candidates:[{raw:"24/09/26",source:"excel",field:"Срок"}]};
+  report.groups.push({id:"quiet",key:"P-9",remarkId:"99",summary:"Quiet conflict",events:[],deadline:{problem:"conflict",state:"conflict",reasonCode:"conflict",reasonLabel:"Противоречивые сроки",source:"jira-description",field:"Срок",raw:"25.09.2026",candidates:[{raw:"25.09.2026",source:"jira-description",field:"Срок"},{raw:'<img src=x onerror="alert(1)">',source:"jira-description",field:"Срок (колонка 2)"}]}});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  const trigger=x.$(".ujg-esi-activity-deadline-issues");
+  assert.equal(trigger.attr("data-metric"),"deadlineIssues");
+  assert.equal(trigger.text(),"Ошибки сроков: 2");
+  assert.equal(x.$(".ujg-esi-activity-metric").length,6);
+  trigger.trigger("focus");
+  const preview=x.$(".ujg-esi-activity-metric-preview");
+  assert.equal(preview.find(".ujg-esi-management-preview-item").length,2);
+  assert.match(preview.text(),/24\/09\/26.*Quiet conflict.*25\.09\.2026.*<img/s);
+  assert.equal(preview.find("img").length,0);
+  trigger.trigger("click");
+  const dialog=x.$(".ujg-esi-management-dialog");
+  assert.equal(dialog.find(".ujg-esi-management-remark").length,2);
+  assert.match(dialog.text(),/текущий журнал Excel.*сохранённое описание Jira/s);
+  assert.match(dialog.text(),/Неоднозначный формат даты/);
+  dialog.find(".ujg-esi-management-remark").last().trigger("click");
+  assert.match(dialog.text(),/Срок \(колонка 2\).*<img/s);
+  assert.equal(dialog.find("img").length,0);
+  dialog.trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.dom.window.document.activeElement,trigger[0]);
+});
+
+test("overdue report includes deadline issue details without claiming an exact overdue total", t => {
+  const report=fixture(); report.metrics.overdue=null; report.observed={overdue:0};
+  report.deadlineCoverage={known:0,missing:0,invalid:1,conflict:0,unknownState:0,total:1};
+  report.groups[0].deadline={problem:"invalid",state:"invalid",reasonCode:"invalid-calendar",reasonLabel:"Несуществующая календарная дата",source:"excel",field:"Срок",raw:"31.02.2026",candidates:[{raw:"31.02.2026",source:"excel",field:"Срок"}]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$("[data-metric='overdue']").trigger("focus");
+  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Ошибки сроков: 1/);
+  x.$("[data-metric='overdue']").trigger("click");
+  assert.match(x.$(".ujg-esi-management-dialog").text(),/Подтверждено 0; итог может быть больше/);
+  assert.equal(x.$(".ujg-esi-management-dialog .ujg-esi-management-deadline-issue").length,0);
+  x.$(".ujg-esi-management-dialog .ujg-esi-management-deadline-open").trigger("click");
+  assert.match(x.$(".ujg-esi-management-dialog").text(),/31\.02\.2026/);
+  assert.equal(x.$(".ujg-esi-management-dialog").attr("aria-label"),"Ошибки сроков");
+});
+
+test("empty deadline issue report uses snapshot wording and remains safe with partial coverage", t => {
+  const report=fixture(); report.deadlineCoverage={known:0,missing:0,invalid:0,conflict:0,unknownState:1,total:1};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$("[data-metric='deadlineIssues']").trigger("focus");
+  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Ошибок срока в загруженных данных не обнаружено/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-metric-preview").text(),/За выбранный день/);
+  x.$("[data-metric='deadlineIssues']").trigger("click");
+  assert.match(x.$(".ujg-esi-management-dialog").text(),/состояние не подтверждено|Снимок загруженных данных/i);
+});
+
+test("mixed candidate sources are both counted in the diagnostic summary", t => {
+  const report=fixture(); report.deadlineCoverage={known:0,missing:0,invalid:0,conflict:1,unknownState:0,total:1};
+  report.groups[0].deadline={problem:"conflict",state:"conflict",reasonCode:"conflict",source:"excel",candidates:[
+    {raw:"25.09.2026",source:"excel",field:"Срок"},
+    {raw:"26.09.2026",source:"jira-description",field:"Срок исполнения"}
+  ]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$("[data-metric='deadlineIssues']").trigger("focus");
+  assert.match(x.$(".ujg-esi-management-deadline-coverage").text(),/текущий журнал Excel: 1.*сохранённое описание Jira: 1/s);
+  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Срок исполнения.*26\.09\.2026/s);
+});
 test("change filter offers unique categories, not individual event descriptions", t => {
   const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
   x.$("[data-activity-filter='change']").trigger("click");

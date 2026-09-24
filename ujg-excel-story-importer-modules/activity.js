@@ -469,10 +469,14 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var found = candidates.filter(function(candidate) { return candidate.problem !== "missing"; });
       var selected = found[0] || candidates[0], signatures = [];
       found.forEach(function(candidate) {
-        var signature = JSON.stringify([candidate.date,candidate.problem,candidate.date ? "" : candidate.raw]);
+        var signature = JSON.stringify([candidate.date,candidate.problem,candidate.date ? "" : String(candidate.raw).trim()]);
         if (signatures.indexOf(signature) < 0) signatures.push(signature);
       });
-      if (signatures.length > 1) selected = {date:null,raw:found.map(function(candidate) { return candidate.raw; }).join("; "),source:selected.source,field:selected.field,problem:"conflict"};
+      var evidence = found.reduce(function(all,candidate) { return all.concat(candidate.candidates || [{raw:candidate.raw,source:candidate.source,field:candidate.field}]); },[]);
+      evidence = evidence.filter(function(candidate,index) { return evidence.findIndex(function(other) { return other.raw === candidate.raw && other.source === candidate.source && other.field === candidate.field; }) === index; });
+      if (signatures.length > 1) selected = {date:null,raw:found.map(function(candidate) { return candidate.raw; }).join("; "),source:selected.source,field:selected.field,problem:"conflict",
+        reasonCode:"conflict",reasonLabel:deadlines.reasonLabel("conflict"),candidates:evidence};
+      else if (selected && evidence.length) selected = Object.assign({},selected,{candidates:evidence});
       var result = Object.assign({},selected,{referenceDate:deadlineDay.date,state:selected.problem || "unknown",daysOverdue:0,daysRemaining:null,owner:null,pendingTasks:[]});
       if (selected.problem) { deadlineCoverage[selected.problem]++; return result; }
       deadlineCoverage.known++;
@@ -530,7 +534,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length,taskReturns:taskReturns,overdue:overdue},returns:returnCounts,deadlineCoverage:deadlineCoverage,deadlineReferenceDate:deadlineDay.date,
       balance:{startOpen:complete ? balanceStart : null,endOpen:complete ? balanceEnd : null},transitions:pairs(transitions),transfers:pairs(transfers),groups:groups,events:events,teams:teams};
   }
-  function escape(value) { return str(value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+  function escapeRaw(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+  function escape(value) { return escapeRaw(str(value)); }
   function msk(value) {
     var ms = Date.parse(value);
     if (!isFinite(ms)) return str(value);
@@ -679,6 +684,18 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       html += '<tr><td>' + issueLink(group.key) + ' ' + escape(group.remarkId) + '<br>' + escape(group.summary) + '</td><td>' + escape(deadlineText(due)) + '</td><td>' + escape(due.owner && due.owner.label || 'Не назначен') + '</td><td>';
       (due.pendingTasks || []).forEach(function(task) { html += '<div>' + issueLink(task.key) + ' [' + escape(task.role || 'История') + '] · ' + escape(statusLabel(task.status)) + ' · ' + escape(task.assignee && task.assignee.label || 'Не назначен') + ' · ' + escape(task.team) + '</div>'; });
       html += '</td></tr>';
+    });
+    html += '</tbody></table>';
+    var issueGroups = (report.deadlineGroups || report.groups || []).filter(function(group) { return group.deadline && (group.deadline.problem === "invalid" || group.deadline.problem === "conflict"); });
+    html += '<h2>Ошибки сроков: ' + issueGroups.length + '</h2><p>Снимок загруженных данных; Excel не проверялся в реальном времени. История переносов срока неизвестна.</p>';
+    html += '<table aria-label="Ошибки сроков"><thead><tr><th>Замечание</th><th>Причина</th><th>Источник</th><th>Поле</th><th>Значение</th></tr></thead><tbody>';
+    issueGroups.forEach(function(group) {
+      var due = group.deadline, reason = due.reasonLabel || deadlines.reasonLabel(due.reasonCode || (due.problem === "conflict" ? "conflict" : "unsupported-format"));
+      var candidates = due.candidates && due.candidates.length ? due.candidates : [{raw:due.raw,source:due.source,field:due.field}];
+      candidates.forEach(function(candidate) {
+        var source = candidate.source === "excel" ? "текущий журнал Excel" : candidate.source === "jira-description" ? "сохранённое описание Jira" : "Источник не указан";
+        html += '<tr><td>' + issueLink(group.key) + ' ' + escape(group.remarkId) + '<br>' + escape(group.summary) + '</td><td>' + escape(reason) + '</td><td>' + escape(source) + '</td><td>' + escape(candidate.field) + '</td><td><pre><span>' + escapeRaw(candidate.raw) + '</span></pre></td></tr>';
+      });
     });
     html += '</tbody></table>';
     html += '<h2>Возвраты задач</h2><p>Каждая задача учтена один раз в итогах. Ниже все её возвраты в пределах фильтра журнала; причина без подтверждающего комментария неизвестна.</p><table aria-label="Возвраты задач"><thead><tr><th>МСК</th><th>Задача</th><th>Роль</th><th>Переход</th><th>Автор</th></tr></thead><tbody>';

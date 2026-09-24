@@ -31,6 +31,16 @@ function setup() {
   return {dom,$,ui:modules._ujgESI_activityManagementUi,report,state,services};
 }
 
+test("parsed deadline export retains a leading newline and safe source text", t => {
+  const x=setup(), raw="\n09/10/2026 <img src=x>\n"; t.after(()=>x.dom.window.close());
+  x.report.groups[0].deadline={problem:"invalid",candidates:[{raw,source:"excel",field:"Срок"}]};
+  const exported=new JSDOM(realActivity.exportHtml(x.report,x.state));
+  t.after(()=>exported.window.close());
+  const value=exported.window.document.querySelector('table[aria-label="Ошибки сроков"] pre');
+  assert.equal(value.textContent,raw);
+  assert.equal(value.querySelector("img"),null);
+});
+
 test("metric lists use management flags and certified transitions", t => {
   const x=setup(); t.after(()=>x.dom.window.close());
   for (const [metric,expected] of [["changed","P-1"],["newRemarks","P-1"],["completed","P-1"],["reopened","P-4"]]) {

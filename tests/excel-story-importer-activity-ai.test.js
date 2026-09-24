@@ -31,6 +31,19 @@ test("LLM context includes current journal deadlines coverage and confirmed over
   assert.match(request.systemPrompt,/перенос/i);
 });
 
+test("LLM remark record carries deadline diagnostic candidates once without extra event records", () => {
+  const source=report();
+  source.groups[0].deadline={date:null,problem:"conflict",reasonCode:"conflict",reasonLabel:"Противоречивые сроки",candidates:[
+    {raw:"25.09.2026",source:"excel",field:"Срок"},
+    {raw:"26.09.2026",source:"jira-description",field:"Срок исполнения"}
+  ]};
+  const plan=ai().prepare(source,scope);
+  const records=plan.parts.flatMap(part=>JSON.parse(part.userPrompt).records);
+  const remark=records.find(record=>record.type==="remark");
+  assert.deepEqual(remark.data.deadline.candidates,source.groups[0].deadline.candidates);
+  assert.equal(records.filter(record=>record.type==="event").length,1);
+});
+
 function report(count = 1) {
   const groups = [], events = [];
   for (let i = 0; i < count; i++) {

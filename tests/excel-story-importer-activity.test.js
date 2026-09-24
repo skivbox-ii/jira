@@ -288,6 +288,46 @@ test("overdue export includes no-event groups dates and clear current-journal ba
   assert.doesNotMatch(unsafe,/href="javascript:/);
 });
 
+test("deadline conflict across source rows keeps all candidates in a quiet group and escaped export", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const first=withDeadline(parent,'<img src=x onerror="alert(1)">');
+  const second=withDeadline(parent,"26.09.2026");
+  second.sourceColumns={"Срок устранения":"26.09.2026"};
+  const result=report(api,[first,second]);
+  assert.equal(result.events.length,0);
+  assert.equal(result.groups.length,1);
+  assert.equal(result.groups[0].deadline.problem,"conflict");
+  assert.deepEqual(JSON.parse(JSON.stringify(result.groups[0].deadline.candidates)),[
+    {raw:'<img src=x onerror="alert(1)">',source:"excel",field:"Срок исполнения"},
+    {raw:"26.09.2026",source:"excel",field:"Срок устранения"}
+  ]);
+  assert.equal(result.metrics.overdue,null);
+  const html=api.exportHtml({...result,groups:[],deadlineGroups:result.groups},{baseUrl:"https://jira.example.test"});
+  assert.match(html,/Ошибки сроков/);
+  assert.match(html,/&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+  assert.doesNotMatch(html,/<img src=x/);
+  assert.match(html,/26\.09\.2026/);
+});
+
+test("equal invalid source rows retain distinct provenance without creating a conflict", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const first=withDeadline(parent,"  someday  ");
+  const second=withDeadline(parent,"someday"); second.sourceColumns={"Срок устранения":"someday"};
+  const result=report(api,[first,second]);
+  const due=result.groups[0].deadline;
+  assert.equal(due.problem,"invalid");
+  assert.deepEqual(Array.from(due.candidates,c=>c.field),["Срок исполнения","Срок устранения"]);
+});
+
+test("deadline export preserves raw whitespace while escaping source markup", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open")), raw="\t <b>later</b> \n";
+  const result=report(api,[withDeadline(parent,raw)]);
+  assert.equal(result.groups[0].deadline.candidates[0].raw,raw);
+  const html=api.exportHtml(result,{baseUrl:"https://jira.example.test"});
+  assert.ok(html.includes("<pre><span>\t &lt;b&gt;later&lt;/b&gt; \n</span></pre>"));
+  assert.doesNotMatch(html,/<b>later<\/b>/);
+});
+
 test("change categories depend on changed data, never transition text or values", () => {
   const api=activity();
   const examples=[
@@ -1093,6 +1133,7 @@ test("unclassified status makes totals unknown without inventing done", () => {
 test("future days do not invent results and stale captures report unknown totals", () => {
   const api = activity();
   const d = detail(api, issue("P-1", "Open"));
+  d.activity.capturedAt = "2026-09-24T20:30:00Z";
   const future = api.summarize([row(d)],teams.defaults(),{date:"2026-09-25",now:"2026-09-24T12:00:00Z"});
   assert.equal(future.metrics.changed,null);
   assert.equal(future.events.length,0);

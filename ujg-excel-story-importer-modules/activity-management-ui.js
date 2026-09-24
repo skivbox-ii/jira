@@ -1,6 +1,6 @@
 define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
   "use strict";
-  var titles = {changed:"Изменённые замечания",newRemarks:"Новые замечания",completed:"Завершённые замечания",reopened:"Возобновлённые замечания",taskReturns:"Возвраты задач",events:"Все события",overdue:"Просроченные замечания"};
+  var titles = {changed:"Изменённые замечания",newRemarks:"Новые замечания",completed:"Завершённые замечания",reopened:"Возобновлённые замечания",taskReturns:"Возвраты задач",events:"Все события",overdue:"Просроченные замечания",deadlineIssues:"Ошибки сроков"};
   var completedDefinition = "В выбранный день достигнута полная готовность замечания: готовы исходная история и все связанные задачи.";
   var reopenedDefinition = "Повторное открытие после полной готовности исходной истории и всех связанных задач.";
   var taskReturnsDefinition = "Переоткрытие после завершения и возврат с проверки или тестирования. Каждая задача учтена один раз; ниже показаны все её возвраты. Причина возврата без подтверждающего комментария неизвестна.";
@@ -35,6 +35,41 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     return "Срок: " + deadlineDate(deadline.date) + " · просрочено " + value(deadline.daysOverdue) + " д · Ответственный: " + person(deadline.owner);
   }
   function deadlineSource(source) { return source === "excel" ? "текущий журнал Excel" : source === "jira-description" ? "сохранённое описание Jira" : "Нет данных"; }
+  var deadlineReasons = {missing:"Срок не указан","ambiguous-format":"Неоднозначный формат даты","unsupported-format":"Неподдерживаемый формат даты","invalid-calendar":"Несуществующая календарная дата",conflict:"Противоречивые сроки"};
+  function issueGroups(report) { return list(report && report.groups).filter(function(group) { return group && group.deadline && (group.deadline.problem === "invalid" || group.deadline.problem === "conflict"); }); }
+  function diagnosticCandidates(deadline) {
+    return list(deadline.candidates).length ? deadline.candidates : [{raw:deadline.raw,source:deadline.source,field:deadline.field}];
+  }
+  function diagnosticEvidence(group) {
+    var deadline = group.deadline || {}, code = deadline.reasonCode || (deadline.problem === "conflict" ? "conflict" : "unsupported-format");
+    var $root = $("<div/>").addClass("ujg-esi-management-deadline-evidence");
+    $root.append(textNode("strong","ujg-esi-management-deadline-reason",deadline.reasonLabel || deadlineReasons[code] || "Причина не определена"));
+    diagnosticCandidates(deadline).forEach(function(candidate) {
+      $root.append($("<div/>").addClass("ujg-esi-management-deadline-candidate").append(
+        textNode("span","","Источник: " + deadlineSource(candidate.source)),
+        textNode("span","","Поле: " + value(candidate.field)),
+        textNode("span","","Значение: " + (candidate.raw == null || candidate.raw === "" ? "Нет данных" : String(candidate.raw)))));
+    });
+    return $root;
+  }
+  function diagnosticSummary(report) {
+    var groups = issueGroups(report), sources = {excel:0,"jira-description":0,unknown:0}, reasons = Object.create(null);
+    groups.forEach(function(group) {
+      var deadline = group.deadline, seen = Object.create(null);
+      diagnosticCandidates(deadline).forEach(function(candidate) { seen[candidate.source === "excel" || candidate.source === "jira-description" ? candidate.source : "unknown"] = true; });
+      Object.keys(seen).forEach(function(source) { sources[source]++; });
+      var code = deadline.reasonCode || (deadline.problem === "conflict" ? "conflict" : "unsupported-format");
+      reasons[code] = (reasons[code] || 0) + 1;
+    });
+    var parts = ["Ошибки сроков: " + groups.length,"источники в замечаниях — текущий журнал Excel: " + sources.excel,"сохранённое описание Jira: " + sources["jira-description"]];
+    if (sources.unknown) parts.push("источник не указан: " + sources.unknown);
+    Object.keys(reasons).forEach(function(code) { parts.push((deadlineReasons[code] || "Причина не определена") + ": " + reasons[code]); });
+    return textNode("p","ujg-esi-management-deadline-coverage",parts.join(" · ") + ". Снимок загруженных данных; Excel не проверялся в реальном времени. История переносов срока неизвестна.");
+  }
+  function diagnosticOpen(report,services) {
+    return $("<button type='button'/>").addClass("ujg-esi-management-deadline-open").text("Ошибки сроков: " + issueGroups(report).length + " · Открыть диагностику")
+      .on("click",function() { if (services.onOpenMetric) services.onOpenMetric("deadlineIssues"); });
+  }
   function calendarDays(count) {
     var last = count % 10, lastTwo = count % 100;
     if (lastTwo >= 11 && lastTwo <= 14) return count + " календарных дней";
@@ -135,6 +170,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     var groups = list(report && report.groups).filter(function(group) {
       var item = management(group);
       if (metric === "overdue") return group.deadline && group.deadline.state === "overdue";
+      if (metric === "deadlineIssues") return group.deadline && (group.deadline.problem === "invalid" || group.deadline.problem === "conflict");
       if (metric === "taskReturns") return list(group.taskReturns).length > 0;
       if (metric === "changed") return item.changed === true;
       if (metric === "newRemarks") return item.newRemark === true;
@@ -243,6 +279,8 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     return (names.length ? names.join(", ") : "Нет данных") + (incomplete ? " · данные частичны" : "");
   }
   function previewItem(group, metric, state, report) {
+    if (metric === "deadlineIssues") return $("<div/>").addClass("ujg-esi-management-preview-item is-deadline-issue")
+      .append(groupLabel(group,state),diagnosticEvidence(group));
     if (metric === "taskReturns") return $("<div/>").addClass("ujg-esi-management-preview-item is-returned")
       .append(groupLabel(group,state),textNode("div","ujg-esi-management-preview-outcome",outcome(group,metric)),returnEvents(group,state));
     if (metric === "overdue") return $("<div/>").addClass("ujg-esi-management-preview-item is-overdue")
@@ -305,8 +343,9 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
   function preview(report, metric, state, services) {
     state = state || {}; services = services || {};
     var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-preview");
-    $root.append(textNode("strong","ujg-esi-management-preview-title",titles[metric] || "Сводка"),metric === "overdue" ? null : warning(report));
+    $root.append(textNode("strong","ujg-esi-management-preview-title",titles[metric] || "Сводка"),metric === "overdue" || metric === "deadlineIssues" ? null : warning(report));
     if (metric === "overdue") $root.append(overdueCoverage(report));
+    if (metric === "deadlineIssues") $root.append(diagnosticSummary(report));
     if (metric === "completed") $root.append(textNode("p","ujg-esi-management-definition",completedDefinition));
     if (metric === "reopened") $root.append(textNode("p","ujg-esi-management-definition",reopenedDefinition));
     if (metric === "taskReturns") $root.append(returnSummary(report));
@@ -315,8 +354,9 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
       $root.append(textNode("p","ujg-esi-management-preview-average","Среднее время от создания до первой полной готовности за выбранный день: " + (elapsed.length ? calendarDuration(elapsed.reduce(function(sum,seconds) { return sum + seconds; },0)/elapsed.length) : "Нет данных") + " (" + elapsed.length + " из " + groups.length + " замечаний с известным временем)"));
     }
     var $scroll = $("<div/>").addClass("ujg-esi-management-preview-scroll");
-    if (!groups.length) $scroll.append(textNode("p","ujg-esi-management-empty",metric === "overdue" ? overdueEmpty(report) : report.coverage && report.coverage.isComplete ? "За выбранный день таких замечаний нет" : "Нет подтверждённых данных"));
+    if (!groups.length) $scroll.append(textNode("p","ujg-esi-management-empty",metric === "overdue" ? overdueEmpty(report) : metric === "deadlineIssues" ? "Ошибок срока в загруженных данных не обнаружено; полнота зависит от загруженного снимка." : report.coverage && report.coverage.isComplete ? "За выбранный день таких замечаний нет" : "Нет подтверждённых данных"));
     groups.forEach(function(group) { $scroll.append(previewItem(group,metric,state,report)); });
+    if (metric === "overdue" && issueGroups(report).length) $scroll.append(diagnosticOpen(report,services));
     $root.append($scroll);
     return $root.append($("<button type='button'/>").addClass("ujg-esi-management-preview-open").text("Открыть сводку").on("click",function() { if (services.onOpen) services.onOpen(); }));
   }
@@ -365,6 +405,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
   function detail(group, metric, state, services, report) {
     var info = management(group), $root = $("<div/>").addClass("ujg-esi-management-detail");
     $root.append($("<h3/>").append(groupLabel(group,state)));
+    if (metric === "deadlineIssues") return $root.append(diagnosticEvidence(group));
     var $outcomes = $("<div/>").addClass("ujg-esi-management-outcomes");
     $outcomes.append(textNode("strong","",metric === "completed" ? completionLabel(group) : metric === "overdue" ? "Просрочка" : "За день"),$("<span/>").append(richText((metric === "reopened" ? "Возобновлено: " : "") + outcome(group,metric),state)));
     $root.append($outcomes);
@@ -425,13 +466,15 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     report = report || {}; state = state || {}; services = services || {};
     var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-panel");
     var reportDate = /^\d{4}-\d{2}-\d{2}$/.test(report.date || "") ? report.date.split("-").reverse().join(".") : value(report.date);
-    var $head = $("<header/>").addClass("ujg-esi-management-header").append($("<div/>").append(textNode("h2","",titles[metric] || "Сводка"),textNode("span","ujg-esi-management-date",metric === "overdue" ? "На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК" : reportDate + " · МСК")));
+    var $head = $("<header/>").addClass("ujg-esi-management-header").append($("<div/>").append(textNode("h2","",titles[metric] || "Сводка"),textNode("span","ujg-esi-management-date",metric === "overdue" || metric === "deadlineIssues" ? "На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК" : reportDate + " · МСК")));
     if (metric === "completed") $head.children("div").append(textNode("p","ujg-esi-management-definition",completedDefinition));
     if (metric === "reopened") $head.children("div").append(textNode("p","ujg-esi-management-definition",reopenedDefinition));
     if (metric === "taskReturns") $head.children("div").append(returnSummary(report));
     $head.append($("<button type='button'/>").addClass("ujg-esi-management-close").attr({title:"Закрыть сводку","aria-label":"Закрыть сводку"}).append(icon("X")).on("click",function() { if (services.onClose) services.onClose(); }));
-    $root.append($head,metric === "overdue" ? null : warning(report));
+    $root.append($head,metric === "overdue" || metric === "deadlineIssues" ? null : warning(report));
     if (metric === "overdue") $root.append(overdueCoverage(report));
+    if (metric === "deadlineIssues") $root.append(diagnosticSummary(report));
+    if (metric === "overdue" && issueGroups(report).length) $root.append(diagnosticOpen(report,services));
     var $body = $("<div/>").addClass("ujg-esi-management-body"), $list = $("<nav/>").addClass("ujg-esi-management-list").attr("aria-label","Замечания"), $detail = $("<main/>").addClass("ujg-esi-management-detail-host");
     if (metric === "events") {
       $list.append(textNode("h3","","Область"));
@@ -460,7 +503,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
       groups.forEach(scopeButton);
     } else {
       $list.append(textNode("h3","","Замечания"));
-      if (!groups.length) $list.append(textNode("p","ujg-esi-management-empty",metric === "overdue" ? overdueEmpty(report) : "Нет данных"));
+      if (!groups.length) $list.append(textNode("p","ujg-esi-management-empty",metric === "overdue" ? overdueEmpty(report) : metric === "deadlineIssues" ? "Ошибок срока в загруженных данных не обнаружено; полнота зависит от загруженного снимка." : "Нет данных"));
       groups.forEach(function(group,index) {
         var $button = $("<button type='button'/>").addClass("ujg-esi-management-remark").append(plainGroupLabel(group)).on("click",function() {
           $list.find(".ujg-esi-management-remark").removeClass("is-selected").attr("aria-current",null);

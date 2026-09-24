@@ -1983,6 +1983,8 @@
 .ujg-esi-activity-metric[data-metric="overdue"] strong { color: #ae2a19; }
 .ujg-esi-activity-balance { text-align: center; font-weight: 600; }
 .ujg-esi-activity-deadline-coverage { margin: 3px 0 0; color: #526174; font-size: 11px; text-align: center; overflow-wrap: anywhere; }
+.ujg-esi-activity-deadline-issues { padding: 0 2px; border: 0; background: transparent; color: #075fc4; font: inherit; text-decoration: underline; cursor: pointer; }
+.ujg-esi-activity-deadline-issues:hover, .ujg-esi-activity-deadline-issues:focus-visible { color: #064d9f; outline-offset: 2px; }
 .ujg-esi-activity-flows { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #dce3eb; }
 .ujg-esi-activity-flows section { min-width: 0; padding: 10px 12px 10px 0; }
 .ujg-esi-activity-flows section + section { border-left: 1px solid #dce3eb; padding-left: 16px; }
@@ -2106,6 +2108,13 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-warning { flex: 0 0 auto; padding: 7px 16px; color: #785b32; background: #fbf6ec; border-bottom: 1px solid #e8d9bd; }
 .ujg-esi-management-deadline-coverage { flex: 0 0 auto; padding: 6px 16px; border-bottom: 1px solid #dce3eb; color: #526174; font-size: 11px; overflow-wrap: anywhere; }
 .ujg-esi-management-preview > .ujg-esi-management-deadline-coverage { padding: 5px 0 8px; }
+.ujg-esi-management-deadline-open { flex: 0 0 auto; align-self: start; margin: 5px 16px; padding: 3px 0; border: 0; background: transparent; color: #075fc4; font: inherit; text-decoration: underline; cursor: pointer; }
+.ujg-esi-management-preview-scroll > .ujg-esi-management-deadline-open { margin: 8px 0; }
+.ujg-esi-management-deadline-evidence { min-width: 0; overflow-wrap: anywhere; }
+.ujg-esi-management-deadline-reason { display: block; margin: 5px 0; color: #9f351f; }
+.ujg-esi-management-deadline-candidate { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 3px 0; }
+.ujg-esi-management-deadline-candidate > span:last-child { flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ujg-esi-management-preview-item.is-deadline-issue { grid-template-columns: minmax(160px,1fr) minmax(0,2fr); }
 .ujg-esi-management-body { display: grid; grid-template-columns: minmax(230px,30%) minmax(0,1fr); flex: 1 1 auto; min-height: 0; }
 .ujg-esi-management-list, .ujg-esi-management-detail-host { min-width: 0; overflow: auto; }
 .ujg-esi-management-list { border-right: 1px solid #dce3eb; background: #f8fafc; }

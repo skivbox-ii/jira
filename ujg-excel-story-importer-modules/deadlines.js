@@ -19,6 +19,13 @@ define("_ujgESI_deadlines", [], function() {
     match = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(raw);
     return match ? iso(+match[3], +match[2], +match[1]) : null;
   }
+  var reasonLabels = {missing:"Срок не указан", "ambiguous-format":"Неоднозначный формат даты", "unsupported-format":"Неподдерживаемый формат даты", "invalid-calendar":"Несуществующая календарная дата", conflict:"Противоречивые сроки"};
+  function invalidReason(raw) {
+    var value = text(raw);
+    if (/^(?:\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})$/.test(value)) return "invalid-calendar";
+    if (/^\d{1,4}\/\d{1,2}\/\d{2,4}$/.test(value)) return "ambiguous-format";
+    return "unsupported-format";
+  }
   function baseName(name) { return text(name).replace(/ \(колонка \d+\)\**$/, ""); }
   function names(columnMap, entries) {
     var preferred = text(columnMap && columnMap.deadline) || "Срок";
@@ -46,10 +53,10 @@ define("_ujgESI_deadlines", [], function() {
         !(canonicalFallback && base === aliases[0] && text(entry.name) !== aliases[0]);
     }).sort(function(a, b) {
       return approved.indexOf(baseName(a.name)) - approved.indexOf(baseName(b.name));
-    }).map(function(entry) { return {raw:text(entry.value),source:source,field:entry.name}; });
+    }).map(function(entry) { return {raw:String(entry.value),source:source,field:entry.name}; });
   }
   function unescapeCell(value) {
-    return text(value).replace(/\\&#124;/g, "|").replace(/\\\\/g, "\n").replace(/\\\\/g, "\\");
+    return String(value == null ? "" : value).replace(/\\&#124;/g, "|").replace(/\\\\/g, "\n").replace(/\\\\/g, "\\");
   }
   function importedColumns(description) {
     var lines = text(description).split(/\r?\n/), start = lines.findIndex(function(line) {
@@ -67,18 +74,20 @@ define("_ujgESI_deadlines", [], function() {
         else current += line[j];
       }
       if (cells.length !== 2 || current) continue;
-      var name = unescapeCell(cells[0]);
+      var name = text(unescapeCell(cells[0]));
       if (name) columns.push({name:name,value:unescapeCell(cells[1])});
     }
     return columns;
   }
   function result(candidates) {
-    if (!candidates.length) return {date:null,raw:"",source:null,field:null,problem:"missing"};
+    if (!candidates.length) return {date:null,raw:"",source:null,field:null,problem:"missing",reasonCode:"missing",reasonLabel:reasonLabels.missing,candidates:[]};
     var first = candidates[0], dates = candidates.map(function(candidate) { return parseDate(candidate.raw); });
-    var distinct = candidates.map(function(candidate, index) { return dates[index] || "!" + candidate.raw; })
+    var distinct = candidates.map(function(candidate, index) { return dates[index] || "!" + text(candidate.raw); })
       .filter(function(value, index, all) { return all.indexOf(value) === index; });
     var problem = distinct.length > 1 ? "conflict" : dates[0] ? null : "invalid";
-    return {date:problem ? null : dates[0],raw:first.raw,source:first.source,field:first.field,problem:problem};
+    var reasonCode = problem === "conflict" ? "conflict" : problem === "invalid" ? invalidReason(first.raw) : null;
+    return {date:problem ? null : dates[0],raw:first.raw,source:first.source,field:first.field,problem:problem,
+      reasonCode:reasonCode,reasonLabel:reasonCode ? reasonLabels[reasonCode] : null,candidates:candidates};
   }
   function resolve(row, options) {
     row = row || {};
@@ -98,5 +107,5 @@ define("_ujgESI_deadlines", [], function() {
     return result(values(importedColumns(details.description), options.columnMap, "jira-description"));
   }
 
-  return {resolve:resolve};
+  return {resolve:resolve,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
 });

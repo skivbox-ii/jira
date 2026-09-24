@@ -8,11 +8,46 @@ function deadlines() { return load(path.join(dir, "deadlines.js"), {}); }
 
 test("strict date parsing and missing values", () => {
   const resolve = deadlines().resolve;
-  assert.deepEqual(JSON.parse(JSON.stringify(resolve({sourceColumns:{"Срок исполнения":"25.09.2026"}}))),
-    {date:"2026-09-25",raw:"25.09.2026",source:"excel",field:"Срок исполнения",problem:null});
+  assert.deepEqual(JSON.parse(JSON.stringify(resolve({sourceColumns:{"Срок исполнения":"25.09.2026"}}))).date,"2026-09-25");
   assert.equal(resolve({sourceColumns:{"Срок исполнения":"31.02.2026"}}).problem,"invalid");
   assert.equal(resolve({sourceColumns:{"Срок исполнения":"09/10/2026"}}).problem,"invalid");
   assert.equal(resolve({sourceColumns:{"Дата фактического устранения":"25.09.2026"}}).problem,"missing");
+});
+
+test("diagnostics classify missing, ambiguous slash, unsupported and calendar-invalid values without accepting them", () => {
+  const resolve=deadlines().resolve;
+  for (const [columns,problem,reasonCode,label] of [
+    [{},"missing","missing",/не указан/i],
+    [{"Срок":"09/10/2026"},"invalid","ambiguous-format",/неоднознач/i],
+    [{"Срок":"September 25, 2026"},"invalid","unsupported-format",/формат/i],
+    [{"Срок":"31.02.2026"},"invalid","invalid-calendar",/календар/i]
+  ]) {
+    const due=resolve({sourceColumns:columns});
+    assert.equal(due.problem,problem);
+    assert.equal(due.reasonCode,reasonCode);
+    assert.match(due.reasonLabel,label);
+    assert.equal(due.date,null);
+  }
+});
+
+test("conflict diagnostics retain every original value, field and source", () => {
+  const resolve=deadlines().resolve;
+  const due=resolve({sourceColumns:{"Срок исполнения":" 25.09.2026 ","Срок устранения":"26.09.2026"}});
+  assert.equal(due.problem,"conflict");
+  assert.equal(due.reasonCode,"conflict");
+  assert.match(due.reasonLabel,/противореч/i);
+  assert.deepEqual(JSON.parse(JSON.stringify(due.candidates)),[
+    {raw:" 25.09.2026 ",source:"excel",field:"Срок исполнения"},
+    {raw:"26.09.2026",source:"excel",field:"Срок устранения"}
+  ]);
+  assert.equal(due.raw," 25.09.2026 ");
+});
+
+test("padding does not turn the same unsupported value into a conflict", () => {
+  const due=deadlines().resolve({sourceColumns:{"Срок исполнения":"  someday  ","Срок устранения":"someday"}});
+  assert.equal(due.problem,"invalid");
+  assert.equal(due.reasonCode,"unsupported-format");
+  assert.equal(due.candidates.length,2);
 });
 
 test("default journal Срок wins; old aliases are fallback only when it is absent", () => {
@@ -101,4 +136,14 @@ test("Jira fallback reads only escaped imported ROOT table", () => {
   assert.equal(resolve({jiraKey:"ABC-1",storyDetails:{description}}).date,"2026-09-25");
   assert.equal(resolve({jiraKey:"ABC-1",storyDetails:{description:"Исполнить до 25.09.2026"}}).problem,"missing");
   assert.equal(resolve({jiraKey:"ABC-1",storyDetails:{description:"|Срок исполнения|25.09.2026|"}}).problem,"missing");
+});
+
+test("imported Jira description conflicts retain every candidate and its source", () => {
+  const description="Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Срок исполнения|25.09.2026|\n|Срок исполнения|26.09.2026|";
+  const due=deadlines().resolve({jiraKey:"ABC-1",storyDetails:{description}});
+  assert.equal(due.problem,"conflict");
+  assert.deepEqual(JSON.parse(JSON.stringify(due.candidates)),[
+    {raw:"25.09.2026",source:"jira-description",field:"Срок исполнения"},
+    {raw:"26.09.2026",source:"jira-description",field:"Срок исполнения"}
+  ]);
 });
