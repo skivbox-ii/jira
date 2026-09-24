@@ -23,6 +23,74 @@ function detail(api, jira, role = "") {
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
 
+test("search timestamps rounded to seconds do not invalidate millisecond changelog entries", () => {
+  const api = activity();
+  const h = history("h", "2026-09-24T09:00:00.853Z", "editor", [item("status", "1", "2", "Open", "Done")]);
+  const jira = issue("P-1", "Done", [h], {fields:{updated:"2026-09-24T09:00:00.000Z"}});
+  assert.equal(api.capture(jira).complete, true);
+  jira.fields.updated = "2026-09-24T08:59:59.000Z";
+  assert.equal(api.capture(jira).complete, false, "A later second remains contradictory");
+  jira.fields.updated = "2026-09-24T09:00:00.100Z";
+  assert.equal(api.capture(jira).complete, false, "Nonzero milliseconds are authoritative");
+});
+
+test("events describe statuses, assignments and durations in plain Russian", () => {
+  const api = activity();
+  assert.equal(api.statusLabel("In Progress"), "В работе");
+  assert.equal(api.statusLabel("In Review"), "На проверке");
+  assert.equal(api.statusLabel("Done"), "Выполнено");
+  assert.equal(api.statusLabel("Custom customer gate"), "Custom customer gate");
+  assert.equal(api.eventText({kind:"status",from:"In Progress",to:"In Review"}), "Передана на проверку · В работе → На проверке");
+  assert.equal(api.eventText({kind:"status",from:"Принята",to:"Done"}), "Задача выполнена · Принята → Выполнено");
+  assert.equal(api.eventText({kind:"status",from:"Готово",to:"Готово"}), "Статус не изменился: Готово");
+  assert.equal(api.eventText({kind:"field",field:"timespent",from:"14400",to:"18000"}), "Учтено 1 ч работы · всего 5 ч");
+  assert.equal(api.eventText({kind:"field",field:"timespent",from:"18000",to:"14400"}), "Скорректированы трудозатраты: 5 ч → 4 ч");
+  assert.equal(api.eventText({kind:"field",field:"timeestimate",from:"14400",to:"10800"}), "Оставшаяся оценка: 4 ч → 3 ч");
+  assert.equal(api.eventText({kind:"field",field:"timeoriginalestimate",from:"0",to:"5400"}), "Исходная оценка: 0 мин → 1 ч 30 мин");
+  assert.equal(api.eventText({kind:"field",field:"WorklogId",from:"151371",to:""}), "Обновлена запись трудозатрат");
+  assert.equal(api.eventText({kind:"field",field:"resolution",from:"",to:"Done"}), "Установлен результат: Выполнено");
+  assert.equal(api.eventText({kind:"field",field:"resolution",from:"Done",to:""}), "Сброшен результат: Выполнено");
+  assert.equal(api.eventText({kind:"assignee",from:"Alice",to:""}), "Снято назначение: Alice");
+  assert.equal(api.eventText({kind:"created"}), "Создана задача");
+  assert.match(api.eventText({kind:"field",field:"customfield_1",from:"a",to:"b"}), /customfield_1.*a → b/);
+  assert.doesNotMatch(api.eventText({kind:"field",field:"timespent",from:"",to:"60"}), /Учтено/, "Unknown previous total is not zero");
+  assert.equal(api.eventText({kind:"field",field:"timespent",from:"",to:"7200"}), "Указаны трудозатраты: 2 ч");
+});
+
+test("duplicate WorklogId bookkeeping is hidden only alongside time changes in the same history", () => {
+  const api=activity();
+  const jira=issue("P-1","Open",[
+    history("h1","2026-09-24T01:00:00Z","editor",[item("timespent","0","1800"),item("WorklogId","42",null)]),
+    history("h2","2026-09-24T02:00:00Z","editor",[item("WorklogId","43",null)])
+  ]);
+  const result=report(api,[row(detail(api,jira))]);
+  assert.equal(result.events.length,2);
+  assert.deepEqual(Array.from(result.events,event=>event.field),["timespent","WorklogId"]);
+});
+
+test("review status is classified as open even when historical category is unavailable", () => {
+  const api=activity();
+  const jira=issue("P-1","Done",[history("h","2026-09-24T01:00:00Z","editor",[item("status","3","2","In Review","Done")])]);
+  const result=report(api,[row(detail(api,jira))]);
+  assert.equal(result.coverage.isComplete,true);
+  assert.equal(result.metrics.completed,1);
+  assert.equal(result.balance.startOpen,1);
+});
+
+test("HTML exports readable event descriptions and transition matrices instead of raw Jira fields", () => {
+  const api=activity();
+  const jira=issue("P-1","Done",[history("h","2026-09-24T01:00:00Z","editor",[
+    item("status","1","2","In Review","Done"),item("timeestimate","3600","0"),item("timespent","0","1800"),item("WorklogId","42",null)
+  ])]);
+  const html=api.exportHtml(report(api,[row(detail(api,jira))]),{filters:{role:["QA","BE"]},sort:{key:"time",descending:true}});
+  assert.match(html,/Задача выполнена/);
+  assert.match(html,/Учтено 30 мин работы/);
+  assert.match(html,/Оставшаяся оценка: 1 ч → 0 мин/);
+  assert.doesNotMatch(html,/WorklogId|timeestimate|timespent|In Review|Done/);
+  assert.match(html,/<table[^>]*aria-label="Переходы статусов"/);
+  assert.match(html,/Из → В/);
+});
+
 test("Moscow day is half-open, today uses Moscow, and invalid dates fail", () => {
   const api = activity();
   assert.deepEqual(JSON.parse(JSON.stringify(api.day("2026-09-24"))), {date: "2026-09-24", start: Date.parse("2026-09-23T21:00:00Z"), end: Date.parse("2026-09-24T21:00:00Z")});

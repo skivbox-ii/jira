@@ -1064,6 +1064,7 @@ define("_ujgESI_main", [
     };
     var excelRows = state.rows;
     var registryRows = [];
+    var registryLoaded = false;
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
@@ -2145,6 +2146,7 @@ define("_ujgESI_main", [
           if (state.projectKey) {
             loadEpics(state.projectKey);
             loadCreateMeta(state.projectKey);
+            if (state.reportView === "activity" && !registryLoaded) onLoadRegistry();
           }
         },
         function(err) {
@@ -2290,6 +2292,7 @@ define("_ujgESI_main", [
     function invalidateRegistry() {
       registrySeq += 1;
       registryRows = [];
+      registryLoaded = false;
       state.registryLoading = false;
       state.registryError = "";
       state.registryWarning = "";
@@ -2311,6 +2314,7 @@ define("_ujgESI_main", [
         state.registryLoading = false;
       }
       state.viewMode = next;
+      if (next === "excel") state.reportView = "registry";
       state.rows = next === "jira" ? registryRows : excelRows;
       state.createDialog = null;
       state.summaryDialog = null;
@@ -2335,6 +2339,7 @@ define("_ujgESI_main", [
         return;
       }
       seq = ++registrySeq;
+      registryLoaded = false;
       invalidateActivityHistory();
       state.registryLoading = true;
       state.registryError = "";
@@ -2391,6 +2396,7 @@ define("_ujgESI_main", [
         state.registryLoading = false;
         state.registryError = "";
         state.registryWarning = data.warning;
+        registryLoaded = true;
         render();
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
@@ -2419,6 +2425,7 @@ define("_ujgESI_main", [
       closeIssueTypePicker();
       loadEpics(state.projectKey);
       loadCreateMeta(state.projectKey);
+      if (state.reportView === "activity") onLoadRegistry();
     }
 
     function onEpicChange(epicKey) {
@@ -2449,6 +2456,7 @@ define("_ujgESI_main", [
       closeUserPicker();
       closeIssueTypePicker();
       render();
+      if (state.reportView === "activity") onLoadRegistry();
     }
 
     function onFileChange(file) {
@@ -3696,6 +3704,8 @@ define("_ujgESI_main", [
         if (view !== "registry" && view !== "activity") return;
         state.reportView = view;
         closeUserPicker();
+        if (view === "activity" && state.viewMode !== "jira") onViewModeChange("jira");
+        if (view === "activity" && !registryLoaded) onLoadRegistry();
         render();
       },
       onDownloadPatchedExcel: onDownloadPatchedExcel,

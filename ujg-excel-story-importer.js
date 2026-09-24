@@ -3259,7 +3259,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       var at = timestamp(h.created);
       if (!at) warn("Недостоверное время истории Jira или нет часового пояса");
       if (at && result.created && at < result.created) warn("Изменение раньше создания Jira");
-      if (at && result.updated && at > result.updated) warn("Изменение позже обновления Jira");
+      // Jira Server search truncates updated milliseconds (JRASERVER-28238).
+      if (at && result.updated && at > result.updated && (Date.parse(result.updated) % 1000 !== 0 || Math.floor(Date.parse(at) / 1000) > Math.floor(Date.parse(result.updated) / 1000))) warn("Изменение позже обновления Jira: " + at + " > " + result.updated);
       var items = [];
       h.items.forEach(function(item,indexInHistory) {
         if (!item || !str(item.field || item.fieldId)) { warn("Поврежденное поле истории Jira"); return; }
@@ -3295,7 +3296,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     if (category === "done") return "done";
     if (["new","indeterminate","in progress"].indexOf(category) >= 0) return "open";
     if (/^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(name)) return "done";
-    if (/^(open|new|to do|todo|backlog|in progress|progress|active|reopened|blocked|testing|in testing|qa|ready for testing|открыто|открыт|открыта|новая|новый|в работе|в процессе|заблокирован|тестирование|на тестировании|выдано|к выполнению|готово к тестированию)$/.test(name)) return "open";
+    if (/^(open|new|to do|todo|backlog|in progress|in review|review|progress|active|reopened|blocked|testing|in testing|qa|ready for testing|открыто|открыт|открыта|новая|новый|в работе|в процессе|на проверке|проверка|заблокирован|тестирование|на тестировании|выдано|к выполнению|готово к тестированию)$/.test(name)) return "open";
     return "unknown";
   }
   function assigneeFrom(item,side) {
@@ -3405,6 +3406,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       all.forEach(function(change) {
         var at = Date.parse(change.h.at), item = change.item;
         if (at < window.start || at >= endpoint) return;
+        if (str(item.field).toLowerCase() === "worklogid" && change.h.items.some(function(sibling) { return /^(timespent|timeestimate)$/i.test(sibling.field); })) return;
         var fromAssignee = item.field === "assignee" ? assigneeFrom(item,"from") : eventAssignee;
         var toAssignee = item.field === "assignee" ? assigneeFrom(item,"to") : eventAssignee;
         var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,
@@ -3511,6 +3513,55 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     if (value == null) return "не задано";
     try { return JSON.stringify(value); } catch (_) { return "недоступно"; }
   }
+  function statusLabel(value) {
+    var name = str(value);
+    var labels = {"open":"Открыто","new":"Новое","to do":"К выполнению","todo":"К выполнению","backlog":"В очереди",
+      "in progress":"В работе","in review":"На проверке","review":"На проверке","reopened":"Возвращено в работу","blocked":"Заблокировано",
+      "testing":"На тестировании","in testing":"На тестировании","ready for testing":"Готово к тестированию",
+      "done":"Выполнено","complete":"Выполнено","completed":"Выполнено","finished":"Выполнено","resolved":"Решено","closed":"Закрыто",
+      "cancelled":"Отменено","canceled":"Отменено","rejected":"Отклонено","accepted":"Принято","unresolved":"Не решено"};
+    return labels[name.toLowerCase()] || name || "Статус не указан";
+  }
+  function duration(value) {
+    var raw = str(value);
+    if (!/^\d+(?:\.\d+)?$/.test(raw)) return raw || "не задано";
+    var seconds = Number(raw), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = Math.round(seconds % 60);
+    return [hours ? hours + " ч" : "",minutes ? minutes + " мин" : "",rest ? rest + " с" : ""].filter(Boolean).join(" ") || "0 мин";
+  }
+  function eventText(event) {
+    event = event || {};
+    var from = str(event.from), to = str(event.to), field = str(event.field).toLowerCase();
+    if (event.kind === "created") return "Создана задача";
+    if (event.kind === "status") {
+      if (from && from === to) return "Статус не изменился: " + statusLabel(to);
+      var destination = statusLabel(to), action = "Изменён статус";
+      if (/^(done|complete|completed|finished|готово|выполнено|выполнена)$/.test(to.toLowerCase())) action = "Задача выполнена";
+      else if (/^(in progress|в работе)$/.test(to.toLowerCase())) action = kind(state("",from)) === "done" ? "Возвращена в работу" : "Взята в работу";
+      else if (/^(in review|review|на проверке)$/.test(to.toLowerCase())) action = "Передана на проверку";
+      else if (/^(testing|in testing|тестирование|на тестировании)$/.test(to.toLowerCase())) action = "Передана на тестирование";
+      else if (/^(closed|закрыто|закрыта)$/.test(to.toLowerCase())) action = "Задача закрыта";
+      else if (/cancel|отмен|^снят/.test(to.toLowerCase())) action = "Задача отменена";
+      return action + " · " + statusLabel(from) + " → " + destination;
+    }
+    if (event.kind === "assignee") {
+      if (!to) return from ? "Снято назначение: " + from : "Исполнитель не назначен";
+      return from ? "Передано: " + from + " → " + to : "Назначен исполнитель: " + to;
+    }
+    if (field === "worklogid") return "Обновлена запись трудозатрат";
+    if (field === "timespent") {
+      if (!from && to) return "Указаны трудозатраты: " + duration(to);
+      if (/^\d+(?:\.\d+)?$/.test(from) && /^\d+(?:\.\d+)?$/.test(to) && Number(to) > Number(from)) return "Учтено " + duration(String(Number(to) - Number(from))) + " работы · всего " + duration(to);
+      return "Скорректированы трудозатраты: " + duration(from) + " → " + duration(to);
+    }
+    if (field === "timeestimate" || field === "timeoriginalestimate") return (field === "timeestimate" ? "Оставшаяся оценка: " : "Исходная оценка: ") + duration(from) + " → " + duration(to);
+    if (field === "resolution") {
+      if (!from && to) return "Установлен результат: " + statusLabel(to);
+      if (from && !to) return "Сброшен результат: " + statusLabel(from);
+      return "Результат: " + (from ? statusLabel(from) : "не задан") + " → " + (to ? statusLabel(to) : "не задан");
+    }
+    var names = {priority:"Приоритет",summary:"Тема",description:"Описание",labels:"Метки",component:"Компоненты",components:"Компоненты",fixversion:"Версия исправления",fixversions:"Версия исправления",version:"Версия",versions:"Версии",duedate:"Срок",attachment:"Вложение",link:"Связь задач",reporter:"Автор задачи",issuetype:"Тип задачи",sprint:"Спринт","epic link":"Эпик","story points":"Оценка сложности"};
+    return "Изменено поле «" + (names[field] || str(event.field) || "Данные задачи") + "»: " + (from || "не задано") + " → " + (to || "очищено");
+  }
   function exportHtml(report,context) {
     context = context || {};
     var warnings = report.coverage && report.coverage.warnings || [];
@@ -3528,27 +3579,41 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     [["changed","Изменённые замечания"],["newRemarks","Новые замечания"],["completed","Завершённые"],["reopened","Переоткрытые"],["events","Наблюдаемые события"]].forEach(function(pair) { html += '<tr><th>' + pair[1] + '</th><td>' + escape(report.metrics && report.metrics[pair[0]] == null ? '—' : report.metrics[pair[0]]) + '</td></tr>'; });
     if (report.coverage && !report.coverage.isComplete && report.observed) html += '<tr><th>Зафиксировано: изменённые / новые</th><td>≥' + escape(report.observed.changed) + ' / ≥' + escape(report.observed.newRemarks) + '</td></tr>';
     html += '</tbody></table><h2>Баланс</h2><p>Открыто в начале: ' + escape(report.balance && report.balance.startOpen == null ? '—' : report.balance && report.balance.startOpen) + '; в конце: ' + escape(report.balance && report.balance.endOpen == null ? '—' : report.balance && report.balance.endOpen) + '</p>';
-    [["Переходы",report.transitions],["Передачи между командами",report.transfers]].forEach(function(section) {
-      html += '<h2>' + section[0] + '</h2><ul>';
-      (section[1] || []).forEach(function(item) { html += '<li>' + escape(item.from) + ' → ' + escape(item.to) + ': ' + escape(item.count) + '</li>'; });
-      html += '</ul>';
+    [["Переходы статусов",report.transitions],["Передачи между командами",report.transfers]].forEach(function(section) {
+      html += '<h2>' + section[0] + '</h2>';
+      var entries = section[1] || [], names = Object.create(null), counts = Object.create(null);
+      entries.forEach(function(item) { names[item.from] = true; names[item.to] = true; counts[JSON.stringify([item.from,item.to])] = item.count; });
+      var parties = Object.keys(names).sort();
+      function display(name) { return escape(section[0] === "Переходы статусов" ? statusLabel(name) : name); }
+      if (!parties.length) { html += '<p>Нет зафиксированных переходов</p>'; return; }
+      html += '<table aria-label="' + section[0] + '"><thead><tr><th scope="col">Из → В</th>';
+      parties.forEach(function(name) { html += '<th scope="col">' + display(name) + '</th>'; });
+      html += '</tr></thead><tbody>';
+      parties.forEach(function(from) {
+        html += '<tr><th scope="row">' + display(from) + '</th>';
+        parties.forEach(function(to) { html += '<td>' + escape(counts[JSON.stringify([from,to])] || '—') + '</td>'; });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
     });
     html += '<h2>Команды на момент снимка</h2><ul>';
     (report.teams || []).forEach(function(team) { html += '<li>' + escape(team.name) + ' (' + escape(team.id) + '): ' + escape((team.members || []).map(function(member) { return member.label + ' [' + member.identifiers.join(', ') + ']'; }).join('; ')) + '</li>'; });
     html += '</ul><h2>Журнал</h2>';
-    (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3><table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Изменение</th><th>До → после</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
+    (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3><table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Что произошло</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
       (group.events || []).forEach(function(event) {
-        var field = {status:"Статус",assignee:"Исполнитель",created:"Создание"}[event.kind] || "Поле: " + str(event.field);
-        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(event.role) + '</td><td>' + escape(field) + '</td><td>' + escape(event.from) + ' → ' + escape(event.to) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(event.fromAssignee && event.fromAssignee.label) + ' → ' + escape(event.toAssignee && event.toAssignee.label) + '</td><td>' + escape(event.fromTeam) + ' → ' + escape(event.toTeam) + '</td></tr>';
+        var assignee = event.kind === "assignee" ? (str(event.fromAssignee && event.fromAssignee.label) || "Не назначен") + ' → ' + (str(event.toAssignee && event.toAssignee.label) || "Не назначен") : str(event.assignee && event.assignee.label) || "Не назначен";
+        var team = event.kind === "assignee" && event.fromTeam !== event.toTeam ? str(event.fromTeam) + ' → ' + str(event.toTeam) : str(event.toTeam);
+        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(event.role || "История") + '</td><td>' + escape(eventText(event)) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(assignee) + '</td><td>' + escape(team) + '</td></tr>';
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }
-  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml};
+  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,eventText:eventText};
 });
 
 /* === Module: activity-ui.js === */
 define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
   "use strict";
+  var sequence = 0;
 
   function moscowToday() { return new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10); }
   function validDate(value) {
@@ -3609,17 +3674,79 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     return "role-other";
   }
   function create() {
+    var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
+    var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
     var fields = [
-      {key:"time", title:"Время, МСК", value:function(event) { return time(event.at); }},
-      {key:"remark", title:"ID · Замечание", value:function(event,group) { return String(group.remarkId || group.key || ""); }},
-      {key:"role", title:"Тикет · Роль", value:function(event) { return roleLabel(event.role); }},
-      {key:"change", title:"Изменение", value:function(event) { return event.kind === "created" ? "Создано" : label(event.from) + " → " + label(event.to); }},
-      {key:"assignee", title:"Исполнитель / передача", value:function(event) { return label(event.assignee); }},
-      {key:"author", title:"Кто изменил", value:function(event) { return label(event.author); }}
+      {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
+      {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
+      {key:"role", title:"Тикет · Роль", width:240, value:function(event) { return roleLabel(event.role); }},
+      {key:"change", title:"Изменение", width:230, value:function(event) { return activity.eventText(event); }},
+      {key:"assignee", title:"Исполнитель / передача", width:190, value:function(event) { return label(event.assignee); }},
+      {key:"author", title:"Кто изменил", width:145, value:function(event) { return label(event.author); }}
     ];
+    order = fields.map(function(field) { return field.key; });
+    function clampWidth(value, fallback) { return typeof value === "number" && isFinite(value) ? Math.max(55, Math.min(1600, Math.round(value))) : fallback; }
+    function loadLayout(key) {
+      layoutKey = key; order = fields.map(function(field) { return field.key; }); hidden = {}; widths = {}; filters = {}; sort = {key:"time",descending:false};
+      try {
+        var data = JSON.parse(window.localStorage.getItem(key) || "null");
+        if (!data || typeof data !== "object") return;
+        var known = order.slice(), seen = Object.create(null);
+        if (Array.isArray(data.order)) order = data.order.filter(function(id) { if (known.indexOf(id) < 0 || seen[id]) return false; seen[id] = true; return true; }).concat(known.filter(function(id) { return !seen[id]; }));
+        if (Array.isArray(data.visible) && data.visible.some(function(id) { return known.indexOf(id) >= 0; })) known.forEach(function(id) { hidden[id] = data.visible.indexOf(id) < 0; });
+        fields.forEach(function(field) {
+          if (data.widths && typeof data.widths[field.key] === "number" && isFinite(data.widths[field.key])) widths[field.key] = clampWidth(data.widths[field.key],field.width);
+        });
+        if (data.sort && known.indexOf(data.sort.key) >= 0) sort = {key:data.sort.key,descending:!!data.sort.descending};
+        if (data.filters && typeof data.filters === "object") known.forEach(function(id) {
+          if (Array.isArray(data.filters[id])) filters[id] = data.filters[id].filter(function(value,index,array) { return typeof value === "string" && array.indexOf(value) === index; });
+        });
+      } catch (ignore) { /* Storage is best-effort. */ }
+    }
+    function saveLayout() {
+      try { window.localStorage.setItem(layoutKey,JSON.stringify({order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
+      catch (ignore) { /* Storage is best-effort. */ }
+    }
+    function visibleFields() { return order.filter(function(id) { return !hidden[id]; }).map(function(id) { return fields.filter(function(field) { return field.key === id; })[0]; }); }
+    function tableLayout(shown, available) {
+      var result = Object.create(null), total = 0;
+      shown.forEach(function(field) { result[field.key] = widths[field.key] || field.width; total += result[field.key]; });
+      available = available || $host && $host.width() || 0;
+      var extra = Math.max(0,available-total);
+      if (extra) {
+        var flexible = shown.filter(function(field) { return widths[field.key] == null && (field.key === "role" || field.key === "change"); });
+        if (!flexible.length) flexible = shown.filter(function(field) { return widths[field.key] == null; });
+        var weight = flexible.reduce(function(sum,field) { return sum + (field.key === "role" ? 3 : field.key === "change" ? 2 : 1); },0);
+        var remaining = extra;
+        flexible.forEach(function(field,index) {
+          var portion = field.key === "role" ? 3 : field.key === "change" ? 2 : 1;
+          var added = index === flexible.length - 1 ? remaining : Math.round(extra * portion / weight);
+          result[field.key] += added; total += added; remaining -= added;
+        });
+      }
+      return {widths:result,total:total};
+    }
+    function closePopover(focus) {
+      if ($popover) $popover.remove(); $popover = null;
+      if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; popoverAnchor.focus(); suppressPopoverFocus = false; } }
+      popoverAnchor = null;
+    }
+    function popup(anchor, title, className, width) {
+      closePopover(); popoverAnchor = anchor; $(anchor).attr("aria-expanded","true");
+      $popover = $("<div/>").addClass(className).attr({role:"dialog","aria-label":title,tabindex:"-1"}).appendTo($host);
+      var rect = anchor.getBoundingClientRect(), viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      var viewportHeight = document.documentElement.clientHeight || window.innerHeight, w = Math.min(width,Math.max(180,viewportWidth-24));
+      $popover.css({position:"fixed",width:w,left:Math.max(12,Math.min(rect.left,viewportWidth-w-12)),top:12,maxHeight:Math.max(120,viewportHeight-24)});
+      $popover.on("keydown",function(event) { if (event.key === "Escape") { event.stopPropagation(); closePopover(true); } });
+      return $popover;
+    }
+    function placePopover(anchor) {
+      var rect = anchor.getBoundingClientRect(), viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      $popover.css("top",Math.max(12,Math.min(rect.bottom+4,viewportHeight-$popover.outerHeight()-12)));
+    }
     function matching(event, group) {
-      return fields.every(function(field) { return !filters[field.key] || field.value(event,group) === filters[field.key]; });
+      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || filters[field.key].indexOf(field.value(event,group)) >= 0; });
     }
     function filtered(report) {
       var groups = (report.groups || []).map(function(group) {
@@ -3650,10 +3777,125 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         return (left < right ? -1 : left > right ? 1 : 0) * (sort.descending ? -1 : 1);
       });
     }
+    function filterMenu(anchor, field, report) {
+      var values = Object.create(null), options;
+      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[field.value(event,group)] = true; }); });
+      options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
+      var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
+      var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",280);
+      [[false,"ArrowDownAZ","Сортировка по возрастанию"],[true,"ArrowUpAZ","Сортировка по убыванию"]].forEach(function(item) {
+        $box.append(button(item[1],item[2],function() { sort = {key:field.key,descending:item[0]}; saveLayout(); draw(); }).addClass("ujg-esi-activity-menu-command").append($("<span/>").text(item[2])));
+      });
+      $box.append(button("FunnelX","Снять фильтр",function() { delete filters[field.key]; saveLayout(); draw(); })
+        .addClass("ujg-esi-activity-menu-command ujg-esi-activity-filter-reset").prop("disabled",!Array.isArray(filters[field.key])).append($("<span/>").text("Снять фильтр")));
+      var $search = $("<input/>").addClass("ujg-esi-filter-search ujg-esi-activity-filter-search").attr({type:"search",placeholder:"Поиск","aria-label":"Поиск значений"});
+      var $chips = $("<div/>").addClass("ujg-esi-filter-chips");
+      var $all = $("<input/>").attr({type:"checkbox","aria-label":"Выделить все найденные значения"});
+      var $list = $("<div/>").addClass("ujg-esi-filter-values");
+      var $count = $("<span/>").addClass("ujg-esi-filter-count");
+      $box.append($search,$chips,$("<label/>").addClass("ujg-esi-filter-all").append($all,$("<span/>").text("Выделить всё"),$count),$list);
+      function foundValues() { var query = String($search.val() || "").toLocaleLowerCase(); return options.filter(function(value) { return value.toLocaleLowerCase().indexOf(query) >= 0; }); }
+      function update() {
+        var found = foundValues(), chosen = Array.isArray(filters[field.key]) ||
+          !options.every(function(value) { return selected.indexOf(value) >= 0; }) ||
+          selected.some(function(value) { return options.indexOf(value) < 0; });
+        $count.text(options.filter(function(value) { return selected.indexOf(value) >= 0; }).length + " / " + options.length);
+        $all.prop("checked",!!found.length && found.every(function(value) { return selected.indexOf(value) >= 0; }));
+        $all.prop("indeterminate",found.some(function(value) { return selected.indexOf(value) >= 0; }) && !$all.prop("checked"));
+        $chips.empty();
+        if (chosen) selected.forEach(function(value) {
+          $chips.append($("<button/>").attr({type:"button",title:"Убрать: " + value}).addClass("ujg-esi-selected-chip ujg-esi-activity-selected-chip")
+            .append($("<span/>").text(value),icon("X")).on("click",function() { selected = selected.filter(function(item) { return item !== value; }); update(); }));
+        });
+        $list.empty();
+        var displayed = found.filter(function(value) { return !chosen || selected.indexOf(value) < 0; });
+        if (!displayed.length) $list.append($("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений"));
+        displayed.forEach(function(value) {
+          var checked = selected.indexOf(value) >= 0;
+          $list.append($("<label/>").addClass("ujg-esi-filter-option ujg-esi-activity-filter-option").toggleClass("is-selected",checked)
+            .append($("<input/>").attr("type","checkbox").prop("checked",checked).on("change",function() {
+              if (this.checked && selected.indexOf(value) < 0) selected.push(value);
+              if (!this.checked) selected = selected.filter(function(item) { return item !== value; });
+              update();
+            }),$("<span/>").text(value)));
+        });
+      }
+      $search.on("input",update);
+      $all.on("change",function() { var found = foundValues(); if (this.checked) found.forEach(function(value) { if (selected.indexOf(value) < 0) selected.push(value); }); else selected = selected.filter(function(value) { return found.indexOf(value) < 0; }); update(); });
+      var $actions = $("<div/>").addClass("ujg-esi-filter-actions");
+      $actions.append($("<button/>").attr("type","button").addClass("ujg-esi-activity-filter-clear").text("Очистить").on("click",function() { selected = []; update(); }));
+      $actions.append($("<button/>").attr("type","button").addClass("ujg-esi-filter-apply ujg-esi-activity-filter-apply").text("Применить").on("click",function() {
+        filters[field.key] = selected.slice();
+        saveLayout(); draw();
+      }));
+      $box.append($actions); update(); placePopover(anchor); $search.trigger("focus");
+    }
+    function eventPopover(anchor, title, events, state) {
+      var $box = popup(anchor,title,"ujg-esi-activity-event-popover",520);
+      $box.append($("<div/>").addClass("ujg-esi-activity-popover-head").append($("<strong/>").text(title + " · " + events.length),button("X","Закрыть события",function() { closePopover(true); })));
+      events.forEach(function(event,index) {
+        var $item = $("<div/>").addClass("ujg-esi-activity-popover-event").attr("data-event-id",event.id == null ? String(index) : String(event.id));
+        $item.append($("<div/>").addClass("ujg-esi-activity-popover-event-head").append($("<time/>").text(time(event.at)),issueKeyNode(event.issueKey,state.baseUrl)));
+        $item.append($("<div/>").addClass("ujg-esi-activity-popover-title").text(event.summary || "Без темы"));
+        $item.append($("<div/>").text("Изменил: " + label(event.author)));
+        $item.append($("<div/>").text(activity.eventText(event)));
+        if (event.kind === "assignee") {
+          $item.append($("<div/>").text("Исполнитель: " + label(event.fromAssignee || event.from) + " → " + label(event.toAssignee || event.to)));
+          $item.append($("<div/>").text("Команда: " + label(event.fromTeam) + " → " + label(event.toTeam)));
+        } else $item.append($("<div/>").text("Исполнитель: " + label(event.assignee)));
+        $box.append($item);
+      });
+      placePopover(anchor);
+    }
+    function matchingEvents(report, predicate) {
+      var seen = Object.create(null), matches = [];
+      (report.events || []).forEach(function(event,index) {
+        if (!predicate(event)) return;
+        var id = event.id == null ? String(index) : String(event.id);
+        if (!seen[id]) { seen[id] = true; matches.push(event); }
+      });
+      return matches;
+    }
+    function eventCount(count, caption, events, state) {
+      function show(anchor, focusControl) {
+        if (suppressPopoverFocus) return;
+        if (!$popover || popoverAnchor !== anchor) eventPopover(anchor,caption,events,state);
+        if (focusControl) $popover.find("button,a").first().trigger("focus");
+      }
+      return $("<button/>").attr({type:"button","aria-label":caption + ": " + count,"aria-haspopup":"dialog","aria-expanded":"false"}).text(metric(count))
+        .on("mouseenter focus click",function() { show(this,false); })
+        .on("keydown",function(event) {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); show(this,true); }
+          else if (event.key === "Tab" && !event.shiftKey && $popover && popoverAnchor === this) { event.preventDefault(); show(this,true); }
+        });
+    }
+    function columnsMenu(anchor) {
+      var $box = popup(anchor,"Столбцы журнала","ujg-esi-grid-menu ujg-esi-activity-columns-menu",280);
+      var visible = order.filter(function(id) { return !hidden[id]; });
+      order.forEach(function(id) {
+        var field = fields.filter(function(item) { return item.key === id; })[0];
+        $box.append($("<label/>").addClass("ujg-esi-filter-option ujg-esi-activity-column-option")
+          .append($("<input/>").attr("type","checkbox").prop("checked",visible.indexOf(id) >= 0).on("change",function() {
+            if (this.checked && visible.indexOf(id) < 0) visible.push(id);
+            if (!this.checked && visible.length > 1) visible = visible.filter(function(value) { return value !== id; });
+            else if (!this.checked) this.checked = true;
+          }),$("<span/>").text(field.title)));
+      });
+      $box.append($("<div/>").addClass("ujg-esi-filter-actions").append(
+        $("<button/>").attr("type","button").addClass("ujg-esi-activity-columns-reset").text("Сбросить").on("click",function() {
+          order = fields.map(function(field) { return field.key; }); hidden = {}; widths = {}; saveLayout(); draw();
+        }),
+        $("<button/>").attr("type","button").addClass("ujg-esi-filter-apply ujg-esi-activity-columns-apply").text("Применить").on("click",function() {
+          order.forEach(function(id) { hidden[id] = visible.indexOf(id) < 0; }); saveLayout(); draw();
+        })));
+      placePopover(anchor); $box.find("input").first().trigger("focus");
+    }
     function download(report, state) {
       var snapshot = filtered(report);
       snapshot.groups = sortedGroups(snapshot.groups).map(function(group) { return Object.assign({},group,{events:sortedEvents(group.events,group)}); });
-      var html = activity.exportHtml(snapshot, {projectKey:state.projectKey, epicKey:state.epicKey, filters:Object.assign({},filters), sort:Object.assign({},sort)});
+      var filterSnapshot = {};
+      Object.keys(filters).forEach(function(key) { filterSnapshot[key] = filters[key].slice(); });
+      var html = activity.exportHtml(snapshot, {projectKey:state.projectKey, epicKey:state.epicKey, filters:filterSnapshot, sort:Object.assign({},sort)});
       var url = URL.createObjectURL(new Blob([html], {type:"text/html;charset=utf-8"}));
       var anchor = document.createElement("a");
       anchor.href = url; anchor.download = "activity-" + date + ".html";
@@ -3661,23 +3903,20 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       setTimeout(function() { URL.revokeObjectURL(url); }, 0);
     }
     function draw() {
+      var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
+      closePopover();
       var state = currentState || {}, services = currentServices || {};
       var report = activity.summarize(state.rows || [], state.teams || [], {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined});
       var coverage = report.coverage || {}, metrics = report.metrics || {}, observed = report.observed || {}, balance = report.balance || {};
-      fields.forEach(function(field) {
-        if (!filters[field.key]) return;
-        var found = (report.groups || []).some(function(group) { return (group.events || []).some(function(event) { return field.value(event,group) === filters[field.key]; }); });
-        if (!found) delete filters[field.key];
-      });
       var journal = filtered(report), $root = $("<div/>").addClass("ujg-esi-activity");
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");
       $toolbar.append($("<h2/>").text("Динамика замечаний"));
       var $controls = $("<div/>").addClass("ujg-esi-activity-controls");
-      $controls.append(button("ChevronLeft","Предыдущий день",function() { date = shiftDate(date,-1); filters = {}; draw(); }));
+      $controls.append(button("ChevronLeft","Предыдущий день",function() { date = shiftDate(date,-1); filters = {}; saveLayout(); draw(); }));
       $controls.append($("<input/>").addClass("ujg-esi-activity-date").attr({type:"date", "aria-label":"Дата отчёта"}).val(date).on("change",function() {
-        if (validDate(this.value)) { if (date !== this.value) filters = {}; date = this.value; draw(); } else $(this).val(date);
+        if (validDate(this.value)) { if (date !== this.value) { filters = {}; saveLayout(); } date = this.value; draw(); } else $(this).val(date);
       }));
-      $controls.append(button("ChevronRight","Следующий день",function() { date = shiftDate(date,1); filters = {}; draw(); }));
+      $controls.append(button("ChevronRight","Следующий день",function() { date = shiftDate(date,1); filters = {}; saveLayout(); draw(); }));
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text("00:00–" + cutoff(report) + " · МСК"));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
       $toolbar.append($controls); $root.append($toolbar);
@@ -3697,15 +3936,29 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       if ((state.rows || []).length) $root.append($metrics);
       var $flows = $("<div/>").addClass("ujg-esi-activity-flows");
       var $statusSection = $("<section/>").append($("<h3/>").text("Переходы статусов задач"));
-      var $statusFlow = $("<div/>").addClass("ujg-esi-activity-status-flows");
-      (report.transitions || []).forEach(function(item) {
-        $statusFlow.append($("<div/>").addClass("ujg-esi-activity-flow").append(
-          $("<span/>").addClass("ujg-esi-activity-flow-state").text(label(item.from)),
-          $("<span/>").addClass("ujg-esi-activity-flow-arrow").append($("<strong/>").text(metric(item.count)),icon("ChevronRight")),
-          $("<span/>").addClass("ujg-esi-activity-flow-state").text(label(item.to))));
-      });
-      if (!(report.transitions || []).length) $statusFlow.text(coverage.isComplete ? "Нет переходов за день" : "Не зафиксировано в загруженной истории");
-      $flows.append($statusSection.append($statusFlow));
+      var transitions = report.transitions || [], statusKeys = Object.create(null);
+      transitions.forEach(function(item) { statusKeys[String(item.from)] = true; statusKeys[String(item.to)] = true; });
+      var statuses = Object.keys(statusKeys).sort(function(a,b) { return activity.statusLabel(a).localeCompare(activity.statusLabel(b),"ru"); });
+      if (transitions.length) {
+        var $statusScroll = $("<div/>").addClass("ujg-esi-activity-matrix-scroll"), $statusMatrix = $("<table/>").addClass("ujg-esi-activity-status-matrix").attr("aria-label","Переходы статусов задач");
+        var $statusHead = $("<tr/>").append($("<th/>").attr("scope","col").text("Из → В"));
+        statuses.forEach(function(value) { $statusHead.append($("<th/>").attr("scope","col").text(activity.statusLabel(value))); });
+        var $statusBody = $("<tbody/>");
+        statuses.forEach(function(from) {
+          var $row = $("<tr/>").append($("<th/>").attr("scope","row").text(activity.statusLabel(from)));
+          statuses.forEach(function(to) {
+            var match = transitions.filter(function(item) { return String(item.from) === from && String(item.to) === to; })[0];
+            var $cell = $("<td/>").toggleClass("has-transfer",!!match);
+            if (match) {
+              var events = matchingEvents(report,function(event) { return event.kind === "status" && String(event.from) === from && String(event.to) === to; });
+              $cell.append(eventCount(match.count,"Переход " + activity.statusLabel(from) + " → " + activity.statusLabel(to),events,state));
+            } else $cell.text("–");
+            $row.append($cell);
+          }); $statusBody.append($row);
+        });
+        $statusSection.append($statusScroll.append($statusMatrix.append($("<thead/>").append($statusHead),$statusBody)));
+      } else $statusSection.append($("<p/>").addClass("ujg-esi-activity-flow-empty").text(coverage.isComplete ? "Нет переходов за день" : "Не зафиксировано в загруженной истории"));
+      $flows.append($statusSection);
       var $transferSection = $("<section/>").append($("<h3/>").text("Передачи между командами"));
       var transfers = report.transfers || [], names = Object.create(null);
       transfers.forEach(function(item) { names[label(item.from)] = true; names[label(item.to)] = true; });
@@ -3719,7 +3972,15 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         var $row = $("<tr/>").append($("<th/>").attr("scope","row").text(from));
         parties.forEach(function(to) {
           var match = transfers.filter(function(item) { return label(item.from) === from && label(item.to) === to; })[0];
-          $row.append($("<td/>").toggleClass("has-transfer",!!match).text(match ? metric(match.count) : "–"));
+          var $cell = $("<td/>").toggleClass("has-transfer",!!match);
+          if (match) {
+            var events = matchingEvents(report,function(event) {
+              return event.kind === "assignee" && label(event.fromTeam) === from && label(event.toTeam) === to && label(event.fromTeam) !== label(event.toTeam);
+            });
+            var caption = "Передача " + from + " → " + to;
+            $cell.append(eventCount(match.count,caption,events,state));
+          } else $cell.text("–");
+          $row.append($cell);
         });
         $matrixBody.append($row);
       });
@@ -3744,29 +4005,47 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       }
       $root.append($coverage);
       var $journal = $("<section/>").addClass("ujg-esi-activity-journal");
-      $journal.append($("<div/>").addClass("ujg-esi-activity-journal-heading").append($("<h3/>").text("Изменения по замечаниям"),$("<span/>").text("Фильтры только для журнала · " + journal.groups.length + " замечаний · " + journal.events.length + " событий")));
-      if (!(state.rows || []).length) $journal.append($("<p/>").addClass("ujg-esi-activity-empty").text("Загрузите источник и связанный состав Jira, чтобы увидеть активность."));
-      else if (!journal.groups.length) $journal.append($("<p/>").addClass("ujg-esi-activity-empty").text("Для выбранного дня и фильтров событий нет."));
-      var $scroll = $("<div/>").addClass("ujg-esi-activity-scroll"), $table = $("<table/>").addClass("ujg-esi-activity-table").attr("aria-label","Журнал изменений");
-      var $head = $("<tr/>");
+      var $journalTools = $("<div/>").addClass("ujg-esi-activity-journal-tools");
       fields.forEach(function(field) {
-        var $th = $("<th/>").attr("scope","col"), $line = $("<div/>").addClass("ujg-esi-activity-th-line");
-        $line.append($("<button/>").attr({type:"button","data-activity-sort":field.key,"aria-label":"Сортировать: " + field.title}).text(field.title).on("click",function() {
-          sort = {key:field.key,descending:sort.key === field.key && !sort.descending}; draw();
-        }));
-        var values = Object.create(null);
-        (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[field.value(event,group)] = true; }); });
-        var $select = $("<select/>").attr({"data-activity-filter":field.key,"aria-label":"Фильтр: " + field.title,"title":"Фильтр: " + field.title});
-        $select.append($("<option/>").val("").text("Все"));
-        Object.keys(values).sort().forEach(function(value) { $select.append($("<option/>").val(value).text(value)); });
-        $select.val(filters[field.key] || "").on("change",function() { filters[field.key] = this.value; draw(); });
-        $th.append($line,$select); $head.append($th);
+        if (!hidden[field.key] || !Array.isArray(filters[field.key])) return;
+        $journalTools.append(button("Funnel","Фильтр: " + field.title,function(event) { event.stopPropagation(); filterMenu(this,field,report); })
+          .addClass("ujg-esi-activity-hidden-filter").attr({"data-activity-hidden-filter":field.key,"aria-haspopup":"dialog","aria-expanded":"false"})
+          .append($("<span/>").text(field.title + " · " + filters[field.key].length)));
+      });
+      if (Object.keys(filters).some(function(key) { return Array.isArray(filters[key]); })) {
+        $journalTools.append(button("FunnelX","Сбросить фильтры журнала",function() { filters = {}; saveLayout(); draw(); }));
+      }
+      $journalTools.append(button("Columns3","Столбцы журнала",function() { columnsMenu(this); }));
+      $journal.append($("<div/>").addClass("ujg-esi-activity-journal-heading").append($("<h3/>").text("Изменения по замечаниям"),$("<span/>").text("Фильтры только для журнала · " + journal.groups.length + " замечаний · " + journal.events.length + " событий"),$journalTools));
+      if (!(state.rows || []).length) $journal.append($("<p/>").addClass("ujg-esi-activity-empty").text(state.registryLoading ? "Загрузка замечаний Jira…" : state.registryError ? "Не удалось загрузить замечания Jira: " + state.registryError : "Загрузите источник и связанный состав Jira, чтобы увидеть активность."));
+      else if (!journal.groups.length) $journal.append($("<p/>").addClass("ujg-esi-activity-empty").text("Для выбранного дня и фильтров событий нет."));
+      var shown = visibleFields(), layout = tableLayout(shown);
+      var $scroll = $("<div/>").addClass("ujg-esi-activity-scroll"), $table = $("<table/>").addClass("ujg-esi-activity-table").css({width:layout.total+"px",minWidth:layout.total+"px"}).attr("aria-label","Журнал изменений");
+      var $cols = $("<colgroup/>"), $head = $("<tr/>");
+      shown.forEach(function(field) {
+        $cols.append($("<col/>").attr("data-column",field.key).css("width",layout.widths[field.key]+"px"));
+        var active = Array.isArray(filters[field.key]), sorted = sort.key === field.key;
+        var $sort = $("<button/>").attr({type:"button","data-activity-sort":field.key,"aria-label":"Сортировать: " + field.title}).addClass("ujg-esi-activity-header-sort")
+          .append($("<span/>").text(field.title),sorted ? icon(sort.descending ? "ArrowDown" : "ArrowUp") : null).on("click",function() {
+            sort = {key:field.key,descending:sort.key === field.key && !sort.descending}; saveLayout(); draw();
+          });
+        var $filter = button("Funnel","Фильтр: " + field.title,function(event) { event.stopPropagation(); filterMenu(this,field,report); })
+          .addClass("ujg-esi-header-filter").toggleClass("is-active",active).attr({"data-activity-filter":field.key,"aria-haspopup":"dialog","aria-expanded":"false"});
+        if (active) $filter.append($("<b/>").text(filters[field.key].length));
+        var $resize = $("<span/>").addClass("ujg-esi-activity-column-resize").attr({role:"separator",tabindex:"0","aria-label":"Ширина: " + field.title,"aria-orientation":"vertical"})
+          .on("pointerdown",function(event) { event.preventDefault(); event.stopPropagation();
+            var measured = $(this).closest("th")[0].getBoundingClientRect().width || parseFloat($host.find('col[data-column="'+field.key+'"]').css("width")) || layout.widths[field.key];
+            drag = {type:"resize",id:field.key,start:event.pageX,width:measured};
+          }).on("keydown",function(event) { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); widths[field.key] = clampWidth(layout.widths[field.key]+(event.key === "ArrowRight" ? 10 : -10),field.width); saveLayout(); draw(); $host.find('th[data-column="'+field.key+'"] .ujg-esi-activity-column-resize').trigger("focus"); });
+        $head.append($("<th/>").attr({scope:"col","data-column":field.key,"aria-sort":sorted ? sort.descending ? "descending" : "ascending" : "none"})
+          .on("pointerdown",function(event) { if ($(event.target).closest(".ujg-esi-header-filter,.ujg-esi-activity-column-resize").length) return; drag = {type:"order",id:field.key,start:event.pageX}; })
+          .append($sort,$filter,$resize));
       });
       var $body = $("<tbody/>");
       sortedGroups(journal.groups).forEach(function(group) {
         var key = String(group.id || group.key || group.remarkId), isCollapsed = !!collapsed[key];
         var $group = $("<tr/>").addClass("ujg-esi-activity-group");
-        $group.append($("<th/>").attr({scope:"rowgroup",colspan:fields.length}).append(
+        $group.append($("<th/>").attr({scope:"rowgroup",colspan:shown.length}).append(
           button(isCollapsed ? "ChevronRight" : "ChevronDown",(isCollapsed ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),function() { collapsed[key] = !collapsed[key]; draw(); })
             .addClass("ujg-esi-activity-group-toggle").attr("aria-expanded",String(!isCollapsed)),
           $("<span/>").addClass("ujg-esi-activity-group-key").append($("<span/>").text("#" + label(group.remarkId || group.key)),group.key ? issueKeyNode(group.key,state.baseUrl) : $("<span/>")),
@@ -3775,27 +4054,54 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         if (isCollapsed) return;
         sortedEvents(group.events,group).forEach(function(event) {
           var $row = $("<tr/>").addClass("ujg-esi-activity-event");
-          $row.append($("<td/>").text(time(event.at)));
-          $row.append($("<td/>").text(group.key || group.remarkId || ""));
           var $role = $("<span/>").addClass("ujg-esi-activity-role " + roleClass(event.role)).text(roleLabel(event.role));
           if (safeColor(event.roleColor)) $role.css("border-color",event.roleColor).css("color",event.roleColor);
-          $row.append($("<td/>").append($("<span/>").addClass("ujg-esi-activity-issue").append(issueKeyNode(event.issueKey,state.baseUrl)),$role,event.summary ? $("<div/>").addClass("ujg-esi-activity-task-summary").text(event.summary) : $("<span/>")));
-          var change = event.kind === "created" ? "Создано" : label(event.from) + " → " + label(event.to);
-          $row.append($("<td/>").append($("<span/>").text(change),event.kind === "field" ? $("<small/>").text(" · " + label(event.field)) : $("<span/>")));
           var assignee = event.kind === "assignee" ? label(event.fromAssignee || event.from) + " → " + label(event.toAssignee || event.to) : label(event.assignee);
           var $assigneeCell = $("<td/>").append(personNode(event.assignee));
           if (event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
           else if (event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
-          $row.append($assigneeCell);
-          $row.append($("<td/>").append(personNode(event.author))); $body.append($row);
+          var cells = {
+            time:$("<td/>").text(time(event.at)), remark:$("<td/>").text(group.key || group.remarkId || ""),
+            role:$("<td/>").append($("<span/>").addClass("ujg-esi-activity-issue").append(issueKeyNode(event.issueKey,state.baseUrl)),$role,event.summary ? $("<div/>").addClass("ujg-esi-activity-task-summary").text(event.summary) : $("<span/>")),
+            change:$("<td/>").text(activity.eventText(event)), assignee:$assigneeCell, author:$("<td/>").append(personNode(event.author))
+          };
+          shown.forEach(function(field) { $row.append(cells[field.key]); }); $body.append($row);
         });
       });
-      $journal.append($scroll.append($table.append($("<thead/>").append($head),$body)));
+      $journal.append($scroll.append($table.append($cols,$("<thead/>").append($head),$body)));
       $root.append($journal); $host.empty().append($root);
+      var fitted = tableLayout(shown,$scroll[0].clientWidth);
+      shown.forEach(function(field) { $cols.find('col[data-column="'+field.key+'"]').css("width",fitted.widths[field.key]+"px"); });
+      $table.css({width:fitted.total+"px",minWidth:fitted.total+"px"});
+      $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
     }
     return {render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
-      currentState = state || {}; currentServices = services || {}; draw();
+      currentState = state || {}; currentServices = services || {};
+      var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";
+      if (layoutKey !== key) loadLayout(key);
+      $(document).off(namespace)
+        .on("click"+namespace,function(event) { if ($popover && event.target !== popoverAnchor && !$.contains(popoverAnchor,event.target) && event.target !== $popover[0] && !$.contains($popover[0],event.target)) closePopover(); })
+        .on("keydown"+namespace,function(event) { if ($popover && event.key === "Escape") { event.stopPropagation(); closePopover(true); } })
+        .on("pointermove"+namespace,function(event) {
+          if (!drag || drag.type !== "resize") return;
+          var field = fields.filter(function(item) { return item.key === drag.id; })[0];
+          widths[drag.id] = clampWidth(drag.width + event.pageX - drag.start,field.width);
+          var layout = tableLayout(visibleFields(),$host.find(".ujg-esi-activity-scroll")[0].clientWidth);
+          Object.keys(layout.widths).forEach(function(key) { $host.find('col[data-column="' + key + '"]').css("width",layout.widths[key]+"px"); });
+          $host.find(".ujg-esi-activity-table").css({width:layout.total+"px",minWidth:layout.total+"px"});
+        }).on("pointerup"+namespace,function(event) {
+          if (!drag) return;
+          var action = drag; drag = null;
+          if (action.type === "resize") { saveLayout(); return; }
+          var $target = $(event.target).closest("th[data-column]");
+          if (Math.abs(event.pageX-action.start) < 5 || !$target.length) return;
+          var from = order.indexOf(action.id), to = order.indexOf($target.attr("data-column"));
+          if (from < 0 || to < 0 || from === to) return;
+          order.splice(from,1); order.splice(order.indexOf($target.attr("data-column"))+(from < to ? 1 : 0),0,action.id);
+          saveLayout(); draw();
+        }).on("pointercancel"+namespace,function() { drag = null; });
+      draw();
     }};
   }
   return {create:create};
@@ -7259,6 +7565,7 @@ define("_ujgESI_main", [
     };
     var excelRows = state.rows;
     var registryRows = [];
+    var registryLoaded = false;
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
@@ -8340,6 +8647,7 @@ define("_ujgESI_main", [
           if (state.projectKey) {
             loadEpics(state.projectKey);
             loadCreateMeta(state.projectKey);
+            if (state.reportView === "activity" && !registryLoaded) onLoadRegistry();
           }
         },
         function(err) {
@@ -8485,6 +8793,7 @@ define("_ujgESI_main", [
     function invalidateRegistry() {
       registrySeq += 1;
       registryRows = [];
+      registryLoaded = false;
       state.registryLoading = false;
       state.registryError = "";
       state.registryWarning = "";
@@ -8506,6 +8815,7 @@ define("_ujgESI_main", [
         state.registryLoading = false;
       }
       state.viewMode = next;
+      if (next === "excel") state.reportView = "registry";
       state.rows = next === "jira" ? registryRows : excelRows;
       state.createDialog = null;
       state.summaryDialog = null;
@@ -8530,6 +8840,7 @@ define("_ujgESI_main", [
         return;
       }
       seq = ++registrySeq;
+      registryLoaded = false;
       invalidateActivityHistory();
       state.registryLoading = true;
       state.registryError = "";
@@ -8586,6 +8897,7 @@ define("_ujgESI_main", [
         state.registryLoading = false;
         state.registryError = "";
         state.registryWarning = data.warning;
+        registryLoaded = true;
         render();
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
@@ -8614,6 +8926,7 @@ define("_ujgESI_main", [
       closeIssueTypePicker();
       loadEpics(state.projectKey);
       loadCreateMeta(state.projectKey);
+      if (state.reportView === "activity") onLoadRegistry();
     }
 
     function onEpicChange(epicKey) {
@@ -8644,6 +8957,7 @@ define("_ujgESI_main", [
       closeUserPicker();
       closeIssueTypePicker();
       render();
+      if (state.reportView === "activity") onLoadRegistry();
     }
 
     function onFileChange(file) {
@@ -9891,6 +10205,8 @@ define("_ujgESI_main", [
         if (view !== "registry" && view !== "activity") return;
         state.reportView = view;
         closeUserPicker();
+        if (view === "activity" && state.viewMode !== "jira") onViewModeChange("jira");
+        if (view === "activity" && !registryLoaded) onLoadRegistry();
         render();
       },
       onDownloadPatchedExcel: onDownloadPatchedExcel,

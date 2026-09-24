@@ -68,7 +68,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       var at = timestamp(h.created);
       if (!at) warn("Недостоверное время истории Jira или нет часового пояса");
       if (at && result.created && at < result.created) warn("Изменение раньше создания Jira");
-      if (at && result.updated && at > result.updated) warn("Изменение позже обновления Jira");
+      // Jira Server search truncates updated milliseconds (JRASERVER-28238).
+      if (at && result.updated && at > result.updated && (Date.parse(result.updated) % 1000 !== 0 || Math.floor(Date.parse(at) / 1000) > Math.floor(Date.parse(result.updated) / 1000))) warn("Изменение позже обновления Jira: " + at + " > " + result.updated);
       var items = [];
       h.items.forEach(function(item,indexInHistory) {
         if (!item || !str(item.field || item.fieldId)) { warn("Поврежденное поле истории Jira"); return; }
@@ -104,7 +105,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     if (category === "done") return "done";
     if (["new","indeterminate","in progress"].indexOf(category) >= 0) return "open";
     if (/^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(name)) return "done";
-    if (/^(open|new|to do|todo|backlog|in progress|progress|active|reopened|blocked|testing|in testing|qa|ready for testing|открыто|открыт|открыта|новая|новый|в работе|в процессе|заблокирован|тестирование|на тестировании|выдано|к выполнению|готово к тестированию)$/.test(name)) return "open";
+    if (/^(open|new|to do|todo|backlog|in progress|in review|review|progress|active|reopened|blocked|testing|in testing|qa|ready for testing|открыто|открыт|открыта|новая|новый|в работе|в процессе|на проверке|проверка|заблокирован|тестирование|на тестировании|выдано|к выполнению|готово к тестированию)$/.test(name)) return "open";
     return "unknown";
   }
   function assigneeFrom(item,side) {
@@ -214,6 +215,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       all.forEach(function(change) {
         var at = Date.parse(change.h.at), item = change.item;
         if (at < window.start || at >= endpoint) return;
+        if (str(item.field).toLowerCase() === "worklogid" && change.h.items.some(function(sibling) { return /^(timespent|timeestimate)$/i.test(sibling.field); })) return;
         var fromAssignee = item.field === "assignee" ? assigneeFrom(item,"from") : eventAssignee;
         var toAssignee = item.field === "assignee" ? assigneeFrom(item,"to") : eventAssignee;
         var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,
@@ -320,6 +322,55 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     if (value == null) return "не задано";
     try { return JSON.stringify(value); } catch (_) { return "недоступно"; }
   }
+  function statusLabel(value) {
+    var name = str(value);
+    var labels = {"open":"Открыто","new":"Новое","to do":"К выполнению","todo":"К выполнению","backlog":"В очереди",
+      "in progress":"В работе","in review":"На проверке","review":"На проверке","reopened":"Возвращено в работу","blocked":"Заблокировано",
+      "testing":"На тестировании","in testing":"На тестировании","ready for testing":"Готово к тестированию",
+      "done":"Выполнено","complete":"Выполнено","completed":"Выполнено","finished":"Выполнено","resolved":"Решено","closed":"Закрыто",
+      "cancelled":"Отменено","canceled":"Отменено","rejected":"Отклонено","accepted":"Принято","unresolved":"Не решено"};
+    return labels[name.toLowerCase()] || name || "Статус не указан";
+  }
+  function duration(value) {
+    var raw = str(value);
+    if (!/^\d+(?:\.\d+)?$/.test(raw)) return raw || "не задано";
+    var seconds = Number(raw), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = Math.round(seconds % 60);
+    return [hours ? hours + " ч" : "",minutes ? minutes + " мин" : "",rest ? rest + " с" : ""].filter(Boolean).join(" ") || "0 мин";
+  }
+  function eventText(event) {
+    event = event || {};
+    var from = str(event.from), to = str(event.to), field = str(event.field).toLowerCase();
+    if (event.kind === "created") return "Создана задача";
+    if (event.kind === "status") {
+      if (from && from === to) return "Статус не изменился: " + statusLabel(to);
+      var destination = statusLabel(to), action = "Изменён статус";
+      if (/^(done|complete|completed|finished|готово|выполнено|выполнена)$/.test(to.toLowerCase())) action = "Задача выполнена";
+      else if (/^(in progress|в работе)$/.test(to.toLowerCase())) action = kind(state("",from)) === "done" ? "Возвращена в работу" : "Взята в работу";
+      else if (/^(in review|review|на проверке)$/.test(to.toLowerCase())) action = "Передана на проверку";
+      else if (/^(testing|in testing|тестирование|на тестировании)$/.test(to.toLowerCase())) action = "Передана на тестирование";
+      else if (/^(closed|закрыто|закрыта)$/.test(to.toLowerCase())) action = "Задача закрыта";
+      else if (/cancel|отмен|^снят/.test(to.toLowerCase())) action = "Задача отменена";
+      return action + " · " + statusLabel(from) + " → " + destination;
+    }
+    if (event.kind === "assignee") {
+      if (!to) return from ? "Снято назначение: " + from : "Исполнитель не назначен";
+      return from ? "Передано: " + from + " → " + to : "Назначен исполнитель: " + to;
+    }
+    if (field === "worklogid") return "Обновлена запись трудозатрат";
+    if (field === "timespent") {
+      if (!from && to) return "Указаны трудозатраты: " + duration(to);
+      if (/^\d+(?:\.\d+)?$/.test(from) && /^\d+(?:\.\d+)?$/.test(to) && Number(to) > Number(from)) return "Учтено " + duration(String(Number(to) - Number(from))) + " работы · всего " + duration(to);
+      return "Скорректированы трудозатраты: " + duration(from) + " → " + duration(to);
+    }
+    if (field === "timeestimate" || field === "timeoriginalestimate") return (field === "timeestimate" ? "Оставшаяся оценка: " : "Исходная оценка: ") + duration(from) + " → " + duration(to);
+    if (field === "resolution") {
+      if (!from && to) return "Установлен результат: " + statusLabel(to);
+      if (from && !to) return "Сброшен результат: " + statusLabel(from);
+      return "Результат: " + (from ? statusLabel(from) : "не задан") + " → " + (to ? statusLabel(to) : "не задан");
+    }
+    var names = {priority:"Приоритет",summary:"Тема",description:"Описание",labels:"Метки",component:"Компоненты",components:"Компоненты",fixversion:"Версия исправления",fixversions:"Версия исправления",version:"Версия",versions:"Версии",duedate:"Срок",attachment:"Вложение",link:"Связь задач",reporter:"Автор задачи",issuetype:"Тип задачи",sprint:"Спринт","epic link":"Эпик","story points":"Оценка сложности"};
+    return "Изменено поле «" + (names[field] || str(event.field) || "Данные задачи") + "»: " + (from || "не задано") + " → " + (to || "очищено");
+  }
   function exportHtml(report,context) {
     context = context || {};
     var warnings = report.coverage && report.coverage.warnings || [];
@@ -337,20 +388,33 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     [["changed","Изменённые замечания"],["newRemarks","Новые замечания"],["completed","Завершённые"],["reopened","Переоткрытые"],["events","Наблюдаемые события"]].forEach(function(pair) { html += '<tr><th>' + pair[1] + '</th><td>' + escape(report.metrics && report.metrics[pair[0]] == null ? '—' : report.metrics[pair[0]]) + '</td></tr>'; });
     if (report.coverage && !report.coverage.isComplete && report.observed) html += '<tr><th>Зафиксировано: изменённые / новые</th><td>≥' + escape(report.observed.changed) + ' / ≥' + escape(report.observed.newRemarks) + '</td></tr>';
     html += '</tbody></table><h2>Баланс</h2><p>Открыто в начале: ' + escape(report.balance && report.balance.startOpen == null ? '—' : report.balance && report.balance.startOpen) + '; в конце: ' + escape(report.balance && report.balance.endOpen == null ? '—' : report.balance && report.balance.endOpen) + '</p>';
-    [["Переходы",report.transitions],["Передачи между командами",report.transfers]].forEach(function(section) {
-      html += '<h2>' + section[0] + '</h2><ul>';
-      (section[1] || []).forEach(function(item) { html += '<li>' + escape(item.from) + ' → ' + escape(item.to) + ': ' + escape(item.count) + '</li>'; });
-      html += '</ul>';
+    [["Переходы статусов",report.transitions],["Передачи между командами",report.transfers]].forEach(function(section) {
+      html += '<h2>' + section[0] + '</h2>';
+      var entries = section[1] || [], names = Object.create(null), counts = Object.create(null);
+      entries.forEach(function(item) { names[item.from] = true; names[item.to] = true; counts[JSON.stringify([item.from,item.to])] = item.count; });
+      var parties = Object.keys(names).sort();
+      function display(name) { return escape(section[0] === "Переходы статусов" ? statusLabel(name) : name); }
+      if (!parties.length) { html += '<p>Нет зафиксированных переходов</p>'; return; }
+      html += '<table aria-label="' + section[0] + '"><thead><tr><th scope="col">Из → В</th>';
+      parties.forEach(function(name) { html += '<th scope="col">' + display(name) + '</th>'; });
+      html += '</tr></thead><tbody>';
+      parties.forEach(function(from) {
+        html += '<tr><th scope="row">' + display(from) + '</th>';
+        parties.forEach(function(to) { html += '<td>' + escape(counts[JSON.stringify([from,to])] || '—') + '</td>'; });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
     });
     html += '<h2>Команды на момент снимка</h2><ul>';
     (report.teams || []).forEach(function(team) { html += '<li>' + escape(team.name) + ' (' + escape(team.id) + '): ' + escape((team.members || []).map(function(member) { return member.label + ' [' + member.identifiers.join(', ') + ']'; }).join('; ')) + '</li>'; });
     html += '</ul><h2>Журнал</h2>';
-    (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3><table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Изменение</th><th>До → после</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
+    (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3><table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Что произошло</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
       (group.events || []).forEach(function(event) {
-        var field = {status:"Статус",assignee:"Исполнитель",created:"Создание"}[event.kind] || "Поле: " + str(event.field);
-        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(event.role) + '</td><td>' + escape(field) + '</td><td>' + escape(event.from) + ' → ' + escape(event.to) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(event.fromAssignee && event.fromAssignee.label) + ' → ' + escape(event.toAssignee && event.toAssignee.label) + '</td><td>' + escape(event.fromTeam) + ' → ' + escape(event.toTeam) + '</td></tr>';
+        var assignee = event.kind === "assignee" ? (str(event.fromAssignee && event.fromAssignee.label) || "Не назначен") + ' → ' + (str(event.toAssignee && event.toAssignee.label) || "Не назначен") : str(event.assignee && event.assignee.label) || "Не назначен";
+        var team = event.kind === "assignee" && event.fromTeam !== event.toTeam ? str(event.fromTeam) + ' → ' + str(event.toTeam) : str(event.toTeam);
+        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(event.role || "История") + '</td><td>' + escape(eventText(event)) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(assignee) + '</td><td>' + escape(team) + '</td></tr>';
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }
-  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml};
+  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,eventText:eventText};
 });

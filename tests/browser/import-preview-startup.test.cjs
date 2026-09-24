@@ -56,12 +56,17 @@ test("the shared preview URL opens a populated tree without manual import or syn
   assert.ok(doc.querySelector(".ujg-esi-activity-table"), "Actual activity module mounts");
   assert.ok(doc.querySelector(".ujg-esi-compact-toolbar"), "Activity must not erase the surrounding toolbar");
   assert.ok(doc.querySelector(".ujg-esi-fullscreen-button"));
+  const activityDeadline = Date.now() + 5000;
+  while (/История: 0 из 0/.test(doc.querySelector(".ujg-esi-activity-coverage").textContent) && Date.now() < activityDeadline) await new Promise(resolve => setTimeout(resolve,20));
+  assert.doesNotMatch(doc.querySelector(".ujg-esi-activity-coverage").textContent,/История: 0 из 0/,"Opening Dynamics loads Jira automatically");
+  assert.ok(dom.window.issueReadCalls > readsBefore);
+  const readsAfterActivityLoad = dom.window.issueReadCalls;
   const date = doc.querySelector('[aria-label="Дата отчёта"]');
   assert.ok(date);
   date.value = "2026-09-01";
   date.dispatchEvent(new dom.window.Event("change",{bubbles:true}));
   assert.equal(doc.querySelector('[aria-label="Дата отчёта"]').value,"2026-09-01");
-  assert.equal(dom.window.issueReadCalls, readsBefore, "Report date changes use loaded data only");
+  assert.equal(dom.window.issueReadCalls, readsAfterActivityLoad, "Report date changes use loaded data only");
   Array.from(doc.querySelectorAll('[role="tab"]')).find(node => node.textContent === "Реестр").click();
   assert.equal(doc.querySelectorAll(".ujg-esi-parent-row").length,50);
   assert.equal(dom.window.mutationCalls,0);

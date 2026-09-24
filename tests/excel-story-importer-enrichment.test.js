@@ -50,6 +50,84 @@ function history(created, to, toString, from, fromString) {
   return { created, items: [{ field: "status", to, toString, from, fromString }] };
 }
 
+test("opening Dynamics selects Jira and loads the scope once while retaining Excel rows", async () => {
+  const calls=[];
+  const excel=[{jiraKey:"TEST-10",summary:"Excel source",sourceColumns:{}}];
+  const app=await loadImporter(excel,{
+    getProjectIssues:(project,epic)=>{calls.push([project,epic]);return Promise.resolve({issues:[]});},
+    getIssuesByKeys:()=>Promise.resolve({issues:[]})
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onReportViewChange("activity");
+  assert.equal(app.state.viewMode,"jira");
+  assert.equal(app.state.reportView,"activity");
+  await flush();await flush();
+  assert.equal(calls.length,1);
+  app.callbacks.onReportViewChange("registry");
+  app.callbacks.onReportViewChange("activity");
+  await flush();
+  assert.equal(calls.length,1,"A loaded empty scope should not loop");
+  app.callbacks.onViewModeChange("excel");
+  assert.equal(app.state.reportView,"registry","Excel always returns to the registry");
+  assert.equal(app.state.rows[0].summary,"Excel source");
+  app.callbacks.onReportViewChange("activity");
+  app.callbacks.onEpicSelect("TEST-EPIC");
+  await flush();await flush();
+  assert.equal(calls.length,2);
+  assert.deepEqual(calls[1],["TEST","TEST-EPIC"]);
+});
+
+test("Dynamics retries failed loads explicitly and does not duplicate pending reads", async () => {
+  let calls=0, resolve;
+  const app=await loadImporter([],{
+    getProjectIssues:()=>{calls++;return new Promise(done=>{resolve=done;});},
+    getIssuesByKeys:()=>Promise.resolve({issues:[]})
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onReportViewChange("activity");
+  app.callbacks.onReportViewChange("activity");
+  assert.equal(calls,1);
+  app.callbacks.onViewModeChange("excel");
+  resolve({issues:[]});await flush();await flush();
+  assert.equal(app.state.viewMode,"excel");
+  assert.equal(app.state.reportView,"registry");
+  app.callbacks.onReportViewChange("activity");
+  assert.equal(calls,2,"Cancelled scope loads again");
+  resolve({issues:[]});await flush();await flush();
+});
+
+test("a failed refresh after success is retried when reopening Dynamics", async () => {
+  let calls=0;
+  const app=await loadImporter([],{
+    getProjectIssues:()=>{calls++;return calls===2 ? Promise.reject(new Error("offline")) : Promise.resolve({issues:[]});},
+    getIssuesByKeys:()=>Promise.resolve({issues:[]})
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onReportViewChange("activity");await flush();await flush();
+  app.callbacks.onLoadRegistry();await flush();await flush();
+  assert.match(app.state.registryError,/offline/);
+  app.callbacks.onViewModeChange("excel");
+  app.callbacks.onReportViewChange("activity");await flush();await flush();
+  assert.equal(calls,3);
+  assert.equal(app.state.registryError,"");
+});
+
+test("a cancelled refresh after success is retried instead of silently reusing the old scope", async () => {
+  let calls=0, finish;
+  const app=await loadImporter([],{
+    getProjectIssues:()=>{calls++;return calls===2 ? new Promise(resolve=>{finish=resolve;}) : Promise.resolve({issues:[]});},
+    getIssuesByKeys:()=>Promise.resolve({issues:[]})
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onReportViewChange("activity");await flush();await flush();
+  app.callbacks.onLoadRegistry();
+  app.callbacks.onViewModeChange("excel");
+  app.callbacks.onReportViewChange("activity");await flush();await flush();
+  assert.equal(calls,3);
+  finish({issues:[]});await flush();await flush();
+  assert.equal(app.state.registryLoading,false);
+});
+
 test("daily activity retains history on parent and child and explicitly enriches only incomplete issues", async () => {
   const calls = [];
   const child = { key: "TEST-2", fields: { summary: "[QA] Child", created: "2026-09-01T00:00:00Z" }, changelog: { startAt: 0, total: 0, histories: [] } };

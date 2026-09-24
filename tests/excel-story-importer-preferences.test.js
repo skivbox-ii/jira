@@ -33,6 +33,8 @@ async function loadImporter(options = {}) {
       getProjects: options.getProjects || (() => Promise.resolve([{ key: "P1" }, { key: "P2" }])),
       getProjectEpics: options.getProjectEpics || (() => Promise.resolve({ issues: [], total: 200 })),
       getProjectCreateMeta: () => Promise.resolve({ projects: [] }),
+      getProjectIssues: options.getProjectIssues || (() => Promise.resolve({ issues: [] })),
+      getIssuesByKeys: () => Promise.resolve({ issues: [] }),
     },
     "_ujgESI_excel-loader": { readWorkbook: () => Promise.resolve({ SheetNames: ["S"] }) },
     _ujgESI_parser: { parseWorkbook: () => ({ rows: [{ summary: "Remark", sourceColumns: {}, status: "ready" }] }) },
@@ -51,6 +53,17 @@ async function loadImporter(options = {}) {
   await flush();
   return app;
 }
+
+test("Dynamics waits for a remembered project arriving after the tab opens", async () => {
+  const storage=memoryStorage(), projects=deferred(), calls=[];
+  storage.setItem(STORAGE_KEY,JSON.stringify({projectKey:"P1",epicsByProject:{P1:"P1-10"}}));
+  const app=await loadImporter({storage,getProjects:()=>projects.promise,getProjectIssues:(project,epic)=>{calls.push([project,epic]);return Promise.resolve({issues:[]});}});
+  app.callbacks.onReportViewChange("activity");
+  projects.resolve([{key:"P1"}]);
+  await flush();await flush();
+  assert.deepEqual(calls,[["P1","P1-10"]]);
+  assert.equal(app.state.registryError,"");
+});
 
 test("preferences restore each project's Epic across switches and reload with a partial list", async () => {
   const storage = memoryStorage();

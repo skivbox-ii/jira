@@ -10,7 +10,9 @@ function setup(report) {
   const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0}, modules = {jquery:$};
   modules._ujgESI_activity = {
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
-    exportHtml(value, context) { calls.exports.push({value,context}); return '<!doctype html><title>Snapshot</title>'; }
+    exportHtml(value, context) { calls.exports.push({value,context}); return '<!doctype html><title>Snapshot</title>'; },
+    statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово"})[value] || value; },
+    eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
   for (const file of ["icons","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
@@ -19,7 +21,15 @@ function setup(report) {
   const ui = modules._ujgESI_activityUi.create();
   const render = () => ui.render($("#root"),state,services);
   render();
-  return {dom,$,state,calls,render};
+  return {dom,$,state,calls,render,modules};
+}
+function selectFilter(x,key,values) {
+  x.$(`[data-activity-filter='${key}']`).trigger("click");
+  x.$(".ujg-esi-activity-filter-clear").trigger("click");
+  values.forEach(value => {
+    x.$(".ujg-esi-activity-filter-option").filter(function() { return x.$(this).text().trim()===value; }).find("input").prop("checked",true).trigger("change");
+  });
+  x.$(".ujg-esi-activity-filter-apply").trigger("click");
 }
 function fixture() {
   const events = [
@@ -34,7 +44,7 @@ test("renders daily totals, unknown balances, current scope and grouped journal"
   assert.match(text,/Итоги за весь день/); assert.match(text,/История: 1 из 2/);
   assert.match(text,/Нет данных/); assert.match(text,/P-EPIC/); assert.match(text,/текущ/);
   assert.match(text,/Scope warning/); assert.match(text,/P-1/); assert.match(text,/P-2/);
-  assert.match(text,/Testing/); assert.match(text,/Done/); assert.match(text,/Ira/);
+  assert.match(text,/Тестирование/); assert.match(text,/Готово/); assert.match(text,/Ira/);
   assert.equal(x.$(".ujg-esi-activity-event").length,2);
   assert.equal(x.calls.summarize[0].options.scopeWarning,"Scope warning");
 });
@@ -83,7 +93,7 @@ test("date navigation keeps instance date across renders and validates input", t
 });
 test("journal filter and sort leave totals intact, collapse survives render", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
-  x.$("[data-activity-filter='role']").val("QA").trigger("change");
+  selectFilter(x,"role",["QA"]);
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
   assert.equal(x.$(".ujg-esi-activity-metric[data-metric='events'] strong").text(),"2");
   x.$("[data-activity-sort='time']").trigger("click");
@@ -136,7 +146,7 @@ test("journal shows colored initials and role tags without repeated team movemen
 test("flow counts and transfer matrix expose each direction", t => {
   const report=fixture(); report.transfers.push({from:"QA",to:"BE",count:2});
   const x=setup(report); t.after(()=>x.dom.window.close());
-  assert.equal(x.$(".ujg-esi-activity-flow-arrow").length,1);
+  assert.equal(x.$(".ujg-esi-activity-status-matrix").length,1);
   assert.equal(x.$(".ujg-esi-activity-transfer-matrix").length,1);
   assert.match(x.$(".ujg-esi-activity-transfer-matrix").text(),/BE.*QA/s);
   assert.match(x.$(".ujg-esi-activity-transfer-matrix").text(),/2/);
@@ -178,24 +188,25 @@ test("export receives filtered report and context without injecting Jira text", 
   x.dom.window.URL.createObjectURL = blob => { download=blob; return "blob:activity-test"; };
   x.dom.window.URL.revokeObjectURL = () => {};
   x.dom.window.HTMLAnchorElement.prototype.click = function() { assert.equal(this.download,"activity-" + x.$(".ujg-esi-activity-date").val() + ".html"); };
-  x.$("[data-activity-filter='role']").val("QA").trigger("change");
+  selectFilter(x,"role",["QA"]);
   x.$("[aria-label='Скачать HTML']").trigger("click");
   assert.equal(x.calls.exports.length,1);
   assert.equal(x.calls.exports[0].value.events.length,1);
   assert.equal(x.calls.exports[0].value.groups[0].events.length,1);
   assert.equal(x.calls.exports[0].context.projectKey,"P");
   assert.equal(x.calls.exports[0].context.epicKey,"P-EPIC");
-  assert.equal(x.calls.exports[0].context.filters.role,"QA");
+  assert.deepEqual(Array.from(x.calls.exports[0].context.filters.role),["QA"]);
   assert.equal(x.calls.exports[0].context.sort.key,"time");
   assert.equal(download.type,"text/html;charset=utf-8");
   assert.equal(x.$("img").length,0);
 });
 test("changing day clears journal filters that may be stale", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
-  x.$("[data-activity-filter='role']").val("QA").trigger("change");
+  selectFilter(x,"role",["QA"]);
   x.$("[aria-label='Следующий день']").trigger("click");
-  assert.equal(x.$("[data-activity-filter='role']").val(),"");
+  assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),false);
   assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout")).filters.role,undefined);
 });
 test("export preserves the selected journal order as well as its sort metadata", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -208,13 +219,31 @@ test("export preserves the selected journal order as well as its sort metadata",
   const exportedTimes=x.calls.exports[0].value.groups[0].events.map(event=>new Date(Date.parse(event.at)+3*3600000).toISOString().slice(11,16));
   assert.deepEqual(exportedTimes,visibleTimes);
 });
-test("data refresh clears a filter value absent from the new report", t => {
+test("data refresh retains a selected value absent from the new report", t => {
   const report=fixture(), x=setup(report); t.after(()=>x.dom.window.close());
-  x.$("[data-activity-filter='role']").val("QA").trigger("change");
+  selectFilter(x,"role",["QA"]);
   report.groups[0].events=report.groups[0].events.filter(event=>event.role!=="QA");
   x.render();
-  assert.equal(x.$("[data-activity-filter='role']").val(),"");
-  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),true);
+  assert.equal(x.$(".ujg-esi-activity-event").length,0);
+  x.$("[data-activity-filter='role']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"QA");
+});
+test("absent persisted selection stays removable and Apply does not turn it into All", t => {
+  const report=fixture(), x=setup(report); t.after(()=>x.dom.window.close());
+  report.groups[0].events[0].author={label:"Alice"};
+  x.render(); selectFilter(x,"author",["Alice"]);
+  report.groups[0].events[0].author={label:"Bob"};
+  report.groups[0].events[1].author={label:"Bob"};
+  x.render();
+  x.$("[data-activity-filter='author']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"Alice");
+  assert.equal(x.$(".ujg-esi-activity-filter-option").text().trim(),"Bob");
+  assert.equal(x.$(".ujg-esi-activity-filter-option input").prop("checked"),false);
+  assert.equal(x.$(".ujg-esi-activity-filter-menu .ujg-esi-filter-count").text(),"0 / 1");
+  x.$(".ujg-esi-activity-filter-apply").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event").length,0);
+  assert.deepEqual(Array.from(JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout")).filters.author),["Alice"]);
 });
 test("empty source offers guidance without invented balances", t => {
   const report=fixture(); report.groups=[]; report.events=[]; report.coverage={complete:0,total:0,incomplete:0,warnings:[],isComplete:true};
@@ -224,4 +253,269 @@ test("empty source offers guidance without invented balances", t => {
   assert.equal(x.$(".ujg-esi-activity-metric").length,0);
   assert.equal(x.$(".ujg-esi-activity-flow").length,0);
   assert.equal(x.$(".ujg-esi-activity-event").length,0);
+});
+test("header funnel applies multiple values with no native selects or duplicate chips", t => {
+  const report=fixture(); report.groups[0].events.push({...report.groups[0].events[0],id:"e3",role:"FE"});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-table thead tr").length,1);
+  assert.equal(x.$(".ujg-esi-activity-table thead select").length,0);
+  selectFilter(x,"role",["QA","FE"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),true);
+  x.$("[data-activity-filter='role']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,2);
+  assert.equal(x.$(".ujg-esi-activity-filter-option.is-selected").length,0);
+  x.$(".ujg-esi-activity-filter-search").val("BE").trigger("input");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,2);
+});
+test("sort filter width and order persist per user-scoped activity layout", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.state.preferencesStorageKey="user-A"; x.render();
+  selectFilter(x,"role",["QA"]);
+  x.$("[data-activity-sort='author']").trigger("click");
+  x.$(".ujg-esi-activity-table [data-column='role'] .ujg-esi-activity-column-resize").trigger(x.$.Event("pointerdown",{pageX:100}));
+  x.$(x.dom.window.document).trigger(x.$.Event("pointermove",{pageX:140})).trigger(x.$.Event("pointerup",{pageX:140}));
+  x.$(".ujg-esi-activity-table thead th[data-column='role']").trigger(x.$.Event("pointerdown",{pageX:100}));
+  x.$(".ujg-esi-activity-table thead th[data-column='change']").trigger(x.$.Event("pointerup",{pageX:120}));
+  const saved=JSON.parse(x.dom.window.localStorage.getItem("user-A:activity-layout"));
+  assert.deepEqual(Array.from(saved.filters.role),["QA"]);
+  assert.equal(saved.sort.key,"author");
+  assert.ok(saved.widths.role>0);
+  assert.ok(saved.order.indexOf("role")>saved.order.indexOf("change"));
+  x.render();
+  assert.equal(x.$(".ujg-esi-activity-table thead th[data-column='author']").attr("aria-sort"),"ascending");
+  assert.equal(x.$(".ujg-esi-activity-table thead th").eq(2).attr("data-column"),"change");
+});
+test("transfer count opens every matching event with safe text and closes on Escape", t => {
+  const report=fixture(), event=report.groups[0].events[1];
+  event.summary="<img src=x onerror=alert(1)>";
+  report.events=[event,{...event,id:"e4",at:"2026-09-24T14:00:00.000Z"}];
+  report.transfers=[{from:"BE",to:"QA",count:2}];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-activity-transfer-matrix .has-transfer button").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event-popover [data-event-id]").length,2);
+  assert.match(x.$(".ujg-esi-activity-event-popover").text(),/P-3/);
+  assert.match(x.$(".ujg-esi-activity-event-popover").text(),/Ira/);
+  assert.match(x.$(".ujg-esi-activity-event-popover").text(),/Bob.*Ann/);
+  assert.equal(x.$(".ujg-esi-activity-event-popover img").length,0);
+  x.$(".ujg-esi-activity-event-popover").trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.$(".ujg-esi-activity-event-popover").length,0);
+});
+test("column visibility and reset preserve at least one visible column", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$("[aria-label='Столбцы журнала']").trigger("click");
+  x.$(".ujg-esi-activity-column-option input").last().prop("checked",false).trigger("change");
+  x.$(".ujg-esi-activity-columns-apply").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
+  x.$("[aria-label='Столбцы журнала']").trigger("click");
+  x.$(".ujg-esi-activity-columns-reset").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,6);
+});
+test("resetting columns preserves applied filters and sort", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  x.$("[data-activity-sort='time']").trigger("click");
+  x.$("[aria-label='Столбцы журнала']").trigger("click");
+  x.$(".ujg-esi-activity-columns-reset").trigger("click");
+  const saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.deepEqual(saved.filters.role,["QA"]);
+  assert.deepEqual(saved.sort,{key:"time",descending:true});
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,6);
+});
+test("empty Dynamics shows registry loading and error context", t => {
+  const report=fixture(); report.groups=[]; report.events=[];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.rows=[]; x.state.registryLoading=true; x.render();
+  assert.match(x.$(".ujg-esi-activity-empty").text(),/Загрузка.*Jira/);
+  x.state.registryLoading=false; x.state.registryError="Jira недоступна"; x.render();
+  assert.match(x.$(".ujg-esi-activity-empty").text(),/Jira недоступна/);
+});
+test("search retains selected values and Escape discards unfinished changes", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  x.$("[data-activity-filter='role']").trigger("click");
+  x.$(".ujg-esi-activity-filter-search").val("BE").trigger("input");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,1);
+  x.$(".ujg-esi-activity-filter-option input").prop("checked",true).trigger("change");
+  x.$(".ujg-esi-activity-filter-menu").trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+});
+test("a new UI instance loads the saved activity layout for the same user", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.state.preferencesStorageKey="user-B"; x.render();
+  selectFilter(x,"role",["QA"]);
+  x.$("[data-activity-sort='author']").trigger("click");
+  const second=x.modules._ujgESI_activityUi.create();
+  second.render(x.$("#root"),x.state,{});
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find("[data-activity-filter='role']").hasClass("is-active"),true);
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find("th[data-column='author']").attr("aria-sort"),"ascending");
+  x.state.preferencesStorageKey="user-C";
+  second.render(x.$("#root"),x.state,{});
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find("[data-activity-filter='role']").hasClass("is-active"),false);
+});
+test("filter menu can remove an applied filter directly", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  x.$("[data-activity-filter='role']").trigger("click");
+  x.$(".ujg-esi-activity-filter-reset").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),false);
+});
+test("redraw closes stale popovers and preserves journal horizontal scroll", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-activity-scroll").scrollLeft(120);
+  x.$("[data-activity-filter='role']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
+  x.render();
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0);
+  assert.equal(x.$(".ujg-esi-activity-scroll").scrollLeft(),120);
+  x.$("[data-activity-sort='author']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-scroll").scrollLeft(),120);
+});
+test("Clear and Apply stores an empty selection and shows zero journal events", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-filter='role']").trigger("click");
+  x.$(".ujg-esi-activity-filter-clear").trigger("click");
+  x.$(".ujg-esi-activity-filter-apply").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event").length,0);
+  assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),true);
+  assert.deepEqual(Array.from(JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout")).filters.role),[]);
+});
+test("selected values survive an empty Jira load and apply when events arrive", t => {
+  const report=fixture(), originalGroups=report.groups, x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  report.groups=[]; report.events=[]; x.state.rows=[]; x.state.registryLoading=true;
+  x.render();
+  assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),true);
+  x.$("[data-activity-filter='role']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"QA");
+  x.$(x.dom.window.document.body).trigger("click");
+  report.groups=originalGroups; x.state.rows=[{id:"row"}]; x.state.registryLoading=false; x.render();
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+});
+test("Escape on focused count closes its popover without moving focus inside", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const count=x.$(".ujg-esi-activity-transfer-matrix .has-transfer button");
+  count.trigger("focus");
+  assert.equal(x.$(".ujg-esi-activity-event-popover").length,1);
+  x.$(x.dom.window.document).trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.$(".ujg-esi-activity-event-popover").length,0);
+});
+test("constructor and __proto__ are distinct filter candidate values", t => {
+  const report=fixture(); report.groups[0].events[0].role="constructor"; report.groups[0].events[1].role="__proto__";
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-filter='role']").trigger("click");
+  const names=x.$(".ujg-esi-activity-filter-option").map(function() { return x.$(this).text().trim(); }).get();
+  assert.deepEqual(names.sort(),["__proto__","constructor"]);
+  selectFilter(x,"role",["__proto__"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+});
+test("wide journal fills host and resize starts at rendered column width", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-activity-mount").css("width","1900px"); x.render();
+  const table=x.$(".ujg-esi-activity-table");
+  const role=x.$(".ujg-esi-activity-table col[data-column='role']");
+  assert.equal(x.$(".ujg-esi-activity-table th[data-column='time'] .ujg-esi-activity-header-sort span").text(),"Время");
+  assert.ok(parseFloat(x.$(".ujg-esi-activity-table col[data-column='time']").css("width"))>=100);
+  assert.ok(parseFloat(table.css("width"))>=1900);
+  const rendered=parseFloat(role.css("width"));
+  assert.ok(rendered>240);
+  x.$(".ujg-esi-activity-table thead th[data-column='role'] .ujg-esi-activity-column-resize").trigger(x.$.Event("pointerdown",{pageX:100}));
+  x.$(x.dom.window.document).trigger(x.$.Event("pointermove",{pageX:140})).trigger(x.$.Event("pointerup",{pageX:140}));
+  const stored=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.equal(stored.widths.role,Math.round(rendered+40));
+});
+test("popover stays inside document client width when a scrollbar is present", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  Object.defineProperty(x.dom.window.document.documentElement,"clientWidth",{configurable:true,value:1585});
+  x.dom.window.innerWidth=1600;
+  const anchor=x.$(".ujg-esi-activity-transfer-matrix .has-transfer button")[0];
+  anchor.getBoundingClientRect=()=>({left:1500,right:1520,top:50,bottom:70,width:20,height:20});
+  x.$(anchor).trigger("click");
+  const box=x.$(".ujg-esi-activity-event-popover");
+  assert.ok(parseFloat(box.css("left"))+parseFloat(box.css("width"))<=1585-12);
+});
+test("journal fits its mounted scroll viewport after a page scrollbar appears", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  Object.defineProperty(x.dom.window.HTMLElement.prototype,"clientWidth",{configurable:true,get() {
+    return this.classList && this.classList.contains("ujg-esi-activity-scroll") ? 1557 : 0;
+  }});
+  x.$(".ujg-esi-activity-mount").css("width","1573px"); x.render();
+  assert.ok(parseFloat(x.$(".ujg-esi-activity-table").css("width"))<=1557);
+  x.state.preferencesStorageKey="custom-widths";
+  x.dom.window.localStorage.setItem("custom-widths:activity-layout",JSON.stringify({widths:{time:100,remark:130,role:900,change:700,assignee:190,author:145}}));
+  x.render();
+  assert.ok(parseFloat(x.$(".ujg-esi-activity-table").css("width"))>1557);
+});
+test("status count drills into deduplicated human events with actual assignee", t => {
+  const report=fixture(), status=report.groups[0].events[0];
+  report.events=[status,{...status,id:status.id},report.groups[0].events[1]];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-activity-status-matrix .has-transfer button").trigger("click");
+  const box=x.$(".ujg-esi-activity-event-popover");
+  assert.equal(box.find("[data-event-id]").length,1);
+  assert.match(box.text(),/Статус: Тестирование → Готово/);
+  assert.match(box.text(),/Исполнитель: Bob/);
+  assert.doesNotMatch(box.text(),/Исполнитель: Testing/);
+});
+test("hidden active filters remain accessible and reset-all preserves column layout", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  x.$("[aria-label='Столбцы журнала']").trigger("click");
+  x.$(".ujg-esi-activity-column-option").filter(function() { return x.$(this).text().includes("Тикет · Роль"); }).find("input").prop("checked",false).trigger("change");
+  x.$(".ujg-esi-activity-columns-apply").trigger("click");
+  assert.equal(x.$("th[data-column='role']").length,0);
+  const hidden=x.$("[data-activity-hidden-filter='role']");
+  assert.equal(hidden.length,1);
+  assert.match(hidden.text(),/Тикет · Роль.*1/);
+  hidden.trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
+  x.$(".ujg-esi-activity-filter-reset").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$("th[data-column='role']").length,0);
+  selectFilter(x,"author",["Ira"]);
+  assert.equal(x.$("[aria-label='Сбросить фильтры журнала']").length,1);
+  x.$("[aria-label='Сбросить фильтры журнала']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$("th[data-column='role']").length,0);
+  assert.equal(x.$("[aria-label='Сбросить фильтры журнала']").length,0);
+});
+test("count keyboard opens actionable popup and Escape returns to anchor", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const count=x.$(".ujg-esi-activity-transfer-matrix .has-transfer button");
+  count.trigger("focus");
+  assert.equal(x.dom.window.document.activeElement,count[0]);
+  count.trigger(x.$.Event("keydown",{key:"Enter"}));
+  assert.equal(x.dom.window.document.activeElement,x.$(".ujg-esi-activity-event-popover button").first()[0]);
+  x.$(x.dom.window.document).trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.dom.window.document.activeElement,count[0]);
+  count.trigger("blur").trigger("focus");
+  count.trigger(x.$.Event("keydown",{key:"Tab"}));
+  assert.equal(x.dom.window.document.activeElement,x.$(".ujg-esi-activity-event-popover button").first()[0]);
+  x.$(x.dom.window.document).trigger(x.$.Event("keydown",{key:"Escape"}));
+  count.trigger(x.$.Event("keydown",{key:" "}));
+  assert.equal(x.dom.window.document.activeElement,x.$(".ujg-esi-activity-event-popover button").first()[0]);
+  x.$(x.dom.window.document).trigger(x.$.Event("keydown",{key:"Escape"}));
+  x.$(".ujg-esi-activity-date").trigger("focus");
+  count.trigger("mouseenter");
+  assert.equal(x.dom.window.document.activeElement,x.$(".ujg-esi-activity-date")[0]);
+});
+test("pointercancel discards pending column reorder", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$("th[data-column='role']").trigger(x.$.Event("pointerdown",{pageX:100}));
+  x.$(x.dom.window.document).trigger(x.$.Event("pointercancel",{pageX:120}));
+  x.$("th[data-column='change']").trigger(x.$.Event("pointerup",{pageX:120}));
+  const order=x.$(".ujg-esi-activity-table thead th[data-column]").map(function() { return x.$(this).attr("data-column"); }).get();
+  assert.ok(order.indexOf("role")<order.indexOf("change"));
+});
+test("keyboard resize keeps focus on separator for successive arrows", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const selector="th[data-column='role'] .ujg-esi-activity-column-resize";
+  x.$(selector).trigger("focus").trigger(x.$.Event("keydown",{key:"ArrowRight"}));
+  assert.equal(x.dom.window.document.activeElement,x.$(selector)[0]);
+  x.$(selector).trigger(x.$.Event("keydown",{key:"ArrowRight"}));
+  assert.equal(x.dom.window.document.activeElement,x.$(selector)[0]);
+  assert.equal(JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout")).widths.role,260);
 });

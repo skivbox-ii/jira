@@ -81,6 +81,14 @@ for (const key of ["EVOSCADA-20914","EVOSCADA-30051"]) {
 }
 movement("EVOSCADA-20914","10:10","status","Готово","В работе","sokolova");
 movement("EVOSCADA-20914","10:30","status","В работе","Тестирование");
+const worked = issues["EVOSCADA-18057"];
+worked.changelog.histories.push({id:worked.key+"-work",created:activityDate+"T11:15:00.853+03:00",author:{name:"petrov",displayName:"Петров П."},items:[
+  {field:"timeestimate",from:"14400",fromString:"14400",to:"10800",toString:"10800"},
+  {field:"timespent",from:"14400",fromString:"14400",to:"18000",toString:"18000"},
+  {field:"WorklogId",from:"42",fromString:"42",to:null,toString:null}
+]});
+worked.changelog.total = worked.changelog.histories.length;
+worked.fields.updated = activityDate+"T11:15:00.000+03:00";
 for (const key of ["EVOSCADA-20000","EVOSCADA-30020","EVOSCADA-30021"]) {
   const target = issues[key];
   target.fields.created = activityDate + "T08:30:00+03:00";
