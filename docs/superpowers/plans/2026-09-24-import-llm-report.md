@@ -32,7 +32,7 @@ are reused only after an explicit user action.
   `activity-markdown.js`, focused browser tests.
 - [x] Shared-client transport in `main.js`, importer build order, preview
   integration. Unit tests before implementation.
-- [ ] Independent review, full suite, build, desktop/mobile UI verification,
+- [x] Independent review, full suite, build, desktop/mobile UI verification,
   scoped publication and read-only Citrix acceptance. Update backlog states.
 
 ## Module Interfaces
@@ -96,4 +96,25 @@ Source text is escaped during Marked token walking, before internally generated
 list HTML. The security rereview passed 417 adversarial DOM probes, including
 raw blocks inside nested loose task lists, without unsafe elements, attributes,
 links or resource requests. Full suite: `/tmp/ujg-llm-final.tap`, 1088 passed,
-0 failed; `git diff --check` passed. Production acceptance remains pending.
+0 failed; `git diff --check` passed. Final grounding rereview found no remaining
+actionable issue; 20 engine tests also passed independently.
+
+### Publication and Citrix Acceptance
+
+- Implementation `b54ec3d7b6c5dd4fca9cade9a60e072f6e9e870b` pushed to `origin/main`.
+- Pinned jsDelivr runtime and CSS matched local bytes. Runtime SHA-256:
+  `a3ed9ff0f6ad0b5b9503d80405ebf6d231ff52bc80d4f7582016d5be109f77c1`;
+  CSS: `067462dd6f54feeba1ffbce6427b33bf643c0525023735c1feab16a2fa25e143`.
+- Read-only Citrix session `import-llm-20260924`: refreshed the browser, selected
+  Dynamics, saw the new command and opened the report dialog. The dialog showed
+  a 22:01 MSK cutoff, 466/466 histories and 339 events without a preparation
+  error. The Generate button was available; no live LLM generation was started.
+- Screenshots under `/Users/skivbox/.codex/citrix-prod-runs/import-llm-20260924/screenshots/`:
+  `inspect-20260924-220131-16803.png` (command),
+  `inspect-20260924-220208-00777.png` (dialog). Actions and OCR are in that session.
+- Jira tickets, statuses, assignees and links were not modified. No direct Jira
+  requests or new provider connections were used for acceptance.
+- AI-01 and AI-02 are complete in the agreed scope. The backlog is empty;
+  heartbeat `import` remains active every 15 minutes and must stay quiet unless
+  there is new actionable work. Actual provider quality/availability still
+  requires the user's explicit live generation.
