@@ -29,7 +29,7 @@
 
 - [x] Review patches against scope and regression risks; run full unit and importer browser suite.
 - [x] Build importer bundle/runtime. Inspect the actual local preview on desktop and narrow viewport.
-- [ ] Record the creation audit conclusion and any production verification limitation. Publish only scoped changes under the already-authorized widget update workflow.
+- [x] Record the creation audit conclusion and any production verification limitation. Publish only scoped changes under the already-authorized widget update workflow.
 
 ## Verification
 
@@ -37,3 +37,7 @@
 - Focused activity unit/browser suites: 99 passed. Review regressions cover unknown prior status and unchanged fields; identity changes and standalone worklog events remain observable.
 - Local browser: hidden ID after migration; explicit re-enable survives reload; restored compact layout; group collapse preserves short context; desktop and 390px viewport inspected; no console errors.
 - Creation audit and retained metadata-unavailable fallback limitation: `docs/import-creation-link-audit.md`.
+- Implementation published as `48a707b3e4b406eb3f41fcda1a1b9a01ffcfde59` on `main`.
+- Citrix production, 24.09.2026 19:21 MSK: 464/464 issue histories loaded, 51 remark groups and 312 events. Duplicate ID column hidden; group current status, linked-task count and daily outcome visible; fullscreen verified. No production issues or links changed.
+- Initial production reload hit `net::ERR_TIMED_OUT` fetching the pinned runtime from jsDelivr. The pinned runtime and CSS matched local assets; a subsequent reload succeeded. Evidence: `~/.codex/citrix-prod-runs/import-activity-20260924/screenshots/inspect-20260924-192246-13005.png`.
+- Final repeated suite with `--test-concurrency=2`: 956 passed, 0 failed, 0 skipped. An earlier default-concurrency rerun crashed the unrelated `user-activity-repo.test.js` worker with `SIGSEGV`; no assertion failed, and the complete bounded-concurrency rerun passed.
