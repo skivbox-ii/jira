@@ -5,6 +5,21 @@ const load = require("./helpers/load-amd-module");
 const ai = () => load(path.join(__dirname, "../ujg-excel-story-importer-modules/activity-ai.js"), {});
 const scope = {projectKey:"P",epicKey:"P-1",baseUrl:"https://jira.test",preferencesStorageKey:"user:a",userScope:"alice",viewMode:"team"};
 
+test("LLM context includes current journal deadlines coverage and confirmed overdue count", () => {
+  const source=report();
+  source.metrics.overdue=1;
+  source.deadlineCoverage={known:1,missing:2,invalid:0,conflict:0,unknownState:0,total:3};
+  source.deadlineReferenceDate="2026-09-24";
+  source.groups[0].deadline={date:"2026-09-23",source:"excel",state:"overdue",daysOverdue:1,referenceDate:"2026-09-24"};
+  const plan=ai().prepare(source,scope), request=plan.parts[0], payload=JSON.parse(request.userPrompt);
+  assert.equal(payload.metrics.overdue,1);
+  assert.deepEqual(payload.deadlineCoverage,source.deadlineCoverage);
+  assert.equal(payload.deadlineReferenceDate,"2026-09-24");
+  assert.equal(payload.records.find(record=>record.type==="remark").data.deadline.date,"2026-09-23");
+  assert.match(request.systemPrompt,/срок.*текущего журнала/i);
+  assert.match(request.systemPrompt,/перенос/i);
+});
+
 function report(count = 1) {
   const groups = [], events = [];
   for (let i = 0; i < count; i++) {
@@ -151,7 +166,8 @@ test("summarize clock ticks preserve cutoff fingerprint when captured evidence i
   const dir=path.join(__dirname,"../ujg-excel-story-importer-modules");
   const teams=load(path.join(dir,"teams.js"),{});
   const remarkId=load(path.join(dir,"remark-id.js"),{});
-  const activity=load(path.join(dir,"activity.js"),{_ujgESI_teams:teams,_ujgESI_remarkId:remarkId});
+  const deadlines=load(path.join(dir,"deadlines.js"),{_ujgESI_config:load(path.join(dir,"config.js"),{})});
+  const activity=load(path.join(dir,"activity.js"),{_ujgESI_teams:teams,_ujgESI_remarkId:remarkId,_ujgESI_deadlines:deadlines});
   const snapshot={complete:true,capturedAt:"2026-09-24T10:00:00Z",created:"2026-09-20T00:00:00Z",updated:"2026-09-24T09:00:00Z",currentStatus:{id:"1",name:"Open",category:"new"},currentAssignee:{label:"Owner",identifiers:["owner"]},histories:[],warnings:[],spentSeconds:0,worklogs:{entries:[],complete:true},comments:{entries:[],complete:true}};
   const rows=[{jiraKey:"P-1",summary:"Remark",storyDetails:{key:"P-1",summary:"Remark",status:"Open",role:"",activity:snapshot},childStatuses:[]}];
   const first=activity.summarize(rows,[],{date:"2026-09-24",now:"2026-09-24T12:00:00Z"});

@@ -98,6 +98,7 @@ test("mapping store loads and saves mappings only in localStorage", async functi
   assert.equal(loaded.columnMap.jira, "Тикет");
   assert.equal(loaded.columnMap.remarkId, "ID");
   assert.equal(loaded.columnMap.owner, "Ответственный");
+  assert.equal(loaded.columnMap.deadline, "Срок");
   assert.equal(loaded.tableStart.headerMarker, "Тема");
   assert.equal(loaded.sheetName, "Замечания");
   assert.equal(loaded.storyAssigneeId, "story-acc");

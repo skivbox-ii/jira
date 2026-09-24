@@ -7,7 +7,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return String(value).replace(/\s+/g, " ").trim();
   }
 
-  function sheetRows(sheet) {
+  function sheetRows(sheet, raw) {
     if (!sheet) return [];
     var hiddenRows = sheet["!rows"] || [];
     function visibleRows(rows) {
@@ -17,7 +17,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     }
     if (Array.isArray(sheet.__rows)) return visibleRows(sheet.__rows);
     if (typeof XLSX !== "undefined" && XLSX.utils && XLSX.utils.sheet_to_json) {
-      return visibleRows(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }));
+      return visibleRows(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: !!raw, defval: "" }));
     }
     return [];
   }
@@ -38,6 +38,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       statusInJira: "Статус в Jira",
       assigneeInJira: "Исполнитель в Jira",
       sprintInJira: "Спринт",
+      deadline: "Срок",
     };
   }
 
@@ -75,6 +76,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     if (text && cellText(map.statusInJira) === text) return "Статус в Jira";
     if (text && cellText(map.assigneeInJira) === text) return "Исполнитель в Jira";
     if (text && cellText(map.sprintInJira) === text) return "Спринт";
+    if (text && cellText(map.deadline) === text) return text === "Срок" ? "Срок" : "Срок исполнения";
     return text;
   }
 
@@ -110,6 +112,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       "Статус в Jira": settings.columnMap.statusInJira,
       "Исполнитель в Jira": settings.columnMap.assigneeInJira,
       "Спринт": settings.columnMap.sprintInJira,
+      "Срок исполнения": settings.columnMap.deadline,
     };
     var selected = {};
     names.forEach(function(name, index) {
@@ -165,7 +168,23 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return text.length >= 3 && /[A-Za-zА-Яа-яЁё]/.test(text);
   }
 
-  function parseRows(sheetName, rows, header, settings) {
+  function deadlineCell(value, date1904) {
+    if (typeof value !== "number" || !isFinite(value)) return cellText(value);
+    var xlsx = typeof XLSX !== "undefined" ? XLSX : null;
+    var parts = xlsx && xlsx.SSF && xlsx.SSF.parse_date_code && xlsx.SSF.parse_date_code(value, {date1904:date1904});
+    if (!parts || !parts.y || !parts.m || !parts.d) return cellText(value);
+    return String(parts.y).padStart(4, "0") + "-" + String(parts.m).padStart(2, "0") + "-" + String(parts.d).padStart(2, "0");
+  }
+
+  function isDeadlineColumn(name, settings) {
+    var base = String(name || "").replace(/ \(колонка \d+\)\**$/, "");
+    if (base === cellText(settings.columnMap.deadline)) return true;
+    return ["Срок исполнения", "Срок исполнения замечания", "Срок устранения",
+      "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения",
+      "Срок выполнения", "Срок"].indexOf(base) !== -1;
+  }
+
+  function parseRows(sheetName, rows, header, settings, rawRows, date1904) {
     var headers = headerNames(rows[header.rowIndex], settings);
     var indexes = columnIndexes(headers);
     var summaryIndex = Object.prototype.hasOwnProperty.call(indexes, config.SUMMARY_COLUMN) ? indexes[config.SUMMARY_COLUMN] - 1 : header.summaryIndex;
@@ -179,7 +198,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       var sourceColumns = {};
       for (j = 0; j < headers.length; j += 1) {
         var name = headers[j];
-        var value = cellText(row[j]);
+        var value = isDeadlineColumn(name, settings) ? deadlineCell((rawRows[i] || [])[j], date1904) : cellText(row[j]);
         if (name && value) sourceColumns[name] = value;
       }
       var jiraKey = extractJiraKey(sourceColumns[config.JIRA_COLUMN]);
@@ -245,7 +264,8 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     var fallback = null;
     for (i = 0; i < scanSheetNames.length; i += 1) {
       var sheetName = String(scanSheetNames[i]);
-      var rows = sheetRows(workbook.Sheets && workbook.Sheets[sheetName]);
+      var sheet = workbook.Sheets && workbook.Sheets[sheetName];
+      var rows = sheetRows(sheet);
       var header = findHeader(rows, settings);
       if (header) {
         var headers = headerNames(rows[header.rowIndex], settings);
@@ -253,7 +273,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
           sheetName: sheetName,
           headerRowNumber: header.rowIndex + 1,
           headerColumns: columnIndexes(headers),
-          rows: parseRows(sheetName, rows, header, settings),
+          rows: parseRows(sheetName, rows, header, settings, sheetRows(sheet, true), !!(workbook.Workbook && workbook.Workbook.WBProps && workbook.Workbook.WBProps.date1904)),
         };
       }
       if (!fallback) {

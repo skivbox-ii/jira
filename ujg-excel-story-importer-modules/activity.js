@@ -1,4 +1,4 @@
-define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsModule,sourceRemarkId) {
+define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadlines"], function(teamsModule,sourceRemarkId,deadlines) {
   "use strict";
   function str(value) { return value == null ? "" : String(value).trim(); }
   function key(value) { return str(value).toUpperCase(); }
@@ -172,8 +172,9 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     (sourceRows || []).forEach(function(row,index) {
       if (!row) return;
       var id = groupId(row,index);
-      if (!grouped[id]) { grouped[id] = {id:id,remarkId:remarkId(row),key:key(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key),summary:str(row.summary),tasks:[],uncreated:false}; order.push(grouped[id]); }
+      if (!grouped[id]) { grouped[id] = {id:id,remarkId:remarkId(row),key:key(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key),summary:str(row.summary),tasks:[],sourceRows:[],uncreated:false}; order.push(grouped[id]); }
       var group = grouped[id];
+      group.sourceRows.push(row);
       if (!group.key) group.uncreated = true;
       if (row.status === "partial") group.missing = true;
       var parentDetails = row.storyDetails || row.activityDetails;
@@ -436,19 +437,72 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       else notes.push("Время в работе не подтверждено полной цепочкой статусов");
       return report;
     }
+    var deadlineDay = day(today(now));
+    var deadlineCoverage = {known:0,missing:0,invalid:0,conflict:0,unknownState:0,total:groups.length}, overdue = 0;
+    function currentDeadlineSnapshot(issueKey) {
+      var entry = issues[issueKey], snap = entry && entry.snapshot;
+      return !!(snap && conflicts.indexOf(issueKey) < 0 && snap.created && snap.currentStatus && snap.currentStatus.name &&
+        isFinite(Date.parse(snap.capturedAt)) && Date.parse(snap.capturedAt) >= deadlineDay.start);
+    }
+    function groupDeadline(source, group) {
+      var candidates = source.sourceRows.map(function(row) { return deadlines.resolve(row,options); });
+      var found = candidates.filter(function(candidate) { return candidate.problem !== "missing"; });
+      var selected = found[0] || candidates[0], signatures = [];
+      found.forEach(function(candidate) {
+        var signature = JSON.stringify([candidate.date,candidate.problem,candidate.date ? "" : candidate.raw]);
+        if (signatures.indexOf(signature) < 0) signatures.push(signature);
+      });
+      if (signatures.length > 1) selected = {date:null,raw:found.map(function(candidate) { return candidate.raw; }).join("; "),source:selected.source,field:selected.field,problem:"conflict"};
+      var result = Object.assign({},selected,{referenceDate:deadlineDay.date,state:selected.problem || "unknown",daysOverdue:0,daysRemaining:null,owner:null,pendingTasks:[]});
+      if (selected.problem) { deadlineCoverage[selected.problem]++; return result; }
+      deadlineCoverage.known++;
+      result.daysRemaining = Math.round((Date.parse(result.date + "T00:00:00Z") - Date.parse(deadlineDay.date + "T00:00:00Z")) / 86400000);
+      var root = issues[group.key], rootSnapshot = root && root.snapshot;
+      if (source.uncreated) {
+        result.reason = "not-created-in-jira";
+        return result;
+      }
+      if (currentDeadlineSnapshot(group.key) && Date.parse(rootSnapshot.created) >= now) {
+        result.reason = "not-created-at-cutoff";
+        return result;
+      }
+      // Today's deadline uses current Jira fields, independent of the selected journal day.
+      if (source.missing || !currentDeadlineSnapshot(group.key) || !source.tasks.every(currentDeadlineSnapshot)) {
+        deadlineCoverage.unknownState++;
+        return result;
+      }
+      result.owner = rootSnapshot.currentAssignee;
+      var existing = source.tasks.filter(function(taskKey) { return Date.parse(issues[taskKey].snapshot.created) < now; });
+      if (existing.some(function(taskKey) { return kind(issues[taskKey].snapshot.currentStatus) === "unknown"; })) {
+        deadlineCoverage.unknownState++;
+        return result;
+      }
+      result.pendingTasks = existing.filter(function(taskKey) { return kind(issues[taskKey].snapshot.currentStatus) === "open"; }).map(function(taskKey) {
+        var entry = issues[taskKey], assignee = entry.snapshot.currentAssignee;
+        return {key:taskKey,role:str(entry.task.role),summary:str(entry.task.summary),status:entry.snapshot.currentStatus.name,assignee:assignee,
+          team:teamFor(teams,assignee),color:teamColor(teams,assignee && assignee.identifiers || [])};
+      });
+      if (kind(rootSnapshot.currentStatus) === "cancelled" || !result.pendingTasks.length && existing.some(function(taskKey) { return kind(issues[taskKey].snapshot.currentStatus) === "cancelled"; })) result.state = "cancelled";
+      else if (!result.pendingTasks.length) result.state = "completed";
+      else if (result.daysRemaining < 0) { result.state = "overdue"; result.daysOverdue = -result.daysRemaining; overdue++; }
+      else result.state = result.daysRemaining === 0 ? "today" : result.daysRemaining === 1 ? "tomorrow" : "upcoming";
+      return result;
+    }
     groups.forEach(function(group,index) {
       var source = order[index];
       group.dayComplete = !source.missing && !source.unknownStatus && source.tasks.every(usable);
       group.management.tasks = source.tasks.map(taskReport);
       if (!group.dayComplete) group.management.notes.push("Полнота группы не подтверждена; переходы готовности не показаны");
       if (source.uncreated) group.management.notes.push("Родительская задача Jira не создана");
+      group.deadline = groupDeadline(source,group);
     });
+    var deadlinesComplete = !options.scopeWarning && !deadlineCoverage.invalid && !deadlineCoverage.conflict && !deadlineCoverage.unknownState;
     var counted = {complete:issueKeys.filter(usable).length,total:issueKeys.length,
       incomplete:issueKeys.filter(function(issueKey) { return !usable(issueKey); }).length,
       uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,isComplete:complete};
     return {date:window.date,start:window.start,end:window.end,asOf:now <= window.start || endpoint < window.start ? null : new Date(endpoint).toISOString(),generatedAt:new Date(now).toISOString(),timezone:"МСК",coverage:counted,
-      metrics:{changed:complete ? Object.keys(changed).length : null,newRemarks:complete ? Object.keys(newRemarks).length : null,completed:complete ? Object.keys(completed).length : null,reopened:complete ? Object.keys(reopened).length : null,events:events.length},
-      observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length},
+      metrics:{changed:complete ? Object.keys(changed).length : null,newRemarks:complete ? Object.keys(newRemarks).length : null,completed:complete ? Object.keys(completed).length : null,reopened:complete ? Object.keys(reopened).length : null,events:events.length,overdue:deadlinesComplete ? overdue : null},
+      observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length,overdue:overdue},deadlineCoverage:deadlineCoverage,deadlineReferenceDate:deadlineDay.date,
       balance:{startOpen:complete ? balanceStart : null,endOpen:complete ? balanceEnd : null},transitions:pairs(transitions),transfers:pairs(transfers),groups:groups,events:events,teams:teams};
   }
   function escape(value) { return str(value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
@@ -461,6 +515,14 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
   function metadata(value) {
     if (value == null) return "не задано";
     try { return JSON.stringify(value); } catch (_) { return "недоступно"; }
+  }
+  function deadlineText(deadline) {
+    if (!deadline || deadline.problem === "missing") return "Срок не указан";
+    if (deadline.problem === "invalid") return "Срок не распознан";
+    if (deadline.problem === "conflict") return "Противоречивые сроки";
+    var date = str(deadline.date).split("-").reverse().join(".");
+    var suffix = {today:"сегодня",tomorrow:"завтра",completed:"готово",cancelled:"отменено",unknown:"состояние не подтверждено"};
+    return "Срок: " + date + (deadline.state === "overdue" ? " · просрочено " + deadline.daysOverdue + " д" : suffix[deadline.state] ? " · " + suffix[deadline.state] : "");
   }
   function statusLabel(value) {
     var name = str(value);
@@ -566,9 +628,34 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       html += '</ul></details>';
     }
     html += '<h2>Итоги</h2><table><tbody>';
-    [["changed","Изменённые замечания"],["newRemarks","Новые замечания"],["completed","Завершённые"],["reopened","Переоткрытые"],["events","Наблюдаемые события"]].forEach(function(pair) { html += '<tr><th>' + pair[1] + '</th><td>' + escape(report.metrics && report.metrics[pair[0]] == null ? '—' : report.metrics[pair[0]]) + '</td></tr>'; });
+    [["changed","Изменённые замечания"],["newRemarks","Новые замечания"],["completed","Завершённые"],["reopened","Переоткрытые"],["events","Наблюдаемые события"],["overdue","Просроченные"]].forEach(function(pair) {
+      var count = report.metrics && report.metrics[pair[0]];
+      if (count == null && pair[0] === "overdue" && report.observed && report.observed.overdue != null) count = "≥" + report.observed.overdue;
+      html += '<tr><th>' + pair[1] + '</th><td>' + escape(count == null ? '—' : count) + '</td></tr>';
+    });
     if (report.coverage && !report.coverage.isComplete && report.observed) html += '<tr><th>Зафиксировано: изменённые / новые</th><td>≥' + escape(report.observed.changed) + ' / ≥' + escape(report.observed.newRemarks) + '</td></tr>';
     html += '</tbody></table><h2>Баланс</h2><p>Открыто в начале: ' + escape(report.balance && report.balance.startOpen == null ? '—' : report.balance && report.balance.startOpen) + '; в конце: ' + escape(report.balance && report.balance.endOpen == null ? '—' : report.balance && report.balance.endOpen) + '</p>';
+    var dueCoverage = report.deadlineCoverage || {};
+    html += '<h2>Просроченные замечания</h2><p>На сегодня, ' + escape(str(report.deadlineReferenceDate).split("-").reverse().join(".")) + ' МСК. Сроки из текущего журнала сравниваются с текущей датой; история переносов не учитывается. Показаны текущие состояния задач, независимо от даты журнала событий.</p>';
+    html += '<p>Срок известен: ' + escape(dueCoverage.known) + '; без срока: ' + escape(dueCoverage.missing) + '; не распознано: ' + escape(dueCoverage.invalid) + '; конфликт: ' + escape(dueCoverage.conflict) + '; состояние не подтверждено: ' + escape(dueCoverage.unknownState) + '</p>';
+    function issueLink(issueKey) {
+      try {
+        var base = new URL(str(context.baseUrl));
+        if (!/^https?:$/.test(base.protocol) || base.username || base.password) throw new Error("Unsafe URL");
+        base.search = ""; base.hash = "";
+        return '<a href="' + escape(base.href.replace(/\/+$/,"") + '/browse/' + encodeURIComponent(str(issueKey))) + '">' + escape(issueKey) + '</a>';
+      } catch (ignore) { return escape(issueKey); }
+    }
+    var overdueGroups = (report.deadlineGroups || report.groups || []).filter(function(group) { return group.deadline && group.deadline.state === "overdue"; })
+      .slice().sort(function(a,b) { return b.deadline.daysOverdue - a.deadline.daysOverdue || str(a.key).localeCompare(str(b.key)); });
+    html += '<table aria-label="Просроченные замечания"><thead><tr><th>Замечание</th><th>Срок исполнения</th><th>Ответственный</th><th>Осталось выполнить</th></tr></thead><tbody>';
+    overdueGroups.forEach(function(group) {
+      var due = group.deadline;
+      html += '<tr><td>' + issueLink(group.key) + ' ' + escape(group.remarkId) + '<br>' + escape(group.summary) + '</td><td>' + escape(deadlineText(due)) + '</td><td>' + escape(due.owner && due.owner.label || 'Не назначен') + '</td><td>';
+      (due.pendingTasks || []).forEach(function(task) { html += '<div>' + issueLink(task.key) + ' [' + escape(task.role || 'История') + '] · ' + escape(statusLabel(task.status)) + ' · ' + escape(task.assignee && task.assignee.label || 'Не назначен') + ' · ' + escape(task.team) + '</div>'; });
+      html += '</td></tr>';
+    });
+    html += '</tbody></table>';
     [["Переходы статусов",report.transitions],["Передачи между командами",report.transfers]].forEach(function(section) {
       html += '<h2>' + section[0] + '</h2>';
       var entries = section[1] || [], names = Object.create(null), counts = Object.create(null);
@@ -590,6 +677,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     (report.teams || []).forEach(function(team) { html += '<li>' + escape(team.name) + ' (' + escape(team.id) + '): ' + escape((team.members || []).map(function(member) { return member.label + ' [' + member.identifiers.join(', ') + ']'; }).join('; ')) + '</li>'; });
     html += '</ul><h2>Журнал</h2>';
     (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3>';
+      if (group.deadline) html += '<p>' + escape(deadlineText(group.deadline)) + '</p>';
       if (group.dayHighlights) {
         var highlights = [];
         if (group.dayHighlights.completed) highlights.push('Завершено ' + group.dayHighlights.completed);

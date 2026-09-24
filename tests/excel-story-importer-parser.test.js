@@ -17,6 +17,92 @@ function loadParser() {
   });
 }
 
+test("deadline mapping canonicalizes the chosen header and converts typed Excel serials with workbook epoch", () => {
+  const config = loadConfig();
+  const calls = [];
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
+    XLSX: {SSF:{parse_date_code:(value, options) => { calls.push([value, options.date1904]); return {y:2026,m:9,d:25}; }}},
+  });
+  const result = parser.parseWorkbook({Workbook:{WBProps:{date1904:true}},SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
+    ["Замечание","Плановая дата"], ["Ошибка", 45000],
+  ]}}}, {columnMap:{deadline:"Плановая дата"}});
+  assert.equal(result.rows[0].sourceColumns["Срок исполнения"], "2026-09-25");
+  assert.deepEqual(calls, [[45000,true]]);
+});
+
+test("default Срок column takes precedence over an older Срок исполнения column after parsing", () => {
+  const config = loadConfig();
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
+    XLSX:{SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 20})}},
+  });
+  const row = parser.parseWorkbook({SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
+    ["Замечание","Срок исполнения","Срок"], ["Ошибка",45001,45000],
+  ]}}}).rows[0];
+  const resolve = loadAmdModule(path.join(MODULE_DIR, "deadlines.js"), {}).resolve;
+  assert.equal(resolve(row,{columnMap:config.COLUMN_MAP}).date,"2026-09-25");
+  const description = loadAmdModule(path.join(MODULE_DIR, "description.js"), {}).buildDescription(row);
+  assert.equal(resolve({storyDetails:{description}},{columnMap:config.COLUMN_MAP}).date,"2026-09-25");
+});
+
+test("typed alias deadlines use raw SheetJS cells and conflicting aliases survive the imported table", () => {
+  const config = loadConfig();
+  const calls = [];
+  const headers = ["Замечание", "Плановый срок устранения", "Срок устранения"];
+  const displayRows = [headers, ["Ошибка", "9/25/26", "9/26/26"]];
+  const rawRows = [headers, ["Ошибка", 45000, 45001]];
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
+    XLSX: {
+      utils:{sheet_to_json:(_sheet, options) => options.raw ? rawRows : displayRows},
+      SSF:{parse_date_code:(value, options) => { calls.push([value, options.date1904]); return {y:2026,m:9,d:value === 45000 ? 25 : 26}; }},
+    },
+  });
+  const row = parser.parseWorkbook({Workbook:{WBProps:{date1904:true}},SheetNames:["Журнал"],Sheets:{Журнал:{}}}).rows[0];
+  assert.equal(row.sourceColumns["Плановый срок устранения"], "2026-09-25");
+  assert.equal(row.sourceColumns["Срок устранения"], "2026-09-26");
+  assert.deepEqual(calls, [[45000,true],[45001,true]]);
+  const deadlines = loadAmdModule(path.join(MODULE_DIR, "deadlines.js"), {});
+  assert.equal(deadlines.resolve(row).problem, "conflict");
+  const description = loadAmdModule(path.join(MODULE_DIR, "description.js"), {}).buildDescription(row);
+  assert.equal(deadlines.resolve({jiraKey:"ABC-1",storyDetails:{description}}).problem, "conflict");
+});
+
+test("duplicate typed alias headers remain conflicting after parser and description writer", () => {
+  const config = loadConfig();
+  const headers = ["Замечание", "Срок устранения", "Срок устранения"];
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
+    XLSX: {
+      utils:{sheet_to_json:(_sheet, options) => options.raw
+        ? [headers,["Ошибка",45000,45001]] : [headers,["Ошибка","9/25/26","9/26/26"]]},
+      SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 26})},
+    },
+  });
+  const row = parser.parseWorkbook({SheetNames:["Журнал"],Sheets:{Журнал:{}}}).rows[0];
+  assert.equal(row.sourceColumns["Срок устранения"], "2026-09-25");
+  assert.equal(row.sourceColumns["Срок устранения (колонка 3)"], "2026-09-26");
+  const deadlines = loadAmdModule(path.join(MODULE_DIR, "deadlines.js"), {});
+  assert.equal(deadlines.resolve(row).problem, "conflict");
+  const description = loadAmdModule(path.join(MODULE_DIR, "description.js"), {}).buildDescription(row);
+  assert.equal(deadlines.resolve({storyDetails:{description}}).problem, "conflict");
+});
+
+test("parsed custom deadline keeps priority over an old canonical deadline column", () => {
+  const config = loadConfig();
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
+    XLSX: {SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 26})}},
+  });
+  const row = parser.parseWorkbook({SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
+    ["Замечание","Срок исполнения","Мой срок"], ["Ошибка",45001,45000],
+  ]}}}, {columnMap:{deadline:"Мой срок"}}).rows[0];
+  const resolve = loadAmdModule(path.join(MODULE_DIR, "deadlines.js"), {}).resolve;
+  assert.equal(resolve(row,{columnMap:{deadline:"Мой срок"}}).date, "2026-09-25");
+  const description = loadAmdModule(path.join(MODULE_DIR, "description.js"), {}).buildDescription(row);
+  assert.equal(resolve({storyDetails:{description}},{columnMap:{deadline:"Мой срок"}}).date, "2026-09-25");
+  const repeated = parser.parseWorkbook({SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
+    ["Замечание","Мой срок","Мой срок"], ["Ошибка",45000,45001],
+  ]}}}, {columnMap:{deadline:"Мой срок"}}).rows[0];
+  assert.equal(resolve(repeated,{columnMap:{deadline:"Мой срок"}}).problem, "conflict");
+});
+
 function loadRemarkId() {
   return loadAmdModule(path.join(MODULE_DIR, "remark-id.js"), {});
 }

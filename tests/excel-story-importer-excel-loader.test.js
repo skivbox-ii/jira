@@ -61,7 +61,7 @@ test("readWorkbook reloads SheetJS when global XLSX is not usable", async functi
   assert.deepEqual(appendedUrls, [loaded.config.DEFAULT_SHEETJS_URL]);
   assert.equal(readArgs.buffer, buffer);
   assert.equal(readArgs.options.type, "array");
-  assert.equal(readArgs.options.cellDates, true);
+  assert.equal(readArgs.options.cellDates, false);
   assert.equal(readArgs.options.cellStyles, true);
 });
 
@@ -154,6 +154,6 @@ test("readWorkbook resolves SheetJS from AMD module when CDN defines xlsx", asyn
   assert.equal(requireCalls[0][0], "xlsx");
   assert.equal(readArgs.buffer, buffer);
   assert.equal(readArgs.options.type, "array");
-  assert.equal(readArgs.options.cellDates, true);
+  assert.equal(readArgs.options.cellDates, false);
   assert.equal(readArgs.options.cellStyles, true);
 });

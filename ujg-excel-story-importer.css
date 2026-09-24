@@ -1974,13 +1974,15 @@
 .ujg-esi-activity-warning { color: #835609; }
 .ujg-esi-activity-summary { border-top: 1px solid #dce3eb; border-bottom: 1px solid #dce3eb; padding: 8px 0; }
 .ujg-esi-activity-summary h3 { font-size: 12px; color: #526174; }
-.ujg-esi-activity-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); margin: 7px 0; }
+.ujg-esi-activity-metrics { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); margin: 7px 0; }
 .ujg-esi-activity-metric { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; padding: 4px 10px; border-right: 1px solid #dce3eb; }
 .ujg-esi-activity-metric:last-child { border-right: 0; }
 .ujg-esi-activity-metric strong { font-size: 22px; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .ujg-esi-activity-metric[data-metric="newRemarks"] strong, .ujg-esi-activity-metric[data-metric="completed"] strong { color: #168154; }
 .ujg-esi-activity-metric[data-metric="reopened"] strong { color: #c43d3d; }
+.ujg-esi-activity-metric[data-metric="overdue"] strong { color: #ae2a19; }
 .ujg-esi-activity-balance { text-align: center; font-weight: 600; }
+.ujg-esi-activity-deadline-coverage { margin: 3px 0 0; color: #526174; font-size: 11px; text-align: center; overflow-wrap: anywhere; }
 .ujg-esi-activity-flows { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #dce3eb; }
 .ujg-esi-activity-flows section { min-width: 0; padding: 10px 12px 10px 0; }
 .ujg-esi-activity-flows section + section { border-left: 1px solid #dce3eb; padding-left: 16px; }
@@ -2050,6 +2052,9 @@
 .ujg-esi-activity-group-badge.is-created { border-color: #b7d8da; background: #ecf7f7; color: #14646a; }
 .ujg-esi-activity-group-badge.is-reopened { border-color: #dfc7a5; background: #fcf5e9; color: #8a5818; }
 .ujg-esi-activity-group-badge.is-incomplete { border-color: #d8c6a9; background: #fbf6ec; color: #785b32; }
+.ujg-esi-activity-group-deadline.is-overdue { border-color: #e5aca5; background: #fff0ee; color: #ae2a19; }
+.ujg-esi-activity-group-deadline.is-near { border-color: #e6cc78; background: #fff8df; color: #765600; }
+.ujg-esi-activity-group-deadline.is-neutral { border-color: #cbd5df; background: #f6f8fa; color: #526174; }
 .ujg-esi-activity-group-key { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 7px; margin-right: 8px; color: #075fc4; font-weight: 700; }
 .ujg-esi-activity-group-key a, .ujg-esi-activity-issue a { color: #075fc4; text-decoration: none; }
 .ujg-esi-activity-group-key a:hover, .ujg-esi-activity-issue a:hover { text-decoration: underline; }
@@ -2089,6 +2094,8 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-close:hover, .ujg-esi-management-close:focus-visible { background: #eaf3fc; }
 .ujg-esi-management-close svg { width: 16px; height: 16px; }
 .ujg-esi-management-warning { flex: 0 0 auto; padding: 7px 16px; color: #785b32; background: #fbf6ec; border-bottom: 1px solid #e8d9bd; }
+.ujg-esi-management-deadline-coverage { flex: 0 0 auto; padding: 6px 16px; border-bottom: 1px solid #dce3eb; color: #526174; font-size: 11px; overflow-wrap: anywhere; }
+.ujg-esi-management-preview > .ujg-esi-management-deadline-coverage { padding: 5px 0 8px; }
 .ujg-esi-management-body { display: grid; grid-template-columns: minmax(230px,30%) minmax(0,1fr); flex: 1 1 auto; min-height: 0; }
 .ujg-esi-management-list, .ujg-esi-management-detail-host { min-width: 0; overflow: auto; }
 .ujg-esi-management-list { border-right: 1px solid #dce3eb; background: #f8fafc; }
@@ -2103,6 +2110,7 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-summary { flex: 1 1 100%; color: #34475b; }
 .ujg-esi-management-detail-host { padding: 14px 18px 28px; }
 .ujg-esi-management-detail h3 { font-size: 15px; padding-bottom: 8px; border-bottom: 1px solid #dce3eb; }
+.ujg-esi-management-history-heading { margin: 14px 0 6px; padding-top: 10px; border-top: 1px solid #dce3eb; color: #526174; font-size: 12px; }
 .ujg-esi-management-detail > p { margin: 8px 0; }
 .ujg-esi-management-transition, .ujg-esi-management-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 0; border-bottom: 1px solid #e3e9ef; }
 .ujg-esi-management-transition > strong { color: #28693b; }
@@ -2140,6 +2148,15 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-preview-title { font-size: 13px; }
 .ujg-esi-management-preview .ujg-esi-management-warning { padding: 5px 0; background: transparent; border: 0; }
 .ujg-esi-management-preview-item { display: grid; grid-template-columns: minmax(180px,1.2fr) minmax(240px,1.6fr) minmax(160px,1fr); gap: 5px 18px; padding: 12px 8px; border-top: 1px solid #e3e9ef; overflow-wrap: anywhere; }
+.ujg-esi-management-preview-item.is-overdue { grid-template-columns: minmax(160px,1.1fr) minmax(0,1.7fr) minmax(170px,.9fr); }
+.ujg-esi-management-preview-item.is-overdue > .ujg-esi-management-group-label { grid-column: 1; grid-row: 1; }
+.ujg-esi-management-preview-item.is-overdue > .ujg-esi-management-pending-tasks { grid-column: 2; grid-row: 1; }
+.ujg-esi-management-preview-item.is-overdue > .ujg-esi-management-overdue-facts { grid-column: 3; grid-row: 1; }
+.ujg-esi-management-overdue-facts { min-width: 0; margin: 0; }
+.ujg-esi-management-overdue-facts .ujg-esi-management-fact { padding: 0 0 6px; border: 0; }
+.ujg-esi-management-overdue-facts .ujg-esi-management-fact dt { color: #526174; }
+.ujg-esi-management-overdue-facts .ujg-esi-management-fact dd { margin: 1px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.ujg-esi-management-overdue-facts .ujg-esi-management-fact:nth-child(1) dd, .ujg-esi-management-overdue-facts .ujg-esi-management-fact:nth-child(2) dd { font-size: 14px; color: #ae2a19; }
 .ujg-esi-management-preview-item.is-completed { border-left: 3px solid #168154; background: #f0faf4; }
 .ujg-esi-management-preview-item > .ujg-esi-management-group-label { grid-column: 1; grid-row: 1; align-content: start; }
 .ujg-esi-management-preview-outcome { grid-column: 1; grid-row: 2 / span 2; }
@@ -2161,11 +2178,18 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-preview-open { margin-top: 8px; padding: 6px 10px; border: 1px solid #075fc4; border-radius: 3px; background: #075fc4; color: #fff; font: inherit; cursor: pointer; }
 .ujg-esi-management-preview-open:hover, .ujg-esi-management-preview-open:focus-visible { background: #064d9f; }
 .ujg-esi-management-preview-outcome { margin-top: 3px; color: #34475b; overflow-wrap: anywhere; }
+.ujg-esi-management-pending-tasks { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.ujg-esi-management-preview-item > .ujg-esi-management-pending-tasks { grid-column: 2 / 4; grid-row: 5; }
+.ujg-esi-management-pending-task { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; }
+.ujg-esi-management-pending-task a { white-space: nowrap; }
+.ujg-esi-management-pending-role-counts { display: flex; flex-wrap: wrap; gap: 5px 12px; }
+.ujg-esi-management-pending-role-counts > span { display: inline-flex; align-items: baseline; gap: 4px; }
 @media (max-width: 800px) {
   .ujg-esi-management-preview-item { display: flex; flex-direction: column; gap: 7px; }
   .ujg-esi-management-preview-item > .ujg-esi-management-group-label { order: -3; }
   .ujg-esi-management-preview-milestone { order: -2; }
   .ujg-esi-management-preview-chronology { order: -1; }
+  .ujg-esi-management-preview-item.is-overdue > .ujg-esi-management-overdue-facts { order: -2; }
 }
 .ujg-esi-management-event-scope { display: block; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid #e3e9ef; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ujg-esi-management-event-scope:hover, .ujg-esi-management-event-scope:focus-visible { background: #eaf3fc; }

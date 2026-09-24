@@ -6,9 +6,11 @@ const {JSDOM} = require("jsdom");
 const jquery = require("jquery");
 const load = require("../helpers/load-amd-module");
 const moduleDir=path.join(__dirname,"../../ujg-excel-story-importer-modules");
+const config=load(path.join(moduleDir,"config.js"),{});
 const realActivity=load(path.join(moduleDir,"activity.js"),{
   _ujgESI_teams:load(path.join(moduleDir,"teams.js"),{}),
-  _ujgESI_remarkId:load(path.join(moduleDir,"remark-id.js"),{})
+  _ujgESI_remarkId:load(path.join(moduleDir,"remark-id.js"),{}),
+  _ujgESI_deadlines:load(path.join(moduleDir,"deadlines.js"),{_ujgESI_config:config})
 });
 
 function setup() {
@@ -39,6 +41,111 @@ test("metric lists use management flags and certified transitions", t => {
   const preview=x.ui.preview(x.report,"completed",x.state,x.services);
   assert.match(preview.text(),/История неполна/);
   assert.equal(preview.find(".ujg-esi-management-preview-open").length,1);
+});
+test("overdue preview and full report include quiet remarks ordered by overdue days", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.groups[0].deadline={date:"2026-09-22",state:"overdue",daysOverdue:2,owner:{label:"Мария"},pendingTasks:[{key:"P-2",role:"QA",summary:"Check",status:"Open",assignee:{label:"Света"},team:"QA"}]};
+  x.report.groups[1].deadline={date:"2026-09-20",state:"overdue",daysOverdue:4,owner:{label:"Иван"},pendingTasks:[{key:"P-3",role:"BE",summary:"Fix",status:"Open",assignee:{label:"Олег"},team:"BE"}]};
+  x.report.groups[1].events=[];
+  const preview=x.ui.preview(x.report,"overdue",x.state,x.services);
+  assert.equal(preview.find(".ujg-esi-management-preview-item").length,2);
+  assert.match(preview.find(".ujg-esi-management-preview-item").first().text(),/P-4.*20\.09\.2026.*4 календарных дня.*Иван/s);
+  assert.match(preview.text(),/P-3.*BE.*Олег.*P-2.*QA.*Света/s);
+  const panel=x.ui.render(x.report,"overdue",x.state,x.services);
+  assert.equal(panel.find(".ujg-esi-management-remark").length,2);
+  assert.match(panel.find(".ujg-esi-management-remark").first().text(),/P-4/);
+  assert.match(panel.find(".ujg-esi-management-detail").text(),/20\.09\.2026.*4 д.*Иван.*P-3.*BE.*Олег/s);
+  assert.ok(panel.find("a[href='https://jira.example.test/base/browse/P-3']").length >= 1);
+});
+test("overdue hover leads with deadline facts and shows only pending children", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.groups[0].deadline={date:"2026-09-22",state:"overdue",daysOverdue:2,owner:{label:"Мария"},source:"jira-description",pendingTasks:[
+    {key:"P-5",role:"QA",summary:"Check again",status:"Open",assignee:{label:"Света"},team:"QA"},
+    {key:"P-6",role:"QA",summary:"Verify",status:"Testing",assignee:{label:"Ира"},team:"QA"}
+  ]};
+  const preview=x.ui.preview(x.report,"overdue",x.state,x.services);
+  const row=preview.find(".ujg-esi-management-preview-item").first();
+  assert.match(row.find(".ujg-esi-management-group-label").text(),/P-1.*11.*Remark one/s);
+  assert.match(row.find(".ujg-esi-management-overdue-facts").text(),/Срок исполнения.*22\.09\.2026.*Просрочено.*2 календарных дня.*Мария.*сохранённое описание Jira/s);
+  assert.match(row.find(".ujg-esi-management-pending-tasks").text(),/QA.*2.*P-5.*Света.*QA.*P-6.*Ира.*QA/s);
+  assert.equal(row.find(".ujg-esi-management-pending-task").length,2);
+  assert.equal(row.find("a[href='https://jira.example.test/base/browse/P-5']").length,1);
+  assert.equal(row.find("a[href='https://jira.example.test/base/browse/P-6']").length,1);
+  assert.doesNotMatch(row.text(),/P-2|С момента создания|Учтено на момент снимков|Работали по замечанию|Завершил/);
+  assert.equal(row.find(".ujg-esi-management-preview-roles,.ujg-esi-management-preview-chronology").length,0);
+  assert.match(x.ui.render(x.report,"overdue",x.state,x.services).find(".ujg-esi-management-detail").text(),/P-2/);
+});
+test("overdue hover uses the correct calendar-day label for one and five days", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  const group=x.report.groups[0];
+  group.deadline={date:"2026-09-23",state:"overdue",daysOverdue:1,pendingTasks:[]};
+  assert.match(x.ui.preview(x.report,"overdue",x.state,x.services).find(".ujg-esi-management-overdue-facts").text(),/1 календарный день/);
+  group.deadline.daysOverdue=5;
+  assert.match(x.ui.preview(x.report,"overdue",x.state,x.services).find(".ujg-esi-management-overdue-facts").text(),/5 календарных дней/);
+});
+test("overdue views show coverage and date basis for a confirmed lower bound", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.deadlineReferenceDate="2026-09-25";
+  x.report.metrics.overdue=null; x.report.observed={overdue:1};
+  x.report.deadlineCoverage={known:2,missing:1,invalid:1,conflict:1,unknownState:1,total:5};
+  x.report.coverage.isComplete=true;
+  x.report.groups[0].deadline={date:"2026-09-23",state:"overdue",daysOverdue:1,pendingTasks:[]};
+  for (const view of [x.ui.preview(x.report,"overdue",x.state,x.services),x.ui.render(x.report,"overdue",x.state,x.services)]) {
+    const note=view.find(".ujg-esi-management-deadline-coverage").text();
+    assert.match(note,/Подтверждено.*1.*итог может быть больше/i);
+    assert.match(note,/известны 2.*без срока 1.*ошибки 1.*конфликты 1.*состояние не подтверждено 1.*из 5/s);
+    assert.match(note,/срок.*текущ.*журнал.*сохранённ.*описан.*история переносов.*не.*известна/is);
+    assert.match(note,/На сегодня, 25\.09\.2026 МСК/i);
+    assert.doesNotMatch(note,/выбранную дату|24\.09\.2026/i);
+  }
+  const overdue=x.ui.render(x.report,"overdue",x.state,x.services);
+  assert.match(overdue.find(".ujg-esi-management-date").text(),/На сегодня, 25\.09\.2026 МСК/);
+  assert.match(x.ui.render(x.report,"completed",x.state,x.services).find(".ujg-esi-management-date").text(),/24\.09\.2026.*МСК/);
+});
+test("overdue views use deadline coverage without a generic history warning", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.coverage.isComplete=false;
+  x.report.metrics.overdue=1;
+  x.report.deadlineReferenceDate="2026-09-25";
+  x.report.deadlineCoverage={known:1,missing:1,invalid:0,conflict:0,unknownState:0,total:2};
+  x.report.groups[0].deadline={date:"2026-09-23",state:"overdue",daysOverdue:2,pendingTasks:[]};
+  for (const view of [x.ui.preview(x.report,"overdue",x.state,x.services),x.ui.render(x.report,"overdue",x.state,x.services)]) {
+    assert.equal(view.find(".ujg-esi-management-warning").length,0);
+    assert.match(view.find(".ujg-esi-management-deadline-coverage").text(),/Просроченных 1.*без срока 1/);
+  }
+  assert.equal(x.ui.preview(x.report,"completed",x.state,x.services).find(".ujg-esi-management-warning").length,1);
+});
+test("overdue full detail labels historical evidence after current work", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.deadlineReferenceDate="2026-09-25";
+  x.report.groups[0].currentStatus="Open";
+  x.report.groups[0].deadline={date:"2026-09-23",state:"overdue",daysOverdue:2,pendingTasks:[{key:"P-5",role:"QA",status:"Open",assignee:{label:"Света"},team:"QA"}]};
+  const detail=x.ui.render(x.report,"overdue",x.state,x.services).find(".ujg-esi-management-detail");
+  const history=detail.find(".ujg-esi-management-history-heading");
+  assert.match(history.text(),/История за 24\.09\.2026 МСК/);
+  assert.ok(detail.find(".ujg-esi-management-pending-tasks").index() < history.index());
+  assert.ok(detail.children(".ujg-esi-management-muted").first().index() < history.index());
+  assert.ok(history.index() < detail.find(".ujg-esi-management-chronology").index());
+  assert.ok(history.index() < detail.find(".ujg-esi-management-task-table").parent().index());
+  assert.match(detail.find(".ujg-esi-management-task-table").text(),/P-2/);
+  assert.equal(x.ui.render(x.report,"completed",x.state,x.services).find(".ujg-esi-management-history-heading").length,0);
+});
+test("overdue empty states distinguish unknown totals, known zero, and missing deadlines", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.coverage.isComplete=true;
+  x.report.groups.forEach(group => { group.deadline={date:null,state:"invalid"}; });
+  for (const [coverage,metric,expected] of [
+    [{known:0,missing:0,invalid:1,conflict:1,unknownState:0,total:2},null,/итог не определён/i],
+    [{known:1,missing:1,invalid:0,conflict:0,unknownState:0,total:2},0,/Среди замечаний с известным сроком просроченных нет/i],
+    [{known:0,missing:2,invalid:0,conflict:0,unknownState:0,total:2},0,/Среди замечаний с известным сроком просроченных нет/i]
+  ]) {
+    x.report.deadlineCoverage=coverage; x.report.metrics.overdue=metric; x.report.observed={overdue:0};
+    for (const view of [x.ui.preview(x.report,"overdue",x.state,x.services),x.ui.render(x.report,"overdue",x.state,x.services)]) {
+      assert.match(view.find(".ujg-esi-management-deadline-coverage").text(),/без срока|ошибки/);
+      assert.match(view.find(".ujg-esi-management-empty").text(),expected);
+      assert.doesNotMatch(view.find(".ujg-esi-management-empty").text(),/За выбранный день таких замечаний нет/);
+    }
+  }
 });
 
 test("reopened preview and report define strict full-readiness reopening even at zero", t => {

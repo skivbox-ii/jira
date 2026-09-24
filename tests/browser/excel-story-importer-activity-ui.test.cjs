@@ -6,9 +6,11 @@ const {JSDOM} = require("jsdom");
 const jquery = require("jquery");
 const load = require("../helpers/load-amd-module");
 const activityDir = path.join(__dirname,"../../ujg-excel-story-importer-modules");
+const config = load(path.join(activityDir,"config.js"),{});
 const activity = load(path.join(activityDir,"activity.js"), {
   _ujgESI_teams:load(path.join(activityDir,"teams.js"),{}),
-  _ujgESI_remarkId:load(path.join(activityDir,"remark-id.js"),{})
+  _ujgESI_remarkId:load(path.join(activityDir,"remark-id.js"),{}),
+  _ujgESI_deadlines:load(path.join(activityDir,"deadlines.js"),{_ujgESI_config:config})
 });
 
 function setup(report, configureWindow) {
@@ -111,6 +113,80 @@ test("metric preview uses ninety percent of the available viewport without overf
   const box=x.$(".ujg-esi-activity-metric-preview");
   assert.equal(parseFloat(box.css("width")),1260);
   assert.ok(parseFloat(box.css("left"))+parseFloat(box.css("width"))<=1400);
+});
+test("a tall metric preview leaves its trigger clickable and limits its scrolling height", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  Object.defineProperty(x.dom.window.document.documentElement,"clientHeight",{configurable:true,value:1000});
+  const original=x.$.fn.outerHeight;
+  x.$.fn.outerHeight=function() { return this.hasClass("ujg-esi-activity-metric-preview") ? 800 : original.apply(this,arguments); };
+  const trigger=x.$("[data-metric='changed']");
+  trigger[0].getBoundingClientRect=()=>({left:100,right:300,top:200,bottom:250,width:200,height:50});
+  trigger.trigger("focus");
+  const box=x.$(".ujg-esi-activity-metric-preview");
+  assert.ok(parseFloat(box.css("top"))>=254);
+  assert.ok(parseFloat(box.css("top"))+parseFloat(box.css("max-height"))<=988);
+  assert.ok(parseFloat(box.find(".ujg-esi-management-preview").css("max-height"))<=708);
+});
+test("deadline metric and badges use controller states and show coverage", t => {
+  const report=fixture();
+  report.metrics.overdue=null; report.observed={overdue:2};
+  report.deadlineReferenceDate="2026-09-25";
+  report.deadlineCoverage={known:3,missing:1,invalid:1,conflict:1,unknownState:2,total:6};
+  report.groups[0].deadline={date:"2026-09-23",referenceDate:"2026-09-25",state:"overdue",daysOverdue:2};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const metric=x.$("[data-metric='overdue']");
+  assert.equal(x.$(".ujg-esi-activity-metric").length,6);
+  assert.match(metric.text(),/≥2.*Просроченные/);
+  assert.match(metric.find("strong").attr("title"),/подтвержд/i);
+  assert.match(metric.find("strong").attr("title"),/На сегодня, 25\.09\.2026 МСК/);
+  assert.match(x.$(".ujg-esi-activity-group-deadline").text(),/23\.09\.2026.*просрочено 2 д/);
+  assert.ok(x.$(".ujg-esi-activity-group-deadline").hasClass("is-overdue"));
+  assert.match(x.$(".ujg-esi-activity-deadline-coverage").text(),/3.*1.*1.*1.*2/);
+  assert.match(x.$(".ujg-esi-activity-deadline-coverage").text(),/На сегодня, 25\.09\.2026 МСК/);
+  assert.match(x.$(".ujg-esi-activity-group-deadline").attr("title"),/На сегодня, 25\.09\.2026 МСК/);
+  x.$(".ujg-esi-activity-date").val("2026-09-22").trigger("change");
+  assert.match(x.$(".ujg-esi-activity-deadline-coverage").text(),/На сегодня, 25\.09\.2026 МСК/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-deadline-coverage").text(),/На выбранную дату|22\.09\.2026/);
+  assert.equal(x.calls.summarize[0].options.journalRows,undefined);
+  x.state.deadlineJournalRows=[{key:"P-1"}]; x.state.mappingSettings={columnMap:{deadline:"План"}}; x.render();
+  assert.deepEqual(x.calls.summarize.at(-1).options.journalRows,x.state.deadlineJournalRows);
+  assert.deepEqual(x.calls.summarize.at(-1).options.columnMap,{deadline:"План"});
+});
+test("deadline badges distinguish near dates and neutral states", t => {
+  const report=fixture();
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  for (const [state,date,phrase,klass] of [["today","2026-09-24","сегодня","is-near"],["tomorrow","2026-09-25","завтра","is-near"],["completed","2026-09-20","готово","is-neutral"],["missing",null,"Срок не указан","is-neutral"],["invalid",null,"Некорректный срок","is-neutral"],["conflict",null,"Противоречивый срок","is-neutral"],["unknown","2026-09-20","состояние не подтверждено","is-neutral"]]) {
+    report.groups[0].deadline={date,state}; x.render();
+    const badge=x.$(".ujg-esi-activity-group-deadline");
+    assert.match(badge.text(),new RegExp(phrase,"i"));
+    assert.ok(badge.hasClass(klass),state);
+    assert.equal(badge.hasClass("is-overdue"),false);
+  }
+});
+test("deadline badge title exposes source field and invalid raw value as safe text", t => {
+  const report=fixture();
+  report.groups[0].deadline={date:null,state:"invalid",source:"jira-description",field:"Срок исполнения",raw:'<img src=x onerror="alert(1)">'};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const badge=x.$(".ujg-esi-activity-group-deadline");
+  assert.match(badge.attr("title"),/сохранённ.*Jira.*Срок исполнения.*<img/s);
+  assert.equal(x.$("img").length,0);
+  report.groups[0].deadline={date:null,state:"conflict",source:"excel",field:"План",raw:"25.09.2026; 26.09.2026"};
+  x.render();
+  assert.match(x.$(".ujg-esi-activity-group-deadline").attr("title"),/Excel.*План.*25\.09\.2026; 26\.09\.2026/s);
+});
+test("overdue metric opens every confirmed remark despite journal filtering", t => {
+  const report=fixture();
+  report.metrics.overdue=2;
+  report.groups[0].deadline={date:"2026-09-23",state:"overdue",daysOverdue:1,pendingTasks:[]};
+  report.groups.push({id:"quiet",key:"P-9",remarkId:"99",summary:"Quiet overdue",events:[],deadline:{date:"2026-09-20",state:"overdue",daysOverdue:4,pendingTasks:[]}});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  assert.equal(x.$(".ujg-esi-activity-group").length,1);
+  x.$("[data-metric='overdue']").trigger("focus");
+  assert.equal(x.$(".ujg-esi-activity-metric-preview .ujg-esi-management-preview-item").length,2);
+  x.$("[data-metric='overdue']").trigger("click");
+  assert.equal(x.$(".ujg-esi-management-dialog .ujg-esi-management-remark").length,2);
+  assert.match(x.$(".ujg-esi-management-dialog .ujg-esi-management-remark").first().text(),/P-9/);
 });
 test("change filter offers unique categories, not individual event descriptions", t => {
   const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
@@ -394,7 +470,9 @@ test("stale history warnings offer refresh even when snapshots are marked comple
 });
 test("export receives filtered report and context without injecting Jira text", t => {
   const report=fixture(); report.groups[0].summary='<img src=x onerror=alert(1)>';
+  report.groups.push({id:"quiet",key:"P-9",summary:"Quiet overdue",events:[],deadline:{date:"2026-09-20",state:"overdue",daysOverdue:4}});
   const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.baseUrl="https://jira.example.test/base";
   let download;
   x.dom.window.URL.createObjectURL = blob => { download=blob; return "blob:activity-test"; };
   x.dom.window.URL.revokeObjectURL = () => {};
@@ -404,8 +482,11 @@ test("export receives filtered report and context without injecting Jira text", 
   assert.equal(x.calls.exports.length,1);
   assert.equal(x.calls.exports[0].value.events.length,1);
   assert.equal(x.calls.exports[0].value.groups[0].events.length,1);
+  assert.equal(x.calls.exports[0].value.deadlineGroups.length,2);
+  assert.equal(x.calls.exports[0].value.deadlineGroups[1].key,"P-9");
   assert.equal(x.calls.exports[0].context.projectKey,"P");
   assert.equal(x.calls.exports[0].context.epicKey,"P-EPIC");
+  assert.equal(x.calls.exports[0].context.baseUrl,"https://jira.example.test/base");
   assert.deepEqual(Array.from(x.calls.exports[0].context.filters.role),["QA"]);
   assert.equal(x.calls.exports[0].context.sort.key,"time");
   assert.equal(download.type,"text/html;charset=utf-8");

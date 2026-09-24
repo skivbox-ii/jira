@@ -607,6 +607,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       { key: "statusInJira", label: "Статус Jira", value: map.statusInJira || "Статус в Jira" },
       { key: "assigneeInJira", label: "Исполнитель Jira", value: map.assigneeInJira || "Исполнитель в Jira" },
       { key: "sprintInJira", label: "Спринт Jira", value: map.sprintInJira || "Спринт" },
+      { key: "deadline", label: "Срок исполнения", value: map.deadline || "Срок" },
     ];
   }
 

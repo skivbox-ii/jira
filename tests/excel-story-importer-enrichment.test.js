@@ -60,6 +60,7 @@ test("opening Dynamics selects Jira and loads the scope once while retaining Exc
   app.callbacks.onProjectChange("TEST");
   app.callbacks.onReportViewChange("activity");
   assert.equal(app.state.viewMode,"jira");
+  assert.equal(app.state.deadlineJournalRows[0].jiraKey,"TEST-10");
   assert.equal(app.state.reportView,"activity");
   await flush();await flush();
   assert.equal(calls.length,1);

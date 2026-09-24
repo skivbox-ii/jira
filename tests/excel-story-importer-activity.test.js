@@ -5,7 +5,8 @@ const load = require("./helpers/load-amd-module");
 const dir = path.join(__dirname, "../ujg-excel-story-importer-modules");
 const teams = load(path.join(dir, "teams.js"), {});
 const remarkId = load(path.join(dir,"remark-id.js"),{});
-const activity = () => load(path.join(dir, "activity.js"), {_ujgESI_teams: teams,_ujgESI_remarkId:remarkId});
+const deadlines = load(path.join(dir,"deadlines.js"),{_ujgESI_config:load(path.join(dir,"config.js"),{})});
+const activity = () => load(path.join(dir, "activity.js"), {_ujgESI_teams: teams,_ujgESI_remarkId:remarkId,_ujgESI_deadlines:deadlines},{URL});
 const complete = histories => ({startAt: 0, total: histories.length, histories});
 const person = (key, label) => ({key, displayName: label});
 const item = (field, from, to, fromString = from, toString = to) => ({field, from, to, fromString, toString});
@@ -22,6 +23,204 @@ function detail(api, jira, role = "") {
 }
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
+
+function withDeadline(parent, value, children = []) {
+  return {...row(parent,children),sheetName:"Замечания",excelRowNumber:3,sourceColumns:{"Срок исполнения":value}};
+}
+
+test("overdue includes a remark with no events and exposes pending tasks and its owner", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const result=report(api,[withDeadline(parent,"23.09.2026")]);
+  assert.equal(result.events.length,0);
+  assert.equal(result.metrics.overdue,1);
+  assert.equal(result.observed.overdue,1);
+  const due=result.groups[0].deadline;
+  assert.equal(due.state,"overdue");
+  assert.equal(due.date,"2026-09-23");
+  assert.equal(due.referenceDate,"2026-09-24");
+  assert.equal(due.daysOverdue,1);
+  assert.equal(due.owner.label,"Owner");
+  assert.equal(due.pendingTasks[0].key,"P-1");
+  assert.equal(result.deadlineCoverage.known,1);
+});
+
+test("inclusive current Moscow deadlines distinguish today tomorrow upcoming and yesterday", () => {
+  const api=activity();
+  for (const [date,state,remaining] of [["23.09.2026","overdue",-1],["24.09.2026","today",0],["25.09.2026","tomorrow",1],["26.09.2026","upcoming",2]]) {
+    const result=report(api,[withDeadline(detail(api,issue("P-1","Open")),date)]);
+    assert.equal(result.groups[0].deadline.state,state,date);
+    assert.equal(result.groups[0].deadline.daysRemaining,remaining);
+    assert.equal(result.metrics.overdue,state === "overdue" ? 1 : 0);
+  }
+  const midnightParent=detail(api,issue("P-1","Open"));
+  midnightParent.activity.capturedAt="2026-09-24T21:00:01Z";
+  const midnight=report(api,[withDeadline(midnightParent,"24.09.2026")],{now:"2026-09-24T21:00:00Z"});
+  assert.equal(midnight.groups[0].deadline.state,"overdue","Midnight advances today's deadline even when the report day stays unchanged");
+  assert.equal(midnight.groups[0].deadline.referenceDate,"2026-09-25");
+});
+
+test("closed root with open QA remains overdue but fully ready and cancelled remarks do not", () => {
+  const api=activity(), done=detail(api,issue("P-1","Done")), qa=detail(api,issue("P-2","Open"),"QA");
+  let result=report(api,[withDeadline(done,"21.09.2026",[qa])]);
+  assert.equal(result.metrics.overdue,1);
+  assert.deepEqual(Array.from(result.groups[0].deadline.pendingTasks,t=>t.key),["P-2"]);
+  assert.equal(result.groups[0].deadline.pendingTasks[0].role,"QA");
+  result=report(api,[withDeadline(done,"21.09.2026")]);
+  assert.equal(result.groups[0].deadline.state,"completed");
+  assert.equal(result.metrics.overdue,0);
+  const cancelled=detail(api,issue("P-3","Cancelled",[],{fields:{status:{id:"3",name:"Cancelled",statusCategory:{key:"done"}}}}));
+  result=report(api,[withDeadline(cancelled,"21.09.2026")]);
+  assert.equal(result.groups[0].deadline.state,"cancelled");
+  assert.equal(result.metrics.overdue,0);
+});
+
+test("deadline state is current and independent of the selected historical report day", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("h1","2026-09-23T11:00:00Z","closer",[item("status","1","2","Open","Done")]),
+    history("h2","2026-09-24T01:00:00Z","reviewer",[item("status","2","1","Done","Open")])
+  ]));
+  const rows=[withDeadline(parent,"22.09.2026")];
+  const previous=report(api,rows,{date:"2026-09-23"});
+  assert.equal(previous.groups[0].deadline.state,"overdue");
+  assert.equal(previous.metrics.overdue,1);
+  assert.equal(previous.groups[0].deadline.referenceDate,"2026-09-24");
+  const current=report(api,rows);
+  assert.equal(current.groups[0].deadline.state,"overdue");
+  assert.equal(current.groups[0].deadline.daysOverdue,2);
+  assert.equal(current.metrics.overdue,1);
+});
+
+test("missing invalid and conflicting deadlines are explicit and never replaced with creation dates", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const missing=report(api,[row(parent)]);
+  assert.equal(missing.groups[0].deadline.state,"missing");
+  assert.equal(missing.groups[0].deadline.date,null);
+  assert.equal(missing.deadlineCoverage.missing,1);
+  assert.equal(missing.metrics.overdue,0);
+  const invalid=report(api,[withDeadline(parent,"31.02.2026")]);
+  assert.equal(invalid.groups[0].deadline.state,"invalid");
+  assert.equal(invalid.deadlineCoverage.invalid,1);
+  assert.equal(invalid.metrics.overdue,null);
+  const conflicting=report(api,[withDeadline(parent,"22.09.2026"),withDeadline(parent,"26.09.2026")]);
+  assert.equal(conflicting.groups.length,1);
+  assert.equal(conflicting.groups[0].deadline.state,"conflict");
+  assert.equal(conflicting.deadlineCoverage.conflict,1);
+  assert.equal(conflicting.metrics.overdue,null);
+});
+
+test("duplicate identical rows count once and deadline resolution leaves rows untouched", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const rows=[withDeadline(parent,"23.09.2026"),withDeadline(parent,"2026-09-23")], before=JSON.stringify(rows);
+  const result=report(api,rows);
+  assert.equal(result.metrics.overdue,1);
+  assert.equal(result.deadlineCoverage.total,1);
+  assert.equal(JSON.stringify(rows),before);
+});
+
+test("missing current snapshot leaves overdue state unknown and retains a confirmed lower bound", () => {
+  const api=activity(), first=detail(api,issue("P-1","Open")), second=detail(api,issue("P-2","Open"));
+  second.activity=null;
+  const result=report(api,[withDeadline(first,"22.09.2026"),withDeadline(second,"23.09.2026")]);
+  assert.equal(result.metrics.overdue,null);
+  assert.equal(result.observed.overdue,1);
+  assert.equal(result.groups[1].deadline.state,"unknown");
+  assert.equal(result.deadlineCoverage.unknownState,1);
+  const scoped=report(api,[withDeadline(first,"22.09.2026")],{scopeWarning:"Загружена часть проекта"});
+  assert.equal(scoped.metrics.overdue,null);
+  assert.equal(scoped.observed.overdue,1);
+});
+
+test("unknown statuses and missing children cannot certify overdue; report date does not affect it", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  for (const rows of [[{...withDeadline(parent,"21.09.2026"),status:"partial"}],
+    [withDeadline(detail(api,issue("P-2","Unknown",[],{fields:{status:{id:"9",name:"Unexpected"}}})),"21.09.2026")]]) {
+    const result=report(api,rows);
+    assert.equal(result.groups[0].deadline.state,"unknown");
+    assert.equal(result.metrics.overdue,null);
+  }
+  const future=report(api,[withDeadline(parent,"21.09.2026")],{date:"2026-09-25"});
+  assert.equal(future.metrics.overdue,1);
+  assert.equal(future.observed.overdue,1);
+});
+
+test("current deadline needs current fields, not complete transition history", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  parent.activity.complete=false;
+  const result=report(api,[withDeadline(parent,"23.09.2026")],{date:"2026-09-20"});
+  assert.equal(result.metrics.overdue,1);
+  assert.equal(result.deadlineReferenceDate,"2026-09-24");
+  parent.activity.capturedAt="2026-09-23T12:00:00Z";
+  const stale=report(api,[withDeadline(parent,"23.09.2026")]);
+  assert.equal(stale.metrics.overdue,null);
+  assert.equal(stale.deadlineCoverage.unknownState,1);
+});
+
+test("overdue work uses the current owner even when the selected day had another assignee", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("h1","2026-09-24T08:00:00Z","owner",[item("assignee","previous","owner","Previous","Owner")])
+  ]));
+  const result=report(api,[withDeadline(parent,"23.09.2026")],{date:"2026-09-23"});
+  assert.equal(result.groups[0].management.tasks[0].assignee.label,"Previous");
+  assert.equal(result.groups[0].deadline.owner.label,"Owner");
+  assert.equal(result.groups[0].deadline.pendingTasks[0].assignee.label,"Owner");
+});
+
+test("a remark not yet created on the historical cutoff is not overdue", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[],{fields:{created:"2026-09-24T13:00:00Z"}}));
+  const result=report(api,[withDeadline(parent,"20.09.2026")]);
+  assert.equal(result.metrics.overdue,0);
+  assert.notEqual(result.groups[0].deadline.state,"overdue");
+});
+
+test("conflicting creation dates cannot certify absence at cutoff in either row order", () => {
+  const api=activity(), past=detail(api,issue("P-1","Open")), future=detail(api,issue("P-1","Open",[],{fields:{created:"2026-09-24T13:00:00Z"}}));
+  for (const copies of [[future,past],[past,future]]) {
+    const result=report(api,copies.map(parent=>withDeadline(parent,"23.09.2026")));
+    assert.equal(result.metrics.overdue,null);
+    assert.equal(result.deadlineCoverage.unknownState,1);
+  }
+});
+
+test("known open cutoff certifies overdue despite an unclassified earlier status", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("h1","2026-09-24T08:00:00Z","owner",[item("status","9","1","Unclassified","Open")])
+  ]));
+  const result=report(api,[withDeadline(parent,"23.09.2026")]);
+  assert.equal(result.groups[0].dayComplete,false);
+  assert.equal(result.groups[0].deadline.state,"overdue");
+  assert.equal(result.metrics.overdue,1);
+});
+
+test("known uncreated Excel row does not invalidate overdue Jira count", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const uncreated={jiraKey:"",summary:"Not created",sheetName:"Замечания",excelRowNumber:4,sourceColumns:{"Срок исполнения":"23.09.2026"}};
+  const result=report(api,[withDeadline(parent,"23.09.2026"),uncreated]);
+  assert.equal(result.metrics.overdue,1);
+  assert.equal(result.deadlineCoverage.unknownState,0);
+  assert.equal(result.groups[1].deadline.reason,"not-created-in-jira");
+});
+
+test("overdue owner and pending work are assigned to teams by identity on the selected cutoff", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Done")), child=detail(api,issue("P-2","Open"),"BE");
+  const result=api.summarize([withDeadline(parent,"23.09.2026",[child])],[{id:"be",name:"BE",stage:"development",roles:["BE"],color:"#123456",members:[{id:"owner",label:"Owner",identifiers:["owner"]}]}],{date:"2026-09-24",now:"2026-09-24T12:00:00Z"});
+  assert.equal(result.groups[0].deadline.pendingTasks[0].team,"BE");
+  assert.equal(result.groups[0].deadline.pendingTasks[0].color,result.teams[0].color);
+});
+
+test("overdue export includes no-event groups dates and clear current-journal basis", () => {
+  const api=activity(), result=report(api,[withDeadline(detail(api,issue("P-1","Open")),"23.09.2026")]);
+  const html=api.exportHtml(result,{baseUrl:"https://jira.example.test"});
+  assert.match(html,/Просроченные/);
+  assert.match(html,/23\.09\.2026/);
+  assert.match(html,/P-1/);
+  assert.match(html,/текущего журнала/i);
+  assert.match(html,/href="https:\/\/jira\.example\.test\/browse\/P-1"/);
+  const filtered=api.exportHtml({...result,groups:[],deadlineGroups:result.groups});
+  assert.match(filtered,/23\.09\.2026/);
+  assert.match(filtered,/P-1/);
+  const unsafe=api.exportHtml(result,{baseUrl:"javascript:alert(1)"});
+  assert.doesNotMatch(unsafe,/href="javascript:/);
+});
 
 test("change categories depend on changed data, never transition text or values", () => {
   const api=activity();
@@ -516,7 +715,7 @@ test("status and assignee reconstruct backwards; author remains the change autho
   ]);
   const result = report(api, [row(detail(api, jira))]);
   assert.equal(result.coverage.isComplete, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.metrics)), {changed: 1, newRemarks: 0, completed: 1, reopened: 0, events: 2});
+  assert.deepEqual(JSON.parse(JSON.stringify(result.metrics)), {changed: 1, newRemarks: 0, completed: 1, reopened: 0, events: 2, overdue:0});
   assert.deepEqual(JSON.parse(JSON.stringify(result.balance)), {startOpen: 1, endOpen: 0});
   assert.equal(result.events[0].author.label, "editor");
   assert.equal(result.events[0].assignee.label, "Old");
@@ -733,7 +932,7 @@ test("partial coverage exposes evidenced changed and new lower bounds", () => {
   const result = report(api,[r]);
   assert.equal(result.metrics.changed,null);
   assert.equal(result.metrics.newRemarks,null);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.observed)),{changed:1,newRemarks:1});
+  assert.deepEqual(JSON.parse(JSON.stringify(result.observed)),{changed:1,newRemarks:1,overdue:0});
 });
 
 test("uncreated source rows do not make observed Jira totals incomplete", () => {

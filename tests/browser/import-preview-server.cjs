@@ -110,6 +110,21 @@ issues["EVOSCADA-20914"].fields.comment={startAt:0,total:1,comments:[{
   id:"reopened-comment",created:activityDate+"T10:10:00+03:00",author:{name:"sokolova",displayName:"Соколова А."},
   body:"h3. Повторная проверка\nПри смене масштаба границы осей исчезают. Требуется доработка EVOSCADA-30050 и повторная проверка [QA] EVOSCADA-30051.\n\n```mermaid\nflowchart LR\n    A[Проверка] --> B[Доработка]\n    B --> C[Повторное тестирование]\n```"
 }]};
+// Journal deadlines exercise overdue work without day events and inclusive MSK days.
+function deadlineDay(offset) {
+  return new Date(Date.parse(activityDate+"T00:00:00Z")+offset*86400000).toISOString().slice(0,10);
+}
+const deadlineDates={
+  "EVOSCADA-16104":deadlineDay(-1),"EVOSCADA-17906":deadlineDay(-2),
+  "EVOSCADA-20000":deadlineDay(0),"EVOSCADA-20914":deadlineDay(1),"EVOSCADA-20862":deadlineDay(-1)
+};
+rows[0].push("Срок");
+rows.slice(1).forEach(row=>{row.push(deadlineDates[row[5]] || "");});
+Object.entries(deadlineDates).forEach(([key,date])=>{
+  const target=issues[key], source="|Срок|"+date+"|";
+  if (target.fields.description.startsWith("Импортировано из журнала замечаний.")) target.fields.description+="\n"+source;
+  else target.fields.description="Импортировано из журнала замечаний.\n\n||Поле||Значение||\n"+source+"\n\n"+target.fields.description;
+});
 const workbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Лист1");
 const excel = XLSX.write(workbook, {type:"buffer",bookType:"xlsx"});

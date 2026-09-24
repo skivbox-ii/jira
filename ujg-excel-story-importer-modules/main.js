@@ -2057,6 +2057,7 @@ define("_ujgESI_main", [
 
     function render() {
       state.epics = state.createDialog && state.createDialog.epics ? state.createDialog.epics : projectEpics;
+      state.deadlineJournalRows = excelRows;
       rendering.render(state);
       if (API && typeof API.resize === "function") API.resize();
     }

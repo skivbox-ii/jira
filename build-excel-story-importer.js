@@ -12,6 +12,7 @@ var MODULE_ORDER = [
   "config.js",
   "mapping-store.js",
   "description.js",
+  "deadlines.js",
   "parser.js",
   "remark-id.js",
   "creator.js",

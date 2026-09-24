@@ -33,6 +33,8 @@ define("_ujgESI_config", [], function() {
     "Статус в Jira",
     "Исполнитель в Jira",
     "Подтверждено заказчиком",
+    "Срок исполнения",
+    "Срок",
   ];
 
   var CREATE_TEMPLATE_ROLES = [
@@ -80,6 +82,7 @@ define("_ujgESI_config", [], function() {
     statusInJira: "Статус в Jira",
     assigneeInJira: "Исполнитель в Jira",
     sprintInJira: "Спринт",
+    deadline: "Срок",
   };
 
   var TABLE_START = {
