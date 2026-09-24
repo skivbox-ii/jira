@@ -98,6 +98,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
+      if (activityView && activityView.dismissPopover && activityView.dismissPopover()) { event.stopPropagation(); return; }
       if (!fullscreen) return;
       if ($(event.target).closest("[role='dialog'],.ujg-esi-grid-menu").length) return;
       toggleFullscreen();
@@ -118,6 +119,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       fullscreenHost.scrollTop(fullscreenScroll.top).scrollLeft(fullscreenScroll.left);
       fullscreen = false;
     }
+    if (activityView && activityView.resize) activityView.resize();
     $root.find(".ujg-esi-fullscreen-button").empty().append(icon(fullscreen ? "Minimize2" : "Expand"))
       .attr({ title: fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", "aria-label": fullscreen ? "Выйти из полноэкранного режима" : "На весь экран" });
   }

@@ -459,6 +459,16 @@ test("HTML snapshot escapes Jira text and includes scope, coverage and team mapp
   assert.doesNotMatch(output,/<script\b|<img\b/i);
 });
 
+test("link events describe additions and removals without Jira boilerplate", () => {
+  const api = activity();
+  assert.equal(api.eventText({field:"Link",to:"This issue is child of EVOSCADA-21507"}),"Добавлена связь: дочерняя задача для EVOSCADA-21507");
+  assert.equal(api.eventText({field:"Link",from:"This issue clones EVOSCADA-21734"}),"Удалена связь: копия задачи EVOSCADA-21734");
+  assert.equal(api.eventText({field:"Link",to:"This issue is cloned by EVOSCADA-21751"}),"Добавлена связь: скопирована в EVOSCADA-21751");
+  assert.equal(api.eventText({field:"Link",to:"This issue is parent of EVOSCADA-21734"}),"Добавлена связь: родительская задача для EVOSCADA-21734");
+  assert.equal(api.eventText({field:"Link",to:"This issue Порождает EVOSCADA-21732"}),"Добавлена связь: Порождает EVOSCADA-21732");
+  assert.equal(api.eventText({field:"Link",from:"Custom relation P-1",to:"Custom relation P-2"}),"Изменена связь: Custom relation P-1 → Custom relation P-2");
+});
+
 test("HTML journal uses MSK time and shows author, assignees and teams", () => {
   const api = activity();
   const jira = issue("P-1","Open",[history("move","2026-09-24T01:00:00Z","Editor",[item("assignee","old","owner","Old","Owner")])]);

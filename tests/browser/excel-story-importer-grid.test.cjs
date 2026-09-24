@@ -6,14 +6,18 @@ const { JSDOM } = require("jsdom");
 const jquery = require("jquery");
 const root = path.join(__dirname, "../..");
 
-function setup() {
+function setup(activityReport) {
   const dom = new JSDOM('<div class="ujg-excel-story-importer"></div>', { runScripts: "outside-only", url: "http://localhost" });
   const w = dom.window;
   w.scrollTo = () => {};
   const $ = jquery(w), modules = { jquery: $ };
   modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
+  if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,statusLabel: value => value,eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
-  for (const file of ["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid", "rendering"]) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
+  const files=["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
+  if (activityReport) files.push("activity-ui");
+  files.push("rendering");
+  for (const file of files) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
   const calls = [];
   const state = {
     projectKey: "P", projects: [{ key: "P", name: "Project" }], epics: [], baseUrl: "https://jira.example.test",
@@ -630,6 +634,48 @@ test("resize does not sort and fullscreen survives render then exits on Escape",
   assert.equal(host.attr("style"),"color: red");
   state.rows=[]; render();
   assert.equal($("[aria-label='На весь экран']").length,1);
+});
+
+function fullscreenActivityReport() {
+  const events=[{id:"status-1",kind:"status",at:"2026-09-24T12:00:00Z",from:"Testing",to:"Done",role:"QA",issueKey:"P-12",assignee:{label:"Anna"}}];
+  return {events,groups:[{id:"remark-1",key:"P-10",events}],transitions:[{from:"Testing",to:"Done",count:1}]};
+}
+
+test("activity fullscreen refits existing table and preserves explicit widths and filters", t => {
+  const {dom,$,state,render}=setup(fullscreenActivityReport()); t.after(()=>dom.window.close());
+  Object.defineProperty(dom.window.HTMLElement.prototype,"clientWidth",{configurable:true,get() {
+    return this.classList.contains("ujg-esi-activity-scroll") ? ($(".ujg-esi-fullscreen").length ? 1888 : 1580) : 0;
+  }});
+  state.preferencesStorageKey="fullscreen-user";
+  dom.window.localStorage.setItem("fullscreen-user:activity-layout",JSON.stringify({widths:{author:265},filters:{role:["QA"]},sort:{key:"author",descending:true}}));
+  state.reportView="activity"; render();
+  const table=$(".ujg-esi-activity-table")[0], stored=dom.window.localStorage.getItem("fullscreen-user:activity-layout");
+  assert.equal(parseFloat($(table).css("width")),1580);
+  $(".ujg-esi-activity-scroll").scrollLeft(50);
+  $("[aria-label='На весь экран']").trigger("click");
+  assert.equal($(".ujg-esi-activity-table")[0],table);
+  assert.equal(parseFloat($(table).css("width")),1888);
+  assert.equal(parseFloat($("col[data-column='author']").css("width")),265);
+  assert.equal($("[data-activity-filter='role']").hasClass("is-active"),true);
+  assert.equal($(".ujg-esi-activity-scroll").scrollLeft(),50);
+  assert.equal(dom.window.localStorage.getItem("fullscreen-user:activity-layout"),stored);
+  $("[aria-label='Выйти из полноэкранного режима']").trigger("click");
+  assert.equal(parseFloat($(table).css("width")),1580);
+});
+
+test("activity count popup consumes first Escape before fullscreen exits", t => {
+  const {dom,$,state,render}=setup(fullscreenActivityReport()); t.after(()=>dom.window.close());
+  state.reportView="activity"; render();
+  $("[aria-label='На весь экран']").trigger("click");
+  const count=$(".ujg-esi-activity-status-matrix .has-transfer button");
+  count.trigger("focus");
+  assert.equal($(".ujg-esi-activity-event-popover").length,1);
+  count.trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal($(".ujg-esi-activity-event-popover").length,0);
+  assert.equal($(".ujg-esi-fullscreen").length,1);
+  assert.equal(dom.window.document.activeElement,count[0]);
+  count.trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal($(".ujg-esi-fullscreen").length,0);
 });
 
 test("confirmation shows a selected Epic absent from fetched options", t => {

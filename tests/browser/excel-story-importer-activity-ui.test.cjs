@@ -5,8 +5,9 @@ const path = require("node:path");
 const {JSDOM} = require("jsdom");
 const jquery = require("jquery");
 
-function setup(report) {
+function setup(report, configureWindow) {
   const dom = new JSDOM('<div id="root"><div class="parent-toolbar">Registry · Activity</div></div>', {runScripts:"outside-only", url:"http://localhost"});
+  if (configureWindow) configureWindow(dom.window);
   const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0}, modules = {jquery:$};
   modules._ujgESI_activity = {
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
@@ -21,7 +22,7 @@ function setup(report) {
   const ui = modules._ujgESI_activityUi.create();
   const render = () => ui.render($("#root"),state,services);
   render();
-  return {dom,$,state,calls,render,modules};
+  return {dom,$,state,calls,render,modules,ui};
 }
 function selectFilter(x,key,values) {
   x.$(`[data-activity-filter='${key}']`).trigger("click");
@@ -518,4 +519,40 @@ test("keyboard resize keeps focus on separator for successive arrows", t => {
   x.$(selector).trigger(x.$.Event("keydown",{key:"ArrowRight"}));
   assert.equal(x.dom.window.document.activeElement,x.$(selector)[0]);
   assert.equal(JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout")).widths.role,260);
+});
+test("activity resize API and window resize fit in place without refreshing the report", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  let available=1580;
+  Object.defineProperty(x.$(".ujg-esi-activity-scroll")[0],"clientWidth",{get:()=>available});
+  const table=x.$(".ujg-esi-activity-table")[0], calls=x.calls.summarize.length;
+  assert.equal(typeof x.ui.resize,"function");
+  x.ui.resize(); assert.equal(parseFloat(x.$(table).css("width")),1580);
+  available=1888; x.$(x.dom.window).trigger("resize");
+  assert.equal(parseFloat(x.$(table).css("width")),1888);
+  assert.equal(x.$(".ujg-esi-activity-table")[0],table);
+  assert.equal(x.calls.summarize.length,calls);
+  const width=parseFloat(x.$("col[data-column='role']").css("width"));
+  x.$("th[data-column='role'] .ujg-esi-activity-column-resize").trigger(x.$.Event("keydown",{key:"ArrowRight"}));
+  assert.equal(JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout")).widths.role,width+10);
+});
+test("activity observes current viewport size and replaces observation on redraw", t => {
+  let observer;
+  const x=setup(fixture(),window => {
+    window.ResizeObserver=class {
+      constructor(callback) { this.callback=callback; this.nodes=[]; observer=this; }
+      observe(node) { this.nodes.push(node); }
+      disconnect() { this.nodes=[]; }
+    };
+  }); t.after(()=>x.dom.window.close());
+  assert.ok(observer);
+  let available=1888;
+  const scroll=x.$(".ujg-esi-activity-scroll")[0];
+  Object.defineProperty(scroll,"clientWidth",{get:()=>available});
+  assert.equal(observer.nodes[0],scroll);
+  observer.callback([{target:scroll}]);
+  assert.equal(parseFloat(x.$(".ujg-esi-activity-table").css("width")),1888);
+  x.render();
+  assert.equal(observer.nodes.length,1);
+  assert.equal(observer.nodes[0],x.$(".ujg-esi-activity-scroll")[0]);
+  assert.notEqual(observer.nodes[0],scroll);
 });

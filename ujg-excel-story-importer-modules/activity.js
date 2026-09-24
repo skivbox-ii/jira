@@ -368,6 +368,18 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       if (from && !to) return "Сброшен результат: " + statusLabel(from);
       return "Результат: " + (from ? statusLabel(from) : "не задан") + " → " + (to ? statusLabel(to) : "не задан");
     }
+    if (field === "link") {
+      function linkLabel(value) {
+        return value.replace(/^This issue\s+/i,"")
+          .replace(/^is (?:a )?child of\s+/i,"дочерняя задача для ")
+          .replace(/^is (?:a )?parent of\s+/i,"родительская задача для ")
+          .replace(/^is cloned by\s+/i,"скопирована в ")
+          .replace(/^clones\s+/i,"копия задачи ");
+      }
+      if (!from && to) return "Добавлена связь: " + linkLabel(to);
+      if (from && !to) return "Удалена связь: " + linkLabel(from);
+      return "Изменена связь: " + linkLabel(from) + " → " + linkLabel(to);
+    }
     var names = {priority:"Приоритет",summary:"Тема",description:"Описание",labels:"Метки",component:"Компоненты",components:"Компоненты",fixversion:"Версия исправления",fixversions:"Версия исправления",version:"Версия",versions:"Версии",duedate:"Срок",attachment:"Вложение",link:"Связь задач",reporter:"Автор задачи",issuetype:"Тип задачи",sprint:"Спринт","epic link":"Эпик","story points":"Оценка сложности"};
     return "Изменено поле «" + (names[field] || str(event.field) || "Данные задачи") + "»: " + (from || "не задано") + " → " + (to || "очищено");
   }

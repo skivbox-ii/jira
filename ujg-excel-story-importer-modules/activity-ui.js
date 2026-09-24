@@ -64,6 +64,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
+    var resizeObserver, observedViewportWidth;
     var fields = [
       {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
       {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
@@ -114,10 +115,29 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       }
       return {widths:result,total:total};
     }
+    function resize() {
+      if (!$host || !$host[0].isConnected) return;
+      var $scroll = $host.find(".ujg-esi-activity-scroll"), $table = $scroll.find(".ujg-esi-activity-table");
+      if (!$table.length) return;
+      observedViewportWidth = $scroll[0].clientWidth;
+      var layout = tableLayout(visibleFields(),observedViewportWidth), scrollLeft = $scroll.scrollLeft();
+      Object.keys(layout.widths).forEach(function(key) { $table.find('col[data-column="'+key+'"]').css("width",layout.widths[key]+"px"); });
+      $table.css({width:layout.total+"px",minWidth:layout.total+"px"});
+      $scroll.scrollLeft(scrollLeft);
+    }
+    function columnWidth(field) {
+      var header = $host.find('th[data-column="'+field.key+'"]')[0];
+      return header && header.getBoundingClientRect().width || parseFloat($host.find('col[data-column="'+field.key+'"]').css("width")) || widths[field.key] || field.width;
+    }
     function closePopover(focus) {
       if ($popover) $popover.remove(); $popover = null;
       if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; popoverAnchor.focus(); suppressPopoverFocus = false; } }
       popoverAnchor = null;
+    }
+    function dismissPopover() {
+      var opened = !!($popover && $popover[0].isConnected);
+      closePopover(opened);
+      return opened;
     }
     function popup(anchor, title, className, width) {
       closePopover(); popoverAnchor = anchor; $(anchor).attr("aria-expanded","true");
@@ -291,6 +311,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     }
     function draw() {
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
+      if (resizeObserver) resizeObserver.disconnect();
       closePopover();
       var state = currentState || {}, services = currentServices || {};
       var report = activity.summarize(state.rows || [], state.teams || [], {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined});
@@ -421,9 +442,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         if (active) $filter.append($("<b/>").text(filters[field.key].length));
         var $resize = $("<span/>").addClass("ujg-esi-activity-column-resize").attr({role:"separator",tabindex:"0","aria-label":"Ширина: " + field.title,"aria-orientation":"vertical"})
           .on("pointerdown",function(event) { event.preventDefault(); event.stopPropagation();
-            var measured = $(this).closest("th")[0].getBoundingClientRect().width || parseFloat($host.find('col[data-column="'+field.key+'"]').css("width")) || layout.widths[field.key];
-            drag = {type:"resize",id:field.key,start:event.pageX,width:measured};
-          }).on("keydown",function(event) { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); widths[field.key] = clampWidth(layout.widths[field.key]+(event.key === "ArrowRight" ? 10 : -10),field.width); saveLayout(); draw(); $host.find('th[data-column="'+field.key+'"] .ujg-esi-activity-column-resize').trigger("focus"); });
+            drag = {type:"resize",id:field.key,start:event.pageX,width:columnWidth(field)};
+          }).on("keydown",function(event) { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); widths[field.key] = clampWidth(columnWidth(field)+(event.key === "ArrowRight" ? 10 : -10),field.width); saveLayout(); draw(); $host.find('th[data-column="'+field.key+'"] .ujg-esi-activity-column-resize').trigger("focus"); });
         $head.append($("<th/>").attr({scope:"col","data-column":field.key,"aria-sort":sorted ? sort.descending ? "descending" : "ascending" : "none"})
           .on("pointerdown",function(event) { if ($(event.target).closest(".ujg-esi-header-filter,.ujg-esi-activity-column-resize").length) return; drag = {type:"order",id:field.key,start:event.pageX}; })
           .append($sort,$filter,$resize));
@@ -457,16 +477,22 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       });
       $journal.append($scroll.append($table.append($cols,$("<thead/>").append($head),$body)));
       $root.append($journal); $host.empty().append($root);
-      var fitted = tableLayout(shown,$scroll[0].clientWidth);
-      shown.forEach(function(field) { $cols.find('col[data-column="'+field.key+'"]').css("width",fitted.widths[field.key]+"px"); });
-      $table.css({width:fitted.total+"px",minWidth:fitted.total+"px"});
+      resize();
+      if (typeof window.ResizeObserver === "function") {
+        if (!resizeObserver) resizeObserver = new window.ResizeObserver(function() {
+          var viewport = $host && $host.find(".ujg-esi-activity-scroll")[0];
+          if (viewport && viewport.clientWidth !== observedViewportWidth) resize();
+        });
+        resizeObserver.observe($scroll[0]);
+      }
       $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
     }
-    return {render:function($parent,state,services) {
+    return {resize:resize,dismissPopover:dismissPopover,render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
       var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";
       if (layoutKey !== key) loadLayout(key);
+      $(window).off("resize"+namespace).on("resize"+namespace,resize);
       $(document).off(namespace)
         .on("click"+namespace,function(event) { if ($popover && event.target !== popoverAnchor && !$.contains(popoverAnchor,event.target) && event.target !== $popover[0] && !$.contains($popover[0],event.target)) closePopover(); })
         .on("keydown"+namespace,function(event) { if ($popover && event.key === "Escape") { event.stopPropagation(); closePopover(true); } })
@@ -474,9 +500,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
           if (!drag || drag.type !== "resize") return;
           var field = fields.filter(function(item) { return item.key === drag.id; })[0];
           widths[drag.id] = clampWidth(drag.width + event.pageX - drag.start,field.width);
-          var layout = tableLayout(visibleFields(),$host.find(".ujg-esi-activity-scroll")[0].clientWidth);
-          Object.keys(layout.widths).forEach(function(key) { $host.find('col[data-column="' + key + '"]').css("width",layout.widths[key]+"px"); });
-          $host.find(".ujg-esi-activity-table").css({width:layout.total+"px",minWidth:layout.total+"px"});
+          resize();
         }).on("pointerup"+namespace,function(event) {
           if (!drag) return;
           var action = drag; drag = null;
