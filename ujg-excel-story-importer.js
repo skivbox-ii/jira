@@ -3324,7 +3324,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     if (/cancel|reject|withdrawn|отмен|отклон|аннулир|^снят[аоы]?$/.test(name)) return "cancelled";
     if (category === "done") return "done";
     if (["new","indeterminate","in progress"].indexOf(category) >= 0) return "open";
-    if (/^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(name)) return "done";
+    if (/^(done|complete|completed|closed|resolved|finished|accepted|готово|выполнено|выполнена|выполнен|закрыто|закрыта|закрыт|завершено|завершена|принято|принята|принят)$/.test(name)) return "done";
     if (/^(open|new|to do|todo|backlog|in progress|in review|review|progress|active|reopened|blocked|testing|in testing|qa|ready for testing|открыто|открыт|открыта|новая|новый|в работе|в процессе|на проверке|проверка|заблокирован|тестирование|на тестировании|выдано|к выполнению|готово к тестированию)$/.test(name)) return "open";
     return "unknown";
   }
@@ -3386,7 +3386,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (issues[taskKey].groups.indexOf(group) < 0) issues[taskKey].groups.push(group);
       });
     });
-    var events = [], warnings = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null);
+    var events = [], warnings = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
     order.forEach(function(group) {
       var parent = issues[group.key], links = parent && parent.snapshot && parent.snapshot.linkedKeys;
       if (!Array.isArray(links)) return;
@@ -3430,7 +3430,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (change.item.field === "status") status = statusAt(change.item.fromId,change.item.from);
         if (change.item.field === "assignee") assignee = assigneeFrom(change.item,"from");
       }
-      states[issueKey] = {start:status,end:endStatus,startPerson:assignee,birthStatus:status,birthPerson:assignee};
+      states[issueKey] = {start:status,end:endStatus,endPerson:endPerson,startPerson:assignee,birthStatus:status,birthPerson:assignee};
       if (snap.created && Date.parse(snap.created) >= endpoint) states[issueKey].end = null;
       var eventAssignee = assignee;
       all.forEach(function(change) {
@@ -3443,7 +3443,10 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:item.from,to:item.to,fromId:item.fromId,toId:item.toId,author:change.h.author || person(null),assignee:toAssignee,
           fromAssignee:fromAssignee,toAssignee:toAssignee,fromTeam:teamFor(teams,fromAssignee),toTeam:teamFor(teams,toAssignee),color:"",roleColor:""};
         events.push(event);
-        if (item.field === "status") statusMeta[event.id] = statusAt(item.toId,item.to);
+        if (item.field === "status") {
+          statusBeforeMeta[event.id] = statusAt(item.fromId,item.from);
+          statusMeta[event.id] = statusAt(item.toId,item.to);
+        }
         eventAssignee = toAssignee;
       });
       if (snap.created) {
@@ -3474,7 +3477,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (event.kind === "status" && !changed) unchangedStatus[event.issueKey] = true;
         if (event.kind === "created") outcomes.created[event.issueKey] = true;
         if (event.kind !== "status" || !event.from || !event.to || !changed) return;
-        var before = kind(state("",event.from)), after = kind(statusMeta[event.id] || state("",event.to));
+        var before = kind(statusBeforeMeta[event.id] || state("",event.from)), after = kind(statusMeta[event.id] || state("",event.to));
         if (before === "open" && after === "done") outcomes.completed[event.issueKey] = true;
         if (before === "done" && after === "open") outcomes.reopened[event.issueKey] = true;
       });
@@ -3516,6 +3519,9 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         var values = group.tasks.map(function(taskKey) { return live[taskKey]; });
         return values.some(function(value) { return !value || kind(value) === "unknown"; }) ? null : values.every(function(value) { return kind(value) === "done"; });
       }
+      function unknownLive() {
+        return group.tasks.some(function(taskKey) { return live[taskKey] && kind(live[taskKey]) === "unknown"; });
+      }
       var batches = Object.create(null);
       groupEvents.forEach(function(event) {
         if (event.kind !== "created" && event.kind !== "status") return;
@@ -3528,10 +3534,12 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           live[event.issueKey] = states[event.issueKey] && states[event.issueKey].birthStatus;
         });
         var prior = liveReady();
+        if (unknownLive()) group.unknownStatus = true;
         batch.filter(function(event) { return event.kind === "status"; }).forEach(function(event) {
           live[event.issueKey] = statusMeta[event.id] || state("",event.to,"");
         });
         var next = liveReady();
+        if (unknownLive()) group.unknownStatus = true;
         var evidence = batch.filter(function(event) { return event.kind === "status"; });
         if (prior === false && next === true) {
           completed[group.id] = true;
@@ -3542,6 +3550,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           if (certified) management.reopened.push({at:at,events:evidence});
         }
       });
+      if (group.unknownStatus) {
+        warnings.push(group.key + ": промежуточный статус не удалось классифицировать");
+        management.completed = [];
+        management.reopened = [];
+      }
     });
     events.forEach(function(event) {
       if (event.kind === "status" && event.from !== event.to) { var label = event.from + " → " + event.to; transitions[label] = (transitions[label] || 0) + 1; }
@@ -3562,7 +3575,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     function taskReport(issueKey) {
       var entry = issues[issueKey], disputed = conflicts.indexOf(issueKey) >= 0, snap = !disputed && entry && entry.snapshot, notes = [], endState = states[issueKey] && states[issueKey].end;
       var report = {key:issueKey,summary:str(entry && entry.task.summary),role:str(entry && entry.task.role),created:snap && snap.created || null,
-        status:endState && endState.name || null,completedAt:null,completedBy:null,elapsedSeconds:null,inProgressSeconds:null,
+        status:endState && endState.name || null,assignee:null,completedAt:null,completedBy:null,dayCompletions:[],elapsedSeconds:null,inProgressSeconds:null,
         spentSeconds:snap ? snap.spentSeconds == null ? null : snap.spentSeconds : null,spentAsOf:snap && timestamp(snap.capturedAt) || null,
         worklogs:[],worklogsComplete:!!(snap && snap.worklogs && snap.worklogs.complete),comments:[],commentsComplete:!!(snap && snap.comments && snap.comments.complete),notes:notes};
       if (!snap || !usable(issueKey)) notes.push("История задачи неполна для выбранного среза");
@@ -3582,12 +3595,16 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (comment.updatedInvalid) notes.push("Время изменения комментария " + comment.id + " недостоверно");
       });
       if (!usable(issueKey) || !snap.created || Date.parse(snap.created) >= endpoint || !endState) return report;
+      report.assignee = states[issueKey].endPerson;
       var changes = [];
       function statusAt(id,name) { return state(id,name,id && id === snap.currentStatus.id ? snap.currentStatus.category : ""); }
       (snap.histories || []).forEach(function(history) { (history.items || []).forEach(function(item) {
         if (item.field === "status" && Date.parse(history.at) < endpoint) changes.push({at:history.at,author:history.author,from:statusAt(item.fromId,item.from),to:statusAt(item.toId,item.to),index:item.index,id:history.id});
       }); });
       changes.sort(function(a,b) { return Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id) || a.index - b.index; });
+      changes.forEach(function(change) {
+        if (Date.parse(change.at) >= window.start && kind(change.from) === "open" && kind(change.to) === "done") report.dayCompletions.push({at:change.at,author:change.author});
+      });
       if (kind(endState) === "done") {
         for (var i=changes.length-1;i>=0;i--) if (kind(changes[i].to) === "done" && kind(changes[i].from) !== "done") {
           if (kind(changes[i].from) === "open") {
@@ -3618,7 +3635,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     }
     groups.forEach(function(group,index) {
       var source = order[index];
-      group.dayComplete = !source.missing && source.tasks.every(usable);
+      group.dayComplete = !source.missing && !source.unknownStatus && source.tasks.every(usable);
       group.management.tasks = source.tasks.map(taskReport);
       if (!group.dayComplete) group.management.notes.push("Полнота группы не подтверждена; переходы готовности не показаны");
       if (source.uncreated) group.management.notes.push("Родительская задача Jira не создана");
@@ -3690,7 +3707,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       if (from && from === to) return "Статус не изменился: " + statusLabel(to);
       var destination = statusLabel(to), action = "Изменён статус";
       if (/^(done|complete|completed|finished|готово|выполнено|выполнена)$/.test(to.toLowerCase())) action = "Задача выполнена";
-      else if (/^(in progress|в работе)$/.test(to.toLowerCase())) action = kind(state("",from)) === "done" ? "Возвращена в работу" : "Взята в работу";
+      else if (/^(in progress|в работе|issued|выдано)$/.test(to.toLowerCase())) {
+        if (/^(in review|review|на проверке|проверка)$/.test(from.toLowerCase())) action = "Возвращена с проверки";
+        else if (/^(testing|in testing|на тестировании|тестирование)$/.test(from.toLowerCase())) action = "Возвращена с тестирования";
+        else if (/^(in progress|в работе)$/.test(to.toLowerCase())) action = kind(state("",from)) === "done" ? "Возвращена в работу" : "Взята в работу";
+      }
       else if (/^(in review|review|на проверке)$/.test(to.toLowerCase())) action = "Передана на проверку";
       else if (/^(testing|in testing|тестирование|на тестировании)$/.test(to.toLowerCase())) action = "Передана на тестирование";
       else if (/^(closed|закрыто|закрыта)$/.test(to.toLowerCase())) action = "Задача закрыта";
@@ -3792,6 +3813,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
 define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
   "use strict";
   var titles = {changed:"Изменённые замечания",newRemarks:"Новые замечания",completed:"Завершённые замечания",reopened:"Возобновлённые замечания",events:"Все события"};
+  var reopenedDefinition = "Повторное открытие после полной готовности исходной истории и всех связанных задач.";
   function list(value) { return Array.isArray(value) ? value : []; }
   function value(input) { return input == null || input === "" ? "Нет данных" : String(input); }
   function person(input) { return value(input && typeof input === "object" ? input.label : input); }
@@ -3870,7 +3892,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     if (metric === "completed" || metric === "reopened") {
       transitions.forEach(function(item) {
         var roles = list(item.events).map(function(event) { return String(event.role || "").toUpperCase(); }).filter(Boolean);
-        parts.push((roles.length ? roles.join(", ") + " · " : "") + dateTime(item.at) + (item.events && item.events[0] ? " · " + person(item.events[0].author) : ""));
+        parts.push((roles.length ? roles.join(", ") + " · " : "") + dateTime(item.at) + (item.events && item.events[0] ? " · " + (metric === "completed" ? "Завершил: " : "Возобновил: ") + person(item.events[0].author) : ""));
       });
     } else {
       if (metric === "events") parts.push("Событий " + list(group.events).length);
@@ -3896,15 +3918,93 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
   function warning(report) {
     return report && report.coverage && report.coverage.isComplete === true ? $() : textNode("p","ujg-esi-management-warning","История неполна: показаны подтверждённые данные, итог может быть больше.");
   }
+  function turnaround(group) {
+    var info = management(group), root = list(info.tasks).filter(function(task) { return task.key === group.key; })[0], milestone = list(info.completed)[0];
+    var start = root && Date.parse(root.created), end = milestone && Date.parse(milestone.at);
+    return isFinite(start) && isFinite(end) && end >= start ? (end-start)/1000 : null;
+  }
+  function workAuthors(tasks) {
+    var names = [], incomplete = false;
+    tasks.forEach(function(task) {
+      if (task.worklogsComplete !== true) incomplete = true;
+      list(task.worklogs).forEach(function(log) {
+        var name = person(log.author);
+        if (name === "Нет данных") incomplete = true;
+        else if (names.indexOf(name) < 0) names.push(name);
+      });
+    });
+    return (names.length ? names.join(", ") : "Нет данных") + (incomplete ? " · данные частичны" : "");
+  }
+  function previewItem(group, metric, state, report) {
+    var info = management(group), allTasks = list(info.tasks), tasks = allTasks.filter(function(task) { return task.key !== group.key; });
+    var $row = $("<div/>").addClass("ujg-esi-management-preview-item");
+    var completions = list(info.completed), completionAt = completions.map(function(item) { return Date.parse(item.at); }).filter(isFinite);
+    var latestCompletion = completionAt.length ? Math.max.apply(null,completionAt) : null;
+    var laterReopened = latestCompletion != null && list(info.reopened).some(function(item) { return Date.parse(item.at) > latestCompletion; });
+    if (completions.length) {
+      if (!laterReopened && latestCompletion != null) $row.addClass("is-completed");
+      $row.append(textNode("div","ujg-esi-management-preview-milestone","Завершено за день" + (laterReopened ? " · Позже возобновлено" : "")));
+    }
+    $row.append(groupLabel(group,state),textNode("div","ujg-esi-management-preview-outcome",outcome(group,metric)));
+    var roles = Object.create(null), $roles = $("<div/>").addClass("ujg-esi-management-preview-roles");
+    tasks.forEach(function(task) {
+      var name = roleNode(task.role,task.summary).text();
+      if (name === "История") name = "Нет данных";
+      if (!roles[name]) roles[name] = [];
+      roles[name].push(task);
+    });
+    Object.keys(roles).forEach(function(name) {
+      var roleTasks = roles[name], completers = [], assignees = [], assigneesProvided = false, assigneesIncomplete = false;
+      roleTasks.forEach(function(task) {
+        [task.completedBy].concat(list(task.dayCompletions).map(function(item) { return item.author; })).forEach(function(author) {
+          var closer = person(author);
+          if (closer !== "Нет данных" && completers.indexOf(closer) < 0) completers.push(closer);
+        });
+        if (Object.prototype.hasOwnProperty.call(task,"assignee")) assigneesProvided = true;
+        var assignee = task.assignee && !task.assignee.label && Array.isArray(task.assignee.identifiers) && !task.assignee.identifiers.length ? "Не назначен" : person(task.assignee);
+        if (assignee === "Нет данных") assigneesIncomplete = true;
+        else if (assignees.indexOf(assignee) < 0) assignees.push(assignee);
+      });
+      var $group = $("<div/>").addClass("ujg-esi-management-preview-role-group").attr("data-role",name);
+      var $keys = $("<span/>").addClass("ujg-esi-management-preview-role-tasks");
+      roleTasks.forEach(function(task) { $keys.append(keyNode(task.key,state.baseUrl)); });
+      $group.append($("<span/>").addClass("ujg-esi-management-preview-role-count").append(roleNode(name),textNode("span","",roleTasks.length)),$keys);
+      if (assigneesProvided) $group.append(textNode("span","ujg-esi-management-preview-role-assignees","Исполнители на срезе: " + (assignees.length ? assignees.join(", ") : "Нет данных") + (assigneesIncomplete ? " · данные частичны" : "")));
+      $group.append(textNode("span","ujg-esi-management-preview-role-workers","Работали: " + workAuthors(roleTasks)));
+      $group.append(textNode("span","ujg-esi-management-preview-role-completers","Завершил: " + (completers.length ? completers.join(", ") : "Нет данных")));
+      $roles.append($group);
+    });
+    if (!tasks.length) $roles.append(textNode("span","ujg-esi-management-muted","Задачи: Нет данных"));
+    $row.append($roles);
+    var known = [];
+    allTasks.forEach(function(task) {
+      if (typeof task.spentSeconds === "number" && isFinite(task.spentSeconds) && task.spentSeconds >= 0) known.push(task.spentSeconds);
+    });
+    $row.append(textNode("div","ujg-esi-management-preview-workers","Работали по замечанию: " + workAuthors(allTasks)));
+    var elapsed = turnaround(group);
+    if (list(info.completed).length) $row.append(textNode("div","ujg-esi-management-preview-elapsed","До завершения: " + (elapsed == null ? "Нет данных" : calendarDuration(elapsed))));
+    else {
+      var root = allTasks.filter(function(task) { return task.key === group.key; })[0];
+      var start = root && Date.parse(root.created), cutoff = Date.parse(report && report.asOf);
+      $row.append(textNode("div","ujg-esi-management-preview-elapsed","С момента создания: " + (isFinite(start) && isFinite(cutoff) && cutoff >= start ? calendarDuration((cutoff-start)/1000) : "Нет данных")));
+    }
+    var partialEffort = known.length < allTasks.length || !allTasks.some(function(task) { return task.key === group.key; });
+    $row.append(textNode("div","ujg-esi-management-preview-effort","Учтено на момент снимков: " + (known.length ? duration(known.reduce(function(sum,seconds) { return sum + seconds; },0)) : "Нет данных") + (partialEffort ? " · частичный итог" : "")));
+    return $row;
+  }
   function preview(report, metric, state, services) {
     state = state || {}; services = services || {};
     var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-preview");
     $root.append(textNode("strong","ujg-esi-management-preview-title",titles[metric] || "Сводка"),warning(report));
-    if (!groups.length) $root.append(textNode("p","ujg-esi-management-empty",report.coverage && report.coverage.isComplete ? "За выбранный день таких замечаний нет" : "Нет подтверждённых данных"));
-    groups.slice(0,4).forEach(function(group) {
-      $root.append($("<div/>").addClass("ujg-esi-management-preview-item").append(groupLabel(group,state),textNode("div","ujg-esi-management-preview-outcome",outcome(group,metric))));
-    });
-    if (groups.length > 4) $root.append(textNode("p","ujg-esi-management-more","Ещё " + (groups.length - 4)));
+    if (metric === "reopened") $root.append(textNode("p","ujg-esi-management-definition",reopenedDefinition));
+    if (metric === "completed" && groups.length) {
+      var elapsed = groups.map(turnaround).filter(function(seconds) { return seconds != null; });
+      $root.append(textNode("p","ujg-esi-management-preview-average","Среднее время завершения: " + (elapsed.length ? calendarDuration(elapsed.reduce(function(sum,seconds) { return sum + seconds; },0)/elapsed.length) : "Нет данных") + " (" + elapsed.length + " из " + groups.length + " замечаний с известным временем)"));
+    }
+    var $scroll = $("<div/>").addClass("ujg-esi-management-preview-scroll");
+    if (!groups.length) $scroll.append(textNode("p","ujg-esi-management-empty",report.coverage && report.coverage.isComplete ? "За выбранный день таких замечаний нет" : "Нет подтверждённых данных"));
+    groups.forEach(function(group) { $scroll.append(previewItem(group,metric,state,report)); });
+    $root.append($scroll);
     return $root.append($("<button type='button'/>").addClass("ujg-esi-management-preview-open").text("Открыть сводку").on("click",function() { if (services.onOpen) services.onOpen(); }));
   }
   function fact(label, content) {
@@ -3965,17 +4065,16 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
         $root.append($line);
       });
     });
-    var root = list(info.tasks).filter(function(task) { return task.key === group.key; })[0];
-    var milestone = list(info.completed)[0];
-    var start = root && Date.parse(root.created), end = milestone && Date.parse(milestone.at);
-    if (isFinite(start) && isFinite(end) && end >= start) $root.append(textNode("p","ujg-esi-management-turnaround","Создание замечания → полная готовность: " + calendarDuration((end-start)/1000)));
+    var elapsed = turnaround(group);
+    if (elapsed != null) $root.append(textNode("p","ujg-esi-management-turnaround","Создание замечания → полная готовность: " + calendarDuration(elapsed)));
     if (list(info.reopened).length && list(info.tasks).some(function(task) { return list(task.comments).length; })) $root.append(textNode("p","ujg-esi-management-note","Доступные комментарии; причина возврата не подтверждена."));
     if (!list(info.tasks).length) $root.append(textNode("p","ujg-esi-management-empty","Данные по задачам: Нет данных"));
     var tasks = list(info.tasks), known = tasks.filter(function(task) { return typeof task.spentSeconds === "number" && isFinite(task.spentSeconds) && task.spentSeconds >= 0; });
     if (tasks.length) {
       var snapshots = known.map(function(task) { return task.spentAsOf; }).filter(function(at) { return isFinite(Date.parse(at)); }).sort();
       var snapshotLabel = snapshots.length === known.length && snapshots.length ? " · снимки: " + dateTime(snapshots[0]) + (snapshots.length > 1 && dateTime(snapshots[snapshots.length-1]) !== dateTime(snapshots[0]) ? " — " + dateTime(snapshots[snapshots.length-1]) : "") : " · время снимков: Нет данных";
-      $root.append(textNode("p","ujg-esi-management-total","Учтено на момент снимков по задачам: " + (known.length ? duration(known.reduce(function(sum,task) { return sum + task.spentSeconds; },0)) : "Нет данных") + (known.length < tasks.length ? " · частичный итог" : "") + snapshotLabel));
+      var partialEffort = known.length < tasks.length || !tasks.some(function(task) { return task.key === group.key; });
+      $root.append(textNode("p","ujg-esi-management-total","Учтено на момент снимков по задачам: " + (known.length ? duration(known.reduce(function(sum,task) { return sum + task.spentSeconds; },0)) : "Нет данных") + (partialEffort ? " · частичный итог" : "") + snapshotLabel));
     }
     var dayEvents = list(report.events).filter(function(event) { return list(group.events).some(function(item) { return item.id === event.id; }); });
     if (dayEvents.length) {
@@ -4012,6 +4111,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
     var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-panel");
     var reportDate = /^\d{4}-\d{2}-\d{2}$/.test(report.date || "") ? report.date.split("-").reverse().join(".") : value(report.date);
     var $head = $("<header/>").addClass("ujg-esi-management-header").append($("<div/>").append(textNode("h2","",titles[metric] || "Сводка"),textNode("span","ujg-esi-management-date",reportDate + " · МСК")));
+    if (metric === "reopened") $head.children("div").append(textNode("p","ujg-esi-management-definition",reopenedDefinition));
     $head.append($("<button type='button'/>").addClass("ujg-esi-management-close").attr({title:"Закрыть сводку","aria-label":"Закрыть сводку"}).append(icon("X")).on("click",function() { if (services.onClose) services.onClose(); }));
     $root.append($head,warning(report));
     var $body = $("<div/>").addClass("ujg-esi-management-body"), $list = $("<nav/>").addClass("ujg-esi-management-list").attr("aria-label","Замечания"), $detail = $("<main/>").addClass("ujg-esi-management-detail-host");
@@ -4242,7 +4342,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function previewMetric(anchor, report, key, state) {
       if ($managementDialog || suppressPopoverFocus || !document.contains(anchor)) return;
       if ($popover && popoverAnchor === anchor) { clearTimeout(previewCloseTimer); return; }
-      var $box = popup(anchor,$(anchor).find("span").last().text(),"ujg-esi-activity-metric-preview",560);
+      var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      var $box = popup(anchor,$(anchor).find("span").last().text(),"ujg-esi-activity-metric-preview",Math.round(viewportWidth * 0.9));
+      $box.css("left",Math.max(12,Math.round((viewportWidth - $box.outerWidth()) / 2)));
       $box.append(managementUi.preview(report,key,state,{onOpen:function() { openManagement(anchor,report,key,state); }}));
       $box.on("mouseenter focusin",function() { clearTimeout(previewCloseTimer); })
         .on("mouseleave",schedulePreviewClose);
@@ -4302,7 +4404,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[(field.filterValue || field.value)(event,group)] = true; }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
       var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
-      var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",280);
+      var isPerson = field.key === "assignee" || field.key === "author";
+      var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",options.length > 8 ? 440 : 360);
       [[false,"ArrowDownAZ","Сортировка по возрастанию"],[true,"ArrowUpAZ","Сортировка по убыванию"]].forEach(function(item) {
         $box.append(button(item[1],item[2],function() { sort = {key:field.key,descending:item[0]}; saveLayout(); draw(); }).addClass("ujg-esi-activity-menu-command").append($("<span/>").text(item[2])));
       });
@@ -4315,30 +4418,42 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var $count = $("<span/>").addClass("ujg-esi-filter-count");
       $box.append($search,$chips,$("<label/>").addClass("ujg-esi-filter-all").append($all,$("<span/>").text("Выделить всё"),$count),$list);
       function foundValues() { var query = String($search.val() || "").toLocaleLowerCase(); return options.filter(function(value) { return value.toLocaleLowerCase().indexOf(query) >= 0; }); }
+      var candidates = options.map(function(value) {
+        var $check = $("<input/>").attr("type","checkbox").on("change",function() {
+          if (this.checked && selected.indexOf(value) < 0) selected.push(value);
+          if (!this.checked) selected = selected.filter(function(item) { return item !== value; });
+          update();
+        });
+        var $label = $("<label/>").addClass("ujg-esi-filter-option ujg-esi-activity-filter-option").append($check,$("<span/>").text(value));
+        var $only = button("Funnel","Выбрать только " + value,function(event) {
+          event.stopPropagation(); selected = [value]; update();
+          if (isPerson) $search.trigger("focus");
+        }).addClass("ujg-esi-filter-only");
+        var $row = $("<div/>").addClass("ujg-esi-filter-value-row").append($label,$only).appendTo($list);
+        return {value:value,row:$row,label:$label,check:$check};
+      });
+      var $empty = $("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений").appendTo($list);
       function update() {
-        var found = foundValues(), chosen = Array.isArray(filters[field.key]) ||
+        var found = foundValues(), chosen = isPerson && (Array.isArray(filters[field.key]) ||
           !options.every(function(value) { return selected.indexOf(value) >= 0; }) ||
-          selected.some(function(value) { return options.indexOf(value) < 0; });
+          selected.some(function(value) { return options.indexOf(value) < 0; }));
         $count.text(options.filter(function(value) { return selected.indexOf(value) >= 0; }).length + " / " + options.length);
         $all.prop("checked",!!found.length && found.every(function(value) { return selected.indexOf(value) >= 0; }));
         $all.prop("indeterminate",found.some(function(value) { return selected.indexOf(value) >= 0; }) && !$all.prop("checked"));
         $chips.empty();
-        if (chosen) selected.forEach(function(value) {
-          $chips.append($("<button/>").attr({type:"button",title:"Убрать: " + value}).addClass("ujg-esi-selected-chip ujg-esi-activity-selected-chip")
-            .append($("<span/>").text(value),icon("X")).on("click",function() { selected = selected.filter(function(item) { return item !== value; }); update(); }));
+        selected.filter(function(value) { return chosen || options.indexOf(value) < 0; }).forEach(function(value) {
+          $chips.append($("<button/>").attr({type:"button",title:"Убрать: " + value,"aria-label":"Убрать: " + value}).addClass("ujg-esi-selected-chip ujg-esi-activity-selected-chip")
+            .append($("<span/>").text(value),icon("X")).on("click",function(event) {
+              // The removed target must not reach the document's outside-click handler.
+              event.stopPropagation(); selected = selected.filter(function(item) { return item !== value; }); update(); $search.trigger("focus");
+            }));
         });
-        $list.empty();
         var displayed = found.filter(function(value) { return !chosen || selected.indexOf(value) < 0; });
-        if (!displayed.length) $list.append($("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений"));
-        displayed.forEach(function(value) {
-          var checked = selected.indexOf(value) >= 0;
-          $list.append($("<label/>").addClass("ujg-esi-filter-option ujg-esi-activity-filter-option").toggleClass("is-selected",checked)
-            .append($("<input/>").attr("type","checkbox").prop("checked",checked).on("change",function() {
-              if (this.checked && selected.indexOf(value) < 0) selected.push(value);
-              if (!this.checked) selected = selected.filter(function(item) { return item !== value; });
-              update();
-            }),$("<span/>").text(value)));
+        candidates.forEach(function(item) {
+          var checked = selected.indexOf(item.value) >= 0, visible = displayed.indexOf(item.value) >= 0;
+          item.row.prop("hidden",!visible); item.label.toggleClass("is-selected",checked); item.check.prop("checked",checked);
         });
+        $empty.prop("hidden",!!displayed.length);
       }
       $search.on("input",update);
       $all.on("change",function() { var found = foundValues(); if (this.checked) found.forEach(function(value) { if (selected.indexOf(value) < 0) selected.push(value); }); else selected = selected.filter(function(value) { return found.indexOf(value) < 0; }); update(); });

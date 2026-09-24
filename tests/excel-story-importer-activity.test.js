@@ -355,8 +355,38 @@ test("management status and closure stop at the endpoint while snapshot spend ke
   assert.equal(task.status,"Open");
   assert.equal(task.completedAt,null);
   assert.equal(task.elapsedSeconds,null);
+  assert.equal(task.dayCompletions.length,1);
+  assert.equal(task.dayCompletions[0].at,"2026-09-24T01:00:00.000Z");
+  assert.equal(task.dayCompletions[0].author.label,"worker");
   assert.equal(task.spentSeconds,3600);
   assert.equal(task.spentAsOf,parent.activity.capturedAt);
+});
+
+test("management assignee reflects the endpoint before a future assignment", () => {
+  const api=activity(), jira=issue("P-1","Open",[
+    history("future","2026-09-24T18:00:00Z","editor",[item("assignee","old","owner","Old","Owner")])
+  ]);
+  const result=report(api,[row(detail(api,jira))]);
+  const task=result.groups[0].management.tasks[0];
+  assert.equal(result.coverage.isComplete,true);
+  assert.equal(task.assignee && task.assignee.label,"Old");
+  assert.deepEqual(Array.from(task.assignee && task.assignee.identifiers || []),["old"]);
+});
+
+test("management assignee stays null for missing and conflicting snapshots", () => {
+  const api=activity();
+  const missing=report(api,[row({key:"P-1",summary:"Missing",status:"Open",role:""})]);
+  assert.equal(missing.groups[0].management.tasks[0].assignee,null);
+
+  const child=detail(api,issue("P-3","Open"));
+  const alternative={...child,activity:{...child.activity,currentAssignee:{label:"Other",identifiers:["other"],color:""}}};
+  const disputed=report(api,[
+    row(detail(api,issue("P-10","Open")),[child]),
+    row(detail(api,issue("P-20","Open")),[alternative])
+  ]);
+  for (const group of disputed.groups) {
+    assert.equal(group.management.tasks.find(task=>task.key==="P-3").assignee,null);
+  }
 });
 
 test("historical task detail hides future comments and labels later edits to visible comments", () => {
@@ -572,6 +602,88 @@ test("current status category follows its stable ID through earlier transitions"
   assert.equal(result.metrics.reopened,1);
   assert.equal(result.metrics.completed,1);
   assert.equal(result.balance.startOpen,0);
+});
+
+test("unknown intermediate status makes otherwise open endpoints uncertifiable", () => {
+  const api = activity();
+  const jira = issue("P-1","Open",[
+    history("a","2026-09-24T01:00:00Z","editor",[item("status","1","2","Open","Done")]),
+    history("b","2026-09-24T02:00:00Z","editor",[item("status","2","1","Done","Open")]),
+    history("c","2026-09-24T03:00:00Z","editor",[item("status","1","9","Open","Custom Gate")]),
+    history("d","2026-09-24T04:00:00Z","editor",[item("status","9","1","Custom Gate","Open")])
+  ]);
+  const result = report(api,[row(detail(api,jira))]);
+  assert.equal(result.coverage.isComplete,false);
+  assert.equal(result.metrics.completed,null);
+  assert.equal(result.metrics.reopened,null);
+  assert.equal(result.balance.endOpen,null);
+  assert.equal(result.groups[0].dayComplete,false);
+  assert.equal(result.groups[0].management.completed.length,0);
+  assert.equal(result.groups[0].management.reopened.length,0);
+});
+
+test("highlights use current done category on both sides of a transition", () => {
+  const api = activity();
+  const jira = issue("P-1","Verified",[
+    history("a","2026-09-24T01:00:00Z","editor",[item("status","5","1","Verified","Open")]),
+    history("b","2026-09-24T02:00:00Z","editor",[item("status","1","5","Open","Verified")])
+  ],{fields:{status:{id:"5",name:"Verified",statusCategory:{key:"done"}}}});
+  const result = report(api,[row(detail(api,jira))]);
+  assert.equal(result.metrics.reopened,1);
+  assert.equal(result.groups[0].dayHighlights.reopened,1);
+  assert.equal(result.groups[0].dayHighlights.completed,1);
+});
+
+test("indeterminate current category prevents a name-only completion highlight", () => {
+  const api = activity();
+  const jira = issue("P-1","Принято",[
+    history("a","2026-09-24T01:00:00Z","editor",[item("status","5","1","Принято","В работе")]),
+    history("b","2026-09-24T02:00:00Z","editor",[item("status","1","5","В работе","Принято")])
+  ],{fields:{status:{id:"5",name:"Принято",statusCategory:{key:"indeterminate"}}}});
+  const result = report(api,[row(detail(api,jira))]);
+  assert.equal(result.metrics.reopened,0);
+  assert.equal(result.groups[0].dayHighlights.reopened,0);
+  assert.equal(result.groups[0].dayHighlights.completed,0);
+});
+
+test("supported terminal aliases count completion while cancellation still does not", () => {
+  const api = activity();
+  for (const terminal of ["accepted","выполнен","принят","закрыт"]) {
+    const jira = issue("P-1",terminal,[history("a","2026-09-24T01:00:00Z","editor",[item("status","1","2","Open",terminal)])],
+      {fields:{status:{id:"2",name:terminal}}});
+    const result = report(api,[row(detail(api,jira))]);
+    assert.equal(result.coverage.isComplete,true,terminal);
+    assert.equal(result.metrics.completed,1,terminal);
+    assert.equal(result.groups[0].dayHighlights.completed,1,terminal);
+  }
+  const cancelled = issue("P-1","Cancelled",[history("a","2026-09-24T01:00:00Z","editor",[item("status","1","3","Open","Cancelled")])],
+    {fields:{status:{id:"3",name:"Cancelled",statusCategory:{key:"done"}}}});
+  assert.equal(report(api,[row(detail(api,cancelled))]).metrics.completed,0);
+});
+
+test("accepted between open states yields supported completion and reopening", () => {
+  const api = activity();
+  const jira = issue("P-1","Open",[
+    history("a","2026-09-24T01:00:00Z","editor",[item("status","1","2","Open","Accepted")]),
+    history("b","2026-09-24T02:00:00Z","editor",[item("status","2","1","Accepted","Open")])
+  ]);
+  const result = report(api,[row(detail(api,jira))]);
+  assert.equal(result.coverage.isComplete,true);
+  assert.equal(result.metrics.completed,1);
+  assert.equal(result.metrics.reopened,1);
+});
+
+test("review and testing returns describe the actual source status", () => {
+  const api = activity();
+  assert.equal(api.eventText({kind:"status",from:"In Review",to:"In Progress"}),"Возвращена с проверки · На проверке → В работе");
+  assert.equal(api.eventText({kind:"status",from:"На тестировании",to:"Выдано"}),"Возвращена с тестирования · На тестировании → Выдано");
+  assert.equal(api.eventText({kind:"status",from:"Done",to:"In Progress"}),"Возвращена в работу · Выполнено → В работе");
+});
+
+test("issuance from a new status does not claim work started", () => {
+  const api = activity();
+  assert.equal(api.eventText({kind:"status",from:"New",to:"Issued"}),"Изменён статус · Новое → Issued");
+  assert.equal(api.eventText({kind:"status",from:"New",to:"Выдано"}),"Изменён статус · Новое → Выдано");
 });
 
 test("journal remark ID prefers mapped source number over local row ID", () => {

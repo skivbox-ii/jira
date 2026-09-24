@@ -8,6 +8,9 @@ The importer registry is the canonical table pattern. New views, including daily
 - A funnel opens a viewport-constrained popover, never a native select or a permanent second row.
 - Include ascending/descending sorting, search, multiple checkboxes, select/clear, apply, and reset.
 - Search changes the candidate list, not selections already made. Selected chips, where used, appear once and are excluded from candidates.
+- Role, change-category and other non-person filters keep a stable checkbox list: toggling a value must not move the other values into chips or recreate the focused checkbox. Provide a per-value "only this value" command for quick narrowing.
+- Removing a selected-person chip must keep the popup open, preserve the other selections and remain a draft until Apply. Test native bubbling clicks on both the label and the cross icon, not just synthetic change events.
+- Long value lists get a wider viewport-constrained popup with a scrollable list; search and Apply remain accessible. Searching and select-all operate only on matching candidates without clearing selections outside the search.
 - Show active filters and sort direction in the header. Escape and outside click close the popover without applying unfinished edits.
 - Keep filters on hidden columns visible and editable above the table. Resetting filters must not reset column layout or sorting. Selected values absent from a new dataset remain visible and removable, never silently discarded.
 - Use keyboard-accessible controls and labels; do not rely on hover alone.

@@ -92,6 +92,14 @@ test("metric hover opens a brief preview and click replaces it with the full rep
   assert.equal(x.ui.dismissPopover(),true);
   assert.equal(x.$(".ujg-esi-management-dialog").length,0);
 });
+test("metric preview uses ninety percent of the available viewport without overflowing", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  Object.defineProperty(x.dom.window.document.documentElement,"clientWidth",{configurable:true,value:1400});
+  x.$("[data-metric='changed']").trigger("focus");
+  const box=x.$(".ujg-esi-activity-metric-preview");
+  assert.equal(parseFloat(box.css("width")),1260);
+  assert.ok(parseFloat(box.css("left"))+parseFloat(box.css("width"))<=1400);
+});
 test("change filter offers unique categories, not individual event descriptions", t => {
   const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
   x.$("[data-activity-filter='change']").trigger("click");
@@ -429,8 +437,8 @@ test("absent persisted selection stays removable and Apply does not turn it into
   x.render();
   x.$("[data-activity-filter='author']").trigger("click");
   assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"Alice");
-  assert.equal(x.$(".ujg-esi-activity-filter-option").text().trim(),"Bob");
-  assert.equal(x.$(".ujg-esi-activity-filter-option input").prop("checked"),false);
+  assert.equal(x.$(".ujg-esi-filter-value-row:not([hidden]) .ujg-esi-activity-filter-option").text().trim(),"Bob");
+  assert.equal(x.$(".ujg-esi-filter-value-row:not([hidden]) input").prop("checked"),false);
   assert.equal(x.$(".ujg-esi-activity-filter-menu .ujg-esi-filter-count").text(),"0 / 1");
   x.$(".ujg-esi-activity-filter-apply").trigger("click");
   assert.equal(x.$(".ujg-esi-activity-event").length,0);
@@ -454,10 +462,59 @@ test("header funnel applies multiple values with no native selects or duplicate 
   assert.equal(x.$(".ujg-esi-activity-event").length,2);
   assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),true);
   x.$("[data-activity-filter='role']").trigger("click");
-  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,2);
-  assert.equal(x.$(".ujg-esi-activity-filter-option.is-selected").length,0);
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,0);
+  assert.equal(x.$(".ujg-esi-activity-filter-option.is-selected").length,2);
   x.$(".ujg-esi-activity-filter-search").val("BE").trigger("input");
-  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,2);
+  assert.equal(x.$(".ujg-esi-activity-filter-option input:checked").length,2);
+  assert.equal(x.$(".ujg-esi-filter-value-row:not([hidden]) .ujg-esi-activity-filter-option").text(),"BE");
+});
+test("role and change checkboxes stay in place while narrowing the selection", t => {
+  for (const key of ["role","change"]) {
+    const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
+    x.$(`[data-activity-filter='${key}']`)[0].click();
+    const inputs=x.$(".ujg-esi-activity-filter-option input").toArray();
+    inputs[0].focus(); inputs[0].click();
+    assert.deepEqual(x.$(".ujg-esi-activity-filter-option input").toArray(),inputs);
+    assert.equal(x.dom.window.document.activeElement,inputs[0]);
+    assert.equal(x.$(".ujg-esi-activity-selected-chip").length,0);
+    inputs[1].click();
+    assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
+    assert.equal(x.$(".ujg-esi-activity-filter-option input:checked").length,inputs.length-2);
+  }
+});
+test("native click on a selected person's cross removes only that value without closing the filter", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"assignee",["Ann","Bob"]);
+  x.$("[data-activity-filter='assignee']")[0].click();
+  x.$(".ujg-esi-activity-selected-chip[title='Убрать: Ann'] svg")[0]
+    .dispatchEvent(new x.dom.window.MouseEvent("click",{bubbles:true}));
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"Bob");
+  assert.equal(x.$(".ujg-esi-filter-value-row:not([hidden]) .ujg-esi-activity-filter-option").text(),"Ann");
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  x.$(".ujg-esi-activity-filter-apply")[0].click();
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/Bob/);
+});
+test("only-value command picks one role without manually unchecking all others", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-filter='role']")[0].click();
+  const only=x.$("[aria-label='Выбрать только QA']");
+  assert.equal(only.length,1);
+  only[0].click();
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
+  assert.equal(x.$(".ujg-esi-activity-filter-option input:checked").closest("label").text(),"QA");
+  x.$(".ujg-esi-activity-filter-apply")[0].click();
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/P-2/);
+});
+test("filter popup styles reach the mounted menu and retain an outer scroll fallback", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$("<style/>").text(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer.css"),"utf8")).appendTo(x.dom.window.document.head);
+  x.$("[data-activity-filter='role']")[0].click();
+  const menu=x.$(".ujg-esi-activity-filter-menu")[0];
+  assert.equal(x.dom.window.getComputedStyle(menu.querySelector(".ujg-esi-filter-only")).width,"26px");
+  assert.equal(x.dom.window.getComputedStyle(menu).overflowY,"auto");
 });
 test("sort filter width and order persist per user-scoped activity layout", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -527,8 +584,8 @@ test("search retains selected values and Escape discards unfinished changes", t 
   selectFilter(x,"role",["QA"]);
   x.$("[data-activity-filter='role']").trigger("click");
   x.$(".ujg-esi-activity-filter-search").val("BE").trigger("input");
-  assert.equal(x.$(".ujg-esi-activity-selected-chip").length,1);
-  x.$(".ujg-esi-activity-filter-option input").prop("checked",true).trigger("change");
+  assert.equal(x.$(".ujg-esi-activity-filter-option input:checked").closest("label").text(),"QA");
+  x.$(".ujg-esi-filter-value-row:not([hidden]) input").prop("checked",true).trigger("change");
   x.$(".ujg-esi-activity-filter-menu").trigger(x.$.Event("keydown",{key:"Escape"}));
   assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0);
   assert.equal(x.$(".ujg-esi-activity-event").length,1);

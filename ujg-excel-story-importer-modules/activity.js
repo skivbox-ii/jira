@@ -127,7 +127,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     if (/cancel|reject|withdrawn|отмен|отклон|аннулир|^снят[аоы]?$/.test(name)) return "cancelled";
     if (category === "done") return "done";
     if (["new","indeterminate","in progress"].indexOf(category) >= 0) return "open";
-    if (/^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(name)) return "done";
+    if (/^(done|complete|completed|closed|resolved|finished|accepted|готово|выполнено|выполнена|выполнен|закрыто|закрыта|закрыт|завершено|завершена|принято|принята|принят)$/.test(name)) return "done";
     if (/^(open|new|to do|todo|backlog|in progress|in review|review|progress|active|reopened|blocked|testing|in testing|qa|ready for testing|открыто|открыт|открыта|новая|новый|в работе|в процессе|на проверке|проверка|заблокирован|тестирование|на тестировании|выдано|к выполнению|готово к тестированию)$/.test(name)) return "open";
     return "unknown";
   }
@@ -189,7 +189,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (issues[taskKey].groups.indexOf(group) < 0) issues[taskKey].groups.push(group);
       });
     });
-    var events = [], warnings = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null);
+    var events = [], warnings = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
     order.forEach(function(group) {
       var parent = issues[group.key], links = parent && parent.snapshot && parent.snapshot.linkedKeys;
       if (!Array.isArray(links)) return;
@@ -233,7 +233,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (change.item.field === "status") status = statusAt(change.item.fromId,change.item.from);
         if (change.item.field === "assignee") assignee = assigneeFrom(change.item,"from");
       }
-      states[issueKey] = {start:status,end:endStatus,startPerson:assignee,birthStatus:status,birthPerson:assignee};
+      states[issueKey] = {start:status,end:endStatus,endPerson:endPerson,startPerson:assignee,birthStatus:status,birthPerson:assignee};
       if (snap.created && Date.parse(snap.created) >= endpoint) states[issueKey].end = null;
       var eventAssignee = assignee;
       all.forEach(function(change) {
@@ -246,7 +246,10 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:item.from,to:item.to,fromId:item.fromId,toId:item.toId,author:change.h.author || person(null),assignee:toAssignee,
           fromAssignee:fromAssignee,toAssignee:toAssignee,fromTeam:teamFor(teams,fromAssignee),toTeam:teamFor(teams,toAssignee),color:"",roleColor:""};
         events.push(event);
-        if (item.field === "status") statusMeta[event.id] = statusAt(item.toId,item.to);
+        if (item.field === "status") {
+          statusBeforeMeta[event.id] = statusAt(item.fromId,item.from);
+          statusMeta[event.id] = statusAt(item.toId,item.to);
+        }
         eventAssignee = toAssignee;
       });
       if (snap.created) {
@@ -277,7 +280,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (event.kind === "status" && !changed) unchangedStatus[event.issueKey] = true;
         if (event.kind === "created") outcomes.created[event.issueKey] = true;
         if (event.kind !== "status" || !event.from || !event.to || !changed) return;
-        var before = kind(state("",event.from)), after = kind(statusMeta[event.id] || state("",event.to));
+        var before = kind(statusBeforeMeta[event.id] || state("",event.from)), after = kind(statusMeta[event.id] || state("",event.to));
         if (before === "open" && after === "done") outcomes.completed[event.issueKey] = true;
         if (before === "done" && after === "open") outcomes.reopened[event.issueKey] = true;
       });
@@ -319,6 +322,9 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         var values = group.tasks.map(function(taskKey) { return live[taskKey]; });
         return values.some(function(value) { return !value || kind(value) === "unknown"; }) ? null : values.every(function(value) { return kind(value) === "done"; });
       }
+      function unknownLive() {
+        return group.tasks.some(function(taskKey) { return live[taskKey] && kind(live[taskKey]) === "unknown"; });
+      }
       var batches = Object.create(null);
       groupEvents.forEach(function(event) {
         if (event.kind !== "created" && event.kind !== "status") return;
@@ -331,10 +337,12 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           live[event.issueKey] = states[event.issueKey] && states[event.issueKey].birthStatus;
         });
         var prior = liveReady();
+        if (unknownLive()) group.unknownStatus = true;
         batch.filter(function(event) { return event.kind === "status"; }).forEach(function(event) {
           live[event.issueKey] = statusMeta[event.id] || state("",event.to,"");
         });
         var next = liveReady();
+        if (unknownLive()) group.unknownStatus = true;
         var evidence = batch.filter(function(event) { return event.kind === "status"; });
         if (prior === false && next === true) {
           completed[group.id] = true;
@@ -345,6 +353,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           if (certified) management.reopened.push({at:at,events:evidence});
         }
       });
+      if (group.unknownStatus) {
+        warnings.push(group.key + ": промежуточный статус не удалось классифицировать");
+        management.completed = [];
+        management.reopened = [];
+      }
     });
     events.forEach(function(event) {
       if (event.kind === "status" && event.from !== event.to) { var label = event.from + " → " + event.to; transitions[label] = (transitions[label] || 0) + 1; }
@@ -365,7 +378,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     function taskReport(issueKey) {
       var entry = issues[issueKey], disputed = conflicts.indexOf(issueKey) >= 0, snap = !disputed && entry && entry.snapshot, notes = [], endState = states[issueKey] && states[issueKey].end;
       var report = {key:issueKey,summary:str(entry && entry.task.summary),role:str(entry && entry.task.role),created:snap && snap.created || null,
-        status:endState && endState.name || null,completedAt:null,completedBy:null,elapsedSeconds:null,inProgressSeconds:null,
+        status:endState && endState.name || null,assignee:null,completedAt:null,completedBy:null,dayCompletions:[],elapsedSeconds:null,inProgressSeconds:null,
         spentSeconds:snap ? snap.spentSeconds == null ? null : snap.spentSeconds : null,spentAsOf:snap && timestamp(snap.capturedAt) || null,
         worklogs:[],worklogsComplete:!!(snap && snap.worklogs && snap.worklogs.complete),comments:[],commentsComplete:!!(snap && snap.comments && snap.comments.complete),notes:notes};
       if (!snap || !usable(issueKey)) notes.push("История задачи неполна для выбранного среза");
@@ -385,12 +398,16 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (comment.updatedInvalid) notes.push("Время изменения комментария " + comment.id + " недостоверно");
       });
       if (!usable(issueKey) || !snap.created || Date.parse(snap.created) >= endpoint || !endState) return report;
+      report.assignee = states[issueKey].endPerson;
       var changes = [];
       function statusAt(id,name) { return state(id,name,id && id === snap.currentStatus.id ? snap.currentStatus.category : ""); }
       (snap.histories || []).forEach(function(history) { (history.items || []).forEach(function(item) {
         if (item.field === "status" && Date.parse(history.at) < endpoint) changes.push({at:history.at,author:history.author,from:statusAt(item.fromId,item.from),to:statusAt(item.toId,item.to),index:item.index,id:history.id});
       }); });
       changes.sort(function(a,b) { return Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id) || a.index - b.index; });
+      changes.forEach(function(change) {
+        if (Date.parse(change.at) >= window.start && kind(change.from) === "open" && kind(change.to) === "done") report.dayCompletions.push({at:change.at,author:change.author});
+      });
       if (kind(endState) === "done") {
         for (var i=changes.length-1;i>=0;i--) if (kind(changes[i].to) === "done" && kind(changes[i].from) !== "done") {
           if (kind(changes[i].from) === "open") {
@@ -421,7 +438,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     }
     groups.forEach(function(group,index) {
       var source = order[index];
-      group.dayComplete = !source.missing && source.tasks.every(usable);
+      group.dayComplete = !source.missing && !source.unknownStatus && source.tasks.every(usable);
       group.management.tasks = source.tasks.map(taskReport);
       if (!group.dayComplete) group.management.notes.push("Полнота группы не подтверждена; переходы готовности не показаны");
       if (source.uncreated) group.management.notes.push("Родительская задача Jira не создана");
@@ -493,7 +510,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       if (from && from === to) return "Статус не изменился: " + statusLabel(to);
       var destination = statusLabel(to), action = "Изменён статус";
       if (/^(done|complete|completed|finished|готово|выполнено|выполнена)$/.test(to.toLowerCase())) action = "Задача выполнена";
-      else if (/^(in progress|в работе)$/.test(to.toLowerCase())) action = kind(state("",from)) === "done" ? "Возвращена в работу" : "Взята в работу";
+      else if (/^(in progress|в работе|issued|выдано)$/.test(to.toLowerCase())) {
+        if (/^(in review|review|на проверке|проверка)$/.test(from.toLowerCase())) action = "Возвращена с проверки";
+        else if (/^(testing|in testing|на тестировании|тестирование)$/.test(from.toLowerCase())) action = "Возвращена с тестирования";
+        else if (/^(in progress|в работе)$/.test(to.toLowerCase())) action = kind(state("",from)) === "done" ? "Возвращена в работу" : "Взята в работу";
+      }
       else if (/^(in review|review|на проверке)$/.test(to.toLowerCase())) action = "Передана на проверку";
       else if (/^(testing|in testing|тестирование|на тестировании)$/.test(to.toLowerCase())) action = "Передана на тестирование";
       else if (/^(closed|закрыто|закрыта)$/.test(to.toLowerCase())) action = "Задача закрыта";

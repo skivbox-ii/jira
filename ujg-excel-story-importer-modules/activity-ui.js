@@ -180,7 +180,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function previewMetric(anchor, report, key, state) {
       if ($managementDialog || suppressPopoverFocus || !document.contains(anchor)) return;
       if ($popover && popoverAnchor === anchor) { clearTimeout(previewCloseTimer); return; }
-      var $box = popup(anchor,$(anchor).find("span").last().text(),"ujg-esi-activity-metric-preview",560);
+      var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      var $box = popup(anchor,$(anchor).find("span").last().text(),"ujg-esi-activity-metric-preview",Math.round(viewportWidth * 0.9));
+      $box.css("left",Math.max(12,Math.round((viewportWidth - $box.outerWidth()) / 2)));
       $box.append(managementUi.preview(report,key,state,{onOpen:function() { openManagement(anchor,report,key,state); }}));
       $box.on("mouseenter focusin",function() { clearTimeout(previewCloseTimer); })
         .on("mouseleave",schedulePreviewClose);
@@ -240,7 +242,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[(field.filterValue || field.value)(event,group)] = true; }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
       var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
-      var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",280);
+      var isPerson = field.key === "assignee" || field.key === "author";
+      var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",options.length > 8 ? 440 : 360);
       [[false,"ArrowDownAZ","Сортировка по возрастанию"],[true,"ArrowUpAZ","Сортировка по убыванию"]].forEach(function(item) {
         $box.append(button(item[1],item[2],function() { sort = {key:field.key,descending:item[0]}; saveLayout(); draw(); }).addClass("ujg-esi-activity-menu-command").append($("<span/>").text(item[2])));
       });
@@ -253,30 +256,42 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var $count = $("<span/>").addClass("ujg-esi-filter-count");
       $box.append($search,$chips,$("<label/>").addClass("ujg-esi-filter-all").append($all,$("<span/>").text("Выделить всё"),$count),$list);
       function foundValues() { var query = String($search.val() || "").toLocaleLowerCase(); return options.filter(function(value) { return value.toLocaleLowerCase().indexOf(query) >= 0; }); }
+      var candidates = options.map(function(value) {
+        var $check = $("<input/>").attr("type","checkbox").on("change",function() {
+          if (this.checked && selected.indexOf(value) < 0) selected.push(value);
+          if (!this.checked) selected = selected.filter(function(item) { return item !== value; });
+          update();
+        });
+        var $label = $("<label/>").addClass("ujg-esi-filter-option ujg-esi-activity-filter-option").append($check,$("<span/>").text(value));
+        var $only = button("Funnel","Выбрать только " + value,function(event) {
+          event.stopPropagation(); selected = [value]; update();
+          if (isPerson) $search.trigger("focus");
+        }).addClass("ujg-esi-filter-only");
+        var $row = $("<div/>").addClass("ujg-esi-filter-value-row").append($label,$only).appendTo($list);
+        return {value:value,row:$row,label:$label,check:$check};
+      });
+      var $empty = $("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений").appendTo($list);
       function update() {
-        var found = foundValues(), chosen = Array.isArray(filters[field.key]) ||
+        var found = foundValues(), chosen = isPerson && (Array.isArray(filters[field.key]) ||
           !options.every(function(value) { return selected.indexOf(value) >= 0; }) ||
-          selected.some(function(value) { return options.indexOf(value) < 0; });
+          selected.some(function(value) { return options.indexOf(value) < 0; }));
         $count.text(options.filter(function(value) { return selected.indexOf(value) >= 0; }).length + " / " + options.length);
         $all.prop("checked",!!found.length && found.every(function(value) { return selected.indexOf(value) >= 0; }));
         $all.prop("indeterminate",found.some(function(value) { return selected.indexOf(value) >= 0; }) && !$all.prop("checked"));
         $chips.empty();
-        if (chosen) selected.forEach(function(value) {
-          $chips.append($("<button/>").attr({type:"button",title:"Убрать: " + value}).addClass("ujg-esi-selected-chip ujg-esi-activity-selected-chip")
-            .append($("<span/>").text(value),icon("X")).on("click",function() { selected = selected.filter(function(item) { return item !== value; }); update(); }));
+        selected.filter(function(value) { return chosen || options.indexOf(value) < 0; }).forEach(function(value) {
+          $chips.append($("<button/>").attr({type:"button",title:"Убрать: " + value,"aria-label":"Убрать: " + value}).addClass("ujg-esi-selected-chip ujg-esi-activity-selected-chip")
+            .append($("<span/>").text(value),icon("X")).on("click",function(event) {
+              // The removed target must not reach the document's outside-click handler.
+              event.stopPropagation(); selected = selected.filter(function(item) { return item !== value; }); update(); $search.trigger("focus");
+            }));
         });
-        $list.empty();
         var displayed = found.filter(function(value) { return !chosen || selected.indexOf(value) < 0; });
-        if (!displayed.length) $list.append($("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений"));
-        displayed.forEach(function(value) {
-          var checked = selected.indexOf(value) >= 0;
-          $list.append($("<label/>").addClass("ujg-esi-filter-option ujg-esi-activity-filter-option").toggleClass("is-selected",checked)
-            .append($("<input/>").attr("type","checkbox").prop("checked",checked).on("change",function() {
-              if (this.checked && selected.indexOf(value) < 0) selected.push(value);
-              if (!this.checked) selected = selected.filter(function(item) { return item !== value; });
-              update();
-            }),$("<span/>").text(value)));
+        candidates.forEach(function(item) {
+          var checked = selected.indexOf(item.value) >= 0, visible = displayed.indexOf(item.value) >= 0;
+          item.row.prop("hidden",!visible); item.label.toggleClass("is-selected",checked); item.check.prop("checked",checked);
         });
+        $empty.prop("hidden",!!displayed.length);
       }
       $search.on("input",update);
       $all.on("change",function() { var found = foundValues(); if (this.checked) found.forEach(function(value) { if (selected.indexOf(value) < 0) selected.push(value); }); else selected = selected.filter(function(value) { return found.indexOf(value) < 0; }); update(); });
