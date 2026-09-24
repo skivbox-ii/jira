@@ -1,0 +1,269 @@
+define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
+  "use strict";
+  var titles = {changed:"Изменённые замечания",newRemarks:"Новые замечания",completed:"Завершённые замечания",reopened:"Возобновлённые замечания",events:"Все события"};
+  function list(value) { return Array.isArray(value) ? value : []; }
+  function value(input) { return input == null || input === "" ? "Нет данных" : String(input); }
+  function person(input) { return value(input && typeof input === "object" ? input.label : input); }
+  function dateTime(input) {
+    var stamp = typeof input === "number" ? input : Date.parse(input);
+    if (!isFinite(stamp)) return "Нет данных";
+    var date = new Date(stamp + 10800000).toISOString();
+    return date.slice(8,10) + "." + date.slice(5,7) + "." + date.slice(0,4) + " " + date.slice(11,16) + " МСК";
+  }
+  function duration(input) {
+    if (typeof input !== "number" || !isFinite(input) || input < 0) return "Нет данных";
+    var minutes = Math.round(input / 60), hours = Math.floor(minutes / 60);
+    return hours + " ч " + minutes % 60 + " мин";
+  }
+  function calendarDuration(input) {
+    if (typeof input !== "number" || !isFinite(input) || input < 0) return "Нет данных";
+    var days = Math.floor(input / 86400);
+    return (days ? days + " д " : "") + duration(input - days * 86400);
+  }
+  function textNode(tag, className, content) { return $("<" + tag + "/>").addClass(className).text(value(content)); }
+  function keyNode(key, baseUrl) {
+    var label = value(key);
+    try {
+      var base = new URL(String(baseUrl || ""));
+      if (!/^https?:$/.test(base.protocol) || base.username || base.password) throw new Error("Unsafe URL");
+      base.search = ""; base.hash = "";
+      return $("<a/>").attr({href:base.href.replace(/\/+$/, "") + "/browse/" + encodeURIComponent(label),target:"_blank",rel:"noopener noreferrer"}).text(label);
+    } catch (ignore) { return $("<span/>").text(label); }
+  }
+  function roleNode(role, summary, color) {
+    var match = String(role || "").toUpperCase().match(/\b(BE|FE|QA|DE|BF)\b/) || String(summary || "").toUpperCase().match(/^\s*\[(BE|FE|QA|DE|BF)\]|^\s*(BE|FE|QA|DE|BF)\s*[:\-]/);
+    var name = match ? match[1] || match[2] : String(role || "История");
+    var $role = textNode("span","ujg-esi-management-role role-" + (match ? name.toLowerCase() : "other"),name);
+    if (/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(color || "")) $role.css("border-color",color);
+    return $role;
+  }
+  function richText(text, state) {
+    var $text = $("<span/>");
+    String(text || "").split(/(\b[A-Z][A-Z0-9_]*-\d+\b|\[(?:BE|FE|QA|DE|BF)\])/g).forEach(function(part) {
+      if (/^[A-Z][A-Z0-9_]*-\d+$/.test(part)) $text.append(keyNode(part,state.baseUrl));
+      else if (/^\[(BE|FE|QA|DE|BF)\]$/.test(part)) $text.append(roleNode(part.slice(1,-1)));
+      else $text.append(document.createTextNode(part));
+    });
+    return $text;
+  }
+  function eventStatement(event) {
+    var category = activity.eventCategory ? activity.eventCategory(event) : "";
+    if (category === "Описание") return "Изменено описание";
+    if (category === "Тема") return "Уточнена тема задачи";
+    if (category === "Комментарии") return "Изменены комментарии";
+    if (category === "Другие поля" || category === "Параметры задачи") return "Обновлены параметры задачи";
+    return activity.eventText(event);
+  }
+  function eventRow(event, state) {
+    var fullTime = dateTime(event.at);
+    return $("<div/>").addClass("ujg-esi-management-event").append(textNode("time","",fullTime === "Нет данных" ? fullTime : fullTime.slice(11,16)).attr({title:fullTime,datetime:event.at}),keyNode(event.issueKey,state.baseUrl),roleNode(event.role,event.summary,event.roleColor),richText(eventStatement(event),state),textNode("span","ujg-esi-management-event-author",person(event.author)));
+  }
+  function management(group) { return group && group.management || {}; }
+  function selectedGroups(report, metric) {
+    return list(report && report.groups).filter(function(group) {
+      var item = management(group);
+      if (metric === "changed") return item.changed === true;
+      if (metric === "newRemarks") return item.newRemark === true;
+      if (metric === "completed" || metric === "reopened") return list(item[metric]).length > 0;
+      return list(group.events).length > 0;
+    });
+  }
+  function groupLabel(group, state) {
+    return $("<span/>").addClass("ujg-esi-management-group-label").append(keyNode(group.key,state.baseUrl),textNode("span","ujg-esi-management-remark-id",group.remarkId),textNode("span","ujg-esi-management-summary",group.summary));
+  }
+  function plainGroupLabel(group) {
+    return $("<span/>").addClass("ujg-esi-management-group-label").append(textNode("strong","",group.key),textNode("span","ujg-esi-management-remark-id",group.remarkId),textNode("span","ujg-esi-management-summary",group.summary));
+  }
+  function outcome(group, metric) {
+    var info = management(group), transitions = list(info[metric]), parts = [];
+    if (metric === "completed" || metric === "reopened") {
+      transitions.forEach(function(item) {
+        var roles = list(item.events).map(function(event) { return String(event.role || "").toUpperCase(); }).filter(Boolean);
+        parts.push((roles.length ? roles.join(", ") + " · " : "") + dateTime(item.at) + (item.events && item.events[0] ? " · " + person(item.events[0].author) : ""));
+      });
+    } else {
+      if (metric === "events") parts.push("Событий " + list(group.events).length);
+      if (metric === "newRemarks" && info.newRemark) {
+        var created = list(group.events).filter(function(event) { return event.kind === "created" && event.issueKey === group.key; })[0];
+        parts.push("Новое замечание" + (created ? " · " + dateTime(created.at) + " · " + person(created.author) : ""));
+      }
+      if (metric === "changed") {
+        var highlights = group.dayHighlights || {};
+        if (highlights.created) parts.push("Создано задач: " + highlights.created);
+        if (highlights.completed) parts.push("Завершено задач: " + highlights.completed);
+        else if (list(info.completed).length) parts.push("Замечание стало готово");
+        if (highlights.reopened) parts.push("Возвращено задач: " + highlights.reopened);
+        else if (list(info.reopened).length) parts.push("Замечание возвращено в работу");
+        var roles = list(group.events).concat(list(info.completed).reduce(function(all,item) { return all.concat(list(item.events)); },[]),list(info.reopened).reduce(function(all,item) { return all.concat(list(item.events)); },[])).map(function(event) { return String(event.role || "").toUpperCase(); }).filter(Boolean);
+        roles = roles.filter(function(role,index) { return roles.indexOf(role) === index; });
+        if (roles.length) parts.push(roles.join(", "));
+      }
+      if (!parts.length && info.changed) parts.push("Изменено");
+    }
+    return parts.join("; ") || "Нет данных";
+  }
+  function warning(report) {
+    return report && report.coverage && report.coverage.isComplete === true ? $() : textNode("p","ujg-esi-management-warning","История неполна: показаны подтверждённые данные, итог может быть больше.");
+  }
+  function preview(report, metric, state, services) {
+    state = state || {}; services = services || {};
+    var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-preview");
+    $root.append(textNode("strong","ujg-esi-management-preview-title",titles[metric] || "Сводка"),warning(report));
+    if (!groups.length) $root.append(textNode("p","ujg-esi-management-empty",report.coverage && report.coverage.isComplete ? "За выбранный день таких замечаний нет" : "Нет подтверждённых данных"));
+    groups.slice(0,4).forEach(function(group) {
+      $root.append($("<div/>").addClass("ujg-esi-management-preview-item").append(groupLabel(group,state),textNode("div","ujg-esi-management-preview-outcome",outcome(group,metric))));
+    });
+    if (groups.length > 4) $root.append(textNode("p","ujg-esi-management-more","Ещё " + (groups.length - 4)));
+    return $root.append($("<button type='button'/>").addClass("ujg-esi-management-preview-open").text("Открыть сводку").on("click",function() { if (services.onOpen) services.onOpen(); }));
+  }
+  function fact(label, content) {
+    return $("<div/>").addClass("ujg-esi-management-fact").append(textNode("dt","",label),$("<dd/>").append(content));
+  }
+  function taskDetail(task, state, services, report) {
+    var $section = $("<details/>").addClass("ujg-esi-management-task");
+    $section.append($("<summary/>").text("Подробности " + value(task.key) + " · " + value(task.summary)));
+    var $facts = $("<dl/>").addClass("ujg-esi-management-facts");
+    if (task.created) $facts.append(fact("Создано",dateTime(task.created)));
+    if (task.status) $facts.append(fact("На конец периода",activity.statusLabel ? activity.statusLabel(task.status) : task.status));
+    if (task.completedAt) $facts.append(fact("Завершено",dateTime(task.completedAt)));
+    if (task.completedBy) $facts.append(fact("Кто завершил",person(task.completedBy)));
+    if (task.elapsedSeconds != null) $facts.append(fact("Календарное время задачи",calendarDuration(task.elapsedSeconds)));
+    if (task.inProgressSeconds != null) $facts.append(fact("Активная работа (разработка, ревью, тестирование)",duration(task.inProgressSeconds)));
+    $facts.append(fact("Учтено на момент снимка",duration(task.spentSeconds) + " · " + dateTime(task.spentAsOf)));
+    $section.append($facts);
+    var logs = list(task.worklogs), $work = $("<div/>").addClass("ujg-esi-management-worklogs");
+    $work.append(textNode("h5","","Учёт работы"));
+    if (task.worklogsComplete !== true) $work.append(textNode("p","ujg-esi-management-muted","Данные по записям неполны"));
+    if (!logs.length) $work.append(textNode("p","ujg-esi-management-empty",task.worklogsComplete === true ? "Нет записей" : "Нет данных"));
+    logs.forEach(function(log) {
+      var $team = textNode("span","ujg-esi-management-log-team",log.team);
+      if (/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(log.color || "")) $team.css("border-left-color",log.color);
+      $work.append($("<div/>").addClass("ujg-esi-management-log").append(textNode("time","",dateTime(log.at)),textNode("span","",person(log.author)),$team,textNode("strong","",duration(log.seconds))));
+    });
+    var teams = Object.create(null);
+    logs.forEach(function(log) { if (typeof log.seconds === "number" && isFinite(log.seconds) && log.seconds >= 0) teams[value(log.team)] = (teams[value(log.team)] || 0) + log.seconds; });
+    Object.keys(teams).forEach(function(team) { $work.append(textNode("p","ujg-esi-management-team-total",team + ": " + duration(teams[team]))); });
+    $section.append($work);
+    var $comments = $("<div/>").addClass("ujg-esi-management-comments").append(textNode("h5","","Комментарии"));
+    if (task.commentsComplete !== true) $comments.append(textNode("p","ujg-esi-management-muted","Комментарии показаны частично"));
+    if (!list(task.comments).length) $comments.append(textNode("p","ujg-esi-management-empty",task.commentsComplete === true ? "Нет записей" : "Нет данных"));
+    list(task.comments).forEach(function(comment) {
+      var $comment = $("<div/>").addClass("ujg-esi-management-comment").append(textNode("div","ujg-esi-management-comment-by",person(comment.author) + " · " + dateTime(comment.at)));
+      if (comment.updatedAt && Date.parse(comment.updatedAt) >= Date.parse(report.asOf)) $comment.append(textNode("p","ujg-esi-management-note","Комментарий редактировался после выбранного периода; показан текущий текст."));
+      var rendered = services.renderDescription && services.renderDescription(comment.body);
+      $comment.append($("<div/>").addClass("ujg-esi-management-comment-body").append(rendered && rendered.jquery ? rendered : textNode("p","",comment.body)));
+      $comments.append($comment);
+    });
+    $section.append($comments);
+    list(task.notes).forEach(function(note) { $section.append(textNode("p","ujg-esi-management-note",note)); });
+    return $section;
+  }
+  function detail(group, metric, state, services, report) {
+    var info = management(group), $root = $("<div/>").addClass("ujg-esi-management-detail");
+    $root.append($("<h3/>").append(groupLabel(group,state)));
+    var $outcomes = $("<div/>").addClass("ujg-esi-management-outcomes");
+    $outcomes.append(textNode("strong","","За день"),textNode("span","",(metric === "completed" ? "Завершено: " : metric === "reopened" ? "Возобновлено: " : "") + outcome(group,metric)));
+    $root.append($outcomes);
+    if (group.currentStatus) $root.append(textNode("p","ujg-esi-management-muted","Исходная история сейчас: " + (activity.statusLabel ? activity.statusLabel(group.currentStatus) : group.currentStatus)));
+    if (typeof group.linkedTaskCount === "number") $root.append(textNode("p","ujg-esi-management-muted","Связанных задач: " + group.linkedTaskCount));
+    ["completed","reopened"].forEach(function(kind) {
+      list(info[kind]).forEach(function(transition) {
+        var $line = $("<div/>").addClass("ujg-esi-management-transition");
+        $line.append(textNode("strong","",kind === "completed" ? "Завершено" : "Возобновлено"),textNode("time","",dateTime(transition.at)));
+        list(transition.events).forEach(function(event) { $line.append($("<span/>").append(keyNode(event.issueKey,state.baseUrl),roleNode(event.role,event.summary,event.roleColor),textNode("span",""," · " + person(event.author)))); });
+        $root.append($line);
+      });
+    });
+    var root = list(info.tasks).filter(function(task) { return task.key === group.key; })[0];
+    var milestone = list(info.completed)[0];
+    var start = root && Date.parse(root.created), end = milestone && Date.parse(milestone.at);
+    if (isFinite(start) && isFinite(end) && end >= start) $root.append(textNode("p","ujg-esi-management-turnaround","Создание замечания → полная готовность: " + calendarDuration((end-start)/1000)));
+    if (list(info.reopened).length && list(info.tasks).some(function(task) { return list(task.comments).length; })) $root.append(textNode("p","ujg-esi-management-note","Доступные комментарии; причина возврата не подтверждена."));
+    if (!list(info.tasks).length) $root.append(textNode("p","ujg-esi-management-empty","Данные по задачам: Нет данных"));
+    var tasks = list(info.tasks), known = tasks.filter(function(task) { return typeof task.spentSeconds === "number" && isFinite(task.spentSeconds) && task.spentSeconds >= 0; });
+    if (tasks.length) {
+      var snapshots = known.map(function(task) { return task.spentAsOf; }).filter(function(at) { return isFinite(Date.parse(at)); }).sort();
+      var snapshotLabel = snapshots.length === known.length && snapshots.length ? " · снимки: " + dateTime(snapshots[0]) + (snapshots.length > 1 && dateTime(snapshots[snapshots.length-1]) !== dateTime(snapshots[0]) ? " — " + dateTime(snapshots[snapshots.length-1]) : "") : " · время снимков: Нет данных";
+      $root.append(textNode("p","ujg-esi-management-total","Учтено на момент снимков по задачам: " + (known.length ? duration(known.reduce(function(sum,task) { return sum + task.spentSeconds; },0)) : "Нет данных") + (known.length < tasks.length ? " · частичный итог" : "") + snapshotLabel));
+    }
+    var dayEvents = list(report.events).filter(function(event) { return list(group.events).some(function(item) { return item.id === event.id; }); });
+    if (dayEvents.length) {
+      var $day = $("<section/>").addClass("ujg-esi-management-day-events").append(textNode("h4","ujg-esi-management-evidence-heading","Движения за день"));
+      dayEvents.forEach(function(event) { $day.append(eventRow(event,state)); });
+      $root.append($day);
+    }
+    if (tasks.length) {
+      var $scroll = $("<div/>").addClass("ujg-esi-management-task-scroll"), $table = $("<table/>").addClass("ujg-esi-management-task-table");
+      $table.append($("<thead/>").append($("<tr/>").append(["Задача","Роль","На конец периода","Завершил · время","Календарно","Учтено на снимке"].map(function(label) { return textNode("th","",label); }))));
+      var $tbody = $("<tbody/>");
+      tasks.forEach(function(task) {
+        $tbody.append($("<tr/>").append($("<td/>").append(keyNode(task.key,state.baseUrl),textNode("small","",task.summary)),$("<td/>").append(roleNode(task.role,task.summary,task.roleColor)),textNode("td","",task.status ? activity.statusLabel ? activity.statusLabel(task.status) : task.status : "Нет данных"),textNode("td","",(task.completedBy ? person(task.completedBy) + " · " : "") + dateTime(task.completedAt)),textNode("td","",calendarDuration(task.elapsedSeconds)),textNode("td","",duration(task.spentSeconds))));
+      });
+      $root.append($scroll.append($table.append($tbody)));
+      var teamTotals = Object.create(null), teamIncomplete = false;
+      tasks.forEach(function(task) {
+        if (task.worklogsComplete !== true) teamIncomplete = true;
+        list(task.worklogs).forEach(function(log) { if (typeof log.seconds === "number" && isFinite(log.seconds) && log.seconds >= 0) teamTotals[value(log.team)] = (teamTotals[value(log.team)] || 0) + log.seconds; else teamIncomplete = true; });
+      });
+      var $teams = $("<p/>").addClass("ujg-esi-management-teams").append(textNode("strong","","Вклад команд · на момент снимков; текущий состав команд"));
+      Object.keys(teamTotals).forEach(function(team) { $teams.append(textNode("span","",team + ": " + duration(teamTotals[team]))); });
+      if (!Object.keys(teamTotals).length) $teams.append(textNode("span","","Нет данных"));
+      if (teamIncomplete) $teams.append(textNode("em","","Возможно неполно"));
+      $root.append($teams);
+      $root.append(textNode("h4","ujg-esi-management-evidence-heading","Детали задач"));
+      tasks.forEach(function(task) { $root.append(taskDetail(task,state,services,report)); });
+    }
+    list(info.notes).forEach(function(note) { $root.append(textNode("p","ujg-esi-management-note",note)); });
+    return $root;
+  }
+  function render(report, metric, state, services) {
+    report = report || {}; state = state || {}; services = services || {};
+    var groups = selectedGroups(report,metric), $root = $("<div/>").addClass("ujg-esi-management-panel");
+    var reportDate = /^\d{4}-\d{2}-\d{2}$/.test(report.date || "") ? report.date.split("-").reverse().join(".") : value(report.date);
+    var $head = $("<header/>").addClass("ujg-esi-management-header").append($("<div/>").append(textNode("h2","",titles[metric] || "Сводка"),textNode("span","ujg-esi-management-date",reportDate + " · МСК")));
+    $head.append($("<button type='button'/>").addClass("ujg-esi-management-close").attr({title:"Закрыть сводку","aria-label":"Закрыть сводку"}).append(icon("X")).on("click",function() { if (services.onClose) services.onClose(); }));
+    $root.append($head,warning(report));
+    var $body = $("<div/>").addClass("ujg-esi-management-body"), $list = $("<nav/>").addClass("ujg-esi-management-list").attr("aria-label","Замечания"), $detail = $("<main/>").addClass("ujg-esi-management-detail-host");
+    if (metric === "events") {
+      $list.append(textNode("h3","","Область"));
+      var allEvents = list(report.events).slice().sort(function(a,b) { return Date.parse(a.at) - Date.parse(b.at); });
+      function renderEvents(scope) {
+        $detail.empty().append(textNode("h3","ujg-esi-management-events-heading",scope ? value(scope.summary) : "Все события"));
+        var events = scope ? allEvents.filter(function(event) { return list(scope.events).some(function(entry) { return entry.id === event.id; }); }) : allEvents;
+        if (!events.length) $detail.append(textNode("p","ujg-esi-management-empty","Нет данных"));
+        var hour = "";
+        events.forEach(function(event) {
+          var parents = scope ? [scope] : list(report.groups).filter(function(item) { return list(item.events).some(function(entry) { return entry.id === event.id; }); });
+          var currentHour = dateTime(event.at).slice(11,13);
+          if (currentHour !== hour) { hour = currentHour; $detail.append(textNode("h4","ujg-esi-management-hour",hour + ":00")); }
+          var $row = eventRow(event,state);
+          parents.forEach(function(group) { $row.append($("<small/>").append(groupLabel(group,state))); });
+          $detail.append($row);
+        });
+      }
+      function scopeButton(group) {
+        var $button = $("<button type='button'/>").addClass("ujg-esi-management-event-scope").append(group ? plainGroupLabel(group) : textNode("strong","","Все события"));
+        $button.on("click",function() { $list.find(".ujg-esi-management-event-scope").removeClass("is-selected").attr("aria-current",null); $button.addClass("is-selected").attr("aria-current","true"); renderEvents(group); });
+        $list.append($button);
+        return $button;
+      }
+      scopeButton(null).trigger("click");
+      groups.forEach(scopeButton);
+    } else {
+      $list.append(textNode("h3","","Замечания"));
+      if (!groups.length) $list.append(textNode("p","ujg-esi-management-empty","Нет данных"));
+      groups.forEach(function(group,index) {
+        var $button = $("<button type='button'/>").addClass("ujg-esi-management-remark").append(plainGroupLabel(group)).on("click",function() {
+          $list.find(".ujg-esi-management-remark").removeClass("is-selected").attr("aria-current",null);
+          $button.addClass("is-selected").attr("aria-current","true");
+          $detail.empty().append(detail(group,metric,state,services,report));
+        });
+        $list.append($button);
+        if (index === 0) $button.trigger("click");
+      });
+    }
+    $body.append($list,$detail);
+    return $root.append($body);
+  }
+  return {preview:preview,render:render};
+});

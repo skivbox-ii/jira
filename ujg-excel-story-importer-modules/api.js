@@ -47,7 +47,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
   }
 
   function issueFields() {
-    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "creator", "issuelinks", "priority", "issuetype", "updated", "created"];
+    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "creator", "issuelinks", "priority", "issuetype", "updated", "created", "timespent", "worklog", "comment"];
     [config.SPRINT_FIELD, "customfield_10020", "customfield_10007"].forEach(function(field) {
       if (field && fields.indexOf(field) < 0) fields.push(field);
     });

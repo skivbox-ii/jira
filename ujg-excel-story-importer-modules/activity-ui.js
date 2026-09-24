@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi"], function($, activity, icon, managementUi) {
   "use strict";
   var sequence = 0;
 
@@ -65,6 +65,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
     var resizeObserver, observedViewportWidth;
+    var $managementDialog, managementAnchor, bodyOverflow, previewTimer, previewCloseTimer;
     var fields = [
       {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
       {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
@@ -134,14 +135,60 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       return header && header.getBoundingClientRect().width || parseFloat($host.find('col[data-column="'+field.key+'"]').css("width")) || widths[field.key] || field.width;
     }
     function closePopover(focus) {
+      clearTimeout(previewTimer); clearTimeout(previewCloseTimer);
       if ($popover) $popover.remove(); $popover = null;
       if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; popoverAnchor.focus(); suppressPopoverFocus = false; } }
       popoverAnchor = null;
     }
     function dismissPopover() {
+      if ($managementDialog) { closeManagement(true); return true; }
       var opened = !!($popover && $popover[0].isConnected);
       closePopover(opened);
       return opened;
+    }
+    function closeManagement(focus) {
+      if ($managementDialog) { $managementDialog.remove(); document.body.style.overflow = bodyOverflow; }
+      $managementDialog = null;
+      if (managementAnchor) {
+        $(managementAnchor).attr("aria-expanded","false");
+        if (focus && document.contains(managementAnchor)) {
+          suppressPopoverFocus = true; managementAnchor.focus(); suppressPopoverFocus = false;
+        }
+      }
+      managementAnchor = null;
+    }
+    function openManagement(anchor, report, key, state) {
+      closePopover(); closeManagement();
+      managementAnchor = anchor; $(anchor).attr("aria-expanded","true");
+      bodyOverflow = document.body.style.overflow; document.body.style.overflow = "hidden";
+      $managementDialog = $("<div/>").addClass("ujg-esi-management-dialog").attr({role:"dialog","aria-modal":"true","aria-label":$(anchor).find("span").last().text(),tabindex:"-1"}).appendTo($host);
+      $managementDialog.append(managementUi.render(report,key,state,Object.assign({},currentServices,{onClose:function() { closeManagement(true); }})));
+      $managementDialog.on("keydown",function(event) {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeManagement(true); return; }
+        if (event.key !== "Tab") return;
+        var $focusable = $managementDialog.find('a[href],button,input,select,textarea,summary,[tabindex="0"]').filter(function() {
+          var node = this;
+          return !this.disabled && !this.hidden && !$(this).closest("[hidden]").length && !$(this).parents("details:not([open])").toArray().some(function(details) { return details.querySelector("summary") !== node; });
+        });
+        var first = $focusable[0], last = $focusable[$focusable.length-1];
+        if (!first) { event.preventDefault(); $managementDialog.trigger("focus"); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === $managementDialog[0])) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      });
+      $managementDialog.trigger("focus");
+    }
+    function previewMetric(anchor, report, key, state) {
+      if ($managementDialog || suppressPopoverFocus || !document.contains(anchor)) return;
+      if ($popover && popoverAnchor === anchor) { clearTimeout(previewCloseTimer); return; }
+      var $box = popup(anchor,$(anchor).find("span").last().text(),"ujg-esi-activity-metric-preview",560);
+      $box.append(managementUi.preview(report,key,state,{onOpen:function() { openManagement(anchor,report,key,state); }}));
+      $box.on("mouseenter focusin",function() { clearTimeout(previewCloseTimer); })
+        .on("mouseleave",schedulePreviewClose);
+      placePopover(anchor);
+    }
+    function schedulePreviewClose() {
+      clearTimeout(previewTimer); clearTimeout(previewCloseTimer);
+      previewCloseTimer = setTimeout(function() { if ($popover && $popover.hasClass("ujg-esi-activity-metric-preview")) closePopover(); },180);
     }
     function popup(anchor, title, className, width) {
       closePopover(); popoverAnchor = anchor; $(anchor).attr("aria-expanded","true");
@@ -316,7 +363,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     function draw() {
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
       if (resizeObserver) resizeObserver.disconnect();
-      closePopover();
+      closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
       var report = activity.summarize(state.rows || [], state.teams || [], {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined});
       var coverage = report.coverage || {}, metrics = report.metrics || {}, observed = report.observed || {}, balance = report.balance || {};
@@ -341,8 +388,12 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         var value = metrics[item[0]], lowerBound = value == null && (item[0] === "changed" || item[0] === "newRemarks") && observed[item[0]] != null;
         var display = value != null ? String(value) : lowerBound ? "≥" + observed[item[0]] : "—";
         var title = value != null ? item[1] : lowerBound ? "Зафиксировано по загруженной истории; итог может быть больше" : "Недостаточно истории для итогового значения";
-        $band.append($("<div/>").addClass("ujg-esi-activity-metric").attr("data-metric",item[0])
-          .append($("<strong/>").attr("title",title).text(display), $("<span/>").text(item[1])));
+        $band.append($("<button/>").addClass("ujg-esi-activity-metric").attr({type:"button","data-metric":item[0],"aria-haspopup":"dialog","aria-expanded":"false","aria-label":item[1]+": "+display})
+          .append($("<strong/>").attr("title",title).text(display), $("<span/>").text(item[1]))
+          .on("click",function() { openManagement(this,report,item[0],state); })
+          .on("mouseenter",function() { var anchor=this; clearTimeout(previewTimer); clearTimeout(previewCloseTimer); previewTimer=setTimeout(function() { previewMetric(anchor,report,item[0],state); },160); })
+          .on("focus",function() { previewMetric(this,report,item[0],state); })
+          .on("mouseleave blur",schedulePreviewClose));
       });
       $metrics.append($band,$("<p/>").addClass("ujg-esi-activity-balance").text("Открытые замечания: " + metric(balance.startOpen) + " на начало · " + metric(balance.endOpen) + " на конец"));
       if ((state.rows || []).length) $root.append($metrics);

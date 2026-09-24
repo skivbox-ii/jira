@@ -23,7 +23,7 @@ function setup(report, configureWindow) {
     eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
-  for (const file of ["icons","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
+  for (const file of ["icons","activity-management-ui","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const state = {rows:[{id:"row"}],teams:[],projectKey:"P",epicKey:"P-EPIC",viewMode:"jira",registryWarning:"Scope warning"};
   const services = {onLoadActivityHistory() { calls.refresh++; }};
   const ui = modules._ujgESI_activityUi.create();
@@ -59,6 +59,39 @@ function categoryFixture() {
   report.metrics.events=report.events.length;
   return report;
 }
+test("daily metric is keyboard actionable and opens an unfiltered management report", t => {
+  const report=fixture();
+  report.groups[0].management={changed:true,newRemark:false,completed:[],reopened:[],tasks:[],notes:[]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"role",["QA"]);
+  const trigger=x.$("[data-metric='changed']");
+  assert.equal(trigger[0].tagName,"BUTTON");
+  trigger.trigger("click");
+  const dialog=x.$(".ujg-esi-management-dialog[role='dialog']");
+  assert.equal(dialog.length,1);
+  assert.equal(dialog.attr("aria-modal"),"true");
+  assert.match(dialog.text(),/Remark/);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  dialog.trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.$(".ujg-esi-management-dialog").length,0);
+  assert.equal(x.dom.window.document.activeElement,trigger[0]);
+  assert.equal(x.$(".ujg-esi-activity-metric-preview").length,0);
+});
+test("metric hover opens a brief preview and click replaces it with the full report", async t => {
+  const report=fixture();
+  report.groups[0].management={changed:true,newRemark:false,completed:[],reopened:[],tasks:[],notes:[]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const trigger=x.$("[data-metric='changed']");
+  trigger.trigger("mouseenter");
+  await new Promise(resolve=>setTimeout(resolve,260));
+  assert.equal(x.$(".ujg-esi-activity-metric-preview").length,1);
+  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Remark/);
+  trigger.trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-metric-preview").length,0);
+  assert.equal(x.$(".ujg-esi-management-dialog").length,1);
+  assert.equal(x.ui.dismissPopover(),true);
+  assert.equal(x.$(".ujg-esi-management-dialog").length,0);
+});
 test("change filter offers unique categories, not individual event descriptions", t => {
   const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
   x.$("[data-activity-filter='change']").trigger("click");

@@ -15,7 +15,7 @@ function setup(activityReport) {
   if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,statusLabel: value => value,eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
   const files=["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
-  if (activityReport) files.push("activity-ui");
+  if (activityReport) files.push("activity-management-ui","activity-ui");
   files.push("rendering");
   for (const file of files) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
   const calls = [];
@@ -640,6 +640,56 @@ function fullscreenActivityReport() {
   const events=[{id:"status-1",kind:"status",at:"2026-09-24T12:00:00Z",from:"Testing",to:"Done",role:"QA",issueKey:"P-12",assignee:{label:"Anna"}}];
   return {events,groups:[{id:"remark-1",key:"P-10",events}],transitions:[{from:"Testing",to:"Done",count:1}]};
 }
+
+test("management comments link Jira keys and roles, render Mermaid and keep HTML inert", async t => {
+  const report=fullscreenActivityReport();
+  report.groups[0].management={changed:true,completed:[],reopened:[],tasks:[{
+    key:"P-12",role:"QA",summary:"Check",comments:[{at:"2026-09-24T12:00:00Z",author:{label:"Anna"},
+      body:"h3. Возврат\nПроверить [QA] P-12 и [BE] P-11. <img src=x onerror=alert(1)>\n```mermaid\ngraph TD\nA-->B\n```"}]
+  }]};
+  const {dom,$,state,render}=setup(report); t.after(()=>dom.window.close());
+  dom.window.mermaid={initialize:()=>{},render:async()=>({svg:'<svg xmlns="http://www.w3.org/2000/svg"><text>Flow</text></svg>'})};
+  state.reportView="activity"; render();
+  $("[data-metric='changed']").trigger("click");
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const body=$(".ujg-esi-management-comment-body");
+  assert.equal(body.find("a[href='https://jira.example.test/browse/P-12']").length,1,body.html() || $(".ujg-esi-management-dialog").text());
+  assert.equal(body.find(".ujg-esi-management-role").length,2);
+  assert.equal(body.find("img,script").length,0);
+  assert.equal(body.find("svg").length,1);
+});
+
+test("management dialog Escape preserves widget fullscreen and source switch restores scrolling", t => {
+  const report=fullscreenActivityReport(); report.groups[0].management={changed:true,tasks:[]};
+  const {dom,$,state,render}=setup(report); t.after(()=>dom.window.close());
+  state.reportView="activity"; render();
+  $("[aria-label='На весь экран']").trigger("click");
+  $("[data-metric='changed']").trigger("click");
+  $(".ujg-esi-management-dialog").trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal($(".ujg-esi-fullscreen").length,1);
+  assert.equal($(".ujg-esi-management-dialog").length,0);
+  $("[data-metric='changed']").trigger("click");
+  assert.equal(dom.window.document.body.style.overflow,"hidden");
+  state.reportView="registry"; render();
+  assert.equal(dom.window.document.body.style.overflow,"");
+  assert.equal($(".ujg-esi-management-dialog").length,0);
+});
+
+test("management focus loop includes disclosure summaries but excludes hidden detail links", t => {
+  const report=fullscreenActivityReport();
+  report.groups[0].management={changed:true,tasks:[{key:"P-12",summary:"Check",comments:[{body:"See P-99"}]}]};
+  const {dom,$,state,render}=setup(report); t.after(()=>dom.window.close());
+  state.reportView="activity"; render();
+  $("[data-metric='changed']").trigger("click");
+  const lastVisibleLink=$(".ujg-esi-management-day-events a").last();
+  lastVisibleLink.trigger("focus");
+  const pass=$.Event("keydown",{key:"Tab"}); lastVisibleLink.trigger(pass);
+  assert.equal(pass.isDefaultPrevented(),false);
+  const summary=$(".ujg-esi-management-task summary").last(); summary.trigger("focus");
+  const wrap=$.Event("keydown",{key:"Tab"}); summary.trigger(wrap);
+  assert.equal(wrap.isDefaultPrevented(),true);
+  assert.equal(dom.window.document.activeElement,$(".ujg-esi-management-close")[0]);
+});
 
 test("activity fullscreen refits existing table and preserves explicit widths and filters", t => {
   const {dom,$,state,render}=setup(fullscreenActivityReport()); t.after(()=>dom.window.close());

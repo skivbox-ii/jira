@@ -238,7 +238,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
 
 
   function wikiInline($parent, text) {
-    String(text || "").split(/(\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-|\+[^\+\n]+\+)/g).forEach(function(part) {
+    String(text || "").split(/(\b[A-Z][A-Z0-9_]*-\d+\b|\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-|\+[^\+\n]+\+)/g).forEach(function(part) {
       var node;
       if (!part) return;
       if (/^\*[^*\n]+\*$/.test(part)) node = $("<strong/>").text(part.slice(1, -1));
@@ -303,6 +303,36 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       }
       $wrap.append($line);
     }
+    return $wrap;
+  }
+
+  function renderManagementDescription(text, baseUrl) {
+    var $wrap = renderJiraWiki(text), browse = "";
+    try {
+      var base = new URL(String(baseUrl || ""));
+      if (/^https?:$/.test(base.protocol) && !base.username && !base.password) {
+        base.search = ""; base.hash = ""; browse = base.href.replace(/\/+$/, "") + "/browse/";
+      }
+    } catch (ignore) { /* Without a trusted Jira URL, keep keys as plain text. */ }
+    var walker = document.createTreeWalker($wrap[0],4), nodes = [], node;
+    while ((node = walker.nextNode())) if (!$(node.parentNode).closest("a,pre,code,svg").length) nodes.push(node);
+    nodes.forEach(function(node) {
+      var pattern = /\b[A-Z][A-Z0-9_]*-\d+\b|\[(?:BE|FE|QA|DE|BF)\]/g, text = node.nodeValue, match, offset = 0;
+      var fragment = document.createDocumentFragment();
+      while ((match = pattern.exec(text))) {
+        fragment.appendChild(document.createTextNode(text.slice(offset,match.index)));
+        var token = match[0], $token;
+        if (token.charAt(0) === "[") {
+          var role = token.slice(1,-1);
+          $token = $("<span/>").addClass("ujg-esi-management-role role-" + role.toLowerCase()).text(role);
+        } else if (browse) $token = $("<a/>").attr({href:browse+encodeURIComponent(token),target:"_blank",rel:"noopener noreferrer"}).text(token);
+        else $token = $("<span/>").text(token);
+        fragment.appendChild($token[0]); offset = pattern.lastIndex;
+      }
+      if (!offset) return;
+      fragment.appendChild(document.createTextNode(text.slice(offset)));
+      node.parentNode.replaceChild(fragment,node);
+    });
     return $wrap;
   }
 
@@ -1752,6 +1782,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     var scrollState = captureScrollState();
     $(document).off("click.ujgEsiOwner");
     $(document).off("click.ujgEsiSummary");
+    if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -1807,7 +1838,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (s.registryError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.registryError));
     if (s.viewMode === "jira" && s.registryWarning) $root.append($("<div/>").addClass("ujg-esi-registry-warning").attr("role", "status").text(s.registryWarning));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
-    if (s.reportView === "activity" && activityView) activityView.render($root,s,services);
+    if (s.reportView === "activity" && activityView) activityView.render($root,s,Object.assign({},services,{renderDescription:function(text) { return renderManagementDescription(text,s.baseUrl); }}));
     else appendPreview($root, s);
     appendRowOwnerPopover($root, s);
     appendConfirmModal($root, s);

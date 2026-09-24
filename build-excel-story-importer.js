@@ -25,6 +25,7 @@ var MODULE_ORDER = [
   "statistics.js",
   "statistics-ui.js",
   "activity.js",
+  "activity-management-ui.js",
   "activity-ui.js",
   "grid.js",
   "rendering.js",

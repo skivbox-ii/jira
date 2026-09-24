@@ -176,7 +176,7 @@ test("activity enrichment reports read failures without changing ticket fields",
   assert.equal(app.state.rows[0].storyDetails.summary, "Parent");
 });
 
-test("full issue history uses a GET and requests creator for creation attribution", async () => {
+test("full issue history reads attribution, comments and logged work without a mutation", async () => {
   let request;
   const api = loadAmdModule(path.join(MODULE_DIR, "api.js"), {
     jquery: {ajax: options => { request = options; return Promise.resolve({}); }},
@@ -187,6 +187,7 @@ test("full issue history uses a GET and requests creator for creation attributio
   assert.equal(request.url,"https://jira.example.test/rest/api/2/issue/TEST-1");
   assert.equal(request.data.expand,"changelog");
   assert.ok(request.data.fields.includes("creator"));
+  for (const field of ["timespent", "worklog", "comment"]) assert.ok(request.data.fields.split(",").includes(field), field);
 });
 
 test("history enrichment deduplicates keys, bounds concurrency, and cancels queued reads on source change", async () => {

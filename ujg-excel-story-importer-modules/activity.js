@@ -40,12 +40,35 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     var name = str(item.fieldId || item.field).toLowerCase();
     return name === "status" ? "status" : name === "assignee" ? "assignee" : str(item.field || item.fieldId);
   }
+  function seconds(value) { return typeof value === "number" && isFinite(value) && value >= 0 ? value : null; }
+  function captureEntries(envelope,field,convert) {
+    var raw = envelope && envelope[field], entries = [], seen = Object.create(null), valid = !!envelope && Array.isArray(raw) && envelope.startAt === 0 &&
+      /^\d+$/.test(String(envelope.total)) && +envelope.total === raw.length && envelope.isLast !== false;
+    if (Array.isArray(raw)) raw.forEach(function(value) {
+      var id = str(value && value.id);
+      if (!id || seen[id]) { valid = false; return; }
+      seen[id] = true;
+      var entry = convert(value);
+      if (!entry) { valid = false; return; }
+      if (field === "worklogs" && entry.seconds === null) valid = false;
+      if (field === "comments" && entry.updatedInvalid) valid = false;
+      entries.push(entry);
+    });
+    return {entries:entries,complete:valid};
+  }
   function capture(issue) {
     issue = issue || {};
     var fields = issue.fields || {}, log = issue.changelog || {}, raw = log.histories;
     var result = {complete:false,capturedAt:new Date().toISOString(),created:timestamp(fields.created),updated:timestamp(fields.updated),
       currentStatus:state(fields.status && fields.status.id,fields.status && fields.status.name,fields.status && fields.status.statusCategory && fields.status.statusCategory.key),
-      currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[]};
+      currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[],spentSeconds:seconds(fields.timespent),
+      worklogs:captureEntries(fields.worklog,"worklogs",function(log) {
+        var at = timestamp(log && log.started), duration = seconds(log && log.timeSpentSeconds);
+        return at ? {id:str(log.id),at:at,author:person(log.author),seconds:duration} : null;
+      }),comments:captureEntries(fields.comment,"comments",function(comment) {
+        var at = timestamp(comment && comment.created), updatedAt = timestamp(comment && comment.updated);
+        return at ? {id:str(comment.id),at:at,updatedAt:updatedAt || null,updatedInvalid:!!str(comment && comment.updated) && !updatedAt,author:person(comment.author),body:str(comment.body)} : null;
+      })};
     function warn(message) { if (result.warnings.indexOf(message) < 0) result.warnings.push(message); }
     if (!result.created) warn("Дата создания Jira недоступна или недостоверна");
     if (!result.currentStatus.name) warn("Текущий статус Jira недоступен");
@@ -143,7 +166,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     var endpoint = Math.min(window.end,now), teams = teamsModule.normalize(inputTeams), grouped = Object.create(null), order = [], issues = Object.create(null), conflicts = [];
     function fingerprint(snapshot) {
       if (!snapshot) return "";
-      return JSON.stringify([snapshot.complete,snapshot.created,snapshot.updated,snapshot.currentStatus,snapshot.currentAssignee,snapshot.histories]);
+      return JSON.stringify([snapshot.complete,snapshot.created,snapshot.updated,snapshot.currentStatus,snapshot.currentAssignee,snapshot.histories,
+        snapshot.spentSeconds,snapshot.worklogs,snapshot.comments]);
     }
     (sourceRows || []).forEach(function(row,index) {
       if (!row) return;
@@ -266,10 +290,12 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     var complete = warnings.length === 0 && order.every(function(group) { return !group.missing; });
     if (order.some(function(group) { return group.missing; })) warnings.push("У части замечаний нет полных данных о связанных задачах");
     var changed = Object.create(null), newRemarks = Object.create(null), completed = Object.create(null), reopened = Object.create(null), balanceStart = 0, balanceEnd = 0;
-    order.forEach(function(group) {
+    order.forEach(function(group,index) {
       var groupEvents = events.filter(function(event) { return group.tasks.indexOf(event.issueKey) >= 0; });
       if (groupEvents.length) changed[group.id] = true;
       if (group.key && events.some(function(event) { return event.issueKey === group.key && event.kind === "created"; })) newRemarks[group.id] = true;
+      var management = groups[index].management = {changed:!!changed[group.id],newRemark:!!newRemarks[group.id],completed:[],reopened:[],tasks:[],notes:[]};
+      var certified = !group.missing && group.tasks.every(usable);
       function readiness(atEnd) {
         if (group.uncreated) return false;
         var values = group.tasks.map(function(taskKey) { var s = states[taskKey]; return s && (atEnd ? s.end : s.start); });
@@ -309,8 +335,15 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
           live[event.issueKey] = statusMeta[event.id] || state("",event.to,"");
         });
         var next = liveReady();
-        if (prior === false && next === true) completed[group.id] = true;
-        if (prior === true && next === false && group.tasks.some(function(taskKey) { return kind(live[taskKey]) === "open"; })) reopened[group.id] = true;
+        var evidence = batch.filter(function(event) { return event.kind === "status"; });
+        if (prior === false && next === true) {
+          completed[group.id] = true;
+          if (certified) management.completed.push({at:at,events:evidence});
+        }
+        if (prior === true && next === false && group.tasks.some(function(taskKey) { return kind(live[taskKey]) === "open"; })) {
+          reopened[group.id] = true;
+          if (certified) management.reopened.push({at:at,events:evidence});
+        }
       });
     });
     events.forEach(function(event) {
@@ -323,7 +356,76 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       var snap = issues[issueKey].snapshot;
       return now > window.start && endpoint >= window.start && conflicts.indexOf(issueKey) < 0 && snap && snap.complete && isFinite(Date.parse(snap.capturedAt)) && Date.parse(snap.capturedAt) >= endpoint;
     }
-    groups.forEach(function(group,index) { group.dayComplete = !order[index].missing && order[index].tasks.every(usable); });
+    function activeStatus(value) {
+      var name = str(value && value.name);
+      if (/^(in progress|in review|review|testing|in testing|qa|ready for testing|в работе|в процессе|на проверке|проверка|тестирование|на тестировании|готово к тестированию)$/i.test(name)) return true;
+      if (kind(value) === "done" || kind(value) === "cancelled" || /^(open|new|to do|todo|backlog|reopened|blocked|открыто|открыт|открыта|новая|новый|заблокирован|к выполнению)$/i.test(name)) return false;
+      return null;
+    }
+    function taskReport(issueKey) {
+      var entry = issues[issueKey], disputed = conflicts.indexOf(issueKey) >= 0, snap = !disputed && entry && entry.snapshot, notes = [], endState = states[issueKey] && states[issueKey].end;
+      var report = {key:issueKey,summary:str(entry && entry.task.summary),role:str(entry && entry.task.role),created:snap && snap.created || null,
+        status:endState && endState.name || null,completedAt:null,completedBy:null,elapsedSeconds:null,inProgressSeconds:null,
+        spentSeconds:snap ? snap.spentSeconds == null ? null : snap.spentSeconds : null,spentAsOf:snap && timestamp(snap.capturedAt) || null,
+        worklogs:[],worklogsComplete:!!(snap && snap.worklogs && snap.worklogs.complete),comments:[],commentsComplete:!!(snap && snap.comments && snap.comments.complete),notes:notes};
+      if (!snap || !usable(issueKey)) notes.push("История задачи неполна для выбранного среза");
+      if (disputed) notes.push("Противоречивые снимки Jira; детали задачи недоступны");
+      if (report.spentSeconds === null) notes.push("Трудозатраты Jira недоступны");
+      if (report.spentSeconds !== null && !report.spentAsOf) { report.spentSeconds = null; notes.push("Время снимка трудозатрат недостоверно"); }
+      if (snap && report.spentAsOf) notes.push("Трудозатраты и записи работы отражают текущий снимок Jira, не срез выбранного дня");
+      if (!report.worklogsComplete) notes.push("Список трудозатрат неполон или недостоверен");
+      if (!report.commentsComplete) notes.push("Список комментариев неполон или недостоверен");
+      (snap && snap.worklogs && snap.worklogs.entries || []).forEach(function(log) {
+        report.worklogs.push({id:log.id,at:log.at,author:log.author,seconds:log.seconds,team:teamFor(teams,log.author),color:teamColor(teams,log.author.identifiers)});
+      });
+      (snap && snap.comments && snap.comments.entries || []).forEach(function(comment) {
+        if (Date.parse(comment.at) >= endpoint) return;
+        report.comments.push({id:comment.id,at:comment.at,updatedAt:comment.updatedAt,author:comment.author,body:comment.body});
+        if (comment.updatedAt && Date.parse(comment.updatedAt) >= endpoint) notes.push("Комментарий " + comment.id + " редактировался после среза; показан текущий текст");
+        if (comment.updatedInvalid) notes.push("Время изменения комментария " + comment.id + " недостоверно");
+      });
+      if (!usable(issueKey) || !snap.created || Date.parse(snap.created) >= endpoint || !endState) return report;
+      var changes = [];
+      function statusAt(id,name) { return state(id,name,id && id === snap.currentStatus.id ? snap.currentStatus.category : ""); }
+      (snap.histories || []).forEach(function(history) { (history.items || []).forEach(function(item) {
+        if (item.field === "status" && Date.parse(history.at) < endpoint) changes.push({at:history.at,author:history.author,from:statusAt(item.fromId,item.from),to:statusAt(item.toId,item.to),index:item.index,id:history.id});
+      }); });
+      changes.sort(function(a,b) { return Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id) || a.index - b.index; });
+      if (kind(endState) === "done") {
+        for (var i=changes.length-1;i>=0;i--) if (kind(changes[i].to) === "done" && kind(changes[i].from) !== "done") {
+          if (kind(changes[i].from) === "open") {
+            report.completedAt = changes[i].at;
+            report.completedBy = Object.assign({},changes[i].author,{color:teamColor(teams,changes[i].author.identifiers || [])});
+            report.elapsedSeconds = (Date.parse(report.completedAt) - Date.parse(snap.created)) / 1000;
+          }
+          break;
+        }
+        if (!report.completedAt) notes.push("Момент завершения не подтвержден переходом статуса");
+      }
+      var initial = changes.length ? changes[0].from : endState, cursor = Date.parse(snap.created), total = 0, current = initial, provable = true;
+      function addActiveInterval(at) {
+        var active = activeStatus(current);
+        if (at < cursor || active === null) provable = false;
+        else if (active) total += at - cursor;
+        cursor = at;
+      }
+      changes.forEach(function(change) {
+        var at = Date.parse(change.at);
+        addActiveInterval(at);
+        current = change.to;
+      });
+      addActiveInterval(endpoint);
+      if (provable) report.inProgressSeconds = total / 1000;
+      else notes.push("Время в работе не подтверждено полной цепочкой статусов");
+      return report;
+    }
+    groups.forEach(function(group,index) {
+      var source = order[index];
+      group.dayComplete = !source.missing && source.tasks.every(usable);
+      group.management.tasks = source.tasks.map(taskReport);
+      if (!group.dayComplete) group.management.notes.push("Полнота группы не подтверждена; переходы готовности не показаны");
+      if (source.uncreated) group.management.notes.push("Родительская задача Jira не создана");
+    });
     var counted = {complete:issueKeys.filter(usable).length,total:issueKeys.length,
       incomplete:issueKeys.filter(function(issueKey) { return !usable(issueKey); }).length,
       uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,isComplete:complete};

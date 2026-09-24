@@ -272,6 +272,188 @@ test("simultaneous opposite child transitions do not invent transient completion
   assert.equal(result.metrics.completed,0);
   assert.equal(result.metrics.reopened,0);
 });
+
+test("management membership and milestone evidence follow certified group readiness", () => {
+  const api=activity();
+  const parent=detail(api,issue("P-1","Open",[
+    history("a","2026-09-24T01:00:00Z","maker",[item("status","1","2","Open","Done")]),
+    history("b","2026-09-24T02:00:00Z","reviewer",[item("status","2","1","Done","Open")])
+  ]));
+  const result=report(api,[row(parent)]), management=result.groups[0].management;
+  assert.equal(management.changed,true);
+  assert.equal(management.newRemark,false);
+  assert.deepEqual(JSON.parse(JSON.stringify(management.completed.map(x=>[x.at,x.events.map(e=>e.id)]))),[["2026-09-24T01:00:00.000Z",["P-1:a:0"]]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(management.reopened.map(x=>[x.at,x.events.map(e=>e.id)]))),[["2026-09-24T02:00:00.000Z",["P-1:b:0"]]]);
+  assert.equal(management.tasks[0].status,"Open");
+  assert.equal(result.metrics.completed,1);
+  assert.equal(result.metrics.reopened,1);
+});
+
+test("management task detail separates closure duration, active status time and snapshot work", () => {
+  const api=activity();
+  const jira=issue("P-1","Done",[
+    history("a","2026-09-20T01:00:00Z","worker",[item("status","1","3","Open","In Progress")]),
+    history("b","2026-09-20T02:00:00Z","worker",[item("status","3","4","In Progress","In Review")]),
+    history("c","2026-09-20T03:00:00Z","reviewer",[item("status","4","2","In Review","Done")])
+  ],{fields:{timespent:1800,worklog:{startAt:0,total:2,worklogs:[
+    {id:"w1",started:"2026-09-20T01:30:00Z",author:person("worker","Worker"),timeSpentSeconds:1200},
+    {id:"w2",started:"2026-09-20T02:30:00Z",author:person("reviewer","Reviewer"),timeSpentSeconds:600}
+  ]},comment:{startAt:0,total:1,comments:[{id:"c1",created:"2026-09-24T02:00:00Z",author:person("reviewer","Reviewer"),body:"Looks good"}]}}});
+  const result=report(api,[row(detail(api,jira,"QA"))]), task=result.groups[0].management.tasks[0];
+  assert.equal(task.completedAt,"2026-09-20T03:00:00.000Z");
+  assert.equal(task.completedBy.label,"reviewer");
+  assert.equal(task.elapsedSeconds,10800);
+  assert.equal(task.inProgressSeconds,7200);
+  assert.equal(task.spentSeconds,1800);
+  assert.ok(Number.isFinite(Date.parse(task.spentAsOf)));
+  assert.equal(task.worklogsComplete,true);
+  assert.deepEqual(Array.from(task.worklogs,w=>w.seconds),[1200,600]);
+  assert.equal(task.commentsComplete,true);
+  assert.equal(task.comments[0].body,"Looks good");
+});
+
+test("missing and disputed detail does not manufacture precision or milestones", () => {
+  const api=activity(), jira=issue("P-1","Done",[history("a","2026-09-24T01:00:00Z","maker",[item("status","1","2","Open","Done")])],
+    {fields:{timespent:NaN,worklog:{startAt:0,total:2,worklogs:[{id:"same",started:"2026-09-24T00:00:00Z",author:person("a","A"),timeSpentSeconds:60},{id:"same",started:"2026-09-24T00:00:00Z",author:person("a","A"),timeSpentSeconds:60}]}}});
+  const parent=detail(api,jira); parent.activity.complete=false;
+  const result=report(api,[row(parent)]), management=result.groups[0].management, task=management.tasks[0];
+  assert.equal(management.completed.length,0);
+  assert.equal(management.reopened.length,0);
+  assert.equal(task.completedAt,null);
+  assert.equal(task.inProgressSeconds,null);
+  assert.equal(task.spentSeconds,null);
+  assert.equal(task.worklogsComplete,false);
+  assert.equal(task.commentsComplete,false);
+  assert.equal(task.worklogs.length,1);
+  assert.ok(management.notes.length);
+  assert.ok(task.notes.length);
+});
+
+test("worklog team follows its author and invalid seconds remain unknown", () => {
+  const api=activity(), jira=issue("P-1","Open",[],{fields:{timespent:90,worklog:{startAt:0,total:2,worklogs:[
+    {id:"ok",started:"2026-09-24T01:00:00Z",author:person("worker","Worker"),timeSpentSeconds:90},
+    {id:"bad",started:"2026-09-24T02:00:00Z",author:person("worker","Worker"),timeSpentSeconds:"unknown"}
+  ]}}});
+  const teamRows=teams.defaults();
+  teamRows[0].members=[{id:"worker",label:"Worker",identifiers:["worker"]}];
+  teamRows[1].members=[{id:"owner",label:"Owner",identifiers:["owner"]}];
+  const task=api.summarize([row(detail(api,jira))],teamRows,{date:"2026-09-24",now:"2026-09-24T12:00:00Z"}).groups[0].management.tasks[0];
+  assert.equal(task.worklogsComplete,false);
+  assert.equal(task.worklogs[0].team,"BE");
+  assert.equal(task.worklogs[0].color,teamRows[0].color);
+  assert.equal(task.worklogs[1].seconds,null);
+  assert.equal(task.worklogs[1].team,"BE");
+});
+
+test("management status and closure stop at the endpoint while snapshot spend keeps its capture time", () => {
+  const api=activity(), jira=issue("P-1","Done",[
+    history("first","2026-09-24T01:00:00Z","worker",[item("status","1","2","Open","Done")]),
+    history("reopen","2026-09-24T08:00:00Z","reviewer",[item("status","2","1","Done","Open")]),
+    history("last","2026-09-24T10:00:00Z","worker",[item("status","1","2","Open","Done")])
+  ],{fields:{created:"2026-09-24T00:00:00Z",timespent:3600}});
+  const parent=detail(api,jira), result=report(api,[row(parent)],{now:"2026-09-24T09:00:00Z"}), task=result.groups[0].management.tasks[0];
+  assert.equal(task.status,"Open");
+  assert.equal(task.completedAt,null);
+  assert.equal(task.elapsedSeconds,null);
+  assert.equal(task.spentSeconds,3600);
+  assert.equal(task.spentAsOf,parent.activity.capturedAt);
+});
+
+test("historical task detail hides future comments and labels later edits to visible comments", () => {
+  const api=activity(), jira=issue("P-1","Open",[],{fields:{comment:{startAt:0,total:3,comments:[
+    {id:"old",created:"2026-09-24T01:00:00Z",updated:"2026-09-24T01:00:00Z",author:person("a","A"),body:"Original"},
+    {id:"edited",created:"2026-09-24T02:00:00Z",updated:"2026-09-24T14:00:00Z",author:person("b","B"),body:"Edited text"},
+    {id:"future",created:"2026-09-24T13:00:00Z",updated:"2026-09-24T13:00:00Z",author:person("c","C"),body:"After endpoint"}
+  ]}}});
+  const task=report(api,[row(detail(api,jira))]).groups[0].management.tasks[0];
+  assert.deepEqual(Array.from(task.comments,c=>c.id),["old","edited"]);
+  assert.equal(task.commentsComplete,true);
+  assert.equal(task.comments[1].updatedAt,"2026-09-24T14:00:00.000Z");
+  assert.match(task.notes.join(" "),/редактир/);
+  assert.doesNotMatch(task.notes.join(" "),/old/);
+});
+
+test("current worklogs may start after endpoint but are not presented as period totals", () => {
+  const api=activity(), jira=issue("P-1","Open",[],{fields:{timespent:600,worklog:{startAt:0,total:1,worklogs:[
+    {id:"future",started:"2026-09-24T14:00:00Z",author:person("a","A"),timeSpentSeconds:600}
+  ]}}});
+  const parent=detail(api,jira), task=report(api,[row(parent)]).groups[0].management.tasks[0];
+  assert.equal(task.worklogs[0].at,"2026-09-24T14:00:00.000Z");
+  assert.equal(task.spentAsOf,parent.activity.capturedAt);
+  assert.match(task.notes.join(" "),/текущ|снимк/);
+});
+
+test("shared issue copies with conflicting management details are not silently selected", () => {
+  const api=activity(), child=detail(api,issue("P-3","Open",[],{fields:{timespent:60,comment:{startAt:0,total:0,comments:[]}}}));
+  for (const detailChange of [
+    {spentSeconds:120},
+    {worklogs:{entries:[{id:"w",at:"2026-09-24T01:00:00.000Z",author:{label:"A",identifiers:[],color:""},seconds:60}],complete:true}},
+    {comments:{entries:[{id:"x",at:"2026-09-24T01:00:00.000Z",author:{label:"A",identifiers:[],color:""},body:"Different"}],complete:true}}
+  ]) {
+    const other={...child,activity:{...child.activity,...detailChange}};
+    const result=report(api,[row(detail(api,issue("P-1","Open")),[child]),row(detail(api,issue("P-2","Open")),[other])]);
+    assert.equal(result.coverage.isComplete,false,JSON.stringify(detailChange));
+    const task=result.groups[0].management.tasks.find(t=>t.key==="P-3");
+    assert.equal(task.completedAt,null);
+    assert.equal(task.spentSeconds,null);
+    assert.equal(task.comments.length,0);
+    assert.equal(task.worklogs.length,0);
+    assert.match(result.coverage.warnings.join(" "),/противоречивые снимки/);
+  }
+});
+
+test("completion author color uses current team membership", () => {
+  const api=activity(), jira=issue("P-1","Done",[history("done","2026-09-24T01:00:00Z","maker",[item("status","1","2","Open","Done")])]);
+  const teamRows=teams.defaults();
+  teamRows[0].members=[{id:"maker",label:"Maker",identifiers:["maker"]}];
+  const task=api.summarize([row(detail(api,jira))],teamRows,{date:"2026-09-24",now:"2026-09-24T12:00:00Z"}).groups[0].management.tasks[0];
+  assert.equal(task.completedBy.color,teamRows[0].color);
+});
+
+test("latest uncertain entry into Done cannot reuse an older completion", () => {
+  const api=activity(), jira=issue("P-1","Done",[
+    history("a","2026-09-24T01:00:00Z","A",[item("status","1","2","Open","Done")]),
+    history("review","2026-09-24T02:00:00Z","R",[item("status","2","3","Done","Custom Review")]),
+    history("b","2026-09-24T03:00:00Z","B",[item("status","3","2","Custom Review","Done")])
+  ],{fields:{created:"2026-09-24T00:00:00Z"}});
+  const task=report(api,[row(detail(api,jira))]).groups[0].management.tasks[0];
+  assert.equal(task.completedAt,null);
+  assert.equal(task.completedBy,null);
+  assert.equal(task.elapsedSeconds,null);
+  assert.match(task.notes.join(" "),/завершен/);
+});
+
+test("latest known review to Done attributes completion to the later author", () => {
+  const api=activity(), jira=issue("P-1","Done",[
+    history("a","2026-09-24T01:00:00Z","A",[item("status","1","2","Open","Done")]),
+    history("review","2026-09-24T02:00:00Z","R",[item("status","2","3","Done","In Review")]),
+    history("b","2026-09-24T03:00:00Z","B",[item("status","3","2","In Review","Done")])
+  ],{fields:{created:"2026-09-24T00:00:00Z"}});
+  const task=report(api,[row(detail(api,jira))]).groups[0].management.tasks[0];
+  assert.equal(task.completedAt,"2026-09-24T03:00:00.000Z");
+  assert.equal(task.completedBy.label,"B");
+  assert.equal(task.elapsedSeconds,10800);
+});
+
+test("current custom terminal status retains its done category in completion detail", () => {
+  const api=activity(), jira=issue("P-1","Verified",[
+    history("verified","2026-09-24T01:00:00Z","checker",[item("status","1","5","Open","Verified")])
+  ],{fields:{created:"2026-09-24T00:00:00Z",status:{id:"5",name:"Verified",statusCategory:{key:"done"}}}});
+  const result=report(api,[row(detail(api,jira))]), task=result.groups[0].management.tasks[0];
+  assert.equal(result.metrics.completed,1);
+  assert.equal(task.completedAt,"2026-09-24T01:00:00.000Z");
+  assert.equal(task.completedBy.label,"checker");
+  assert.equal(task.elapsedSeconds,3600);
+});
+
+test("unknown open-category custom status leaves active work time unknown", () => {
+  const api=activity(), jira=issue("P-1","Developing",[],{fields:{created:"2026-09-24T00:00:00Z",
+    status:{id:"7",name:"Developing",statusCategory:{key:"indeterminate"}}}});
+  const task=report(api,[row(detail(api,jira))]).groups[0].management.tasks[0];
+  assert.equal(task.status,"Developing");
+  assert.equal(task.inProgressSeconds,null);
+  assert.match(task.notes.join(" "),/Время в работе/);
+});
 test("a refreshed parent with a changed linked scope cannot claim complete remark totals", () => {
   const api=activity(), parent=detail(api,issue("P-1","Done"));
   parent.activity.linkedKeys=["P-2"];

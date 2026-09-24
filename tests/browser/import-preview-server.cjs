@@ -95,6 +95,21 @@ for (const key of ["EVOSCADA-20000","EVOSCADA-30020","EVOSCADA-30021"]) {
   target.changelog.histories[0].created = activityDate + "T08:40:00+03:00";
   target.fields.updated = target.changelog.histories[0].created;
 }
+// Management summaries use explicit offline evidence, never synthetic Jira writes.
+for (const [key,seconds,author,displayName,started] of [
+  ["EVOSCADA-20862",0,"ivanov","Иванов И.","2026-09-23T09:00:00+03:00"],
+  ["EVOSCADA-30040",10800,"petrov","Петров П.","2026-09-23T09:00:00+03:00"],
+  ["EVOSCADA-30041",5400,"sokolova","Соколова А.",activityDate+"T10:30:00+03:00"]
+]) {
+  const target=issues[key];
+  target.fields.timespent=seconds;
+  target.fields.worklog={startAt:0,total:seconds ? 1 : 0,worklogs:seconds ? [{id:key+"-worklog",started,timeSpentSeconds:seconds,author:{name:author,displayName}}] : []};
+  target.fields.comment={startAt:0,total:0,comments:[]};
+}
+issues["EVOSCADA-20914"].fields.comment={startAt:0,total:1,comments:[{
+  id:"reopened-comment",created:activityDate+"T10:10:00+03:00",author:{name:"sokolova",displayName:"Соколова А."},
+  body:"h3. Повторная проверка\nПри смене масштаба границы осей исчезают. Требуется доработка EVOSCADA-30050 и повторная проверка [QA] EVOSCADA-30051.\n\n```mermaid\nflowchart LR\n    A[Проверка] --> B[Доработка]\n    B --> C[Повторное тестирование]\n```"
+}]};
 const workbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Лист1");
 const excel = XLSX.write(workbook, {type:"buffer",bookType:"xlsx"});
