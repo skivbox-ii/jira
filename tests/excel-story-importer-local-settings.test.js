@@ -93,3 +93,20 @@ test("stale team user search cannot change a different project's picker", async 
   assert.equal(app.state.teamUsers.length, 0);
   assert.equal(app.state.teamUsersLoading, false);
 });
+
+test("context assignment moves local membership and persists without changing issue ownership", async () => {
+  const app=await setup(); app.hooks.onProjectChange("P");
+  const user={id:"dev",label:"Developer",identifiers:["u1","dev"]};
+  app.state.rows=[{jiraKey:"P-1",storyDetails:{assignee:"Developer",assigneeIdentifiers:["dev"]}}];
+  app.hooks.onTeamMemberToggle("be",user);
+  app.hooks.onAssignUserTeam(user,"qa");
+  assert.equal(app.state.teams.find(x=>x.id==="be").members.length,0);
+  assert.equal(app.state.teams.find(x=>x.id==="qa").members[0].id,"dev");
+  assert.equal(app.state.rows[0].storyDetails.assignee,"Developer");
+  app.hooks.onProjectChange("Q"); app.hooks.onProjectChange("P");
+  assert.equal(app.state.teams.find(x=>x.id==="qa").members[0].id,"dev");
+  app.storage.setItem=()=>{throw Error("quota");};
+  app.hooks.onAssignUserTeam(user,"fe");
+  assert.match(app.state.teamsError,/quota/);
+  assert.equal(app.state.teams.find(x=>x.id==="qa").members[0].id,"dev");
+});

@@ -50,6 +50,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
         return {
           source: row, rowIndex: index, groupId: groupId, uid: groupId + ":" + (child ? childIndex : "story"), isChild: !!child,
           remarkId: remarkId(row), remark: text(row.summary), owner: text(Object.prototype.hasOwnProperty.call(cols, "Ответственный") ? cols["Ответственный"] : cols["Исполнитель"]),
+          ownerIdentifiers: ["accountId", "key", "name", "username"].map(function(field) { return text(row.ownerAssignee && row.ownerAssignee[field]); }).concat(text(row.ownerAssigneeId),Array.isArray(row.ownerIdentifiers) ? row.ownerIdentifiers : []).filter(function(id, index, all) { return id && all.indexOf(id) === index; }),
           module: text(cols["Модуль"]), sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
           type: key ? text(details.issueType) : "",
           role: child ? text(details.role) : "",

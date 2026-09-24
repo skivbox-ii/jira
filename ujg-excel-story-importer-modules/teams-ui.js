@@ -6,9 +6,10 @@ define("_ujgESI_teamsUi", ["jquery", "_ujgESI_teams", "_ujgESI_icons"], function
       .append(icon(iconName)).on("click", action);
   }
   function sameUser(a, b) {
-    var left = a && Array.isArray(a.identifiers) ? a.identifiers : [];
-    var right = b && Array.isArray(b.identifiers) ? b.identifiers : [];
-    return !!(a && b && ((a.id && b.id && a.id === b.id) || left.some(function(id) { return right.indexOf(id) >= 0; })));
+    if (!a || !b) return false;
+    var left = [a.id].concat(Array.isArray(a.identifiers) ? a.identifiers : []).filter(Boolean);
+    var right = [b.id].concat(Array.isArray(b.identifiers) ? b.identifiers : []).filter(Boolean);
+    return left.some(function(id) { return right.indexOf(id) >= 0; });
   }
   function renderPicker(row, team, state, hooks) {
     var selected = Array.isArray(team.members) ? team.members : [];
@@ -25,16 +26,15 @@ define("_ujgESI_teamsUi", ["jquery", "_ujgESI_teams", "_ujgESI_icons"], function
       .val(query).on("input", function() { hooks.onTeamMembersSearch(team.id, $(this).val()); }));
     if (state.teamUsersLoading) picker.append($("<div/>").addClass("ujg-esi-team-loading").text("Загрузка пользователей..."));
     if (state.teamUsersError) picker.append($("<div/>").addClass("ujg-esi-team-error").text(state.teamUsersError));
-    var users = selected.slice();
+    var users = [];
     (Array.isArray(state.teamUsers) ? state.teamUsers : []).forEach(function(user) {
-      if (!users.some(function(existing) { return sameUser(existing, user); })) users.push(user);
+      if (!selected.some(function(existing) { return sameUser(existing, user); }) && !users.some(function(existing) { return sameUser(existing, user); })) users.push(user);
     });
     var needle = String(query).trim().toLowerCase();
     users.forEach(function(user) {
-      var isSelected = selected.some(function(existing) { return sameUser(existing, user); });
       var searchable = [user.label, user.id].concat(Array.isArray(user.identifiers) ? user.identifiers : []).join(" ").toLowerCase();
-      if (!isSelected && needle && searchable.indexOf(needle) < 0) return;
-      picker.append($("<button/>", { type: "button", "class": "ujg-esi-team-member-row" + (isSelected ? " is-selected" : ""), "data-user-id": user.id, "aria-pressed": String(isSelected), "aria-label": (isSelected ? "Удалить участника " : "Добавить участника ") + user.label })
+      if (needle && searchable.indexOf(needle) < 0) return;
+      picker.append($("<button/>", { type: "button", "class": "ujg-esi-team-member-row", "data-user-id": user.id, "aria-pressed": "false", "aria-label": "Добавить участника " + user.label })
         .text(user.label).on("click", function() { hooks.onTeamMemberToggle(team.id, user); }));
     });
     row.append(picker);

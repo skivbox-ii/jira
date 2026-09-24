@@ -35,15 +35,14 @@ test("editor reports local project and commits edits through hooks", t => {
   assert.deepEqual(calls.at(-1), ["onTeamRemove", "qa"]);
 });
 
-test("selected member stays pinned, highlighted and removable during search", t => {
+test("selected member stays pinned and removable without a duplicate candidate during search", t => {
   const { dom, $, calls, state, render } = setup(); t.after(() => dom.window.close());
   $(".ujg-esi-team-members-button").trigger("click");
   assert.match($(".ujg-esi-team-members-button").text(), /1/);
   $(".ujg-esi-team-search").val("Bob").trigger("input");
   state.teamMemberPicker.query = "Bob"; render();
   assert.equal($(".ujg-esi-team-chip").length, 1);
-  assert.equal($(".ujg-esi-team-member-row").first().hasClass("is-selected"), true);
-  assert.equal($(".ujg-esi-team-member-row").length, 2);
+  assert.deepEqual($(".ujg-esi-team-member-row").map((_, el) => $(el).attr("data-user-id")).get(), ["b"]);
   $(".ujg-esi-team-chip").trigger("click");
   assert.equal(calls.at(-1)[0], "onTeamMemberToggle");
   assert.equal(calls.at(-1)[1], "qa");
@@ -66,5 +65,27 @@ test("editor exposes stable row and user IDs with compact column labels", t => {
   assert.deepEqual($(".ujg-esi-team-columns").children().map((_, element) => $(element).text()).get(),
     ["Название", "Направление", "Роли", "Цвет", "Участники"]);
   assert.equal($(".ujg-esi-team-chip").attr("data-user-id"), "a");
-  assert.deepEqual($(".ujg-esi-team-member-row").map((_, element) => $(element).attr("data-user-id")).get(), ["a", "b"]);
+  assert.deepEqual($(".ujg-esi-team-member-row").map((_, element) => $(element).attr("data-user-id")).get(), ["b"]);
+});
+
+test("selected names are escaped in chips and never repeated among candidates", t => {
+  const {dom, $, state, render} = setup(); t.after(() => dom.window.close());
+  state.teams[0].members[0].label = '<img src=x onerror=alert(1)>';
+  render();
+  assert.equal($(".ujg-esi-team-chip").text(), '<img src=x onerror=alert(1)>');
+  assert.equal($(".ujg-esi-team-picker img").length, 0);
+  assert.equal($(".ujg-esi-team-member-row[data-user-id=a]").length, 0);
+});
+
+test("selected ID and candidate identifier aliases do not duplicate a member", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  state.teams[0].members = [{id:"acct-a",label:"Alice",identifiers:[]}];
+  state.teamUsers = [{id:"jira-a",label:"Alice from Jira",identifiers:["acct-a"]}, {id:"b",label:"Bob",identifiers:["acct-b"]}];
+  render();
+  assert.equal($(".ujg-esi-team-chip").length,1);
+  assert.deepEqual($(".ujg-esi-team-member-row").map((_,el)=>$(el).attr("data-user-id")).get(),["b"]);
+  state.teams[0].members = [{id:"jira-a",label:"Alice",identifiers:["acct-a"]}];
+  state.teamUsers = [{id:"acct-a",label:"Alice alias",identifiers:[]}];
+  render();
+  assert.equal($(".ujg-esi-team-member-row").length,0);
 });

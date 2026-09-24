@@ -323,6 +323,7 @@ test("Jira registry loads explicitly, enriches linked children, and preserves wo
       calls.push([project, epic]);
       return Promise.resolve({ issues: [{ key: "TEST-1", fields: {
         summary: "Existing Story", description: "Story body", issuetype: { name: "Story" },
+        assignee: {name:"jira.owner",key:"user-42",displayName:"Registry owner"},
         issuelinks: [{ type: { name: "Child" }, outwardIssue: { key: "TEST-2", fields: { summary: "[FE] child" } } }],
       } }] });
     },
@@ -340,6 +341,7 @@ test("Jira registry loads explicitly, enriches linked children, and preserves wo
   await flush(); await flush();
   assert.deepEqual(calls, [["TEST", ""]]);
   assert.equal(app.state.rows[0].storyDetails.description, "Story body");
+  assert.deepEqual(Array.from(app.state.rows[0].ownerIdentifiers),["user-42","jira.owner"]);
   assert.equal(app.state.rows[0].childStatuses[0].description, "Child body");
   app.callbacks.onViewModeChange("excel");
   assert.equal(app.state.rows[0].summary, "Excel remark");
@@ -411,6 +413,7 @@ test("row owner picker updates local owner and Story default without assigning J
   app.callbacks.onDialogAssigneeSelect("row-owner-0", "owner-1");
   assert.equal(app.state.rows[0].sourceColumns["Ответственный"], "Owner One");
   assert.equal(app.state.rows[0].ownerAssignee.accountId, "owner-1");
+  assert.deepEqual(Array.from(app.state.rows[0].ownerIdentifiers),["owner-1"]);
   app.callbacks.onCreateRow(0);
   assert.equal(app.state.createDialog.assigneeId, "owner-1");
   app.callbacks.onCloseUserPicker();
@@ -433,6 +436,7 @@ test("owner selection and clearing patch the mapped Excel owner column", async f
   assert.equal(patches[0].rows[0].values["Owner mapped"], "Owner One");
   app.callbacks.onDialogAssigneeClear("row-owner-0");
   assert.equal(app.state.rows[0].sourceColumns["Ответственный"], "");
+  assert.deepEqual(Array.from(app.state.rows[0].ownerIdentifiers),[]);
   app.callbacks.onSyncJira();
   await flush(); await flush();
   assert.equal(patches[1].rows[0].values["Owner mapped"], "");

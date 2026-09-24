@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi"], function($, gridModule, icon, teamsUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi"], function($, gridModule, icon, teamsUi, statisticsUi) {
   "use strict";
 
   var $root;
@@ -1712,7 +1712,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     grid.mount($parent, state, {
       appendActions: function($td, row, index) { appendRowActions($td, row, state, index); },
       renderDescription: renderJiraWiki,
-      editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); }
+      editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); },
+      assignTeam: function(user, teamId) { if (services && services.onAssignUserTeam) services.onAssignUserTeam(user, teamId); }
     });
   }
 
@@ -1746,6 +1747,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     } : null;
     var scrollState = captureScrollState();
     $(document).off("click.ujgEsiOwner");
+    $(document).off("click.ujgEsiSummary");
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -1764,13 +1766,28 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       $tools.append(gridModule.button("ChevronsUpDown", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
       var $summary = $("<details/>").addClass("ujg-esi-import-summary");
       $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
-      appendCounters($summary, s);
-      if (s.syncSummary) $summary.append($("<div/>").addClass("ujg-esi-sync-summary").text(s.syncSummary));
+      var $analytics = $("<div/>").addClass("ujg-esi-analytics").attr({role:"dialog","aria-label":"Сводка замечаний"});
+      $analytics.append($("<div/>").addClass("ujg-esi-stats-head").append($("<strong/>").text("Сводка замечаний"),gridModule.button("X","Закрыть сводку",function() { $summary.prop("open",false); $summary.children("summary").trigger("focus"); })));
+      if (statisticsUi) statisticsUi.render($analytics,s);
+      appendCounters($analytics,s);
+      if (s.syncSummary) $analytics.append($("<div/>").addClass("ujg-esi-stats-note").text(s.syncSummary));
+      $summary.append($analytics).on("toggle",function() {
+        if (!$summary.prop("open")) return;
+        var rect = $summary[0].getBoundingClientRect(), viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        var width = Math.min(940,viewportWidth - 24), top = Math.max(12,Math.min(rect.bottom+6,window.innerHeight-180));
+        $analytics.css({width:width,left:Math.max(12,Math.min(rect.right-width,viewportWidth-width-12)),top:top,maxHeight:Math.max(140,window.innerHeight-top-12)});
+      }).on("keydown",function(event) {
+        if (event.key === "Escape" && $summary.prop("open")) { event.stopPropagation(); $summary.prop("open",false); $summary.children("summary").trigger("focus"); }
+      });
+      $(document).on("click.ujgEsiSummary",function(event) {
+        if (!$(event.target).closest($summary).length) $summary.prop("open",false);
+      });
       $tools.append($summary); $toolbar.append($tools);
     }
     $toolbar.append(gridModule.button(fullscreen ? "Minimize2" : "Expand", fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", toggleFullscreen).addClass("ujg-esi-fullscreen-button"));
     $root.append($toolbar);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
+    if (s.teamsError && (!s.mappingEditorOpen || s.activeMappingBlock !== "teams")) $root.append($("<div/>").addClass("ujg-esi-error").attr("role", "alert").text(s.teamsError));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
     if (s.syncError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.syncError));
     if (s.registryError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.registryError));

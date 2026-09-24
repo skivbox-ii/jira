@@ -1135,6 +1135,12 @@ define("_ujgESI_main", [
       }));
     }
 
+    function onAssignUserTeam(user, teamId) {
+      if (!teamsModule || !state.projectKey) return;
+      try { saveTeams(teamsModule.assignUser(state.teams, user, teamId)); }
+      catch (err) { state.teamsError = "Команда не изменена: " + searchErrorText(err); render(); }
+    }
+
     function onTeamMembersSearch(id, query) {
       if (!state.projectKey || !state.teams.some(function(team) { return team.id === id; })) return;
       var seq = ++teamSearchSeq, project = state.projectKey;
@@ -1438,6 +1444,7 @@ define("_ujgESI_main", [
         if (ref.owner) {
           node.sourceColumns = node.sourceColumns || {};
           node.sourceColumns["Ответственный"] = "";
+          node.ownerIdentifiers = [];
           node.ownerEdited = true;
           if (state.viewMode === "excel") resetExportState();
         }
@@ -1449,6 +1456,7 @@ define("_ujgESI_main", [
       if (ref.owner) {
         node.sourceColumns = node.sourceColumns || {};
         node.sourceColumns["Ответственный"] = node[ref.labelKey];
+        node.ownerIdentifiers = userIdentifiers(raw);
         node.ownerEdited = true;
         if (state.viewMode === "excel") resetExportState();
       }
@@ -2298,6 +2306,7 @@ define("_ujgESI_main", [
             alreadyLinked: true,
             summary: issueSummaryName(issue),
             sourceColumns: { "Ответственный": issueAssigneeName(issue), "Исполнитель в Jira": issueAssigneeName(issue) },
+            ownerIdentifiers: userIdentifiers(issue.fields && issue.fields.assignee),
             storyDetails: issueDetails(issue),
             childStatuses: children,
             createdChildren: createdChildren,
@@ -3583,6 +3592,7 @@ define("_ujgESI_main", [
       onTeamRemove: onTeamRemove,
       onTeamChange: onTeamChange,
       onTeamMemberToggle: onTeamMemberToggle,
+      onAssignUserTeam: onAssignUserTeam,
       onTeamMembersOpen: onTeamMembersOpen,
       onTeamMembersSearch: onTeamMembersSearch,
       onLlmResetRequest: onLlmResetRequest,

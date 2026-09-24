@@ -24,6 +24,14 @@ test("registry keeps actual source ID and leaves uncreated Jira fields empty", (
   assert.equal(rows[3].rowIndex, 1);
 });
 
+test("owner team identity comes only from selected Jira identity or the Jira registry source", () => {
+  const input=source(); input[0].storyDetails.assignee="Owner";
+  input[0].storyDetails.assigneeIdentifiers=["jira-owner"];
+  assert.deepEqual(Array.from(registry().buildRows(input)[0].ownerIdentifiers),[]);
+  input[0].ownerIdentifiers=["jira-owner"];
+  assert.deepEqual(Array.from(registry().buildRows(input)[0].ownerIdentifiers),["jira-owner"]);
+});
+
 test("child-only filter retains context parent and excludes unrelated siblings", () => {
   const r = registry();
   const groups = r.selectGroups(r.buildRows(source()), { status: ["Open"] });

@@ -22,6 +22,8 @@ var MODULE_ORDER = [
   "icons.js",
   "teams.js",
   "teams-ui.js",
+  "statistics.js",
+  "statistics-ui.js",
   "grid.js",
   "rendering.js",
   "main.js",

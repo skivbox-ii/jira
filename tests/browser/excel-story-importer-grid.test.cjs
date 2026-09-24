@@ -12,7 +12,7 @@ function setup() {
   w.scrollTo = () => {};
   const $ = jquery(w), modules = { jquery: $ };
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
-  for (const file of ["remark-id", "registry", "icons", "teams", "teams-ui", "grid", "rendering"]) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
+  for (const file of ["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid", "rendering"]) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
   const calls = [];
   const state = {
     projectKey: "P", projects: [{ key: "P", name: "Project" }], epics: [], baseUrl: "https://jira.example.test",
@@ -31,13 +31,33 @@ function setup() {
     onCreateRow: index => calls.push(["create", index]), onRowImproveRemark: index => calls.push(["correct", index]),
     onAddChildTasks: index => calls.push(["children", index]),
     onDialogAssigneeFocus: target => calls.push(["owner", target]),
+    onAssignUserTeam: (user, teamId) => calls.push(["assign-team", user, teamId]),
     onViewModeChange: mode => calls.push(["mode", mode]), onLoadRegistry: () => calls.push(["load"]),
     onLlmResetRequest: () => calls.push(["reset-request"]), onLlmResetConfirm: () => calls.push(["reset-confirm"]), onLlmResetCancel: () => calls.push(["reset-cancel"])
   });
   modules._ujgESI_rendering.render(state);
-  return { dom, $, state, calls, render: () => modules._ujgESI_rendering.render(state) };
+  return { dom, $, state, calls, modules, render: () => modules._ujgESI_rendering.render(state) };
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
+function teamGrid(fixture) {
+  const context = setup();
+  const { $, modules } = context;
+  const registry = modules._ujgESI_registry;
+  const original = registry.buildRows;
+  registry.buildRows = rows => original(rows).map(entry => Object.assign(entry, {
+    ownerIdentifiers: entry.isChild ? [] : fixture.ownerIds || [],
+    assigneeIdentifiers: entry.key === "P-11" ? fixture.assigneeIds || [] : []
+  }));
+  context.state.teams = fixture.teams || [];
+  const assignments = [];
+  const grid = modules._ujgESI_grid.create();
+  const host = $("<div/>").appendTo("body");
+  grid.mount(host, context.state, {
+    appendActions() {}, editOwner: () => assignments.push(["edit"]),
+    assignTeam: (user, id) => assignments.push([user, id])
+  });
+  return { ...context, grid, host, assignments };
+}
 
 test("owner cell retains coordinator and shows current work independently of collapsed or filtered children", t => {
   const {dom,$,state,render} = setup(); t.after(()=>dom.window.close());
@@ -82,8 +102,8 @@ test("team search completion preserves an uncommitted name draft and keyboard me
   assert.equal(dom.window.document.activeElement.selectionStart, 7);
   $(".ujg-esi-team-member-row").trigger("focus");
   state.teams[0].members = [user]; render();
-  assert.equal(dom.window.document.activeElement, $(".ujg-esi-team-member-row")[0]);
-  assert.equal($(".ujg-esi-team-member-row").attr("aria-pressed"), "true");
+  assert.equal(dom.window.document.activeElement, $(".ujg-esi-team-search")[0]);
+  assert.equal($(".ujg-esi-team-member-row[data-user-id=bob]").length, 0);
   state.teamMemberPicker.query = "Alice"; render();
   $(".ujg-esi-team-chip").trigger("focus");
   state.teams[0].members = []; render();
@@ -129,12 +149,162 @@ test("selected assignees remain removable while searching and Escape dismisses",
   $(".ujg-esi-filter-all input").prop("checked", false).trigger("change");
   option($, "Bob").prop("checked", true).trigger("change");
   $(".ujg-esi-filter-search").val("Anna").trigger("input");
-  assert.equal(option($, "Bob").length, 1);
+  assert.equal(option($, "Bob").length, 0);
   assert.equal($(".ujg-esi-selected-chip").text(), "Bob");
   $(".ujg-esi-selected-chip").trigger("click");
   assert.equal(option($, "Bob").length, 0);
   $(".ujg-esi-filter-search").trigger($.Event("keydown", { key: "Escape" }));
   assert.equal($(".ujg-esi-grid-menu").length, 0);
+});
+
+test("selected owner chips exclude duplicate candidate rows", t => {
+  const {dom,$} = setup(); t.after(()=>dom.window.close());
+  $("[data-filter='owner']").trigger("click");
+  $(".ujg-esi-filter-all input").prop("checked",false).trigger("change");
+  option($,"Owner").prop("checked",true).trigger("change");
+  assert.equal($(".ujg-esi-selected-chip").text(), "Owner");
+  assert.equal(option($,"Owner").length,0);
+  $(".ujg-esi-selected-chip").trigger("click");
+  assert.equal(option($,"Owner").length,1);
+});
+
+test("completed work has no current summary even when a message exists", t => {
+  const {dom,$,state,render} = setup(); t.after(()=>dom.window.close());
+  state.rows[1].childStatuses[0].status = "Done";
+  state.rows[1].childStatuses[0].done = true;
+  render();
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-current-work").length,0);
+});
+
+test("team colors tint initials avatars and role badges without separate dots", t => {
+  const teams = [{id:"be",name:"Backend",direction:"development",roles:["BE"],color:"#3973B9",members:[{id:"bob",label:"Bob",identifiers:["acct-bob"]}]}];
+  const {dom,$,host} = teamGrid({teams,assigneeIds:["acct-bob"]}); t.after(()=>dom.window.close());
+  const row = host.find("tr[data-key='P-11']");
+  assert.equal(row.find(".ujg-esi-person-team").length,0);
+  assert.equal(row.find(".ujg-esi-avatar").text(),"B");
+  assert.equal(row.find(".ujg-esi-avatar").css("background-color"),"rgb(57, 115, 185)");
+  assert.equal(row.find(".ujg-esi-role-badge").text(),"BE");
+  assert.equal(row.find(".ujg-esi-role-badge").css("border-color"),"rgb(57, 115, 185)");
+});
+
+test("stable owner identifiers color the owner initials without team dots", t => {
+  const teams = [{id:"qa",name:"Quality",roles:["QA"],color:"#168477",members:[{id:"owner",label:"Owner",identifiers:["acct-owner"]}]}];
+  const {dom,host} = teamGrid({teams,ownerIds:["acct-owner"]}); t.after(()=>dom.window.close());
+  const owner = host.find("tr[data-key='P-10'] .ujg-esi-cell-owner");
+  assert.equal(owner.find(".ujg-esi-avatar").css("background-color"),"rgb(22, 132, 119)");
+  assert.match(owner.find(".ujg-esi-person").attr("title"),/Quality/);
+  assert.equal(owner.find(".ujg-esi-person-team").length,0);
+});
+
+test("every palette avatar uses text with at least 4.5 contrast", t => {
+  const {dom, host, state, grid, modules} = teamGrid({ownerIds:["acct-owner"]}); t.after(()=>dom.window.close());
+  const colors = modules._ujgESI_teams.colors;
+  const luminance = value => {
+    const rgb = value.match(/\d+/g).slice(0,3).map(channel => Number(channel)/255);
+    const linear = rgb.map(channel => channel <= .04045 ? channel/12.92 : ((channel+.055)/1.055)**2.4);
+    return .2126*linear[0]+.7152*linear[1]+.0722*linear[2];
+  };
+  colors.forEach(color => {
+    state.teams = [{id:"team",name:"Team",color,roles:[],members:[{id:"owner",label:"Owner",identifiers:["acct-owner"]}]}];
+    host.empty();
+    grid.mount(host,state,{appendActions(){},assignTeam(){}});
+    const avatar = host.find("tr[data-key='P-10'] .ujg-esi-avatar");
+    const background = luminance(avatar.css("background-color"));
+    const foreground = luminance(avatar.css("color"));
+    assert.ok((Math.max(background,foreground)+.05)/(Math.min(background,foreground)+.05) >= 4.5,color);
+  });
+});
+
+test("multiple team memberships use neutral avatar and list every team", t => {
+  const member = {id:"bob",label:"Bob",identifiers:["acct-bob"]};
+  const teams = [{id:"be",name:"Backend",roles:["BE"],color:"#3973B9",members:[member]}, {id:"qa",name:"QA",roles:["QA"],color:"#168477",members:[member]}];
+  const {dom,$,host} = teamGrid({teams,assigneeIds:["acct-bob"]}); t.after(()=>dom.window.close());
+  const avatar = host.find("tr[data-key='P-11'] .ujg-esi-avatar");
+  assert.equal(avatar.hasClass("is-multi-team"),true);
+  assert.notEqual(avatar.css("background-color"),"rgb(57, 115, 185)");
+  assert.match(avatar.closest(".ujg-esi-person").attr("title"),/Backend.*QA/);
+  assert.match(avatar.attr("style"),/2px #3973B9.*4px #168477/i);
+});
+
+test("real registry ownerAssigneeId colors owner and assigns the exact user", t => {
+  const {dom,$,state,calls,render} = setup(); t.after(()=>dom.window.close());
+  state.rows[1].ownerAssigneeId = "acct-owner";
+  state.teams = [{id:"qa",name:"Quality",roles:["QA"],color:"#168477",members:[{id:"acct-owner",label:"Owner",identifiers:["acct-owner"]}]}];
+  render();
+  const owner = $("tr[data-key='P-10'] .ujg-esi-cell-owner");
+  assert.equal(owner.hasClass("ujg-esi-team-context"),true);
+  assert.equal(owner.find(".ujg-esi-avatar").css("background-color"),"rgb(22, 132, 119)");
+  owner.trigger($.Event("keydown",{key:"ContextMenu"}));
+  $(".ujg-esi-team-menu [data-team-id='qa']").trigger("click");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[["assign-team",{id:"acct-owner",label:"Owner",identifiers:["acct-owner"]},"qa"]]);
+});
+
+test("assignee and owner team cells expose the existing focus class", t => {
+  const {dom,$} = setup(); t.after(()=>dom.window.close());
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-owner").hasClass("ujg-esi-team-context"),true);
+  assert.equal($("tr[data-key='P-11'] .ujg-esi-cell-assignee").hasClass("ujg-esi-team-context"),true);
+});
+
+test("statistics opens four tables, retains counters, and closes on Escape", t => {
+  const {dom,$} = setup(); t.after(()=>dom.window.close());
+  const summary = $(".ujg-esi-import-summary"), anchor = summary.children("summary");
+  const counters = summary.find(".ujg-esi-counters").text();
+  anchor[0].click();
+  assert.equal(summary.prop("open"),true);
+  assert.deepEqual(summary.find(".ujg-esi-stats-section table").map((_,el)=>$(el).attr("aria-label")).get(),[
+    "Итог по замечаниям","Текущие направления","На командах","Задачи по ролям"
+  ]);
+  assert.equal(summary.find(".ujg-esi-counters .ujg-esi-counter").length,4);
+  assert.equal(summary.find(".ujg-esi-counters").text(),counters);
+  summary.trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal(summary.prop("open"),false);
+  assert.equal(dom.window.document.activeElement,anchor[0]);
+  assert.equal(summary.find(".ujg-esi-counters").text(),counters);
+});
+
+test("assignee context menu assigns exact stable identifier and closes with Escape", t => {
+  const teams = [{id:"be",name:"Backend",roles:["BE"],color:"#3973B9",members:[]}];
+  const {dom,$,host,assignments} = teamGrid({teams,assigneeIds:["acct-bob"]}); t.after(()=>dom.window.close());
+  const cell = host.find("tr[data-key='P-11'] .ujg-esi-cell-assignee");
+  cell.trigger($.Event("keydown",{key:"ContextMenu"}));
+  assert.equal($(".ujg-esi-team-menu").length,1);
+  $(".ujg-esi-team-menu [data-team-id='be']").trigger("click");
+  assert.deepEqual(JSON.parse(JSON.stringify(assignments)),[[{id:"acct-bob",label:"Bob",identifiers:["acct-bob"]},"be"]]);
+  cell.trigger($.Event("keydown",{key:"F10",shiftKey:true}));
+  $(".ujg-esi-team-menu").trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal($(".ujg-esi-team-menu").length,0);
+});
+
+test("unknown owner cannot assign by name and context menu never invokes left edit", t => {
+  const teams = [{id:"be",name:"Backend",roles:["BE"],color:"#3973B9",members:[]}];
+  const {dom,$,host,assignments} = teamGrid({teams}); t.after(()=>dom.window.close());
+  const owner = host.find("tr[data-key='P-10'] .ujg-esi-cell-owner");
+  owner.find(".ujg-esi-owner-button").trigger($.Event("contextmenu"));
+  assert.equal($(".ujg-esi-team-menu").length,1);
+  assert.equal($(".ujg-esi-team-menu button:enabled").length,0);
+  assert.match($(".ujg-esi-team-menu").text(),/Выберите пользователя Jira/);
+  assert.deepEqual(assignments,[]);
+  assert.equal(dom.window.document.activeElement,$(".ujg-esi-team-menu")[0]);
+  $(".ujg-esi-team-menu").trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal($(".ujg-esi-team-menu").length,0);
+});
+
+test("owner team menu clears by exact ID and renders team names as text", t => {
+  const teams = [{id:"be",name:"<img src=x onerror=alert(1)>",roles:["BE"],color:"#3973B9",members:[]}];
+  const {dom,$,host,assignments} = teamGrid({teams,ownerIds:["acct-owner"]}); t.after(()=>dom.window.close());
+  host.find("tr[data-key='P-10'] .ujg-esi-cell-owner").trigger($.Event("contextmenu"));
+  assert.match($(".ujg-esi-team-menu").text(),/Локальная команда.*Owner/s);
+  assert.equal($(".ujg-esi-team-menu img").length,0);
+  assert.match($(".ujg-esi-team-menu").text(),/<img src=x onerror=alert\(1\)>/);
+  $(".ujg-esi-team-menu [data-team-id='']").trigger("click");
+  assert.deepEqual(JSON.parse(JSON.stringify(assignments)),[[{id:"acct-owner",label:"Owner",identifiers:["acct-owner"]},""]]);
+});
+
+test("team menu escapes the person label and identifies the local action", t => {
+  const {dom,$,grid,host} = teamGrid({ownerIds:["acct-owner"]}); t.after(()=>dom.window.close());
+  grid.teamMenu(host.find("tr[data-key='P-10'] .ujg-esi-cell-owner")[0],{label:"<img src=x onerror=alert(1)>",identifiers:["acct-owner"]});
+  assert.equal($(".ujg-esi-team-menu img").length,0);
+  assert.match($(".ujg-esi-team-menu").text(),/Локальная команда.*<img src=x onerror=alert\(1\)>/s);
 });
 
 test("sorting does not remap source actions and loading a new workbook clears old filters", t => {
@@ -416,7 +586,7 @@ test("column layout persists under the user key and aligns a mixed more row", t 
   const saved = JSON.parse(dom.window.localStorage.getItem(state.preferencesStorageKey));
   assert.equal(saved.projectKey,"P"); assert.equal(saved.epicsByProject.P,"P-1");
   assert.ok(saved.gridLayout);
-  const headCount = $("thead th").length;
+  const headCount = $(".ujg-esi-registry-table thead th").length;
   const occupied = $(".ujg-esi-parent-row").filter("[data-key='P-10']").find("td").toArray().reduce((n,cell) => n + Number(cell.colSpan || 1),0);
   assert.equal(occupied,headCount);
   const more = $(".ujg-esi-more-row").first();

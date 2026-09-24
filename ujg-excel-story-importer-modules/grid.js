@@ -165,6 +165,44 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       $menu.on("keydown", function(event) { if (event.key === "Escape") { event.stopPropagation(); closeMenu(true); } });
       return $menu;
     }
+    function teamMenu(anchor, user) {
+      if (!$host || !$host[0].isConnected || !anchor) return;
+      var identifiers = Array.isArray(user && user.identifiers) ? user.identifiers.filter(function(id) { return typeof id === "string" && !!id.trim(); }) : [];
+      identifiers = identifiers.filter(function(id, index) { return identifiers.indexOf(id) === index; });
+      var caption = "Локальная команда · " + (user && user.label || "пользователь");
+      var $box = popup(anchor, caption).addClass("ujg-esi-team-menu").attr("tabindex", "-1");
+      $box.append($("<div/>").addClass("ujg-esi-team-menu-heading").text(caption));
+      var rect = anchor.getBoundingClientRect(), width = Math.min(276, Math.max(180, window.innerWidth - 24));
+      $box.css({position:"fixed",width:width,left:Math.max(12,Math.min(rect.left,window.innerWidth-width-12)),top:12,maxHeight:Math.max(100,window.innerHeight-24),overflowY:"auto"});
+      if (!identifiers.length || !hooks.assignTeam) {
+        $box.append($("<button/>").attr({type:"button",disabled:true}).addClass("ujg-esi-team-menu-option").text("Выберите пользователя Jira"));
+      } else {
+        var exactUser = {id:identifiers[0],label:String(user.label || ""),identifiers:identifiers};
+        var membership = teamsModule.forUser(state.teams || [], identifiers);
+        (state.teams || []).forEach(function(team) {
+          $box.append($("<button/>").attr({type:"button","data-team-id":team.id,"aria-pressed":String(membership.some(function(match) { return match.id === team.id; }))})
+            .addClass("ujg-esi-team-menu-option").text(team.name).on("click",function() { closeMenu(); hooks.assignTeam(exactUser,team.id); }));
+        });
+        $box.append($("<button/>").attr({type:"button","data-team-id":"","aria-pressed":String(!membership.length)})
+          .addClass("ujg-esi-team-menu-option").text("Без команды").on("click",function() { closeMenu(); hooks.assignTeam(exactUser,""); }));
+      }
+      $box.css("top",Math.max(12,Math.min(rect.bottom+4,window.innerHeight-$box.outerHeight()-12)));
+      var $first = $box.find("button:enabled").first();
+      ($first.length ? $first : $box).trigger("focus");
+      return $box;
+    }
+    function teamContext($cell, entry, key) {
+      var identifiers = key === "owner" ? entry.ownerIdentifiers : entry.assigneeIdentifiers;
+      var user = {label:entry[key] || "",identifiers:identifiers};
+      $cell.addClass("ujg-esi-team-context").attr({tabindex:"0","aria-haspopup":"dialog","aria-label":(key === "owner" ? "Ответственный: " : "Исполнитель: ") + (entry[key] || "Не указан") + ". Команда: контекстное меню"});
+      $cell.on("contextmenu",function(event) { event.preventDefault(); event.stopPropagation(); teamMenu(this,user); });
+      $cell.on("keydown",function(event) {
+        if (event.key === "ContextMenu" || event.key === "F10" && event.shiftKey) {
+          event.preventDefault(); event.stopPropagation(); teamMenu(this,user);
+        }
+      });
+      return $cell;
+    }
     function refresh() { closeMenu(); closeDescription(); draw(); }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
@@ -192,13 +230,13 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       }
       function update() {
         var found = searchValues();
-        var displayed = options.filter(function(value) { return found.indexOf(value) !== -1 || (isPerson && selected.indexOf(value) !== -1); });
-        if (isPerson) displayed.sort(function(a, b) { return (selected.indexOf(b) !== -1 ? 1 : 0) - (selected.indexOf(a) !== -1 ? 1 : 0) || registry.compare(a, b); });
+        var hasChips = isPerson && selected.length < options.length;
+        var displayed = found.filter(function(value) { return !hasChips || selected.indexOf(value) === -1; });
         $count.text(selected.length + " / " + options.length);
         $all.prop("checked", !!found.length && found.every(function(value) { return selected.indexOf(value) !== -1; }));
         $all.prop("indeterminate", found.some(function(value) { return selected.indexOf(value) !== -1; }) && !$all.prop("checked"));
         $chips.empty();
-        if (isPerson && selected.length < options.length) selected.forEach(function(value) {
+        if (hasChips) selected.forEach(function(value) {
           $chips.append($("<button/>").attr({ type: "button", title: "Убрать: " + label(value) }).addClass("ujg-esi-selected-chip").append($("<span/>").text(label(value)), icon("X")).on("click", function(event) { event.stopPropagation(); selected = selected.filter(function(v) { return v !== value; }); update(); }));
         });
         $list.empty();
@@ -231,29 +269,50 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       update(); $search.trigger("focus");
     }
     function teamPerson(value, identifiers) {
-      var $person = person(value), names = [];
-      (state.teams || []).forEach(function(team) {
-        if (!(team.members || []).some(function(member) { return [member.id].concat(member.identifiers || []).some(function(id) { return (identifiers || []).indexOf(id) >= 0; }); })) return;
-        names.push(team.name);
-        if (teamsModule.colors.indexOf(team.color) >= 0) $person.append($("<i/>").addClass("ujg-esi-person-team").css("background-color", team.color).attr({title:team.name,"aria-label":team.name}));
-      });
+      var $person = person(value);
+      var matches = teamsModule.forUser(state.teams || [], identifiers || []);
+      var names = matches.map(function(team) { return team.name; });
+      var colors = matches.map(function(team) { return team.color; }).filter(function(color) { return teamsModule.colors.indexOf(color) >= 0; });
+      var $avatar = $person.find(".ujg-esi-avatar");
+      if (matches.length === 1 && colors.length) $avatar.addClass("is-team-colored").css({"background-color":colors[0],color:avatarTextColor(colors[0])});
+      else if (matches.length > 1) {
+        $avatar.addClass("is-multi-team").css({"background-color":"#59636e",color:"#fff", "box-shadow":colors.slice(0, 3).map(function(color, index) {
+          return "0 0 0 " + (2 + index * 2) + "px " + color;
+        }).join(", ")});
+      }
       if (names.length) $person.attr("title", value + " · " + names.join(", "));
       return $person;
+    }
+    function avatarTextColor(color) {
+      var channels = [1, 3, 5].map(function(index) {
+        var value = parseInt(color.slice(index, index + 2), 16) / 255;
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+      });
+      var luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+      return 1.05 / (luminance + 0.05) >= 4.5 ? "#fff" : "#000";
+    }
+    function roleBadge(value) {
+      var $badge = $("<span/>").addClass("ujg-esi-role-badge").text(value);
+      var matches = teamsModule.forRole(state.teams || [], value || "");
+      if (matches.length === 1 && teamsModule.colors.indexOf(matches[0].color) >= 0) {
+        $badge.addClass("is-team-colored").css({color:matches[0].color,"border-color":matches[0].color});
+        $badge.attr("title", matches[0].name);
+      } else if (matches.length > 1) $badge.attr("title", matches.map(function(team) { return team.name; }).join(", "));
+      return $badge;
     }
     function workSummary(entry) {
       if (!teamsModule) return null;
       var work = teamsModule.currentWork(entry.source, state.teams);
+      if (!work.groups.length) return null;
       var caption = "Текущая работа по замечанию " + (entry.remarkId || entry.key || "");
       var $button = $("<button/>").attr({type:"button", "aria-label":caption, "aria-haspopup":"dialog", "aria-expanded":"false"}).addClass("ujg-esi-current-work");
       $button.append($("<span/>").addClass("ujg-esi-current-label").text("Сейчас: "));
       work.groups.forEach(function(group) { $button.append($("<span/>").addClass("ujg-esi-work-phase is-" + group.direction).text(group.label + " · " + group.count)); });
-      if (!work.groups.length) $button.append($("<span/>").addClass("ujg-esi-work-empty").text(work.message));
       if (work.warnings.length) $button.append(icon("TriangleAlert"));
       $button.on("click", function() {
         var $box = popup(this, caption).addClass("ujg-esi-work-details");
         $box.append($("<div/>").addClass("ujg-esi-work-heading").append($("<strong/>").text("Текущая работа"), button("X", "Закрыть текущую работу", function() { closeMenu(true); })));
         if (work.parent.key) $box.append($("<p/>").addClass("ujg-esi-work-parent").text([work.parent.key, work.parent.status, work.parent.assignee].filter(Boolean).join(" · ")));
-        if (!work.groups.length) $box.append($("<p/>").text(work.message));
         work.groups.forEach(function(group) {
           $box.append($("<h4/>").text(group.label + " · " + group.count));
           group.tasks.forEach(function(task) {
@@ -274,11 +333,12 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     function cell(entry, key) {
       var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
       if (key === "owner") {
-        if (hooks.editOwner) $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(person(value), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
-        else $td.append(person(value));
-        return $td.append(workSummary(entry));
+        if (hooks.editOwner) $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(teamPerson(value, entry.ownerIdentifiers), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
+        else $td.append(teamPerson(value, entry.ownerIdentifiers));
+        return teamContext($td.append(workSummary(entry)), entry, "owner");
       }
-      if (key === "assignee") return $td.append(teamPerson(value, entry.assigneeIdentifiers)).attr("title", value || "Не указан");
+      if (key === "assignee") return teamContext($td.append(teamPerson(value, entry.assigneeIdentifiers)), entry, "assignee");
+      if (key === "role" && value) return $td.append(roleBadge(value));
       if (key === "remark") {
         $td.append($("<div/>").addClass("ujg-esi-source-text").text(value));
         $td.attr("title", value).append($("<small/>").text([entry.module, entry.source.excelRowNumber ? "Excel: " + entry.source.excelRowNumber : ""].filter(Boolean).join(" · ")));
@@ -422,6 +482,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
     }
     return {
+      teamMenu: teamMenu,
       dismissPopover: function() {
         if ($menu && $menu[0].isConnected) { closeMenu(true); return true; }
         if ($description && $description[0].isConnected) { closeDescription(true); return true; }

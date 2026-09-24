@@ -74,12 +74,58 @@ define("_ujgESI_teams", [], function() {
     storage.setItem(storageKey(preferencesKey, projectKey), JSON.stringify(value));
     return value;
   }
+  function forUser(input, identifiers) {
+    var ids = unique(identifiers, 20, 160);
+    return normalize(input).filter(function(team) {
+      return team.members.some(function(member) {
+        return [member.id].concat(member.identifiers).some(function(id) { return ids.indexOf(id) >= 0; });
+      });
+    });
+  }
+  function forRole(input, role) {
+    var wanted = str(role, 80).toUpperCase();
+    return wanted ? normalize(input).filter(function(team) {
+      return team.roles.some(function(alias) { return alias.toUpperCase() === wanted; });
+    }) : [];
+  }
+  function assignUser(input, user, teamId) {
+    var list = normalize(input), id = str(user && user.id, 160);
+    if (!id) throw new Error("Нужен идентификатор пользователя Jira");
+    if (teamId && !list.some(function(team) { return team.id === teamId; })) throw new Error("Команда не найдена");
+    var identifiers = unique([id].concat(user.identifiers || []), 20, 160);
+    // Resolve connected Jira aliases before removing memberships, independent of team order.
+    var changed = true;
+    while (changed) {
+      changed = false;
+      list.forEach(function(team) {
+        team.members.forEach(function(member) {
+          var aliases = [member.id].concat(member.identifiers);
+          if (!aliases.some(function(key) { return identifiers.indexOf(key) >= 0; })) return;
+          aliases.forEach(function(key) {
+            if (identifiers.indexOf(key) < 0) { identifiers.push(key); changed = true; }
+          });
+        });
+      });
+    }
+    list.forEach(function(team) {
+      team.members = team.members.filter(function(member) {
+        return ![member.id].concat(member.identifiers).some(function(key) { return identifiers.indexOf(key) >= 0; });
+      });
+    });
+    if (teamId) {
+      var target = list.filter(function(team) { return team.id === teamId; })[0];
+      if (target.members.length >= 100) throw new Error("В команде уже 100 участников");
+      target.members.push({id:id,label:str(user.label,160) || id,identifiers:unique(identifiers,20,160)});
+    }
+    return list;
+  }
   function statusKind(task) {
     var status = str(task.status, 160).toLowerCase();
     var category = str(task.statusCategory, 80).toLowerCase();
     var state = str(task.statusState, 80).toLowerCase();
-    if (/cancel|reject|отмен|отклон|аннулир/.test(status) || /cancel|reject/.test(state)) return "cancelled";
-    if (task.done === true || /^(done|complete|completed|closed|resolved)$/.test(category) || state === "done" || /^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(status)) return "done";
+    if (/cancel|reject|withdrawn|отмен|отклон|аннулир|^снят[аоы]?$/.test(status) || /cancel|reject/.test(state)) return "cancelled";
+    var completed = typeof task.done === "boolean" ? task.done : category ? category === "done" : state ? state === "done" : /^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(status);
+    if (completed) return "done";
     if (/test|qa|тест|провер|испыт/.test(status)) return "testing";
     if (/implement|deploy|rollout|внедр|разверт|передач.*эксплуатац/.test(status)) return "implementation";
     if (/develop|coding|разработ|программир/.test(status)) return "development";
@@ -146,5 +192,5 @@ define("_ujgESI_teams", [], function() {
     var message = groups.length ? "" : (doneChild && !unknownChild ? "Нет подтвержденной передачи в следующую фазу" : "Нет данных о текущей работе");
     return { groups: groups, message: message, warnings: warnings, parent: parent };
   }
-  return { directions: directions, colors: colors, defaults: defaults, normalize: normalize, storageKey: storageKey, load: load, save: save, currentWork: currentWork };
+  return { directions: directions, colors: colors, defaults: defaults, normalize: normalize, storageKey: storageKey, load: load, save: save, currentWork: currentWork, forUser: forUser, forRole: forRole, assignUser: assignUser, statusKind: statusKind };
 });
