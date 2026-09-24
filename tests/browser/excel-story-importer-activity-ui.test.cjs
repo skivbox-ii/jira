@@ -12,7 +12,7 @@ function setup(report, configureWindow) {
   modules._ujgESI_activity = {
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
     exportHtml(value, context) { calls.exports.push({value,context}); return '<!doctype html><title>Snapshot</title>'; },
-    statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово"})[value] || value; },
+    statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово",Open:"Открыто"})[value] || value; },
     eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
@@ -48,6 +48,78 @@ test("renders daily totals, unknown balances, current scope and grouped journal"
   assert.match(text,/Тестирование/); assert.match(text,/Готово/); assert.match(text,/Ira/);
   assert.equal(x.$(".ujg-esi-activity-event").length,2);
   assert.equal(x.calls.summarize[0].options.scopeWarning,"Scope warning");
+});
+test("new and legacy layouts hide duplicate remark once while retaining preferences and filters", t => {
+  const x=setup(fixture(), window => window.localStorage.setItem("ujg-esi-state:activity-layout",JSON.stringify({
+    order:["author","remark","time","role","change","assignee"],visible:["author","remark","time","role","change","assignee"],
+    widths:{remark:180,role:280},sort:{key:"author",descending:true},filters:{remark:["744"]}
+  }))); t.after(()=>x.dom.window.close());
+  let saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.equal(x.$("th[data-column='remark']").length,0);
+  assert.deepEqual(saved.visible.includes("remark"),false);
+  assert.deepEqual(saved.filters.remark,["744"]);
+  assert.deepEqual(saved.sort,{key:"author",descending:true});
+  assert.equal(saved.widths.role,280);
+  assert.equal(x.$("[data-activity-hidden-filter='remark']").length,1);
+  x.$("[aria-label='Столбцы журнала']").trigger("click");
+  x.$(".ujg-esi-activity-column-option").filter(function() { return x.$(this).text().includes("ID · Замечание"); }).find("input").prop("checked",true).trigger("change");
+  x.$(".ujg-esi-activity-columns-apply").trigger("click");
+  const next=x.modules._ujgESI_activityUi.create(); next.render(x.$("#root"),x.state,{});
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find("th[data-column='remark']").length,1);
+  saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.equal(saved.visible.includes("remark"),true);
+  x.$("[aria-label='Столбцы журнала']").last().trigger("click");
+  x.$(".ujg-esi-activity-columns-reset").last().trigger("click");
+  saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.equal(saved.visible.includes("remark"),false);
+  assert.deepEqual(saved.filters.remark,["744"]);
+  assert.deepEqual(saved.sort,{key:"author",descending:true});
+});
+test("legacy remark-only layout migrates to one usable non-remark column", t => {
+  const x=setup(fixture(), window => window.localStorage.setItem("ujg-esi-state:activity-layout",JSON.stringify({visible:["remark"],filters:{remark:["744"]}}))); t.after(()=>x.dom.window.close());
+  assert.equal(x.$("th[data-column='remark']").length,0);
+  assert.ok(x.$(".ujg-esi-activity-table thead th").length>=1);
+  const saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.ok(saved.visible.includes("time"));
+  assert.deepEqual(saved.filters.remark,["744"]);
+});
+test("group context is unaffected by journal filters and keeps the full summary", t => {
+  const report=fixture(); Object.assign(report.groups[0],{currentStatus:"Open",linkedTaskCount:2,dayComplete:false,
+    dayHighlights:{completed:1,created:1,reopened:0},summary:"A long original story summary that must remain complete"});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const heading=x.$(".ujg-esi-activity-group");
+  assert.match(heading.text(),/Сейчас: Открыто/);
+  assert.match(heading.text(),/Связанных задач: 2/);
+  assert.match(heading.text(),/Завершено 1/);
+  assert.match(heading.text(),/Создано 1/);
+  assert.match(heading.find(".ujg-esi-activity-group-badge.is-created").attr("title"),/исходн.*истори.*связанн.*задач/);
+  assert.match(heading.text(),/История неполна/);
+  assert.match(heading.text(),/A long original story summary that must remain complete/);
+  selectFilter(x,"role",["QA"]);
+  assert.match(x.$(".ujg-esi-activity-group").text(),/Завершено 1/);
+  assert.match(x.$(".ujg-esi-activity-group").text(),/Создано 1/);
+});
+test("group heading summarizes ordinary observed edits without implying completeness", t => {
+  const report=fixture(); Object.assign(report.groups[0],{currentStatus:"Open",linkedTaskCount:1,dayComplete:false,
+    dayHighlights:{completed:0,created:0,reopened:0},dayActivityCount:2});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.match(x.$(".ujg-esi-activity-group").text(),/Изменено 2/);
+  assert.match(x.$(".ujg-esi-activity-group").text(),/История неполна/);
+});
+test("group heading calls out a no-op-only selected day without claiming work", t => {
+  const report=fixture(); Object.assign(report.groups[0],{currentStatus:"Open",linkedTaskCount:0,dayComplete:true,
+    dayHighlights:{completed:0,created:0,reopened:0},dayActivityCount:0,dayNoopStatusCount:1});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.match(x.$(".ujg-esi-activity-group").text(),/За день/);
+  assert.match(x.$(".ujg-esi-activity-group").text(),/Статус без изменений/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-group").text(),/Изменено/);
+});
+test("field-only no-op history says no change, not observed work", t => {
+  const report=fixture(); Object.assign(report.groups[0],{currentStatus:"Open",linkedTaskCount:0,dayComplete:true,
+    dayHighlights:{completed:0,created:0,reopened:0},dayActivityCount:0,dayNoopStatusCount:0});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.match(x.$(".ujg-esi-activity-group").text(),/Без изменений/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-group").text(),/Изменено 1/);
 });
 test("Excel source excludes a stale Jira registry warning", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -285,7 +357,7 @@ test("sort filter width and order persist per user-scoped activity layout", t =>
   assert.ok(saved.order.indexOf("role")>saved.order.indexOf("change"));
   x.render();
   assert.equal(x.$(".ujg-esi-activity-table thead th[data-column='author']").attr("aria-sort"),"ascending");
-  assert.equal(x.$(".ujg-esi-activity-table thead th").eq(2).attr("data-column"),"change");
+  assert.equal(x.$(".ujg-esi-activity-table thead th").eq(1).attr("data-column"),"change");
 });
 test("transfer count opens every matching event with safe text and closes on Escape", t => {
   const report=fixture(), event=report.groups[0].events[1];
@@ -307,10 +379,10 @@ test("column visibility and reset preserve at least one visible column", t => {
   x.$("[aria-label='Столбцы журнала']").trigger("click");
   x.$(".ujg-esi-activity-column-option input").last().prop("checked",false).trigger("change");
   x.$(".ujg-esi-activity-columns-apply").trigger("click");
-  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,4);
   x.$("[aria-label='Столбцы журнала']").trigger("click");
   x.$(".ujg-esi-activity-columns-reset").trigger("click");
-  assert.equal(x.$(".ujg-esi-activity-table thead th").length,6);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
 });
 test("resetting columns preserves applied filters and sort", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -322,7 +394,7 @@ test("resetting columns preserves applied filters and sort", t => {
   assert.deepEqual(saved.filters.role,["QA"]);
   assert.deepEqual(saved.sort,{key:"time",descending:true});
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
-  assert.equal(x.$(".ujg-esi-activity-table thead th").length,6);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
 });
 test("empty Dynamics shows registry loading and error context", t => {
   const report=fixture(); report.groups=[]; report.events=[];

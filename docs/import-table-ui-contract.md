@@ -29,6 +29,8 @@ The importer registry is the canonical table pattern. New views, including daily
 - Translate known statuses and change fields into plain Russian. Format durations as hours/minutes, not seconds. Suppress duplicate WorklogId bookkeeping when the same history already describes changed work time.
 - Preserve exact event data internally. Unknown fields remain explicitly labelled; never invent work or a transition from missing values.
 - HTML export uses the same human-readable descriptions and filtered/sorted journal as the screen.
+- Hide the duplicate remark ID column by default: the group heading retains the ID and Jira link. Allow explicit opt-in and preserve it after reload; migrate old layouts without losing filters, widths, order or the last visible column.
+- Group headings distinguish the current original-story status from selected-day outcomes, show the linked task count, and use short factual highlights. Do not infer full remark completion from one completed child, or count no-op status changes as completed work. Journal filtering must not silently change the whole-day group summary.
 
 ## Acceptance
 

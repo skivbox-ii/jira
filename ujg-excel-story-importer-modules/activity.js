@@ -219,7 +219,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         var fromAssignee = item.field === "assignee" ? assigneeFrom(item,"from") : eventAssignee;
         var toAssignee = item.field === "assignee" ? assigneeFrom(item,"to") : eventAssignee;
         var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,
-          issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:item.from,to:item.to,author:change.h.author || person(null),assignee:toAssignee,
+          issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:item.from,to:item.to,fromId:item.fromId,toId:item.toId,author:change.h.author || person(null),assignee:toAssignee,
           fromAssignee:fromAssignee,toAssignee:toAssignee,fromTeam:teamFor(teams,fromAssignee),toTeam:teamFor(teams,toAssignee),color:"",roleColor:""};
         events.push(event);
         if (item.field === "status") statusMeta[event.id] = statusAt(item.toId,item.to);
@@ -242,7 +242,27 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       var roleTeams = teams.filter(function(team) { return team.roles.some(function(alias) { return alias.toUpperCase() === role; }); });
       event.roleColor = role && roleTeams.length === 1 ? roleTeams[0].color : "";
     });
-    var groups = order.map(function(group) { return {id:group.id,remarkId:group.remarkId,key:group.key,summary:group.summary,events:events.filter(function(event) { return group.tasks.indexOf(event.issueKey) >= 0; })}; });
+    var groups = order.map(function(group) {
+      var parent = issues[group.key], parentStatus = parent && parent.snapshot && parent.snapshot.currentStatus && parent.snapshot.currentStatus.name || parent && parent.task.status;
+      var groupEvents = events.filter(function(event) { return group.tasks.indexOf(event.issueKey) >= 0; });
+      var outcomes = {completed:Object.create(null),created:Object.create(null),reopened:Object.create(null)};
+      var active = Object.create(null), unchangedStatus = Object.create(null);
+      groupEvents.forEach(function(event) {
+        var changed = event.kind === "created" || str(event.field).toLowerCase() === "worklogid" || event.from !== event.to || !!(event.fromId && event.toId && event.fromId !== event.toId);
+        if (changed) active[event.issueKey] = true;
+        if (event.kind === "status" && !changed) unchangedStatus[event.issueKey] = true;
+        if (event.kind === "created") outcomes.created[event.issueKey] = true;
+        if (event.kind !== "status" || !event.from || !event.to || !changed) return;
+        var before = kind(state("",event.from)), after = kind(statusMeta[event.id] || state("",event.to));
+        if (before === "open" && after === "done") outcomes.completed[event.issueKey] = true;
+        if (before === "done" && after === "open") outcomes.reopened[event.issueKey] = true;
+      });
+      return {id:group.id,remarkId:group.remarkId,key:group.key,summary:group.summary,events:groupEvents,
+        currentStatus:parentStatus || null,currentStatusKind:parentStatus ? kind(parent && parent.snapshot && parent.snapshot.currentStatus || state("",parentStatus,parent && parent.task.statusCategory)) : "unknown",
+        linkedTaskCount:group.tasks.filter(function(taskKey) { return taskKey !== group.key; }).length,
+        dayActivityCount:Object.keys(active).length,dayNoopStatusCount:Object.keys(unchangedStatus).length,
+        dayHighlights:{completed:Object.keys(outcomes.completed).length,created:Object.keys(outcomes.created).length,reopened:Object.keys(outcomes.reopened).length}};
+    });
     var complete = warnings.length === 0 && order.every(function(group) { return !group.missing; });
     if (order.some(function(group) { return group.missing; })) warnings.push("У части замечаний нет полных данных о связанных задачах");
     var changed = Object.create(null), newRemarks = Object.create(null), completed = Object.create(null), reopened = Object.create(null), balanceStart = 0, balanceEnd = 0;
@@ -303,6 +323,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       var snap = issues[issueKey].snapshot;
       return now > window.start && endpoint >= window.start && conflicts.indexOf(issueKey) < 0 && snap && snap.complete && isFinite(Date.parse(snap.capturedAt)) && Date.parse(snap.capturedAt) >= endpoint;
     }
+    groups.forEach(function(group,index) { group.dayComplete = !order[index].missing && order[index].tasks.every(usable); });
     var counted = {complete:issueKeys.filter(usable).length,total:issueKeys.length,
       incomplete:issueKeys.filter(function(issueKey) { return !usable(issueKey); }).length,
       uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,isComplete:complete};
@@ -420,7 +441,19 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     html += '<h2>Команды на момент снимка</h2><ul>';
     (report.teams || []).forEach(function(team) { html += '<li>' + escape(team.name) + ' (' + escape(team.id) + '): ' + escape((team.members || []).map(function(member) { return member.label + ' [' + member.identifiers.join(', ') + ']'; }).join('; ')) + '</li>'; });
     html += '</ul><h2>Журнал</h2>';
-    (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3><table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Что произошло</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
+    (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3>';
+      if (group.dayHighlights) {
+        var highlights = [];
+        if (group.dayHighlights.completed) highlights.push('Завершено ' + group.dayHighlights.completed);
+        if (group.dayHighlights.created) highlights.push('Создано ' + group.dayHighlights.created);
+        if (group.dayHighlights.reopened) highlights.push('Возвращено ' + group.dayHighlights.reopened);
+        if (!highlights.length && group.dayActivityCount) highlights.push('Изменено ' + group.dayActivityCount);
+        if (!highlights.length && group.dayNoopStatusCount) highlights.push('Статус без изменений');
+        if (!highlights.length && group.dayComplete) highlights.push('Без изменений');
+        if (!group.dayComplete) highlights.push('История неполна');
+        html += '<p>Сейчас: ' + escape(statusLabel(group.currentStatus)) + ' · Связанных задач: ' + escape(group.linkedTaskCount) + ' · За день: ' + escape(highlights.join(' · ')) + ' <small>(исходная история и связанные задачи)</small></p>';
+      }
+      html += '<table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Что произошло</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
       (group.events || []).forEach(function(event) {
         var assignee = event.kind === "assignee" ? (str(event.fromAssignee && event.fromAssignee.label) || "Не назначен") + ' → ' + (str(event.toAssignee && event.toAssignee.label) || "Не назначен") : str(event.assignee && event.assignee.label) || "Не назначен";
         var team = event.kind === "assignee" && event.fromTeam !== event.toTeam ? str(event.fromTeam) + ' → ' + str(event.toTeam) : str(event.toTeam);

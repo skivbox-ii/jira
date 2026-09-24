@@ -171,6 +171,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   function looksLikeChildRelation(value) {
     var text = normalizeLinkText(value);
+    if (looksLikeParentRelation(value)) return false;
     return text === "child" ||
       text === "is_child" ||
       text === "child_of" ||
@@ -181,7 +182,9 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   function looksLikeParentRelation(value) {
     var text = normalizeLinkText(value);
-    return text === "parent" ||
+    return text === "has_child" ||
+      text === "has_children" ||
+      text === "parent" ||
       text === "is_parent" ||
       text === "parent_of" ||
       text === "is_parent_of" ||
@@ -210,12 +213,15 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     var outwardParent = looksLikeParentRelation(outward);
     var inwardParent = looksLikeParentRelation(inward);
 
-    if (name && name === configured) return { score: 100, parentOutward: true };
-    if (outwardParent && inwardChild) return { score: 90, parentOutward: true };
-    if (outwardChild && inwardParent) return { score: 90, parentOutward: false };
-    if (inwardChild) return { score: 80, parentOutward: true };
-    if (outwardChild) return { score: 80, parentOutward: false };
-    return { score: 0, parentOutward: true };
+    var score = 0, parentOutward = true;
+    // The issue view uses the OTHER endpoint's label: an outward parent label
+    // requires the Story in inwardIssue and the child in outwardIssue.
+    if (outwardParent && inwardChild) { score = 90; parentOutward = false; }
+    else if (outwardChild && inwardParent) { score = 90; parentOutward = true; }
+    else if (inwardChild || outwardParent) { score = 80; parentOutward = false; }
+    else if (outwardChild || inwardParent) { score = 80; parentOutward = true; }
+    if (name && name === configured) score = 100;
+    return { score: score, parentOutward: parentOutward };
   }
 
   function pickChildLinkType(data) {

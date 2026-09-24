@@ -76,13 +76,14 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     order = fields.map(function(field) { return field.key; });
     function clampWidth(value, fallback) { return typeof value === "number" && isFinite(value) ? Math.max(55, Math.min(1600, Math.round(value))) : fallback; }
     function loadLayout(key) {
-      layoutKey = key; order = fields.map(function(field) { return field.key; }); hidden = {}; widths = {}; filters = {}; sort = {key:"time",descending:false};
+      layoutKey = key; order = fields.map(function(field) { return field.key; }); hidden = {remark:true}; widths = {}; filters = {}; sort = {key:"time",descending:false};
       try {
         var data = JSON.parse(window.localStorage.getItem(key) || "null");
         if (!data || typeof data !== "object") return;
         var known = order.slice(), seen = Object.create(null);
         if (Array.isArray(data.order)) order = data.order.filter(function(id) { if (known.indexOf(id) < 0 || seen[id]) return false; seen[id] = true; return true; }).concat(known.filter(function(id) { return !seen[id]; }));
         if (Array.isArray(data.visible) && data.visible.some(function(id) { return known.indexOf(id) >= 0; })) known.forEach(function(id) { hidden[id] = data.visible.indexOf(id) < 0; });
+        if (data.version !== 2) { hidden.remark = true; if (known.every(function(id) { return hidden[id]; })) hidden.time = false; }
         fields.forEach(function(field) {
           if (data.widths && typeof data.widths[field.key] === "number" && isFinite(data.widths[field.key])) widths[field.key] = clampWidth(data.widths[field.key],field.width);
         });
@@ -90,10 +91,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         if (data.filters && typeof data.filters === "object") known.forEach(function(id) {
           if (Array.isArray(data.filters[id])) filters[id] = data.filters[id].filter(function(value,index,array) { return typeof value === "string" && array.indexOf(value) === index; });
         });
+        if (data.version !== 2) saveLayout();
       } catch (ignore) { /* Storage is best-effort. */ }
     }
     function saveLayout() {
-      try { window.localStorage.setItem(layoutKey,JSON.stringify({order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
+      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
       catch (ignore) { /* Storage is best-effort. */ }
     }
     function visibleFields() { return order.filter(function(id) { return !hidden[id]; }).map(function(id) { return fields.filter(function(field) { return field.key === id; })[0]; }); }
@@ -290,7 +292,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       });
       $box.append($("<div/>").addClass("ujg-esi-filter-actions").append(
         $("<button/>").attr("type","button").addClass("ujg-esi-activity-columns-reset").text("Сбросить").on("click",function() {
-          order = fields.map(function(field) { return field.key; }); hidden = {}; widths = {}; saveLayout(); draw();
+          order = fields.map(function(field) { return field.key; }); hidden = {remark:true}; widths = {}; saveLayout(); draw();
         }),
         $("<button/>").attr("type","button").addClass("ujg-esi-filter-apply ujg-esi-activity-columns-apply").text("Применить").on("click",function() {
           order.forEach(function(id) { hidden[id] = visible.indexOf(id) < 0; }); saveLayout(); draw();
@@ -451,12 +453,24 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       var $body = $("<tbody/>");
       sortedGroups(journal.groups).forEach(function(group) {
         var key = String(group.id || group.key || group.remarkId), isCollapsed = !!collapsed[key];
+        var dayBadgeTitle = "За выбранный день: исходная история и связанные задачи; каждая задача учтена один раз в каждом итоге.";
         var $group = $("<tr/>").addClass("ujg-esi-activity-group");
         $group.append($("<th/>").attr({scope:"rowgroup",colspan:shown.length}).append(
           button(isCollapsed ? "ChevronRight" : "ChevronDown",(isCollapsed ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),function() { collapsed[key] = !collapsed[key]; draw(); })
             .addClass("ujg-esi-activity-group-toggle").attr("aria-expanded",String(!isCollapsed)),
           $("<span/>").addClass("ujg-esi-activity-group-key").append($("<span/>").text("#" + label(group.remarkId || group.key)),group.key ? issueKeyNode(group.key,state.baseUrl) : $("<span/>")),
-          $("<span/>").text(group.summary || ""), $("<small/>").text(" · " + group.events.length)));
+          $("<span/>").addClass("ujg-esi-activity-group-summary").text(group.summary || ""),
+          $("<span/>").addClass("ujg-esi-activity-group-context").append(
+            $("<span/>").addClass("ujg-esi-activity-group-badge is-status" + (group.currentStatusKind ? " is-" + group.currentStatusKind : "")).text("Сейчас: " + activity.statusLabel(group.currentStatus)),
+            $("<span/>").addClass("ujg-esi-activity-group-badge").text("Связанных задач: " + group.linkedTaskCount),
+            $("<span/>").addClass("ujg-esi-activity-group-day-label").text("За день:"),
+            group.dayHighlights && group.dayHighlights.completed ? $("<span/>").addClass("ujg-esi-activity-group-badge is-done").attr("title",dayBadgeTitle).text("Завершено " + group.dayHighlights.completed) : $("<span/>"),
+            group.dayHighlights && group.dayHighlights.created ? $("<span/>").addClass("ujg-esi-activity-group-badge is-created").attr("title",dayBadgeTitle).text("Создано " + group.dayHighlights.created) : $("<span/>"),
+            group.dayHighlights && group.dayHighlights.reopened ? $("<span/>").addClass("ujg-esi-activity-group-badge is-reopened").attr("title",dayBadgeTitle).text("Возвращено " + group.dayHighlights.reopened) : $("<span/>"),
+            group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && group.dayActivityCount ? $("<span/>").addClass("ujg-esi-activity-group-badge").attr("title",dayBadgeTitle).text("Изменено " + group.dayActivityCount) : $("<span/>"),
+            group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && !group.dayActivityCount && group.dayNoopStatusCount ? $("<span/>").addClass("ujg-esi-activity-group-badge").text("Статус без изменений") : $("<span/>"),
+            group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && !group.dayActivityCount && !group.dayNoopStatusCount && group.dayComplete ? $("<span/>").addClass("ujg-esi-activity-group-badge").text("Без изменений") : $("<span/>"),
+            group.dayComplete === false ? $("<span/>").addClass("ujg-esi-activity-group-badge is-incomplete").text("История неполна") : $("<span/>"))));
         $body.append($group);
         if (isCollapsed) return;
         sortedEvents(group.events,group).forEach(function(event) {

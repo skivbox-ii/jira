@@ -23,6 +23,88 @@ function detail(api, jira, role = "") {
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
 
+test("group context uses current parent status, unique linked children and observed day outcomes", () => {
+  const api=activity();
+  const parent=detail(api,issue("P-1","Open"));
+  const done=detail(api,issue("P-2","Open",[
+    history("h1","2026-09-24T01:00:00Z","editor",[item("status","1","2","Open","Done")]),
+    history("h2","2026-09-24T02:00:00Z","editor",[item("status","2","1","Done","Open")]),
+    history("h3","2026-09-24T03:00:00Z","editor",[item("status","1","1","Open","Open")])
+  ]));
+  const created=detail(api,issue("P-3","Open",[],{fields:{created:"2026-09-24T04:00:00Z"}}));
+  const result=report(api,[row(parent,[done,created,done])]);
+  assert.equal(result.groups[0].currentStatus,"Open");
+  assert.equal(result.groups[0].linkedTaskCount,2);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.groups[0].dayHighlights)),{completed:1,created:1,reopened:1});
+});
+
+test("missing parent history cannot imply current readiness or complete day summary", () => {
+  const api=activity(), parent={key:"P-1",summary:"Missing",status:"",role:""};
+  const child=detail(api,issue("P-2","Done",[history("h","2026-09-24T01:00:00Z","editor",[item("status","1","2","Open","Done")])]));
+  const result=report(api,[row(parent,[child])]);
+  assert.equal(result.groups[0].currentStatus,null);
+  assert.equal(result.groups[0].dayComplete,false);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.groups[0].dayHighlights)),{completed:1,created:0,reopened:0});
+});
+test("group status names the current parent state even when selected day predates its transition", () => {
+  const api=activity();
+  const parent=detail(api,issue("P-1","Done",[history("later","2026-09-25T01:00:00Z","editor",[item("status","1","2","Open","Done")])],{fields:{updated:"2026-09-25T02:00:00Z"}}));
+  const result=report(api,[row(parent)],{now:"2026-09-26T12:00:00Z"});
+  assert.equal(result.groups[0].currentStatus,"Done");
+  assert.equal(result.groups[0].dayHighlights.completed,0);
+  assert.match(api.exportHtml(result),/Сейчас: Выполнено/);
+});
+test("no-op status history does not count as day work", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("h","2026-09-24T01:00:00Z","editor",[item("status","1","1","Open","Open")])
+  ]));
+  const result=report(api,[row(parent)]);
+  assert.equal(result.groups[0].dayActivityCount,0);
+  assert.equal(result.groups[0].dayNoopStatusCount,1);
+  assert.match(api.exportHtml(result),/Статус без изменений/);
+});
+test("ordinary day edits count distinct tasks", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("h1","2026-09-24T01:00:00Z","editor",[item("priority","1","2","Low","High")]),
+    history("h2","2026-09-24T02:00:00Z","editor",[item("summary","a","b","Old","New")])
+  ]));
+  assert.equal(report(api,[row(parent)]).groups[0].dayActivityCount,1);
+});
+test("completion badge requires a known open prior status", () => {
+  const api=activity();
+  for (const prior of ["Released","Cancelled","Done"]) {
+    const jira=issue("P-1","Done",[history("h","2026-09-24T01:00:00Z","editor",[item("status",prior === "Done" ? "2" : "1","2",prior,"Done")])]);
+    const result=report(api,[row(detail(api,jira))]);
+    assert.equal(result.groups[0].dayHighlights.completed,0,prior);
+    assert.equal(result.groups[0].dayActivityCount,prior === "Done" ? 0 : 1,prior);
+    assert.doesNotMatch(api.exportHtml(result),/Завершено 1/,prior);
+  }
+  const cancelled=issue("P-1","Cancelled",[history("h","2026-09-24T01:00:00Z","editor",[item("status","3","3","Cancelled","Cancelled")])],
+    {fields:{status:{id:"3",name:"Cancelled",statusCategory:{key:"done"}}}});
+  assert.equal(report(api,[row(detail(api,cancelled))]).groups[0].dayActivityCount,0);
+});
+test("identical field values are not activity, but distinct IDs and Worklog bookkeeping are", () => {
+  const api=activity(), jira=issue("P-1","Open",[
+    history("h1","2026-09-24T01:00:00Z","editor",[item("priority","1","1","Low","Low")]),
+    history("h2","2026-09-24T02:00:00Z","editor",[item("assignee","a","b","Alex","Alex")]),
+    history("h3","2026-09-24T03:00:00Z","editor",[item("WorklogId",null,null,null,null)])
+  ],{fields:{assignee:person("b","Alex")}});
+  const result=report(api,[row(detail(api,jira))]);
+  assert.equal(result.groups[0].dayActivityCount,1);
+  const onlyNoop=issue("P-2","Open",[history("h","2026-09-24T01:00:00Z","editor",[item("priority","1","1","Low","Low")])]);
+  const noOpReport=report(api,[row(detail(api,onlyNoop))]);
+  assert.equal(noOpReport.groups[0].dayActivityCount,0);
+  assert.match(api.exportHtml(noOpReport),/Без изменений/);
+  assert.doesNotMatch(api.exportHtml(noOpReport),/Изменено 1/);
+  const worklog=issue("P-3","Open",[history("h","2026-09-24T01:00:00Z","editor",[item("WorklogId",null,null,null,null)])]);
+  assert.equal(report(api,[row(detail(api,worklog))]).groups[0].dayActivityCount,1);
+  const sameNameTransfer=issue("P-4","Open",[history("h","2026-09-24T01:00:00Z","editor",[item("assignee","a","b","Alex","Alex")])],
+    {fields:{assignee:person("b","Alex")}});
+  assert.equal(report(api,[row(detail(api,sameNameTransfer))]).groups[0].dayActivityCount,1);
+  const sameNameValue=issue("P-5","Open",[history("h","2026-09-24T01:00:00Z","editor",[item("priority","1","2","Medium","Medium")])]);
+  assert.equal(report(api,[row(detail(api,sameNameValue))]).groups[0].dayActivityCount,1);
+});
+
 test("search timestamps rounded to seconds do not invalidate millisecond changelog entries", () => {
   const api = activity();
   const h = history("h", "2026-09-24T09:00:00.853Z", "editor", [item("status", "1", "2", "Open", "Done")]);

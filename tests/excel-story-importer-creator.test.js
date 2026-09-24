@@ -445,8 +445,62 @@ test("createRow resolves child issue link type from Jira metadata", async functi
   assert.equal(result.ok, true);
   assert.equal(links.length, 1);
   assert.equal(links[0].type.name, "Hierarchy");
-  assert.equal(links[0].outwardIssue.key, "EVOSCADA-8000");
-  assert.equal(links[0].inwardIssue.key, "EVOSCADA-8001");
+  assert.equal(links[0].inwardIssue.key, "EVOSCADA-8000");
+  assert.equal(links[0].outwardIssue.key, "EVOSCADA-8001");
+});
+
+for (const method of ["createRow", "createAdditionalTasks"]) {
+  for (const name of ["Child", "Hierarchy"]) {
+    for (const parentLabel of ["is parent of", "parent", "has children", "has child"]) {
+      for (const parentSide of ["outward", "inward"]) {
+        test(method + " keeps Story as parent for " + name + " " + parentSide + "=" + parentLabel, async function () {
+          const creator = loadCreator();
+          const type = { name, outward: "is child of", inward: "is child of" };
+          type[parentSide] = parentLabel;
+          const calls = [], links = [];
+          const parentKey = "TEST-1";
+          const api = {
+            getIssueLinkTypes: () => Promise.resolve({ issueLinkTypes: [type] }),
+            createIssue(payload) {
+              calls.push(payload.fields);
+              return Promise.resolve({ key: method === "createRow" && calls.length === 1 ? parentKey : "TEST-2" });
+            },
+            createIssueLink(payload) { links.push(payload); return Promise.resolve({}); },
+          };
+          const row = { summary: "Original remark", sourceColumns: { "№": 42 } };
+          if (method === "createAdditionalTasks") row.jiraKey = parentKey;
+          const result = await creator[method](api, row, {
+            projectKey: "TEST", createSubtasks: true,
+            childTasks: [{ role: "QA", issueType: "Task", enabled: true }],
+          });
+          assert.equal(result.ok, true);
+          assert.equal(result.createdKey, parentKey);
+          assert.equal(calls.length, method === "createRow" ? 2 : 1);
+          assert.equal(links.length, 1);
+          const link = links[0];
+          assert.equal(link.type.name, name);
+          // In Jira's issue view the OTHER endpoint chooses the relation label.
+          const childEndpoint = parentSide + "Issue";
+          const parentEndpoint = (parentSide === "outward" ? "inward" : "outward") + "Issue";
+          assert.equal(link[parentEndpoint].key, parentKey);
+          assert.equal(link[childEndpoint].key, "TEST-2");
+          assert.equal(type[childEndpoint.replace("Issue", "")], parentLabel);
+        });
+      }
+    }
+  }
+}
+
+test("configured Child type preference does not override its direction metadata", function () {
+  const creator = loadCreator();
+  const chosen = creator.pickChildLinkType({ issueLinkTypes: [
+    { name: "Hierarchy", outward: "is child of", inward: "is parent of" },
+    { name: "Child", outward: "is parent of", inward: "is child of" },
+  ] });
+  const link = creator.childLinkPayload("TEST-1", "TEST-2", chosen);
+  assert.equal(link.type.name, "Child");
+  assert.equal(link.inwardIssue.key, "TEST-1");
+  assert.equal(link.outwardIssue.key, "TEST-2");
 });
 
 test("storyFields omits Epic Link when create metadata marks it unavailable", function () {
