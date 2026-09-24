@@ -4,12 +4,19 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {JSDOM} = require("jsdom");
 const jquery = require("jquery");
+const load = require("../helpers/load-amd-module");
+const activityDir = path.join(__dirname,"../../ujg-excel-story-importer-modules");
+const activity = load(path.join(activityDir,"activity.js"), {
+  _ujgESI_teams:load(path.join(activityDir,"teams.js"),{}),
+  _ujgESI_remarkId:load(path.join(activityDir,"remark-id.js"),{})
+});
 
 function setup(report, configureWindow) {
   const dom = new JSDOM('<div id="root"><div class="parent-toolbar">Registry · Activity</div></div>', {runScripts:"outside-only", url:"http://localhost"});
   if (configureWindow) configureWindow(dom.window);
   const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0}, modules = {jquery:$};
   modules._ujgESI_activity = {
+    eventCategory:event => activity.eventCategory(event),
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
     exportHtml(value, context) { calls.exports.push({value,context}); return '<!doctype html><title>Snapshot</title>'; },
     statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово",Open:"Открыто"})[value] || value; },
@@ -39,6 +46,84 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+function categoryFixture() {
+  const report=fixture();
+  report.events.push(
+    {...report.events[0],id:"e3",from:"Open",to:"In Progress"},
+    {...report.events[0],id:"e4",kind:"field",field:"description",from:"old",to:"new"},
+    {...report.events[0],id:"e5",kind:"field",field:"description",from:"other",to:"text"},
+    {...report.events[0],id:"e6",kind:"field",field:"timespent",from:"0",to:"3600"},
+    {...report.events[0],id:"e7",kind:"field",field:"WorklogId",from:"123",to:""},
+    {...report.events[0],id:"e8",kind:"field",field:"timeestimate",from:"7200",to:"3600"}
+  );
+  report.metrics.events=report.events.length;
+  return report;
+}
+test("change filter offers unique categories, not individual event descriptions", t => {
+  const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-filter='change']").trigger("click");
+  const options=x.$(".ujg-esi-activity-filter-option").map(function() {return x.$(this).text().trim();}).get();
+  assert.deepEqual(options.sort(),["Исполнитель","Описание","Оценка трудозатрат","Статус","Трудозатраты"].sort());
+});
+test("category multi-select filters all matching events while keeping details and totals", t => {
+  const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"change",["Статус","Описание"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,4);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/Статус: Тестирование → Готово/);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/Открыто → In Progress/);
+  assert.equal(x.$("[data-metric='events'] strong").text(),"8");
+  const saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.deepEqual(saved.filters.change,["Статус","Описание"]);
+  const next=x.modules._ujgESI_activityUi.create(); next.render(x.$("#root"),x.state,{});
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find(".ujg-esi-activity-event").length,4);
+});
+test("worklog category groups records and spent time without including estimates", t => {
+  const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
+  selectFilter(x,"change",["Трудозатраты"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  selectFilter(x,"change",["Оценка трудозатрат"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+});
+test("migration clears obsolete change descriptions but preserves version-2 layout and other filters", t => {
+  const x=setup(fixture(),window=>window.localStorage.setItem("ujg-esi-state:activity-layout",JSON.stringify({
+    version:2,visible:["remark","change","role"],order:["change","role","remark","time","assignee","author"],
+    widths:{change:345},sort:{key:"change",descending:true},filters:{change:["Статус: Testing → Done"],role:["QA"]}
+  }))); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  const saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.equal(saved.filters.change,undefined);
+  assert.deepEqual(saved.filters.role,["QA"]);
+  assert.ok(saved.visible.includes("remark"));
+  assert.equal(saved.widths.change,345);
+  assert.equal(saved.order[0],"change");
+  assert.deepEqual(saved.sort,{key:"change",descending:true});
+});
+test("category export keeps all matching descriptions and category filter metadata", t => {
+  const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
+  x.dom.window.URL.createObjectURL=()=>"blob:category-test";
+  x.dom.window.URL.revokeObjectURL=()=>{};
+  x.dom.window.HTMLAnchorElement.prototype.click=function(){};
+  selectFilter(x,"change",["Трудозатраты"]);
+  x.$("[aria-label='Скачать HTML']").trigger("click");
+  assert.deepEqual(Array.from(x.calls.exports[0].value.events,event=>event.field),["timespent","WorklogId"]);
+  assert.deepEqual(Array.from(x.calls.exports[0].context.filters.change),["Трудозатраты"]);
+  assert.equal(x.calls.exports[0].value.metrics.events,8);
+});
+test("empty change selection survives migration and current selections survive empty reports", t => {
+  const report=categoryFixture();
+  const x=setup(report,window=>window.localStorage.setItem("ujg-esi-state:activity-layout",JSON.stringify({version:2,filters:{change:[]}})));
+  t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event").length,0);
+  selectFilter(x,"change",["Описание"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  const groups=report.groups;
+  report.groups=[]; x.render();
+  x.$("[data-activity-filter='change']").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"Описание");
+  x.$(".ujg-esi-activity-filter-apply").trigger("click");
+  report.groups=groups; x.render();
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+});
 test("renders daily totals, unknown balances, current scope and grouped journal", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const text=x.$("#root").text();

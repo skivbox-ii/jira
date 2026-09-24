@@ -74,7 +74,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       h.items.forEach(function(item,indexInHistory) {
         if (!item || !str(item.field || item.fieldId)) { warn("Поврежденное поле истории Jira"); return; }
         if (fieldName(item) === "status" && (!str(item.from || item.fromString) || !str(item.to || item.toString))) warn("Неполный переход статуса Jira");
-        items.push({field:fieldName(item),from:str(item.fromString),to:str(item.toString),fromId:str(item.from),toId:str(item.to),index:indexInHistory});
+        items.push({field:fieldName(item),fieldId:str(item.fieldId),from:str(item.fromString),to:str(item.toString),fromId:str(item.from),toId:str(item.to),index:indexInHistory});
       });
       if (at) result.histories.push({id:str(h.id) || "index:" + index,at:at,author:person(h.author),items:items});
     });
@@ -218,7 +218,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (str(item.field).toLowerCase() === "worklogid" && change.h.items.some(function(sibling) { return /^(timespent|timeestimate)$/i.test(sibling.field); })) return;
         var fromAssignee = item.field === "assignee" ? assigneeFrom(item,"from") : eventAssignee;
         var toAssignee = item.field === "assignee" ? assigneeFrom(item,"to") : eventAssignee;
-        var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,
+        var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,fieldId:str(item.fieldId),
           issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:item.from,to:item.to,fromId:item.fromId,toId:item.toId,author:change.h.author || person(null),assignee:toAssignee,
           fromAssignee:fromAssignee,toAssignee:toAssignee,fromTeam:teamFor(teams,fromAssignee),toTeam:teamFor(teams,toAssignee),color:"",roleColor:""};
         events.push(event);
@@ -358,6 +358,31 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     var seconds = Number(raw), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = Math.round(seconds % 60);
     return [hours ? hours + " ч" : "",minutes ? minutes + " мин" : "",rest ? rest + " с" : ""].filter(Boolean).join(" ") || "0 мин";
   }
+  var changeCategories = Object.create(null);
+  [
+    ["Создание задачи",["created"]],
+    ["Статус",["status","статус"]],
+    ["Исполнитель",["assignee","исполнитель"]],
+    ["Описание",["description","описание"]],
+    ["Тема",["summary","тема"]],
+    ["Трудозатраты",["timespent","worklogid","worklog","затраченное время","трудозатраты"]],
+    ["Оценка трудозатрат",["timeestimate","timeoriginalestimate","remaining estimate","original estimate","оставшаяся оценка","исходная оценка"]],
+    ["Результат",["resolution","решение","результат"]],
+    ["Приоритет",["priority","приоритет"]],
+    ["Сроки",["duedate","due date","startdate","срок исполнения","срок","дата начала"]],
+    ["Связи задач",["link","issuelinks","parent","epic link","связь","связи задач","родитель","связь эпика"]],
+    ["Комментарии",["comment","комментарий"]],
+    ["Вложения",["attachment","вложение","вложения"]],
+    ["Параметры задачи",["labels","component","components","fixversion","fixversions","version","versions","sprint","issuetype","reporter","project","story points","метки","компоненты","версия исправления","версии исправления","версии","спринт","тип задачи","автор","проект"]]
+  ].forEach(function(category) {
+    category[1].forEach(function(field) { changeCategories[categoryField(field)] = category[0]; });
+  });
+  function categoryField(value) { return str(value).toLowerCase().replace(/[\s_-]+/g,""); }
+  function eventCategory(event) {
+    event = event || {};
+    if (event.kind === "created" || event.kind === "status" || event.kind === "assignee") return changeCategories[event.kind];
+    return changeCategories[categoryField(event.fieldId)] || changeCategories[categoryField(event.field)] || "Другие поля";
+  }
   function eventText(event) {
     event = event || {};
     var from = str(event.from), to = str(event.to), field = str(event.field).toLowerCase();
@@ -461,5 +486,5 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }
-  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,eventText:eventText};
+  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,eventText:eventText,eventCategory:eventCategory};
 });

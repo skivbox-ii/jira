@@ -23,6 +23,48 @@ function detail(api, jira, role = "") {
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
 
+test("change categories depend on changed data, never transition text or values", () => {
+  const api=activity();
+  const examples=[
+    [{kind:"created"},"Создание задачи"],
+    [{kind:"status",from:"Open",to:"In Progress"},"Статус"],
+    [{kind:"status",from:"In Progress",to:"In Review"},"Статус"],
+    [{kind:"status",from:"Done",to:"Open"},"Статус"],
+    [{kind:"assignee",from:"Alice",to:"Bob"},"Исполнитель"],
+    [{kind:"field",field:"description",from:"Old",to:"New"},"Описание"],
+    [{kind:"field",field:"summary"},"Тема"],
+    [{kind:"field",field:"timespent",from:"0",to:"3600"},"Трудозатраты"],
+    [{kind:"field",field:"WorklogId"},"Трудозатраты"],
+    [{kind:"field",field:"Time Spent"},"Трудозатраты"],
+    [{kind:"field",field:"timeestimate"},"Оценка трудозатрат"],
+    [{kind:"field",field:"timeoriginalestimate"},"Оценка трудозатрат"],
+    [{kind:"field",field:"resolution"},"Результат"],
+    [{kind:"field",field:"priority"},"Приоритет"],
+    [{kind:"field",field:"duedate"},"Сроки"],
+    [{kind:"field",field:"Link"},"Связи задач"],
+    [{kind:"field",field:"attachment"},"Вложения"],
+    [{kind:"field",field:"comment"},"Комментарии"],
+    [{kind:"field",field:"labels"},"Параметры задачи"],
+    [{kind:"field",field:"fixVersions"},"Параметры задачи"],
+    [{kind:"field",field:"Описание"},"Описание"],
+    [{kind:"field",field:"Локализованное поле",fieldId:"description"},"Описание"],
+    [{kind:"field",field:"customfield_123",to:"Done"},"Другие поля"],
+    [{kind:"field",field:"constructor"},"Другие поля"],
+    [{kind:"field",field:"__proto__"},"Другие поля"],
+    [null,"Другие поля"]
+  ];
+  examples.forEach(([event,expected])=>assert.equal(api.eventCategory(event),expected,JSON.stringify(event)));
+});
+test("captured field IDs survive into events for localized change categories", () => {
+  const api=activity(), change={...item("Localized description","old","new"),fieldId:"description"};
+  const parent=detail(api,issue("P-1","Open",[history("h1","2026-09-24T01:00:00Z","editor",[change])]));
+  assert.equal(parent.activity.histories[0].items[0].fieldId,"description");
+  const event=report(api,[row(parent)]).events[0];
+  assert.equal(event.field,"Localized description");
+  assert.equal(event.fieldId,"description");
+  assert.equal(api.eventCategory(event),"Описание");
+});
+
 test("group context uses current parent status, unique linked children and observed day outcomes", () => {
   const api=activity();
   const parent=detail(api,issue("P-1","Open"));

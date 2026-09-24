@@ -3271,7 +3271,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       h.items.forEach(function(item,indexInHistory) {
         if (!item || !str(item.field || item.fieldId)) { warn("Поврежденное поле истории Jira"); return; }
         if (fieldName(item) === "status" && (!str(item.from || item.fromString) || !str(item.to || item.toString))) warn("Неполный переход статуса Jira");
-        items.push({field:fieldName(item),from:str(item.fromString),to:str(item.toString),fromId:str(item.from),toId:str(item.to),index:indexInHistory});
+        items.push({field:fieldName(item),fieldId:str(item.fieldId),from:str(item.fromString),to:str(item.toString),fromId:str(item.from),toId:str(item.to),index:indexInHistory});
       });
       if (at) result.histories.push({id:str(h.id) || "index:" + index,at:at,author:person(h.author),items:items});
     });
@@ -3415,7 +3415,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
         if (str(item.field).toLowerCase() === "worklogid" && change.h.items.some(function(sibling) { return /^(timespent|timeestimate)$/i.test(sibling.field); })) return;
         var fromAssignee = item.field === "assignee" ? assigneeFrom(item,"from") : eventAssignee;
         var toAssignee = item.field === "assignee" ? assigneeFrom(item,"to") : eventAssignee;
-        var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,
+        var event = {id:issueKey + ":" + change.h.id + ":" + item.index,at:change.h.at,kind:item.field === "status" || item.field === "assignee" ? item.field : "field",field:item.field,fieldId:str(item.fieldId),
           issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:item.from,to:item.to,fromId:item.fromId,toId:item.toId,author:change.h.author || person(null),assignee:toAssignee,
           fromAssignee:fromAssignee,toAssignee:toAssignee,fromTeam:teamFor(teams,fromAssignee),toTeam:teamFor(teams,toAssignee),color:"",roleColor:""};
         events.push(event);
@@ -3555,6 +3555,31 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
     var seconds = Number(raw), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = Math.round(seconds % 60);
     return [hours ? hours + " ч" : "",minutes ? minutes + " мин" : "",rest ? rest + " с" : ""].filter(Boolean).join(" ") || "0 мин";
   }
+  var changeCategories = Object.create(null);
+  [
+    ["Создание задачи",["created"]],
+    ["Статус",["status","статус"]],
+    ["Исполнитель",["assignee","исполнитель"]],
+    ["Описание",["description","описание"]],
+    ["Тема",["summary","тема"]],
+    ["Трудозатраты",["timespent","worklogid","worklog","затраченное время","трудозатраты"]],
+    ["Оценка трудозатрат",["timeestimate","timeoriginalestimate","remaining estimate","original estimate","оставшаяся оценка","исходная оценка"]],
+    ["Результат",["resolution","решение","результат"]],
+    ["Приоритет",["priority","приоритет"]],
+    ["Сроки",["duedate","due date","startdate","срок исполнения","срок","дата начала"]],
+    ["Связи задач",["link","issuelinks","parent","epic link","связь","связи задач","родитель","связь эпика"]],
+    ["Комментарии",["comment","комментарий"]],
+    ["Вложения",["attachment","вложение","вложения"]],
+    ["Параметры задачи",["labels","component","components","fixversion","fixversions","version","versions","sprint","issuetype","reporter","project","story points","метки","компоненты","версия исправления","версии исправления","версии","спринт","тип задачи","автор","проект"]]
+  ].forEach(function(category) {
+    category[1].forEach(function(field) { changeCategories[categoryField(field)] = category[0]; });
+  });
+  function categoryField(value) { return str(value).toLowerCase().replace(/[\s_-]+/g,""); }
+  function eventCategory(event) {
+    event = event || {};
+    if (event.kind === "created" || event.kind === "status" || event.kind === "assignee") return changeCategories[event.kind];
+    return changeCategories[categoryField(event.fieldId)] || changeCategories[categoryField(event.field)] || "Другие поля";
+  }
   function eventText(event) {
     event = event || {};
     var from = str(event.from), to = str(event.to), field = str(event.field).toLowerCase();
@@ -3658,7 +3683,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId"], function(teamsM
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }
-  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,eventText:eventText};
+  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,eventText:eventText,eventCategory:eventCategory};
 });
 
 /* === Module: activity-ui.js === */
@@ -3733,7 +3758,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
       {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
       {key:"role", title:"Тикет · Роль", width:240, value:function(event) { return roleLabel(event.role); }},
-      {key:"change", title:"Изменение", width:230, value:function(event) { return activity.eventText(event); }},
+      {key:"change", title:"Изменение", width:230, value:function(event) { return activity.eventText(event); }, filterValue:function(event) { return activity.eventCategory(event); }},
       {key:"assignee", title:"Исполнитель / передача", width:190, value:function(event) { return label(event.assignee); }},
       {key:"author", title:"Кто изменил", width:145, value:function(event) { return label(event.author); }}
     ];
@@ -3755,11 +3780,13 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         if (data.filters && typeof data.filters === "object") known.forEach(function(id) {
           if (Array.isArray(data.filters[id])) filters[id] = data.filters[id].filter(function(value,index,array) { return typeof value === "string" && array.indexOf(value) === index; });
         });
-        if (data.version !== 2) saveLayout();
+        // Old selections contain full event text, not change categories.
+        if (data.changeFilterVersion !== 1 && filters.change && filters.change.length) delete filters.change;
+        if (data.version !== 2 || data.changeFilterVersion !== 1) saveLayout();
       } catch (ignore) { /* Storage is best-effort. */ }
     }
     function saveLayout() {
-      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
+      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,changeFilterVersion:1,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
       catch (ignore) { /* Storage is best-effort. */ }
     }
     function visibleFields() { return order.filter(function(id) { return !hidden[id]; }).map(function(id) { return fields.filter(function(field) { return field.key === id; })[0]; }); }
@@ -3819,7 +3846,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       $popover.css("top",Math.max(12,Math.min(rect.bottom+4,viewportHeight-$popover.outerHeight()-12)));
     }
     function matching(event, group) {
-      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || filters[field.key].indexOf(field.value(event,group)) >= 0; });
+      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || filters[field.key].indexOf((field.filterValue || field.value)(event,group)) >= 0; });
     }
     function filtered(report) {
       var groups = (report.groups || []).map(function(group) {
@@ -3852,7 +3879,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     }
     function filterMenu(anchor, field, report) {
       var values = Object.create(null), options;
-      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[field.value(event,group)] = true; }); });
+      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[(field.filterValue || field.value)(event,group)] = true; }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
       var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
       var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",280);

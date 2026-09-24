@@ -27,6 +27,7 @@ The importer registry is the canonical table pattern. New views, including daily
 - Status transitions and team transfers use compact from/to matrix tables. Nonzero counts reveal the underlying events on hover, keyboard focus, or click.
 - Event details include Moscow time, task key/title, author, and before/after values; show people, not technical identifiers.
 - Translate known statuses and change fields into plain Russian. Format durations as hours/minutes, not seconds. Suppress duplicate WorklogId bookkeeping when the same history already describes changed work time.
+- The Change filter selects categories of changed data (status, assignee, description, work logged, estimate, etc.), never individual before/after descriptions. Keep full descriptions in journal rows and use the same category selection for export. Classify by event kind and field identity, not by parsing display text; unknown fields share an explicit Other fields category. Migrate obsolete description-based selections once without resetting other filters or column preferences.
 - Preserve exact event data internally. Unknown fields remain explicitly labelled; never invent work or a transition from missing values.
 - HTML export uses the same human-readable descriptions and filtered/sorted journal as the screen.
 - Hide the duplicate remark ID column by default: the group heading retains the ID and Jira link. Allow explicit opt-in and preserve it after reload; migrate old layouts without losing filters, widths, order or the last visible column.

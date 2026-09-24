@@ -69,7 +69,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
       {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
       {key:"role", title:"Тикет · Роль", width:240, value:function(event) { return roleLabel(event.role); }},
-      {key:"change", title:"Изменение", width:230, value:function(event) { return activity.eventText(event); }},
+      {key:"change", title:"Изменение", width:230, value:function(event) { return activity.eventText(event); }, filterValue:function(event) { return activity.eventCategory(event); }},
       {key:"assignee", title:"Исполнитель / передача", width:190, value:function(event) { return label(event.assignee); }},
       {key:"author", title:"Кто изменил", width:145, value:function(event) { return label(event.author); }}
     ];
@@ -91,11 +91,13 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
         if (data.filters && typeof data.filters === "object") known.forEach(function(id) {
           if (Array.isArray(data.filters[id])) filters[id] = data.filters[id].filter(function(value,index,array) { return typeof value === "string" && array.indexOf(value) === index; });
         });
-        if (data.version !== 2) saveLayout();
+        // Old selections contain full event text, not change categories.
+        if (data.changeFilterVersion !== 1 && filters.change && filters.change.length) delete filters.change;
+        if (data.version !== 2 || data.changeFilterVersion !== 1) saveLayout();
       } catch (ignore) { /* Storage is best-effort. */ }
     }
     function saveLayout() {
-      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
+      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,changeFilterVersion:1,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
       catch (ignore) { /* Storage is best-effort. */ }
     }
     function visibleFields() { return order.filter(function(id) { return !hidden[id]; }).map(function(id) { return fields.filter(function(field) { return field.key === id; })[0]; }); }
@@ -155,7 +157,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
       $popover.css("top",Math.max(12,Math.min(rect.bottom+4,viewportHeight-$popover.outerHeight()-12)));
     }
     function matching(event, group) {
-      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || filters[field.key].indexOf(field.value(event,group)) >= 0; });
+      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || filters[field.key].indexOf((field.filterValue || field.value)(event,group)) >= 0; });
     }
     function filtered(report) {
       var groups = (report.groups || []).map(function(group) {
@@ -188,7 +190,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], fu
     }
     function filterMenu(anchor, field, report) {
       var values = Object.create(null), options;
-      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[field.value(event,group)] = true; }); });
+      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[(field.filterValue || field.value)(event,group)] = true; }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
       var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
       var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",280);
