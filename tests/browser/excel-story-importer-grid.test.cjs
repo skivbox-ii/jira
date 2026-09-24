@@ -11,6 +11,7 @@ function setup() {
   const w = dom.window;
   w.scrollTo = () => {};
   const $ = jquery(w), modules = { jquery: $ };
+  modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
   for (const file of ["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid", "rendering"]) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));
   const calls = [];
@@ -33,12 +34,30 @@ function setup() {
     onDialogAssigneeFocus: target => calls.push(["owner", target]),
     onAssignUserTeam: (user, teamId) => calls.push(["assign-team", user, teamId]),
     onViewModeChange: mode => calls.push(["mode", mode]), onLoadRegistry: () => calls.push(["load"]),
+    onReportViewChange: view => calls.push(["report",view]),
     onLlmResetRequest: () => calls.push(["reset-request"]), onLlmResetConfirm: () => calls.push(["reset-confirm"]), onLlmResetCancel: () => calls.push(["reset-cancel"])
   });
   modules._ujgESI_rendering.render(state);
   return { dom, $, state, calls, modules, render: () => modules._ujgESI_rendering.render(state) };
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
+
+test("activity tab is independent from source mode and leaves registry/fullscreen available", () => {
+  const {$,state,calls,render} = setup();
+  const initialRows = $(".ujg-esi-grid tbody tr").length;
+  const tab = $("[role=tab]").filter(function() {return $(this).text() === "Динамика";});
+  assert.equal(tab.length,1);
+  tab.trigger("click");
+  assert.deepEqual(calls.pop(),["report","activity"]);
+  state.reportView = "activity"; render();
+  assert.equal($(".activity-test-sentinel").length,1);
+  assert.equal($(".ujg-esi-grid").length,0);
+  assert.equal($(".ujg-esi-fullscreen-button").length,1);
+  assert.equal($("[aria-label='Режим Jira']").length,1);
+  state.reportView = "registry"; render();
+  assert.equal($(".activity-test-sentinel").length,0);
+  assert.equal($(".ujg-esi-grid tbody tr").length,initialRows);
+});
 function teamGrid(fixture) {
   const context = setup();
   const { $, modules } = context;

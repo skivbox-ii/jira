@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi"], function($, gridModule, icon, teamsUi, statisticsUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi) {
   "use strict";
 
   var $root;
@@ -6,6 +6,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var SUMMARY_MAX_LENGTH = 255;
   var epicSearchTimer = null;
   var grid;
+  var activityView;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
@@ -93,6 +94,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $root = container;
     services = svc || {};
     grid = gridModule.create();
+    activityView = activityUi ? activityUi.create() : null;
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
@@ -1752,6 +1754,16 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
     $toolbar.append($("<h2/>").text("Импорт замечаний"));
+    var $reportTabs = $("<div/>").addClass("ujg-esi-view-modes").attr({role:"tablist", "aria-label":"Представление замечаний"});
+    [["registry", "Реестр"], ["activity", "Динамика"]].forEach(function(view) {
+      var selected = (s.reportView || "registry") === view[0];
+      $reportTabs.append($("<button/>").attr({type:"button",role:"tab","aria-selected":String(selected),"aria-pressed":String(selected)})
+        .text(view[1]).on("click",function() {
+          grid.dismissPopover();
+          if (services.onReportViewChange) services.onReportViewChange(view[0]);
+        }));
+    });
+    $toolbar.append($reportTabs);
     var $modes = $("<div/>").addClass("ujg-esi-view-modes").attr({ role:"group", "aria-label":"Источник замечаний" });
     [["excel", "Excel"], ["jira", "Jira"]].forEach(function(mode) {
       $modes.append($("<button/>").attr({type:"button", "aria-label":"Режим " + mode[1], "aria-pressed":String((s.viewMode || "excel") === mode[0])}).text(mode[1]).on("click", function() { if (services.onViewModeChange) services.onViewModeChange(mode[0]); }));
@@ -1761,7 +1773,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendEpicPicker($toolbar, s);
     if (s.parseMeta && s.viewMode !== "jira") appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
-    if (s.rows && s.rows.length) {
+    if (s.reportView !== "activity" && s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
       $tools.append(gridModule.button("ChevronsUpDown", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));
       var $summary = $("<details/>").addClass("ujg-esi-import-summary");
@@ -1793,7 +1805,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (s.registryError) $root.append($("<div/>").addClass("ujg-esi-sync-error").text(s.registryError));
     if (s.viewMode === "jira" && s.registryWarning) $root.append($("<div/>").addClass("ujg-esi-registry-warning").attr("role", "status").text(s.registryWarning));
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
-    appendPreview($root, s);
+    if (s.reportView === "activity" && activityView) activityView.render($root,s,services);
+    else appendPreview($root, s);
     appendRowOwnerPopover($root, s);
     appendConfirmModal($root, s);
     appendLlmReviewDialog($root, s, "summary");

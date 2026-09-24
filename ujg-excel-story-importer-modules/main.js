@@ -10,7 +10,8 @@ define("_ujgESI_main", [
   "_ujgESI_rendering",
   "_ujgShared_llmClient",
   "_ujgESI_teams",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule) {
+  "_ujgESI_activity",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -695,6 +696,8 @@ define("_ujgESI_main", [
   function issueDetails(issue) {
     var fields = issue && issue.fields || {};
     var since = issueStatusSince(issue);
+    var activity = activityModule ? activityModule.capture(issue) : null;
+    if (activity) activity.linkedKeys = childIssueKeysFromIssues([issue]);
     function name(value) { return value && value.name != null ? String(value.name) : typeof value === "string" ? value : ""; }
     return {
       key: issueKey(issue),
@@ -710,6 +713,8 @@ define("_ujgESI_main", [
       priority: name(fields.priority),
       issueType: name(fields.issuetype),
       updated: fields.updated != null ? String(fields.updated) : "",
+      created: fields.created != null ? String(fields.created) : "",
+      activity: activity,
       statusSince: since.statusSince,
       statusSinceReason: since.statusSinceReason,
     };
@@ -862,6 +867,8 @@ define("_ujgESI_main", [
         priority: details.priority,
         issueType: details.issueType,
         updated: details.updated,
+        created: details.created,
+        activity: details.activity,
         statusSince: details.statusSince,
         statusSinceReason: details.statusSinceReason,
         sourceIndex: index,
@@ -989,9 +996,12 @@ define("_ujgESI_main", [
       epicKey: "",
       rows: [],
       viewMode: "excel",
+      reportView: "registry",
       registryLoading: false,
       registryError: "",
       registryWarning: "",
+      activityLoading: false,
+      activityError: "",
       createSubtasks: true,
       loading: false,
       error: "",
@@ -1064,6 +1074,66 @@ define("_ujgESI_main", [
     var epicChoices = Object.create(null);
     var createInFlight = false;
     var teamSearchSeq = 0;
+    var activitySeq = 0;
+
+    function invalidateActivityHistory() {
+      activitySeq++;
+      state.activityLoading = false;
+      state.activityError = "";
+    }
+
+    function onLoadActivityHistory() {
+      if (state.activityLoading || state.loading || state.syncLoading || state.registryLoading) return;
+      if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
+        state.activityError = "Загрузка истории Jira недоступна.";
+        render();
+        return;
+      }
+      var seq = ++activitySeq, rows = state.rows, project = state.projectKey, epic = state.epicKey, mode = state.viewMode;
+      var targets = Object.create(null), pending = Object.create(null), failures = [];
+      rows.forEach(function(row) {
+        var details = (row.childStatuses || []).filter(function(child) { return child && child.linkedToParent !== false; });
+        var key = String(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key || "").toUpperCase();
+        if (key) {
+          if (!row.storyDetails && !row.activityDetails) row.activityDetails = {key:key,summary:row.summary};
+          details.push(row.storyDetails || row.activityDetails);
+        }
+        details.forEach(function(detail) {
+          var key = String(detail.key || "").toUpperCase();
+          if (!key) return;
+          if (!targets[key]) targets[key] = [];
+          targets[key].push(detail);
+          if (!detail.activity || !detail.activity.complete) pending[key] = true;
+        });
+      });
+      var keys = Object.keys(pending), offset = 0;
+      if (!keys.length) keys = Object.keys(targets);
+      if (!keys.length) return;
+      state.activityLoading = true;
+      state.activityError = "";
+      render();
+      function current() { return seq === activitySeq && rows === state.rows && project === state.projectKey && epic === state.epicKey && mode === state.viewMode; }
+      function next() {
+        if (!current() || offset >= keys.length) return Promise.resolve();
+        var key = keys[offset++];
+        // At most three reads in flight; only the report snapshot is enriched.
+        return Promise.resolve().then(function() { return current() ? api.getIssueWithHistory(key) : null; }).then(function(issue) {
+          if (!current()) return;
+          if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
+          var snapshot = activityModule.capture(issue);
+          snapshot.linkedKeys = childIssueKeysFromIssues([issue]);
+          targets[key].forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
+        }).catch(function(err) {
+          if (current()) failures.push(key + ": " + searchErrorText(err));
+        }).then(next);
+      }
+      Promise.all([next(), next(), next()]).then(function() {
+        if (!current()) return;
+        state.activityLoading = false;
+        state.activityError = failures.length ? "Не удалось загрузить историю: " + failures.slice(0, 5).join("; ") + (failures.length > 5 ? " (и ещё " + (failures.length - 5) + ")" : "") : "";
+        render();
+      });
+    }
 
     function hasOwn(obj, key) {
       return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
@@ -1233,6 +1303,7 @@ define("_ujgESI_main", [
     }
 
     function parseLoadedWorkbook() {
+      invalidateActivityHistory();
       var parsed = parser.parseWorkbook(state.sourceWorkbook, state.mappingSettings);
       excelRows = (parsed.rows || []).map(copyRow);
       if (state.viewMode === "excel") state.rows = excelRows;
@@ -2228,6 +2299,7 @@ define("_ujgESI_main", [
     function onViewModeChange(mode) {
       var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
       if (!next || next === state.viewMode) return;
+      invalidateActivityHistory();
       if (state.viewMode === "excel") excelRows = state.rows;
       if (state.viewMode === "jira") registryRows = state.rows;
       if (next !== "excel" && state.syncLoading) {
@@ -2263,6 +2335,7 @@ define("_ujgESI_main", [
         return;
       }
       seq = ++registrySeq;
+      invalidateActivityHistory();
       state.registryLoading = true;
       state.registryError = "";
       state.registryWarning = "";
@@ -2328,6 +2401,7 @@ define("_ujgESI_main", [
     }
 
     function onProjectChange(projectKey) {
+      invalidateActivityHistory();
       projectSelectionChanged = true;
       if (state.syncLoading) {
         syncSeq += 1;
@@ -2359,6 +2433,7 @@ define("_ujgESI_main", [
     }
 
     function onEpicSelect(epicKey) {
+      invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
         state.syncLoading = false;
@@ -2378,6 +2453,7 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
         state.syncLoading = false;
@@ -2755,6 +2831,7 @@ define("_ujgESI_main", [
         render();
         return;
       }
+      invalidateActivityHistory();
       state.syncLoading = true;
       seq = ++syncSeq;
       state.syncError = "";
@@ -3614,6 +3691,13 @@ define("_ujgESI_main", [
       onSyncJira: onSyncJira,
       onViewModeChange: onViewModeChange,
       onLoadRegistry: onLoadRegistry,
+      onLoadActivityHistory: onLoadActivityHistory,
+      onReportViewChange: function(view) {
+        if (view !== "registry" && view !== "activity") return;
+        state.reportView = view;
+        closeUserPicker();
+        render();
+      },
       onDownloadPatchedExcel: onDownloadPatchedExcel,
       onCreateRow: onCreateRow,
       onAddChildTasks: onAddChildTasks,

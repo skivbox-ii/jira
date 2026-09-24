@@ -16,6 +16,7 @@ async function setup(options = {}) {
     _ujgESI_api: { getProjects: () => Promise.resolve([{key:"P"},{key:"Q"}]), getProjectEpics: () => Promise.resolve([]), getProjectCreateMeta: () => Promise.resolve({projects:[]}), searchUsers: options.searchUsers || (() => Promise.resolve([])) },
     "_ujgESI_excel-loader": {}, _ujgESI_parser: {}, _ujgESI_creator: {}, _ujgESI_mappingStore: null, _ujgESI_xlsxPatcher: null,
     _ujgESI_teams: teams,
+    _ujgESI_activity: null,
     _ujgESI_rendering: { init: (_el, hooks) => { app.hooks = hooks; }, render: state => { app.state = state; } },
     _ujgShared_llmClient: options.llmClient || { request: () => { throw Error("No LLM request allowed"); } },
   }, { localStorage: storage, window: {localStorage: storage} });

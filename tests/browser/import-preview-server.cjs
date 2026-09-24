@@ -10,14 +10,14 @@ rows.push([816, "При переключении вкладок пропадае
 const descriptions = ["Драйвер МЭК устанавливает сигналу недостоверность только на основе флага IV. Учитывать OV и NT.", "Интерфейс просмотра настроек МЭК-соединений", "Сохранение настроек попапов после обновления", "Плановая линия на участке профиля", "Автомасштабирование при переходе между ТУ", "Курсор и границы осей X и Y"];
 const keys = ["EVOSCADA-16104", "EVOSCADA-17906", "EVOSCADA-20000", "EVOSCADA-21032", "EVOSCADA-20862", "EVOSCADA-20914"];
 function issue(key, title, status, person, type) {
-  const statusId = status === "Готово" ? "3" : /В работе|Тестирование/.test(status) ? "2" : "1";
+  const statusId = status === "Готово" ? "3" : status === "Тестирование" ? "4" : status === "В работе" ? "2" : "1";
   const number = Number(key.split("-").pop());
   const since = new Date(Date.UTC(2026,8,22,10) - (number % 12 * 86400000 + number % 6 * 3600000)).toISOString();
   const description = /^\[QA\]/.test(title)
     ? "h2. Проверка качества сигнала\nПроверить обработку признаков недостоверности в драйвере МЭК и отображение качества в OPC UA.\nh3. Сценарии проверки\n* Передать сигнал с флагами OV и NT.\n* Проверить отображение состояния в журнале и контейнере МЭК.\n* Повторить проверку после переподключения.\nh3. Ожидаемый результат\nКачество сигнала и его описание соответствуют полученным флагам; результат зафиксирован в протоколе тестирования."
     : "h2. " + title + "\n" + (type === "История" ? "Исходное замечание из журнала приёмки." : "Реализовать изменение и проверить обработку граничных состояний.") + "\nh3. Критерии приёмки\n* Изменение сохраняется после обновления.\n* Существующие сценарии работают без регрессий.";
   const username = {"Иванов И.":"ivanov", "Сидоров А.":"sidorov", "Соколова А.":"sokolova", "Петров П.":"petrov", "Орлова Н.":"orlova"}[person] || person;
-  return {key, fields:{summary:title,description, status:{id:statusId,name:status,statusCategory:{key:statusId === "3" ? "done" : statusId === "2" ? "indeterminate" : "new"}}, assignee:person ? {name:username,displayName:person} : null, priority:{name:number % 7 === 0 ? "Высокий" : "Средний"}, issuetype:{name:type},created:"2026-09-01T09:00:00Z",updated:"2026-09-22T10:00:00Z",issuelinks:[]},changelog:{startAt:0,total:1,histories:[{id:key+"-h",created:since,items:[{field:"status",from:"0",fromString:"Новая",to:statusId,toString:status}]}]}};
+  return {key, fields:{summary:title,description, status:{id:statusId,name:status,statusCategory:{key:statusId === "3" ? "done" : /^(2|4)$/.test(statusId) ? "indeterminate" : "new"}}, assignee:person ? {name:username,displayName:person} : null, creator:{name:"orlova",displayName:"Орлова Н."}, priority:{name:number % 7 === 0 ? "Высокий" : "Средний"}, issuetype:{name:type},created:"2026-09-01T09:00:00Z",updated:"2026-09-22T10:00:00Z",issuelinks:[]},changelog:{startAt:0,total:1,histories:[{id:key+"-h",created:since,author:{name:"ivanov",displayName:"Иванов И."},items:[{field:"status",from:"0",fromString:"Новая",to:statusId,toString:status}]}]}};
 }
 for (let i = 0; i < 68; i++) {
   const id = 744 + i, key = keys[i] || "EVOSCADA-" + (24000 + i), description = descriptions[i % descriptions.length];
@@ -46,6 +46,46 @@ for (let i = 0; i < 68; i++) {
     issues[partial.key] = partial; issues[child.key] = child;
     partial.fields.issuelinks.push({type:{name:"Child",outward:"is parent of",inward:"is child of"},outwardIssue:{key:child.key,fields:child.fields}});
   }
+}
+// Explicit daily movements supplement the existing tree fixture, without live Jira.
+const activityDate = new Date(Date.now() + 3 * 3600000).toISOString().slice(0,10);
+const statusIds = {"Новая":"0","К выполнению":"1","В работе":"2","Готово":"3","Тестирование":"4"};
+function movement(key, time, field, from, to, author) {
+  const target = issues[key];
+  const item = {field, fromString:from, toString:to};
+  if (field === "status") {
+    item.from = statusIds[from]; item.to = statusIds[to];
+    target.fields.status = {id:item.to,name:to,statusCategory:{key:to === "Готово" ? "done" : /В работе|Тестирование/.test(to) ? "indeterminate" : "new"}};
+  } else {
+    item.from = from === "Петров П." ? "petrov" : "sokolova";
+    item.to = to === "Петров П." ? "petrov" : "sokolova";
+    target.fields.assignee = {name:item.to,displayName:to};
+  }
+  const created = activityDate + "T" + time + ":00+03:00";
+  target.changelog.histories.push({id:key+"-day-"+target.changelog.histories.length,created,author:{name:author || "ivanov",displayName:author === "sokolova" ? "Соколова А." : "Иванов И."},items:[item]});
+  target.changelog.total = target.changelog.histories.length;
+  target.fields.updated = created;
+}
+movement("EVOSCADA-18080","09:15","status","Тестирование","В работе","sokolova");
+movement("EVOSCADA-18080","09:15","assignee","Соколова А.","Петров П.","sokolova");
+movement("EVOSCADA-18057","10:20","status","Готово","В работе");
+movement("EVOSCADA-18057","11:10","status","В работе","Готово");
+movement("EVOSCADA-30040","11:45","status","Готово","Готово");
+movement("EVOSCADA-30041","12:05","status","Тестирование","Готово","sokolova");
+movement("EVOSCADA-30050","10:00","assignee","Петров П.","Соколова А.");
+for (const key of ["EVOSCADA-20914","EVOSCADA-30051"]) {
+  const target = issues[key];
+  target.changelog.histories[0].items[0].to = "3";
+  target.changelog.histories[0].items[0].toString = "Готово";
+  target.fields.status = {id:"3",name:"Готово",statusCategory:{key:"done"}};
+}
+movement("EVOSCADA-20914","10:10","status","Готово","В работе","sokolova");
+movement("EVOSCADA-20914","10:30","status","В работе","Тестирование");
+for (const key of ["EVOSCADA-20000","EVOSCADA-30020","EVOSCADA-30021"]) {
+  const target = issues[key];
+  target.fields.created = activityDate + "T08:30:00+03:00";
+  target.changelog.histories[0].created = activityDate + "T08:40:00+03:00";
+  target.fields.updated = target.changelog.histories[0].created;
 }
 const workbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Лист1");

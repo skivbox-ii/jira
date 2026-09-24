@@ -47,7 +47,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
   }
 
   function issueFields() {
-    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "priority", "issuetype", "updated", "created"];
+    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "creator", "issuelinks", "priority", "issuetype", "updated", "created"];
     [config.SPRINT_FIELD, "customfield_10020", "customfield_10007"].forEach(function(field) {
       if (field && fields.indexOf(field) < 0) fields.push(field);
     });
@@ -137,6 +137,14 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
           expand: options && options.expand === "changelog" ? ["changelog"] : undefined,
           maxResults: list.length,
         }),
+      });
+    },
+    getIssueWithHistory: function(key) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()),
+        type: "GET",
+        dataType: "json",
+        data: { fields: issueFields().join(","), expand: "changelog" },
       });
     },
     getProjectIssues: function(projectKey, epicKey) {

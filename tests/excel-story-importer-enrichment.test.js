@@ -35,6 +35,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       render: state => { app.state = state; },
     },
     _ujgESI_teams: null,
+    _ujgESI_activity: { capture: issue => ({ key: issue.key, complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });
@@ -48,6 +49,110 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
 function history(created, to, toString, from, fromString) {
   return { created, items: [{ field: "status", to, toString, from, fromString }] };
 }
+
+test("daily activity retains history on parent and child and explicitly enriches only incomplete issues", async () => {
+  const calls = [];
+  const child = { key: "TEST-2", fields: { summary: "[QA] Child", created: "2026-09-01T00:00:00Z" }, changelog: { startAt: 0, total: 0, histories: [] } };
+  const parent = { key: "TEST-1", fields: { summary: "Parent", created: "2026-09-01T00:00:00Z", issuelinks: [{ type: { name: "Child" }, outwardIssue: child }] } };
+  const app = await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}], {
+    getIssuesByKeys: keys => Promise.resolve({issues: keys.map(key => key === parent.key ? parent : child)}),
+    getIssueWithHistory: key => { calls.push(key); return Promise.resolve(Object.assign({}, parent, {changelog: {startAt:0,total:0,histories:[]}})); }
+  });
+  app.callbacks.onSyncJira(); await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails.activity.complete, false);
+  assert.equal(app.state.rows[0].childStatuses[0].activity.complete, true);
+  assert.equal(app.state.rows[0].storyDetails.created, parent.fields.created);
+  assert.equal(calls.length, 0);
+  app.callbacks.onLoadActivityHistory(); await flush(); await flush();
+  assert.deepEqual(calls, ["TEST-1"]);
+  assert.equal(app.state.rows[0].storyDetails.activity.complete, true);
+  assert.equal(app.state.activityLoading, false);
+});
+
+test("activity enrichment ignores a response after switching project", async () => {
+  let resolveHistory;
+  const issue = { key: "TEST-1", fields: { summary: "Parent" } };
+  const app = await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}], {
+    getIssuesByKeys: () => Promise.resolve({issues:[issue]}),
+    getIssueWithHistory: () => new Promise(resolve => { resolveHistory = resolve; })
+  });
+  app.callbacks.onSyncJira(); await flush(); await flush();
+  const original = app.state.rows[0].storyDetails.activity;
+  app.callbacks.onLoadActivityHistory(); await flush();
+  app.callbacks.onProjectChange("OTHER");
+  resolveHistory(Object.assign({}, issue, {changelog:{startAt:0,total:0,histories:[]}})); await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails.activity, original);
+  assert.equal(app.state.activityLoading, false);
+});
+
+test("activity enrichment reports read failures without changing ticket fields", async () => {
+  const issue = { key: "TEST-1", fields: { summary: "Parent" } };
+  const app = await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}], {
+    getIssuesByKeys: () => Promise.resolve({issues:[issue]}),
+    getIssueWithHistory: () => Promise.reject(new Error("offline"))
+  });
+  app.callbacks.onSyncJira(); await flush(); await flush();
+  app.callbacks.onLoadActivityHistory(); await flush(); await flush();
+  assert.equal(app.state.activityLoading, false);
+  assert.match(app.state.activityError, /TEST-1.*offline/);
+  assert.equal(app.state.rows[0].storyDetails.summary, "Parent");
+});
+
+test("full issue history uses a GET and requests creator for creation attribution", async () => {
+  let request;
+  const api = loadAmdModule(path.join(MODULE_DIR, "api.js"), {
+    jquery: {ajax: options => { request = options; return Promise.resolve({}); }},
+    _ujgESI_config: {baseUrl:"https://jira.example.test"}
+  });
+  await api.getIssueWithHistory("TEST-1");
+  assert.equal(request.type,"GET");
+  assert.equal(request.url,"https://jira.example.test/rest/api/2/issue/TEST-1");
+  assert.equal(request.data.expand,"changelog");
+  assert.ok(request.data.fields.includes("creator"));
+});
+
+test("history enrichment deduplicates keys, bounds concurrency, and cancels queued reads on source change", async () => {
+  const resolvers = [], reads = [];
+  const issues = Array.from({length:8},(_,i) => ({key:"TEST-"+(i+1),fields:{summary:"Parent"}}));
+  const app = await loadImporter(issues.concat(issues[0]).map(issue => ({jiraKey:issue.key,sourceColumns:{}})), {
+    getIssuesByKeys: () => Promise.resolve({issues}),
+    getIssueWithHistory: key => { reads.push(key); return new Promise(resolve => resolvers.push(() => resolve(Object.assign({},issues.find(issue => issue.key === key),{changelog:{startAt:0,total:0,histories:[]}})))); }
+  });
+  app.callbacks.onSyncJira(); await flush(); await flush();
+  app.callbacks.onLoadActivityHistory(); await flush();
+  assert.equal(reads.length,3);
+  resolvers[0](); await flush();
+  assert.equal(reads.length,4);
+  app.callbacks.onViewModeChange("jira");
+  resolvers.slice(1).forEach(resolve => resolve()); await flush(); await flush();
+  assert.equal(reads.length,4);
+  assert.equal(app.state.activityLoading,false);
+  assert.equal(app.state.activityError,"");
+});
+
+test("explicit history refresh can renew complete but stale snapshots", async () => {
+  let reads = 0;
+  const issue = {key:"TEST-1",fields:{summary:"Parent"},changelog:{startAt:0,total:0,histories:[]}};
+  const app = await loadImporter([{jiraKey:issue.key,sourceColumns:{}}], {
+    getIssuesByKeys: () => Promise.resolve({issues:[issue]}),
+    getIssueWithHistory: () => { reads++; return Promise.resolve(issue); }
+  });
+  app.callbacks.onSyncJira(); await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails.activity.complete,true);
+  app.callbacks.onLoadActivityHistory(); await flush(); await flush();
+  assert.equal(reads,1);
+});
+
+test("activity-only reads never replace unsynchronized Excel fields with key-only Story details", async () => {
+  const sourceColumns = {"Статус в Jira":"Готово","Исполнитель в Jira":"Иванов","Приоритет":"Высокий"};
+  const app = await loadImporter([{jiraKey:"TEST-1",summary:"Excel remark",sourceColumns}], {
+    getIssueWithHistory: () => Promise.reject(new Error("offline"))
+  });
+  app.callbacks.onLoadActivityHistory(); await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails,undefined);
+  assert.deepEqual(plain(app.state.rows[0].sourceColumns),sourceColumns);
+  assert.match(app.state.activityError,/offline/);
+});
 
 test("ready-for-testing without a status category remains an open testing task", async () => {
   const issue = {key:"TEST-1",fields:{summary:"Work",status:{name:"Готово к тестированию"}}};
@@ -104,6 +209,8 @@ test("explicit sync enriches Story and child fields without extra requests or is
     statusCategory: "", statusState: "progress", done: false,
     assigneeIdentifiers: ["JIRAUSER100", "ivan"],
     priority: "High", issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
+    created: issues[0].fields.created,
+    activity: {key:"TEST-1",complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
   });
   assert.match(row.storyDetails.statusSinceReason, /истор|переход/i);
@@ -112,6 +219,8 @@ test("explicit sync enriches Story and child fields without extra requests or is
     statusCategory: "new", statusState: "todo", done: false, assignee: "developer", blocked: false,
     assigneeIdentifiers: ["developer"],
     priority: "Low", issueType: "Task", updated: "2026-02-02T00:00:00Z",
+    created: child.fields.created,
+    activity: {key:"TEST-2",complete:true,histories:[],linkedKeys:[]},
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
   });
   assert.match(row.childStatuses[0].statusSinceReason, /создани/i);
