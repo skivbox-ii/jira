@@ -3,7 +3,7 @@ define("_ujgESI_deadlines", [], function() {
 
   var aliases = ["Срок исполнения", "Срок исполнения замечания", "Срок устранения",
     "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения",
-    "Срок выполнения", "Срок"];
+    "Срок выполнения", "Срок", "Планируемая дата устранения"];
 
   function text(value) { return value == null ? "" : String(value).trim(); }
   function key(value) { return text(value).toUpperCase(); }

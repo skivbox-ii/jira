@@ -15,14 +15,14 @@ for (const timezone of ["UTC", "Europe/Moscow"]) {
         const parser=load(path.join(dir,'parser.js'),{_ujgESI_config:config},{XLSX});
         const resolve=load(path.join(dir,'deadlines.js'),{}).resolve;
         (async()=>{
-          for(const custom of [false,true]) {
-            const name=custom?'Мой срок':'Срок', serial=46290-${date1904 ? 1462 : 0};
+          for(const name of ['Срок','Мой срок','Планируемая дата устранения']) {
+            const serial=46290-${date1904 ? 1462 : 0};
             const sheet=XLSX.utils.aoa_to_sheet([['Замечание',name,name,'Дата'],['Ошибка',serial,serial,serial]]);
             for(const cell of ['B2','C2','D2']) sheet[cell].z='dd/mm/yyyy';
             const workbook={SheetNames:['Журнал'],Sheets:{Журнал:sheet},Workbook:{WBProps:{date1904:${date1904}}}};
             const buffer=XLSX.write(workbook,{type:'buffer',bookType:'xlsx'});
             const loaded=await loader.readWorkbookFromBuffer(buffer);
-            const options={columnMap:{deadline:name}}, row=parser.parseWorkbook(loaded,options).rows[0];
+            const options={columnMap:{deadline:name==='Мой срок'?name:'Срок'}}, row=parser.parseWorkbook(loaded,options).rows[0];
             const due=resolve(row,options);
             assert.equal(due.problem,null,JSON.stringify(row.sourceColumns));
             assert.equal(due.date,'2026-09-25',JSON.stringify(row.sourceColumns));

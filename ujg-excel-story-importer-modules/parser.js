@@ -181,7 +181,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     if (base === cellText(settings.columnMap.deadline)) return true;
     return ["Срок исполнения", "Срок исполнения замечания", "Срок устранения",
       "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения",
-      "Срок выполнения", "Срок"].indexOf(base) !== -1;
+      "Срок выполнения", "Срок", "Планируемая дата устранения"].indexOf(base) !== -1;
   }
 
   function parseRows(sheetName, rows, header, settings, rawRows, date1904) {

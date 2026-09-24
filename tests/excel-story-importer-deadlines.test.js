@@ -43,6 +43,12 @@ test("populated duplicate Срок survives a blank first column before alias fa
   }
 });
 
+test("production journal planned removal date is a deadline, not a factual completion date", () => {
+  const resolve=deadlines().resolve;
+  assert.equal(resolve({sourceColumns:{"Планируемая дата устранения":"24.09.2026"}}).date,"2026-09-24");
+  assert.equal(resolve({sourceColumns:{"Фактическая дата устранения":"24.09.2026"}}).problem,"missing");
+});
+
 test("custom mapping selects its field and ignores unrelated deadline aliases", () => {
   const resolve = deadlines().resolve;
   const row = {sourceColumns:{"Мой срок":"2026-09-25","Срок":"2026-09-26"}};
