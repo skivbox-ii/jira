@@ -32,21 +32,21 @@ Files: `deadlines.js` (new module), config/parser/main/rendering (только �
 
 Interface: `resolve(row, {columnMap,journalRows}) -> {date,raw,source,field,problem}` по spec; `state.deadlineJournalRows` содержит текущие Excel-строки в памяти.
 
-- [ ] Red: строгие даты, custom mapping, Jira imported table, источник Excel по точному ключу, конфликты и отсутствие подстановки из свободного текста.
+- [x] Red: строгие даты, custom mapping, Jira imported table, источник Excel по точному ключу, конфликты и отсутствие подстановки из свободного текста.
 
 ```js
 assert.equal(deadlines.resolve({sourceColumns:{'Срок исполнения':'25.09.2026'}}).date,'2026-09-25');
 assert.equal(deadlines.resolve({sourceColumns:{'Срок исполнения':'31.02.2026'}}).problem,'invalid');
 ```
 
-- [ ] Реализовать чистый модуль и маппинг через существующие настройки. Сохранять дату без новых вызовов Jira и без вмешательства в создание задач.
-- [ ] Green: `node --test tests/excel-story-importer-deadlines.test.js tests/excel-story-importer-parser.test.js tests/excel-story-importer-mapping-store.test.js`.
+- [x] Реализовать чистый модуль и маппинг через существующие настройки. Сохранять дату без новых вызовов Jira и без вмешательства в создание задач.
+- [x] Green: `node --test tests/excel-story-importer-deadlines.test.js tests/excel-story-importer-parser.test.js tests/excel-story-importer-mapping-store.test.js`.
 
 ## Task 2: Расчёт и экспорт
 
 Files: activity.js, activity-ai.js, build-excel-story-importer.js; domain/AI tests и AMD wiring helpers.
 
-- [ ] Red: просроченное замечание без событий, сегодня/завтра, готово/отменено, незавершённый ребёнок, возврат, выбранный прошлый день, дубли и unknown coverage.
+- [x] Red: просроченное замечание без событий, сегодня/завтра, готово/отменено, незавершённый ребёнок, возврат, выбранный прошлый день, дубли и unknown coverage.
 
 ```js
 assert.equal(result.events.length,0);
@@ -55,29 +55,29 @@ assert.equal(result.metrics.overdue,1);
 assert.equal(result.groups[0].deadline.daysOverdue,1);
 ```
 
-- [ ] Реализовать контракт групп и deadlineCoverage. Сводка не зависит от фильтров журнала. Сроки не меняют существующие метрики.
-- [ ] Добавить срок/просрочку в HTML и инструкцию LLM о текущем сроке журнала; не обрезать замечания без событий из экспортной сводки.
-- [ ] Green: domain, AI и экспортные тесты.
+- [x] Реализовать контракт групп и deadlineCoverage. Сводка не зависит от фильтров журнала. Сроки не меняют существующие метрики.
+- [x] Добавить срок/просрочку в HTML и инструкцию LLM о текущем сроке журнала; не обрезать замечания без событий из экспортной сводки.
+- [x] Green: domain, AI и экспортные тесты.
 
 ## Task 3: Заголовки и управленческая сводка
 
 Files: activity-ui.js, activity-management-ui.js, CSS; соответствующие browser tests.
 
-- [ ] Red: шестой показатель, заголовок со сроком, жёлтые today/tomorrow, красный overdue, нейтральный completed, hover/click и независимость от фильтров.
-- [ ] Добавить срок последним элементом группового заголовка; deadlineCoverage в компактную строку под итогами.
-- [ ] Расширить существующие preview/full report для overdue: сначала максимальная просрочка, все строки, deadline/owner/pendingTasks с ключами и ролями, никаких новых мутационных действий.
-- [ ] Green: browser tests. Ранее реализованные даты готовности и переходы должны остаться без изменений.
+- [x] Red: шестой показатель, заголовок со сроком, жёлтые today/tomorrow, красный overdue, нейтральный completed, hover/click и независимость от фильтров.
+- [x] Добавить срок последним элементом группового заголовка; deadlineCoverage в компактную строку под итогами.
+- [x] Расширить существующие preview/full report для overdue: сначала максимальная просрочка, все строки, deadline/owner/pendingTasks с ключами и ролями, никаких новых мутационных действий.
+- [x] Green: browser tests. Ранее реализованные даты готовности и переходы должны остаться без изменений.
 
 ## Task 4: Приёмка и публикация
 
 Files: preview-bootstrap/startup tests, итоговые JS/runtime, backlog и журнал приёмки.
 
-- [ ] Дополнить локальную фикстуру сроками и сценарием без событий; даты вычислять от дня фикстуры.
-- [ ] Собрать только importer и его runtime. Полный существующий suite, diff --check.
-- [ ] Независимое ревью готового diff и устранение подтверждённых замечаний.
-- [ ] Скриншоты 1440x1000/390x844: заголовки, 6 итогов, overdue hover/full, прокрутка.
-- [ ] Публикация, сравнение CDN по SHA, read-only Citrix-проверка реальных сроков. Если в Jira нет источника срока, проверить честное отсутствие данных и загрузку журнала через UI, не выдумывать даты.
-- [ ] Обновить backlog с доказательствами; не отмечать production acceptance без скриншота.
+- [x] Дополнить локальную фикстуру сроками и сценарием без событий; даты вычислять от дня фикстуры.
+- [x] Собрать только importer и его runtime. Полный существующий suite, diff --check.
+- [x] Независимое ревью готового diff и устранение подтверждённых замечаний.
+- [x] Скриншоты 1440x1000/390x844: заголовки, 6 итогов, overdue hover/full, прокрутка.
+- [x] Публикация, сравнение CDN по SHA, read-only Citrix-проверка реальных сроков. Если в Jira нет источника срока, проверить честное отсутствие данных и загрузку журнала через UI, не выдумывать даты.
+- [x] Обновить backlog с доказательствами; не отмечать production acceptance без скриншота.
 
 ## Саморевью плана
 
