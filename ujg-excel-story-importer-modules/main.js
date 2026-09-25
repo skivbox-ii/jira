@@ -673,7 +673,8 @@ define("_ujgESI_main", [
     }
     if (created && updated && created > updated) return unknown("Дата создания Jira позже даты обновления.");
     if (!transitions.length) return sinceCreation();
-    if ((created && transitions[0].at < created) || (updated && transitions[transitions.length - 1].at > updated)) return unknown("Даты переходов не согласуются с датами создания или обновления Jira.");
+    // Jira's field and changelog timestamps can differ within the same second.
+    if ((created && transitions[0].at < created) || (updated && Math.floor(Date.parse(transitions[transitions.length - 1].at) / 1000) > Math.floor(Date.parse(updated) / 1000))) return unknown("Даты переходов не согласуются с датами создания или обновления Jira.");
     for (var i = 1; i < transitions.length; i += 1) {
       var previous = transitions[i - 1];
       var current = transitions[i];
@@ -1001,6 +1002,7 @@ define("_ujgESI_main", [
       registryError: "",
       registryWarning: "",
       activityLoading: false,
+      activityProgress: null,
       activityError: "",
       createSubtasks: true,
       loading: false,
@@ -1076,22 +1078,24 @@ define("_ujgESI_main", [
     var createInFlight = false;
     var teamSearchSeq = 0;
     var activitySeq = 0;
+    var activityDate = "";
 
     function invalidateActivityHistory() {
       activitySeq++;
       state.activityLoading = false;
       state.activityError = "";
+      state.activityProgress = null;
     }
 
-    function onLoadActivityHistory() {
+    function onLoadActivityHistory(options) {
       if (state.activityLoading || state.loading || state.syncLoading || state.registryLoading) return;
-      if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
-        state.activityError = "Загрузка истории Jira недоступна.";
-        render();
-        return;
+      var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
+        var start = Date.parse(requestedDate + "T00:00:00+03:00");
+        if (isFinite(start) && start < Date.now()) requiredThrough = Math.min(Date.now(), start + 86400000);
       }
       var seq = ++activitySeq, rows = state.rows, project = state.projectKey, epic = state.epicKey, mode = state.viewMode;
-      var targets = Object.create(null), pending = Object.create(null), failures = [];
+      var targets = Object.create(null), pending = Object.create(null), failures = (opts.failures || []).slice();
       rows.forEach(function(row) {
         var details = (row.childStatuses || []).filter(function(child) { return child && child.linkedToParent !== false; });
         var key = String(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key || "").toUpperCase();
@@ -1105,13 +1109,22 @@ define("_ujgESI_main", [
           if (!targets[key]) targets[key] = [];
           targets[key].push(detail);
           if (!detail.activity || !detail.activity.complete) pending[key] = true;
+          else if (requiredThrough && (!isFinite(Date.parse(detail.activity.capturedAt)) || Date.parse(detail.activity.capturedAt) < requiredThrough)) pending[key] = true;
         });
       });
       var keys = Object.keys(pending), offset = 0;
-      if (!keys.length) keys = Object.keys(targets);
+      if (!keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
+      if (opts.excludeKeys) keys = keys.filter(function(key) { return opts.excludeKeys.indexOf(key) < 0; });
       if (!keys.length) return;
+      if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
+        state.activityError = "Загрузка истории Jira недоступна.";
+        render();
+        return;
+      }
       state.activityLoading = true;
       state.activityError = "";
+      state.activityProgress = {completed:0,total:keys.length};
+      var lastProgressRender = Date.now();
       render();
       function current() { return seq === activitySeq && rows === state.rows && project === state.projectKey && epic === state.epicKey && mode === state.viewMode; }
       function next() {
@@ -1126,13 +1139,24 @@ define("_ujgESI_main", [
           targets[key].forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
         }).catch(function(err) {
           if (current()) failures.push(key + ": " + searchErrorText(err));
-        }).then(next);
+        }).then(function() {
+          if (!current()) return;
+          state.activityProgress.completed++;
+          if (Date.now() - lastProgressRender >= 500) {
+            lastProgressRender = Date.now();
+            render();
+          }
+          return next();
+        });
       }
       Promise.all([next(), next(), next()]).then(function() {
         if (!current()) return;
         state.activityLoading = false;
         state.activityError = failures.length ? "Не удалось загрузить историю: " + failures.slice(0, 5).join("; ") + (failures.length > 5 ? " (и ещё " + (failures.length - 5) + ")" : "") : "";
         render();
+        if (state.reportView === "activity" && activityDate && activityDate !== requestedDate) {
+          onLoadActivityHistory({onlyIncomplete:true,date:activityDate,excludeKeys:keys.concat(opts.excludeKeys || []),failures:failures});
+        }
       });
     }
 
@@ -2399,6 +2423,7 @@ define("_ujgESI_main", [
         state.registryWarning = data.warning;
         registryLoaded = true;
         render();
+        if (state.reportView === "activity") onLoadActivityHistory({onlyIncomplete:true});
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
         state.registryLoading = false;
@@ -3723,13 +3748,19 @@ define("_ujgESI_main", [
       onViewModeChange: onViewModeChange,
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
+      onActivityDateChange: function(date) {
+        activityDate = date;
+        if (state.reportView === "activity" && state.viewMode === "jira") onLoadActivityHistory({onlyIncomplete:true,date:date});
+      },
       onActivityLlmRequest: onActivityLlmRequest,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
+        var enteringActivity = view === "activity" && state.reportView !== "activity";
+        if (state.reportView !== view) invalidateActivityHistory();
         state.reportView = view;
         closeUserPicker();
         if (view === "activity" && state.viewMode !== "jira") onViewModeChange("jira");
-        if (view === "activity" && !registryLoaded) onLoadRegistry();
+        if (view === "activity" && (enteringActivity || !registryLoaded)) onLoadRegistry();
         render();
       },
       onDownloadPatchedExcel: onDownloadPatchedExcel,

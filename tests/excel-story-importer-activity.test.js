@@ -456,11 +456,28 @@ test("search timestamps rounded to seconds do not invalidate millisecond changel
   const api = activity();
   const h = history("h", "2026-09-24T09:00:00.853Z", "editor", [item("status", "1", "2", "Open", "Done")]);
   const jira = issue("P-1", "Done", [h], {fields:{updated:"2026-09-24T09:00:00.000Z"}});
-  assert.equal(api.capture(jira).complete, true);
+  let snapshot = api.capture(jira);
+  assert.equal(snapshot.complete, true);
+  assert.deepEqual(Array.from(snapshot.warnings), []);
+  assert.equal(snapshot.diagnostics.length, 1);
+  assert.match(snapshot.diagnostics[0], /09:00:00\.853Z > 2026-09-24T09:00:00\.000Z/);
+  let result = report(api,[row(detail(api,jira))],{now:"2026-09-24T09:00:01Z"});
+  assert.equal(result.coverage.isComplete,true);
+  assert.equal(result.coverage.incomplete,0);
+  assert.match(result.coverage.diagnostics[0],/^P-1:.*09:00:00\.853Z/);
   jira.fields.updated = "2026-09-24T08:59:59.000Z";
-  assert.equal(api.capture(jira).complete, false, "A later second remains contradictory");
+  snapshot = api.capture(jira);
+  assert.equal(snapshot.complete, false, "A later second remains contradictory");
+  assert.match(snapshot.warnings.join(" "),/Изменение позже обновления/);
+  assert.deepEqual(Array.from(snapshot.diagnostics),[]);
   jira.fields.updated = "2026-09-24T09:00:00.100Z";
-  assert.equal(api.capture(jira).complete, false, "Nonzero milliseconds are authoritative");
+  snapshot = api.capture(jira);
+  assert.equal(snapshot.complete, true, "A same-second discrepancy stays diagnostic even with nonzero updated milliseconds");
+  assert.equal(snapshot.diagnostics.length,1);
+  assert.equal(snapshot.histories[0].at,"2026-09-24T09:00:00.853Z");
+  result = report(api,[row(detail(api,jira))],{now:"2026-09-24T09:00:01Z"});
+  assert.equal(result.coverage.isComplete,true);
+  assert.equal(result.coverage.diagnostics.length,1);
 });
 
 test("events describe statuses, assignments and durations in plain Russian", () => {

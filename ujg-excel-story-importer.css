@@ -2010,10 +2010,12 @@
 .ujg-esi-activity-popover-event-head a { color: #075fc4; }
 .ujg-esi-activity-popover-title { font-weight: 600; overflow-wrap: anywhere; }
 .ujg-esi-activity-coverage { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; }
-.ujg-esi-activity-warning-details { min-width: 0; flex: 1 1 260px; }
-.ujg-esi-activity-warning-details summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ujg-esi-activity-warning-details, .ujg-esi-activity-diagnostic-details { min-width: 0; flex: 1 1 260px; }
+.ujg-esi-activity-warning-details summary, .ujg-esi-activity-diagnostic-details summary { cursor: pointer; overflow-wrap: anywhere; }
 .ujg-esi-activity-warning-list { max-height: 160px; overflow-y: auto; margin-top: 5px; padding: 6px 8px; border: 1px solid #e6c99d; background: #fffaf0; color: #835609; overflow-wrap: anywhere; }
 .ujg-esi-activity-warning-list > div + div { border-top: 1px solid #f0dfbd; margin-top: 4px; padding-top: 4px; }
+.ujg-esi-activity-diagnostic-list { max-height: 160px; overflow-y: auto; margin-top: 5px; padding: 6px 8px; border: 1px solid #dce3eb; background: #f5f8fb; color: #526174; overflow-wrap: anywhere; }
+.ujg-esi-activity-diagnostic-list > div + div { border-top: 1px solid #dce3eb; margin-top: 4px; padding-top: 4px; }
 .ujg-esi-activity-error { color: #ae2a19; }
 .ujg-esi-activity-journal { border-top: 1px solid #dce3eb; padding-top: 12px; min-width: 0; }
 .ujg-esi-activity-journal-heading { margin-bottom: 8px; }

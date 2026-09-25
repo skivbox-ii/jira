@@ -418,18 +418,23 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");
       $toolbar.append($("<h2/>").text("Динамика замечаний"));
       var $controls = $("<div/>").addClass("ujg-esi-activity-controls");
-      $controls.append(button("ChevronLeft","Предыдущий день",function() { date = shiftDate(date,-1); filters = {}; saveLayout(); draw(); }));
+      function changeDate(nextDate) {
+        if (!validDate(nextDate) || nextDate === date) return;
+        date = nextDate; filters = {}; saveLayout();
+        if (currentServices && currentServices.onActivityDateChange) currentServices.onActivityDateChange(date);
+        draw();
+      }
+      $controls.append(button("ChevronLeft","Предыдущий день",function() { changeDate(shiftDate(date,-1)); }));
       $controls.append($("<input/>").addClass("ujg-esi-activity-date").attr({type:"date", "aria-label":"Дата отчёта"}).val(date).on("change",function() {
-        if (validDate(this.value)) { if (date !== this.value) { filters = {}; saveLayout(); } date = this.value; draw(); } else $(this).val(date);
+        if (validDate(this.value)) changeDate(this.value); else $(this).val(date);
       }));
-      $controls.append(button("ChevronRight","Следующий день",function() { date = shiftDate(date,1); filters = {}; saveLayout(); draw(); }));
+      $controls.append(button("ChevronRight","Следующий день",function() { changeDate(shiftDate(date,1)); }));
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text("00:00–" + cutoff(report) + " · МСК"));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
-      $controls.append(button("WandSparkles","LLM-отчёт",function() { closePopover(); closeManagement(); aiUi.open(this); })
-        .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>").text("LLM-отчёт")));
+      $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
+        .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
       $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
-      if (state.viewMode === "jira" && state.registryWarning) $root.append($("<p/>").addClass("ujg-esi-activity-warning").text(state.registryWarning));
       var partialDay = report.asOf && timestamp(report.asOf) !== Number(report.end);
       var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(partialDay ? "Итоги на " + cutoff(report) + " МСК" : "Итоги за весь день"));
       var $band = $("<div/>").addClass("ujg-esi-activity-metrics");
@@ -525,21 +530,31 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $flows.append($transferSection);
       if ((state.rows || []).length) $root.append($flows);
       var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
-      $coverage.append($("<span/>").text("История: " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " · МСК"));
-      if ((coverage.warnings || []).length) {
+      var progress = state.activityProgress || {};
+      var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
+        (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
+        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
+      $coverage.append($("<span/>").text(coverageText));
+      if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
         var warnings = coverage.warnings;
         var $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
-        $details.append($("<summary/>").text(warnings.length + " предупреждения · " + warnings.slice(0,2).join(" · ")));
+        $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
         var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
         warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
         $coverage.append($details.append($warningList));
       }
+      if (!state.activityLoading && !state.registryLoading && (coverage.diagnostics || []).length) {
+        var $diagnostics = $("<details/>").addClass("ujg-esi-activity-diagnostic-details");
+        $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
+        var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
+        coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
+        $coverage.append($diagnostics.append($diagnosticList));
+      }
       if (coverage.total || state.activityError || state.activityLoading) {
         if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));
-        if (state.activityLoading) $coverage.append($("<span/>").text("Загрузка истории…"));
         if (state.activityError) $coverage.append($("<span/>").addClass("ujg-esi-activity-error").text(state.activityError));
       }
-      $root.append($coverage);
+      $coverage.insertAfter($root.children(".ujg-esi-activity-scope"));
       var $journal = $("<section/>").addClass("ujg-esi-activity-journal");
       var $journalTools = $("<div/>").addClass("ujg-esi-activity-journal-tools");
       fields.forEach(function(field) {

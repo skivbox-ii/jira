@@ -34,7 +34,7 @@ function setup(report, configureWindow) {
   const ui = modules._ujgESI_activityUi.create();
   const render = () => ui.render($("#root"),state,services);
   render();
-  return {dom,$,state,calls,render,modules,ui};
+  return {dom,$,state,services,calls,render,modules,ui};
 }
 function selectFilter(x,key,values) {
   x.$(`[data-activity-filter='${key}']`).trigger("click");
@@ -367,9 +367,10 @@ test("empty change selection survives migration and current selections survive e
 test("renders daily totals, unknown balances, current scope and grouped journal", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const text=x.$("#root").text();
-  assert.match(text,/Итоги за весь день/); assert.match(text,/История: 1 из 2/);
+  assert.match(text,/Итоги за весь день/); assert.match(text,/Проверена история 1 из 2 задач/);
   assert.match(text,/Нет данных/); assert.match(text,/P-EPIC/); assert.match(text,/текущ/);
-  assert.match(text,/Scope warning/); assert.match(text,/P-1/); assert.match(text,/P-2/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-scope").text(),/Scope warning/);
+  assert.match(text,/P-1/); assert.match(text,/P-2/);
   assert.match(text,/Тестирование/); assert.match(text,/Готово/); assert.match(text,/Ira/);
   assert.equal(x.$(".ujg-esi-activity-event").length,2);
   assert.equal(x.calls.summarize[0].options.scopeWarning,"Scope warning");
@@ -482,12 +483,21 @@ test("render preserves parent toolbar and reuses one private mount", t => {
 });
 test("date navigation keeps instance date across renders and validates input", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const changes=[]; x.services.onActivityDateChange=value=>changes.push(value);
+  x.render(); assert.deepEqual(changes,[]);
   x.$(".ujg-esi-activity-date").val("2026-09-24").trigger("change");
+  assert.deepEqual(changes,["2026-09-24"]);
+  x.$(".ujg-esi-activity-date").val("2026-09-24").trigger("change");
+  assert.deepEqual(changes,["2026-09-24"]);
   x.$("[aria-label='Предыдущий день']").trigger("click");
+  assert.deepEqual(changes,["2026-09-24","2026-09-23"]);
   assert.equal(x.calls.summarize.at(-1).options.date,"2026-09-23");
-  x.render(); assert.equal(x.$(".ujg-esi-activity-date").val(),"2026-09-23");
+  x.render(); assert.equal(x.$(".ujg-esi-activity-date").val(),"2026-09-23"); assert.equal(changes.length,2);
   x.$("[aria-label='Следующий день']").trigger("click");
+  assert.deepEqual(changes,["2026-09-24","2026-09-23","2026-09-24"]);
   assert.equal(x.calls.summarize.at(-1).options.date,"2026-09-24");
+  x.$(".ujg-esi-activity-date").val("2026-02-30").trigger("change");
+  assert.equal(changes.length,3);
 });
 test("journal filter and sort leave totals intact, collapse survives render", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -525,8 +535,24 @@ test("coverage keeps long warnings in a compact scrollable disclosure", t => {
   const report=fixture(); report.coverage.warnings=["First warning","Second warning","Third warning"];
   const x=setup(report); t.after(()=>x.dom.window.close());
   assert.equal(x.$(".ujg-esi-activity-coverage details").length,1);
-  assert.match(x.$(".ujg-esi-activity-coverage summary").text(),/3 предупреждения/);
+  assert.match(x.$(".ujg-esi-activity-coverage summary").text(),/проблем.*3/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-coverage summary").text(),/First warning/);
   assert.match(x.$(".ujg-esi-activity-warning-list").text(),/Third warning/);
+});
+test("loading shows registry phase or read progress and defers issue disclosures", t => {
+  const report=fixture(); report.coverage.diagnostics=["P-1: same-second timestamp"];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.registryLoading=true; x.state.activityLoading=true; x.render();
+  assert.match(x.$(".ujg-esi-activity-coverage").text(),/Загрузка реестра/);
+  assert.equal(x.$(".ujg-esi-activity-coverage").next().hasClass("ujg-esi-activity-summary"),true,"Loading progress is above the report metrics");
+  assert.equal(x.$(".ujg-esi-activity-warning-details").length,0);
+  assert.equal(x.$(".ujg-esi-activity-ai-command").prop("disabled"),true);
+  x.state.registryLoading=false; x.state.activityProgress={completed:7,total:12}; x.render();
+  assert.match(x.$(".ujg-esi-activity-coverage").text(),/7 из 12/);
+  x.state.activityLoading=false; x.render();
+  assert.match(x.$(".ujg-esi-activity-warning-details summary").text(),/проблем/);
+  assert.match(x.$(".ujg-esi-activity-diagnostic-details summary").text(),/расхождени/);
+  assert.match(x.$(".ujg-esi-activity-diagnostic-list").text(),/P-1: same-second timestamp/);
 });
 test("journal shows colored initials and role tags without repeated team movement", t => {
   const report=fixture(); report.groups[0].events[0].author={label:"Ira S",color:"#774488"};

@@ -61,7 +61,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     var fields = issue.fields || {}, log = issue.changelog || {}, raw = log.histories;
     var result = {complete:false,capturedAt:new Date().toISOString(),created:timestamp(fields.created),updated:timestamp(fields.updated),
       currentStatus:state(fields.status && fields.status.id,fields.status && fields.status.name,fields.status && fields.status.statusCategory && fields.status.statusCategory.key),
-      currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[],spentSeconds:seconds(fields.timespent),
+      currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[],diagnostics:[],spentSeconds:seconds(fields.timespent),
       worklogs:captureEntries(fields.worklog,"worklogs",function(log) {
         var at = timestamp(log && log.started), duration = seconds(log && log.timeSpentSeconds);
         return at ? {id:str(log.id),at:at,author:person(log.author),seconds:duration} : null;
@@ -91,8 +91,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var at = timestamp(h.created);
       if (!at) warn("Недостоверное время истории Jira или нет часового пояса");
       if (at && result.created && at < result.created) warn("Изменение раньше создания Jira");
-      // Jira Server search truncates updated milliseconds (JRASERVER-28238).
-      if (at && result.updated && at > result.updated && (Date.parse(result.updated) % 1000 !== 0 || Math.floor(Date.parse(at) / 1000) > Math.floor(Date.parse(result.updated) / 1000))) warn("Изменение позже обновления Jira: " + at + " > " + result.updated);
+      if (at && result.updated && at > result.updated) {
+        var difference = "Изменение позже обновления Jira: " + at + " > " + result.updated;
+        if (Math.floor(Date.parse(at) / 1000) === Math.floor(Date.parse(result.updated) / 1000)) result.diagnostics.push(difference);
+        else warn(difference);
+      }
       var items = [];
       h.items.forEach(function(item,indexInHistory) {
         if (!item || !str(item.field || item.fieldId)) { warn("Поврежденное поле истории Jira"); return; }
@@ -207,7 +210,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
         if (issues[taskKey].groups.indexOf(group) < 0) issues[taskKey].groups.push(group);
       });
     });
-    var events = [], warnings = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
+    var events = [], warnings = [], diagnostics = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
     order.forEach(function(group) {
       var parent = issues[group.key], links = parent && parent.snapshot && parent.snapshot.linkedKeys;
       if (!Array.isArray(links)) return;
@@ -229,6 +232,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var entry = issues[issueKey], snap = entry.snapshot;
       if (conflicts.indexOf(issueKey) >= 0) return;
       if (!snap) { warnings.push(issueKey + ": история Jira не загружена"); return; }
+      (snap.diagnostics || []).forEach(function(message) { diagnostics.push(issueKey + ": " + message); });
       if (!snap.complete) warnings.push(issueKey + ": история Jira неполна" + (snap.warnings && snap.warnings.length ? " (" + snap.warnings.join("; ") + ")" : ""));
       var captured = Date.parse(snap.capturedAt);
       if (!isFinite(captured) || captured < endpoint) warnings.push(issueKey + ": снимок истории сделан до конца выбранного периода");
@@ -528,7 +532,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     ["reopened","review","testing"].forEach(function(type) { returnCounts[type] = returnEvents.filter(function(event) { return event.returnKind === type; }).length; });
     var counted = {complete:issueKeys.filter(usable).length,total:issueKeys.length,
       incomplete:issueKeys.filter(function(issueKey) { return !usable(issueKey); }).length,
-      uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,isComplete:complete};
+      uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,diagnostics:diagnostics,isComplete:complete};
     return {date:window.date,start:window.start,end:window.end,asOf:now <= window.start || endpoint < window.start ? null : new Date(endpoint).toISOString(),generatedAt:new Date(now).toISOString(),timezone:"МСК",coverage:counted,
       metrics:{changed:complete ? Object.keys(changed).length : null,newRemarks:complete ? Object.keys(newRemarks).length : null,completed:complete ? Object.keys(completed).length : null,reopened:complete ? Object.keys(reopened).length : null,taskReturns:complete ? taskReturns : null,events:events.length,overdue:deadlinesComplete ? overdue : null},
       observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length,taskReturns:taskReturns,overdue:overdue},returns:returnCounts,deadlineCoverage:deadlineCoverage,deadlineReferenceDate:deadlineDay.date,

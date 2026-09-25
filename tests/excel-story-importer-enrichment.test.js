@@ -35,7 +35,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       render: state => { app.state = state; },
     },
     _ujgESI_teams: null,
-    _ujgESI_activity: { capture: issue => ({ key: issue.key, complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
+    _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });
@@ -50,7 +50,7 @@ function history(created, to, toString, from, fromString) {
   return { created, items: [{ field: "status", to, toString, from, fromString }] };
 }
 
-test("opening Dynamics selects Jira and loads the scope once while retaining Excel rows", async () => {
+test("opening Dynamics refreshes the scope on entry while retaining Excel rows", async () => {
   const calls=[];
   const excel=[{jiraKey:"TEST-10",summary:"Excel source",sourceColumns:{}}];
   const app=await loadImporter(excel,{
@@ -67,15 +67,134 @@ test("opening Dynamics selects Jira and loads the scope once while retaining Exc
   app.callbacks.onReportViewChange("registry");
   app.callbacks.onReportViewChange("activity");
   await flush();
-  assert.equal(calls.length,1,"A loaded empty scope should not loop");
+  assert.equal(calls.length,2,"A new entry refreshes even an empty scope");
+  app.callbacks.onReportViewChange("activity");
+  await flush();
+  assert.equal(calls.length,2,"Rendering or reselecting the active tab must not loop");
   app.callbacks.onViewModeChange("excel");
   assert.equal(app.state.reportView,"registry","Excel always returns to the registry");
   assert.equal(app.state.rows[0].summary,"Excel source");
   app.callbacks.onReportViewChange("activity");
   app.callbacks.onEpicSelect("TEST-EPIC");
   await flush();await flush();
-  assert.equal(calls.length,2);
-  assert.deepEqual(calls[1],["TEST","TEST-EPIC"]);
+  assert.equal(calls.length,4);
+  assert.deepEqual(calls[3],["TEST","TEST-EPIC"]);
+});
+
+test("Dynamics automatically enriches missing history after registry load with progress", async () => {
+  const reads = [];
+  let finish;
+  const child = {key:"TEST-2",fields:{summary:"[QA] Child"},changelog:{startAt:0,total:0,histories:[]}};
+  const parent = {key:"TEST-1",fields:{summary:"Parent",issuetype:{name:"Story"},issuelinks:[{type:{name:"Child"},outwardIssue:child}]}};
+  const app = await loadImporter([], {
+    getProjectIssues:()=>Promise.resolve({issues:[parent]}),
+    getIssuesByKeys:()=>Promise.resolve({issues:[child]}),
+    getIssueWithHistory:key=>{reads.push(key);return new Promise(resolve=>{finish=resolve;});},
+    createIssue:()=>assert.fail("Read-only load"),updateIssue:()=>assert.fail("Read-only load")
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onReportViewChange("activity");
+  await flush(); await flush();
+  assert.deepEqual(reads,["TEST-1"]);
+  assert.equal(app.state.activityLoading,true);
+  assert.deepEqual(plain(app.state.activityProgress),{completed:0,total:1});
+  app.callbacks.onReportViewChange("activity");
+  app.callbacks.onActivityDateChange("2026-09-24");
+  await flush();
+  assert.deepEqual(reads,["TEST-1"],"Tab/date changes do not duplicate in-flight reads");
+  finish({...parent,changelog:{startAt:0,total:0,histories:[]}});
+  await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails.activity.complete,true);
+  assert.equal(app.state.activityLoading,false);
+  assert.deepEqual(plain(app.state.activityProgress),{completed:1,total:1});
+  app.state.rows[0].storyDetails.activity.capturedAt="2026-09-25T08:00:00Z";
+  app.state.rows[0].childStatuses[0].activity.capturedAt="2026-09-25T08:00:00Z";
+  app.callbacks.onActivityDateChange("2026-09-23");
+  await flush();
+  assert.deepEqual(reads,["TEST-1"],"Complete history covers earlier days without another request");
+});
+
+test("Dynamics does not retry failed history in a loop, but changing day retries missing data", async () => {
+  let reads=0;
+  const parent={key:"TEST-1",fields:{summary:"Parent",issuetype:{name:"Story"}}};
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:[parent]}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:()=>{reads++;return Promise.reject(new Error("offline"));}
+  });
+  app.callbacks.onProjectChange("TEST");app.callbacks.onReportViewChange("activity");
+  await flush();await flush();await flush();
+  assert.equal(reads,1);
+  assert.match(app.state.activityError,/TEST-1.*offline/);
+  assert.equal(app.state.rows[0].storyDetails.activity.complete,false);
+  app.callbacks.onReportViewChange("activity");await flush();
+  assert.equal(reads,1);
+  app.callbacks.onActivityDateChange("2026-09-24");await flush();await flush();
+  assert.equal(reads,2);
+});
+
+test("leaving Dynamics cancels the history queue and ignores late responses", async () => {
+  const finishes=[],reads=[];
+  const parents=Array.from({length:5},(_,i)=>({key:"TEST-"+(i+1),fields:{issuetype:{name:"Story"}}}));
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:parents}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:key=>{reads.push(key);return new Promise(resolve=>finishes.push(()=>resolve({key,fields:{},changelog:{startAt:0,total:0,histories:[]}})));}
+  });
+  app.callbacks.onProjectChange("TEST");app.callbacks.onReportViewChange("activity");
+  await flush();await flush();
+  assert.equal(reads.length,3);
+  app.callbacks.onReportViewChange("registry");
+  finishes.forEach(finish=>finish());await flush();await flush();
+  assert.equal(reads.length,3);
+  assert.equal(app.state.activityLoading,false);
+  assert.ok(app.state.rows.every(row=>!row.storyDetails.activity.complete));
+});
+
+test("changing day renews a complete history captured before that day's end", async () => {
+  let reads=0;
+  const parent={key:"TEST-1",fields:{issuetype:{name:"Story"}},changelog:{startAt:0,total:0,histories:[]}};
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:[parent]}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:()=>{reads++;return Promise.resolve(parent);}
+  });
+  app.callbacks.onProjectChange("TEST");app.callbacks.onReportViewChange("activity");await flush();await flush();
+  assert.equal(reads,0);
+  app.state.rows[0].storyDetails.activity.capturedAt="2026-09-23T10:00:00Z";
+  app.callbacks.onActivityDateChange("2026-09-24");await flush();await flush();
+  assert.equal(reads,1);
+});
+
+test("a day change during enrichment queues newly stale history without retrying the same failed issue", async () => {
+  const reads=[];
+  let rejectPending;
+  const parents=[
+    {key:"TEST-1",fields:{issuetype:{name:"Story"}},changelog:{startAt:0,total:0,histories:[]}},
+    {key:"TEST-2",fields:{issuetype:{name:"Story"}}}
+  ];
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:parents}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:key=>{reads.push(key);return key==="TEST-2" ? new Promise((resolve,reject)=>{rejectPending=reject;}) : Promise.resolve(parents[0]);}
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onActivityDateChange("2026-09-22");
+  app.callbacks.onReportViewChange("activity");await flush();await flush();
+  app.state.rows[0].storyDetails.activity.capturedAt="2026-09-23T10:00:00Z";
+  app.callbacks.onActivityDateChange("2026-09-24");
+  assert.deepEqual(reads,["TEST-2"]);
+  rejectPending(new Error("offline"));await flush();await flush();await flush();
+  assert.deepEqual(reads,["TEST-2","TEST-1"]);
+  assert.match(app.state.activityError,/TEST-2.*offline/);
+  assert.equal(app.state.activityLoading,false);
+});
+
+test("status-since retains the real transition time for same-second Jira timestamp skew only", async () => {
+  const at="2026-09-25T04:20:37.628Z";
+  for (const [updated,expected] of [["2026-09-25T04:20:37.626Z",at],["2026-09-25T04:20:37.000Z",at],["2026-09-25T04:20:36.999Z",""]]) {
+    const parent={key:"TEST-1",fields:{created:"2026-09-01T00:00:00Z",updated,status:{id:"2",name:"Done"}},
+      changelog:{startAt:0,total:1,histories:[history(at,"2","Done","1","Open")]}};
+    const app=await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}],{getIssuesByKeys:()=>Promise.resolve({issues:[parent]})});
+    app.callbacks.onSyncJira();await flush();await flush();
+    assert.equal(app.state.rows[0].storyDetails.statusSince,expected);
+  }
 });
 
 test("Dynamics retries failed loads explicitly and does not duplicate pending reads", async () => {
@@ -290,7 +409,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     assigneeIdentifiers: ["JIRAUSER100", "ivan"],
     priority: "High", issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
     created: issues[0].fields.created,
-    activity: {key:"TEST-1",complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
+    activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
   });
   assert.match(row.storyDetails.statusSinceReason, /истор|переход/i);
@@ -300,7 +419,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     assigneeIdentifiers: ["developer"],
     priority: "Low", issueType: "Task", updated: "2026-02-02T00:00:00Z",
     created: child.fields.created,
-    activity: {key:"TEST-2",complete:true,histories:[],linkedKeys:[]},
+    activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[]},
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
   });
   assert.match(row.childStatuses[0].statusSinceReason, /создани/i);

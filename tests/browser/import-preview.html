@@ -18,14 +18,18 @@
 window.modules = {jquery: jQuery};
 window.mutationCalls = 0;
 window.issueReadCalls = 0;
+window.historyReadCalls = [];
 window.offlineApi = {
   baseUrl: "https://jira.example.test",
   getProjects: function(){return Promise.resolve([{key:"EVOSCADA",name:"EVO-SCADA"}]);},
   getProjectEpics: function(){return Promise.resolve({issues:[{key:"EVOSCADA-100",fields:{summary:"Замечания ИИ ТСВ"}},{key:"EVOSCADA-200",fields:{summary:"Приёмочные испытания"}}]});},
   getProjectCreateMeta: function(){return Promise.resolve({projects:[]});},
   getIssuesByKeys: function(keys){window.issueReadCalls++;return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
-  getIssueWithHistory: function(key){window.issueReadCalls++;return Promise.resolve(fixtureIssues[key]);},
-  getProjectIssues: function(){window.issueReadCalls++;return Promise.resolve({issues:Object.values(fixtureIssues).filter(function(issue){return issue.fields.issuetype.name === "История";})});},
+  getIssueWithHistory: function(key){window.issueReadCalls++;window.historyReadCalls.push(key);return new Promise(function(resolve){setTimeout(function(){resolve(fixtureIssues[key]);},250);});},
+  getProjectIssues: function(){window.issueReadCalls++;return Promise.resolve({issues:Object.values(fixtureIssues).filter(function(issue){return issue.fields.issuetype.name === "История";}).map(function(issue){
+    if (issue.key !== "EVOSCADA-16104") return issue;
+    var partial = Object.assign({},issue); delete partial.changelog; return partial;
+  })});},
   searchUsers: function(query){return Promise.resolve({users:[{name:"ivanov",displayName:"Иванов Иван"},{name:"petrov",displayName:"Петров Павел"},{name:"sokolova",displayName:"Соколова Анна"},{name:"orlova",displayName:"Орлова Наталья"}].filter(function(user){return (user.name+" "+user.displayName).toLowerCase().includes(String(query || "").toLowerCase());})});},
   createIssue: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");},
   createIssueLink: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");}

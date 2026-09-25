@@ -3399,7 +3399,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     var fields = issue.fields || {}, log = issue.changelog || {}, raw = log.histories;
     var result = {complete:false,capturedAt:new Date().toISOString(),created:timestamp(fields.created),updated:timestamp(fields.updated),
       currentStatus:state(fields.status && fields.status.id,fields.status && fields.status.name,fields.status && fields.status.statusCategory && fields.status.statusCategory.key),
-      currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[],spentSeconds:seconds(fields.timespent),
+      currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[],diagnostics:[],spentSeconds:seconds(fields.timespent),
       worklogs:captureEntries(fields.worklog,"worklogs",function(log) {
         var at = timestamp(log && log.started), duration = seconds(log && log.timeSpentSeconds);
         return at ? {id:str(log.id),at:at,author:person(log.author),seconds:duration} : null;
@@ -3429,8 +3429,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var at = timestamp(h.created);
       if (!at) warn("Недостоверное время истории Jira или нет часового пояса");
       if (at && result.created && at < result.created) warn("Изменение раньше создания Jira");
-      // Jira Server search truncates updated milliseconds (JRASERVER-28238).
-      if (at && result.updated && at > result.updated && (Date.parse(result.updated) % 1000 !== 0 || Math.floor(Date.parse(at) / 1000) > Math.floor(Date.parse(result.updated) / 1000))) warn("Изменение позже обновления Jira: " + at + " > " + result.updated);
+      if (at && result.updated && at > result.updated) {
+        var difference = "Изменение позже обновления Jira: " + at + " > " + result.updated;
+        if (Math.floor(Date.parse(at) / 1000) === Math.floor(Date.parse(result.updated) / 1000)) result.diagnostics.push(difference);
+        else warn(difference);
+      }
       var items = [];
       h.items.forEach(function(item,indexInHistory) {
         if (!item || !str(item.field || item.fieldId)) { warn("Поврежденное поле истории Jira"); return; }
@@ -3545,7 +3548,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
         if (issues[taskKey].groups.indexOf(group) < 0) issues[taskKey].groups.push(group);
       });
     });
-    var events = [], warnings = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
+    var events = [], warnings = [], diagnostics = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
     order.forEach(function(group) {
       var parent = issues[group.key], links = parent && parent.snapshot && parent.snapshot.linkedKeys;
       if (!Array.isArray(links)) return;
@@ -3567,6 +3570,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var entry = issues[issueKey], snap = entry.snapshot;
       if (conflicts.indexOf(issueKey) >= 0) return;
       if (!snap) { warnings.push(issueKey + ": история Jira не загружена"); return; }
+      (snap.diagnostics || []).forEach(function(message) { diagnostics.push(issueKey + ": " + message); });
       if (!snap.complete) warnings.push(issueKey + ": история Jira неполна" + (snap.warnings && snap.warnings.length ? " (" + snap.warnings.join("; ") + ")" : ""));
       var captured = Date.parse(snap.capturedAt);
       if (!isFinite(captured) || captured < endpoint) warnings.push(issueKey + ": снимок истории сделан до конца выбранного периода");
@@ -3866,7 +3870,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     ["reopened","review","testing"].forEach(function(type) { returnCounts[type] = returnEvents.filter(function(event) { return event.returnKind === type; }).length; });
     var counted = {complete:issueKeys.filter(usable).length,total:issueKeys.length,
       incomplete:issueKeys.filter(function(issueKey) { return !usable(issueKey); }).length,
-      uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,isComplete:complete};
+      uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,diagnostics:diagnostics,isComplete:complete};
     return {date:window.date,start:window.start,end:window.end,asOf:now <= window.start || endpoint < window.start ? null : new Date(endpoint).toISOString(),generatedAt:new Date(now).toISOString(),timezone:"МСК",coverage:counted,
       metrics:{changed:complete ? Object.keys(changed).length : null,newRemarks:complete ? Object.keys(newRemarks).length : null,completed:complete ? Object.keys(completed).length : null,reopened:complete ? Object.keys(reopened).length : null,taskReturns:complete ? taskReturns : null,events:events.length,overdue:deadlinesComplete ? overdue : null},
       observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length,taskReturns:taskReturns,overdue:overdue},returns:returnCounts,deadlineCoverage:deadlineCoverage,deadlineReferenceDate:deadlineDay.date,
@@ -5724,18 +5728,23 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");
       $toolbar.append($("<h2/>").text("Динамика замечаний"));
       var $controls = $("<div/>").addClass("ujg-esi-activity-controls");
-      $controls.append(button("ChevronLeft","Предыдущий день",function() { date = shiftDate(date,-1); filters = {}; saveLayout(); draw(); }));
+      function changeDate(nextDate) {
+        if (!validDate(nextDate) || nextDate === date) return;
+        date = nextDate; filters = {}; saveLayout();
+        if (currentServices && currentServices.onActivityDateChange) currentServices.onActivityDateChange(date);
+        draw();
+      }
+      $controls.append(button("ChevronLeft","Предыдущий день",function() { changeDate(shiftDate(date,-1)); }));
       $controls.append($("<input/>").addClass("ujg-esi-activity-date").attr({type:"date", "aria-label":"Дата отчёта"}).val(date).on("change",function() {
-        if (validDate(this.value)) { if (date !== this.value) { filters = {}; saveLayout(); } date = this.value; draw(); } else $(this).val(date);
+        if (validDate(this.value)) changeDate(this.value); else $(this).val(date);
       }));
-      $controls.append(button("ChevronRight","Следующий день",function() { date = shiftDate(date,1); filters = {}; saveLayout(); draw(); }));
+      $controls.append(button("ChevronRight","Следующий день",function() { changeDate(shiftDate(date,1)); }));
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text("00:00–" + cutoff(report) + " · МСК"));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
-      $controls.append(button("WandSparkles","LLM-отчёт",function() { closePopover(); closeManagement(); aiUi.open(this); })
-        .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>").text("LLM-отчёт")));
+      $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
+        .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
       $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
-      if (state.viewMode === "jira" && state.registryWarning) $root.append($("<p/>").addClass("ujg-esi-activity-warning").text(state.registryWarning));
       var partialDay = report.asOf && timestamp(report.asOf) !== Number(report.end);
       var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(partialDay ? "Итоги на " + cutoff(report) + " МСК" : "Итоги за весь день"));
       var $band = $("<div/>").addClass("ujg-esi-activity-metrics");
@@ -5831,21 +5840,31 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $flows.append($transferSection);
       if ((state.rows || []).length) $root.append($flows);
       var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
-      $coverage.append($("<span/>").text("История: " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " · МСК"));
-      if ((coverage.warnings || []).length) {
+      var progress = state.activityProgress || {};
+      var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
+        (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
+        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
+      $coverage.append($("<span/>").text(coverageText));
+      if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
         var warnings = coverage.warnings;
         var $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
-        $details.append($("<summary/>").text(warnings.length + " предупреждения · " + warnings.slice(0,2).join(" · ")));
+        $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
         var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
         warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
         $coverage.append($details.append($warningList));
       }
+      if (!state.activityLoading && !state.registryLoading && (coverage.diagnostics || []).length) {
+        var $diagnostics = $("<details/>").addClass("ujg-esi-activity-diagnostic-details");
+        $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
+        var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
+        coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
+        $coverage.append($diagnostics.append($diagnosticList));
+      }
       if (coverage.total || state.activityError || state.activityLoading) {
         if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));
-        if (state.activityLoading) $coverage.append($("<span/>").text("Загрузка истории…"));
         if (state.activityError) $coverage.append($("<span/>").addClass("ujg-esi-activity-error").text(state.activityError));
       }
-      $root.append($coverage);
+      $coverage.insertAfter($root.children(".ujg-esi-activity-scope"));
       var $journal = $("<section/>").addClass("ujg-esi-activity-journal");
       var $journalTools = $("<div/>").addClass("ujg-esi-activity-journal-tools");
       fields.forEach(function(field) {
@@ -9075,7 +9094,8 @@ define("_ujgESI_main", [
     }
     if (created && updated && created > updated) return unknown("Дата создания Jira позже даты обновления.");
     if (!transitions.length) return sinceCreation();
-    if ((created && transitions[0].at < created) || (updated && transitions[transitions.length - 1].at > updated)) return unknown("Даты переходов не согласуются с датами создания или обновления Jira.");
+    // Jira's field and changelog timestamps can differ within the same second.
+    if ((created && transitions[0].at < created) || (updated && Math.floor(Date.parse(transitions[transitions.length - 1].at) / 1000) > Math.floor(Date.parse(updated) / 1000))) return unknown("Даты переходов не согласуются с датами создания или обновления Jira.");
     for (var i = 1; i < transitions.length; i += 1) {
       var previous = transitions[i - 1];
       var current = transitions[i];
@@ -9403,6 +9423,7 @@ define("_ujgESI_main", [
       registryError: "",
       registryWarning: "",
       activityLoading: false,
+      activityProgress: null,
       activityError: "",
       createSubtasks: true,
       loading: false,
@@ -9478,22 +9499,24 @@ define("_ujgESI_main", [
     var createInFlight = false;
     var teamSearchSeq = 0;
     var activitySeq = 0;
+    var activityDate = "";
 
     function invalidateActivityHistory() {
       activitySeq++;
       state.activityLoading = false;
       state.activityError = "";
+      state.activityProgress = null;
     }
 
-    function onLoadActivityHistory() {
+    function onLoadActivityHistory(options) {
       if (state.activityLoading || state.loading || state.syncLoading || state.registryLoading) return;
-      if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
-        state.activityError = "Загрузка истории Jira недоступна.";
-        render();
-        return;
+      var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
+        var start = Date.parse(requestedDate + "T00:00:00+03:00");
+        if (isFinite(start) && start < Date.now()) requiredThrough = Math.min(Date.now(), start + 86400000);
       }
       var seq = ++activitySeq, rows = state.rows, project = state.projectKey, epic = state.epicKey, mode = state.viewMode;
-      var targets = Object.create(null), pending = Object.create(null), failures = [];
+      var targets = Object.create(null), pending = Object.create(null), failures = (opts.failures || []).slice();
       rows.forEach(function(row) {
         var details = (row.childStatuses || []).filter(function(child) { return child && child.linkedToParent !== false; });
         var key = String(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key || "").toUpperCase();
@@ -9507,13 +9530,22 @@ define("_ujgESI_main", [
           if (!targets[key]) targets[key] = [];
           targets[key].push(detail);
           if (!detail.activity || !detail.activity.complete) pending[key] = true;
+          else if (requiredThrough && (!isFinite(Date.parse(detail.activity.capturedAt)) || Date.parse(detail.activity.capturedAt) < requiredThrough)) pending[key] = true;
         });
       });
       var keys = Object.keys(pending), offset = 0;
-      if (!keys.length) keys = Object.keys(targets);
+      if (!keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
+      if (opts.excludeKeys) keys = keys.filter(function(key) { return opts.excludeKeys.indexOf(key) < 0; });
       if (!keys.length) return;
+      if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
+        state.activityError = "Загрузка истории Jira недоступна.";
+        render();
+        return;
+      }
       state.activityLoading = true;
       state.activityError = "";
+      state.activityProgress = {completed:0,total:keys.length};
+      var lastProgressRender = Date.now();
       render();
       function current() { return seq === activitySeq && rows === state.rows && project === state.projectKey && epic === state.epicKey && mode === state.viewMode; }
       function next() {
@@ -9528,13 +9560,24 @@ define("_ujgESI_main", [
           targets[key].forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
         }).catch(function(err) {
           if (current()) failures.push(key + ": " + searchErrorText(err));
-        }).then(next);
+        }).then(function() {
+          if (!current()) return;
+          state.activityProgress.completed++;
+          if (Date.now() - lastProgressRender >= 500) {
+            lastProgressRender = Date.now();
+            render();
+          }
+          return next();
+        });
       }
       Promise.all([next(), next(), next()]).then(function() {
         if (!current()) return;
         state.activityLoading = false;
         state.activityError = failures.length ? "Не удалось загрузить историю: " + failures.slice(0, 5).join("; ") + (failures.length > 5 ? " (и ещё " + (failures.length - 5) + ")" : "") : "";
         render();
+        if (state.reportView === "activity" && activityDate && activityDate !== requestedDate) {
+          onLoadActivityHistory({onlyIncomplete:true,date:activityDate,excludeKeys:keys.concat(opts.excludeKeys || []),failures:failures});
+        }
       });
     }
 
@@ -10801,6 +10844,7 @@ define("_ujgESI_main", [
         state.registryWarning = data.warning;
         registryLoaded = true;
         render();
+        if (state.reportView === "activity") onLoadActivityHistory({onlyIncomplete:true});
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
         state.registryLoading = false;
@@ -12125,13 +12169,19 @@ define("_ujgESI_main", [
       onViewModeChange: onViewModeChange,
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
+      onActivityDateChange: function(date) {
+        activityDate = date;
+        if (state.reportView === "activity" && state.viewMode === "jira") onLoadActivityHistory({onlyIncomplete:true,date:date});
+      },
       onActivityLlmRequest: onActivityLlmRequest,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
+        var enteringActivity = view === "activity" && state.reportView !== "activity";
+        if (state.reportView !== view) invalidateActivityHistory();
         state.reportView = view;
         closeUserPicker();
         if (view === "activity" && state.viewMode !== "jira") onViewModeChange("jira");
-        if (view === "activity" && !registryLoaded) onLoadRegistry();
+        if (view === "activity" && (enteringActivity || !registryLoaded)) onLoadRegistry();
         render();
       },
       onDownloadPatchedExcel: onDownloadPatchedExcel,
