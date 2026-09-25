@@ -77,6 +77,65 @@ test("filter values respect other filters and do not remove currently filtered v
   assert.deepEqual(Array.from(values), ["Done", "Open"]);
 });
 
+test("completed child and completed story flags independently select groups", () => {
+  const r = registry();
+  const input = source();
+  input.push({ id: "all-done", jiraKey: "P-30", storyDetails: {key:"P-30",status:"Open"}, childStatuses:[{key:"P-31",status:"Done"}] });
+  input.push({ id: "done-empty", jiraKey: "P-40", storyDetails: {key:"P-40",status:"Done"} });
+  const rows = r.buildRows(input);
+  const shape = filters => Array.from(r.selectGroups(rows, filters), g => [g.parent.key, g.contextOnly, Array.from(g.children, c => c.key)]);
+  assert.deepEqual(shape({}), [
+    ["P-10",false,["P-11","P-12"]],["",false,[]],["P-30",false,["P-31"]],["P-40",false,[]]
+  ]);
+  assert.deepEqual(shape({excludeDone:true}), [
+    ["P-10",false,["P-11"]],["",false,[]],["P-30",false,[]],["P-40",false,[]]
+  ]);
+  assert.deepEqual(shape({excludeDoneStories:true}), [
+    ["",false,[]],["P-30",false,["P-31"]]
+  ]);
+  assert.deepEqual(shape({excludeDone:true,excludeDoneStories:true}), [
+    ["",false,[]],["P-30",false,[]]
+  ]);
+});
+
+test("status selection keeps context behavior while story exclusion removes whole group", () => {
+  const r = registry(), rows = r.buildRows(source());
+  assert.deepEqual(Array.from(r.selectGroups(rows,{status:["Open"],excludeDone:true}), g => [g.parent.key,g.contextOnly,Array.from(g.children,c => c.key)]), [["P-10",true,["P-11"]]]);
+  assert.equal(r.selectGroups(rows,{status:["Open"],excludeDoneStories:true}).length,0);
+  assert.deepEqual(Array.from(r.selectGroups(rows,{status:["Done"],excludeDone:true}), g => [g.parent.key,Array.from(g.children,c => c.key)]), [["P-10",[]]]);
+});
+
+test("status facets ignore both flags and other facets omit hidden story values", () => {
+  const r = registry(), rows = r.buildRows(source());
+  assert.deepEqual(Array.from(r.values(rows,"status",{excludeDone:true,excludeDoneStories:true})),["","Done","Open"]);
+  assert.deepEqual(Array.from(r.values(rows,"assignee",{excludeDoneStories:true})),[""]);
+  assert.deepEqual(Array.from(r.values(rows,"assignee",{excludeDone:true})),["","Anna","Bob"]);
+});
+
+test("workflow done category controls exclusions while exact status values stay selectable", () => {
+  const r = registry();
+  const input = [{id:"custom",jiraKey:"P-60",storyDetails:{key:"P-60",status:"Released",statusCategory:"done"},childStatuses:[
+    {key:"P-61",status:"Accepted",statusCategory:"done"},
+    {key:"P-62",status:"In review",statusCategory:"indeterminate"}
+  ]}];
+  const rows = r.buildRows(input);
+  assert.deepEqual(Array.from(r.values(rows,"status",{excludeDone:true,excludeDoneStories:true})),["Accepted","In review","Released"]);
+  const childOnly = r.selectGroups(rows,{status:["In review"],excludeDone:true});
+  assert.equal(childOnly.length,1);
+  assert.equal(childOnly[0].contextOnly,true);
+  assert.deepEqual(Array.from(childOnly[0].children,c => c.key),["P-62"]);
+  assert.equal(r.selectGroups(rows,{status:["In review"],excludeDoneStories:true}).length,0);
+});
+
+test("uncreated remark with a done source status is not a completed Jira Story", () => {
+  const r = registry();
+  const rows = r.buildRows([{id:"new",summary:"New remark",sourceColumns:{"Статус в Jira":"Готово"}}]);
+  assert.equal(rows[0].key,"");
+  assert.equal(rows[0].done,true);
+  assert.equal(r.selectGroups(rows,{excludeDoneStories:true}).length,1);
+  assert.deepEqual(Array.from(r.values(rows,"summary",{excludeDoneStories:true})),["New remark"]);
+});
+
 test("status age uses only a verified statusSince, never updated", () => {
   const r = registry();
   const input = source();

@@ -85,7 +85,7 @@
 .ujg-esi-registry-table .ujg-esi-cell-remarkId { font-weight: 650; }
 .ujg-esi-registry-table .ujg-esi-expand-cell { position: sticky; left: 0; background: white; z-index: 1; padding: 3px 0; }
 .ujg-esi-registry-table th:first-child { left: 0; z-index: 4; padding: 2px; }
-.ujg-esi-source-text { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.ujg-esi-source-text { display: block; white-space: normal; overflow-wrap: anywhere; }
 .ujg-esi-cell-remark small { display: block; margin-top: 4px; color: #77828e; font-size: 10px; line-height: 14px; }
 .ujg-esi-registry-table .ujg-esi-cell-key { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ujg-esi-registry-table a { color: #075fc4; text-decoration: none; }
@@ -100,9 +100,7 @@
 .ujg-esi-registry-table .ujg-esi-more-row td { padding: 0 5px; border-bottom-color: #d6dce4; }
 .ujg-esi-registry .ujg-esi-icon-button.ujg-esi-more-children { display: inline-flex; justify-content: flex-start; width: 100%; min-width: 0; height: auto; min-height: 27px; gap: 4px; padding: 0 3px; border: 0; background: transparent; color: #075fc4; font-size: 12px; font-weight: 400; white-space: normal; text-align: left; cursor: pointer; }
 .ujg-esi-more-children span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ujg-esi-registry-table .is-collapsed .ujg-esi-source-text { -webkit-line-clamp: 1; }
 .ujg-esi-registry-table .is-collapsed .ujg-esi-cell-remark small { display: none; }
-.ujg-esi-registry-table .is-new .ujg-esi-source-text { -webkit-line-clamp: 2; }
 .ujg-esi-draft-label { display: inline-block; padding: 0 4px; margin-top: 2px; border-radius: 2px; font-size: 10px; line-height: 15px; color: #57687b; background: #eaf0f5; }
 .ujg-esi-person { display: flex; align-items: center; gap: 5px; }
 .ujg-esi-person > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

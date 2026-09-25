@@ -86,6 +86,20 @@ test("More children label stays at the start of a wide run and truncates in a na
   assert.match(label, /white-space:\s*nowrap/);
 });
 
+test("Excel remarks wrap fully in expanded, collapsed and new registry rows", function () {
+  const source = read("ujg-excel-story-importer.css");
+  const rules = [...source.matchAll(/([^{}]+)\{([^{}]+)\}/g)]
+    .filter((match) => match[1].includes(".ujg-esi-source-text"));
+  assert.ok(rules.length);
+  const base = rules.find((match) => match[1].trim() === ".ujg-esi-source-text")[2];
+  assert.match(base, /display:\s*block/);
+  assert.match(base, /white-space:\s*normal/);
+  assert.match(base, /overflow-wrap:\s*anywhere/);
+  for (const rule of rules) {
+    assert.doesNotMatch(rule[2], /line-clamp|overflow:\s*hidden|text-overflow:\s*ellipsis|white-space:\s*nowrap/);
+  }
+});
+
 test("workflow badges stay on one line and truncate within narrow columns", function () {
   const source = read("ujg-excel-story-importer.css");
   const badge = source.match(/\.ujg-esi-workflow-status\s*\{([^}]+)\}/)[1];

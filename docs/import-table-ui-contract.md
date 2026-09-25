@@ -14,6 +14,7 @@ The importer registry is the canonical table pattern. New views, including daily
 - Show active filters and sort direction in the header. Escape and outside click close the popover without applying unfinished edits.
 - Keep filters on hidden columns visible and editable above the table. Resetting filters must not reset column layout or sorting. Selected values absent from a new dataset remain visible and removable, never silently discarded.
 - Use keyboard-accessible controls and labels; do not rely on hover alone.
+- In the registry status filter, keep completion scopes independent: "Исключить готовые" excludes only completed child tasks; "Исключить готовые истории" excludes the entire group of a completed original story. The first option alone must keep completed stories, including those with no remaining visible children. Both options are drafts until Apply and clear together when the status filter is reset.
 - Count popovers support keyboard entry and Escape returns focus to the count. Consecutive keyboard resize steps retain focus; cancelled pointer gestures cannot reorder columns later.
 
 ## Columns and Persistence
@@ -22,7 +23,7 @@ The importer registry is the canonical table pattern. New views, including daily
 - Provide column visibility and reset controls. Keep at least one column visible. Resetting columns preserves applied filters and sorting.
 - Persist order, visibility, widths, sorting, and applied filters under a view-specific, user-scoped localStorage key. Never overwrite registry preferences from a report.
 - Constrain widths and validate stored values. Storage failures must not break the table.
-- Wrap task titles and remarks. Horizontal overflow belongs inside the table region, not the page.
+- Wrap task titles and remarks fully, without line clamps or ellipses, including collapsed groups and remarks not yet created in Jira. Horizontal overflow belongs inside the table region, not the page.
 
 ## Daily Activity
 

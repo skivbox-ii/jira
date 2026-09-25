@@ -2815,13 +2815,17 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
   }
   function matches(row, filters, except) {
     return Object.keys(filters || {}).every(function(key) {
-      if (key === "excludeDone") return except === "status" || !filters[key] || !row.done;
+      if (key === "excludeDone") return except === "status" || !filters[key] || !row.isChild || !row.done;
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }
   function values(rows, column, filters) {
     var seen = Object.create(null);
-    (rows || []).filter(function(row) { return matches(row, filters, column); }).forEach(function(row) { seen[text(row[column])] = true; });
+    var hiddenStory = false;
+    (rows || []).forEach(function(row) {
+      if (!row.isChild) hiddenStory = column !== "status" && !!(filters && filters.excludeDoneStories && row.key && row.done);
+      if (!hiddenStory && matches(row, filters, column)) seen[text(row[column])] = true;
+    });
     return Object.keys(seen).sort(compare);
   }
   function selectGroups(rows, filters, sort) {
@@ -2829,14 +2833,14 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
     var current;
     (rows || []).forEach(function(row) {
       if (!row.isChild) {
-        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0 };
+        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0, hiddenStory: !!(filters && filters.excludeDoneStories && row.key && row.done) };
         groups.push(current);
       } else if (current) {
         current.totalChildren += 1;
         if (matches(row, filters)) current.children.push(row);
       }
     });
-    groups = groups.filter(function(group) { return !group.contextOnly || group.children.length; });
+    groups = groups.filter(function(group) { return !group.hiddenStory && (!group.contextOnly || group.children.length); });
     if (sort && sort.column) {
       function value(row) { return sort.column === "age" ? row.ageMs : row[sort.column]; }
       function cmp(a, b) {
@@ -6174,8 +6178,9 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     function refresh() { closeMenu(); closeDescription(); draw(); }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
-      var active = Array.isArray(filters[key]) || key === "status" && !!filters.excludeDone;
+      var active = Array.isArray(filters[key]) || key === "status" && !!(filters.excludeDone || filters.excludeDoneStories);
       var excludeDone = !!filters.excludeDone;
+      var excludeDoneStories = !!filters.excludeDoneStories;
       var options = registry.values(rows, key, filters);
       (filters[key] || []).forEach(function(value) { if (options.indexOf(value) === -1) options.push(value); });
       options.sort(registry.compare);
@@ -6184,8 +6189,9 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       [ ["asc", "ArrowDownAZ", key === "priority" ? "Сначала низкий приоритет" : "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", key === "priority" ? "Сначала высокий приоритет" : "Сортировка по убыванию"] ].forEach(function(item) {
         $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
       });
-      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") delete filters.excludeDone; page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые" }).prop("checked", excludeDone).on("change", function() { excludeDone = this.checked; }), $("<span/>").text("Исключить готовые")));
+      if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые истории" }).prop("checked", excludeDoneStories).on("change", function() { excludeDoneStories = this.checked; }), $("<span/>").text("Исключить готовые истории")));
       var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
       var $chips = $("<div/>").addClass("ujg-esi-filter-chips");
       var $all = $("<input/>").attr({ type: "checkbox", "aria-label": "Выделить все найденные значения" });
@@ -6227,7 +6233,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         update();
       });
       var $apply = $("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() {
-        if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; }
+        if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; if (excludeDoneStories) filters.excludeDoneStories = true; else delete filters.excludeDoneStories; }
         var allValues = registry.values(rows, key, {});
         if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
         page = 0; refresh();
@@ -6352,7 +6358,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("ListTree", "Развернуть все", function() { collapsed = Object.create(null); rows.forEach(function(row) { fullChildren[row.groupId] = true; }); refresh(); })));
       visible.forEach(function(column) {
         $colgroup.append($("<col/>").attr({"data-column":column[0],width:widths[column[0]] || column[2]}).css("width", (widths[column[0]] || column[2]) + "px"));
-        var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!filters.excludeDone, sorted = sort && sort.column === column[0];
+        var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!(filters.excludeDone || filters.excludeDoneStories), sorted = sort && sort.column === column[0];
         var heading = column[0] === "remark" && state.viewMode === "jira" ? "Замечание" : column[1];
         var caption = "Фильтр: " + heading;
         var $filter = button(active ? "Funnel" : "ChevronDown", caption, function(event) { event.stopPropagation(); filterMenu(this, column); })

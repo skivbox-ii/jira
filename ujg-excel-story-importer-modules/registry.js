@@ -75,13 +75,17 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
   }
   function matches(row, filters, except) {
     return Object.keys(filters || {}).every(function(key) {
-      if (key === "excludeDone") return except === "status" || !filters[key] || !row.done;
+      if (key === "excludeDone") return except === "status" || !filters[key] || !row.isChild || !row.done;
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }
   function values(rows, column, filters) {
     var seen = Object.create(null);
-    (rows || []).filter(function(row) { return matches(row, filters, column); }).forEach(function(row) { seen[text(row[column])] = true; });
+    var hiddenStory = false;
+    (rows || []).forEach(function(row) {
+      if (!row.isChild) hiddenStory = column !== "status" && !!(filters && filters.excludeDoneStories && row.key && row.done);
+      if (!hiddenStory && matches(row, filters, column)) seen[text(row[column])] = true;
+    });
     return Object.keys(seen).sort(compare);
   }
   function selectGroups(rows, filters, sort) {
@@ -89,14 +93,14 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
     var current;
     (rows || []).forEach(function(row) {
       if (!row.isChild) {
-        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0 };
+        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0, hiddenStory: !!(filters && filters.excludeDoneStories && row.key && row.done) };
         groups.push(current);
       } else if (current) {
         current.totalChildren += 1;
         if (matches(row, filters)) current.children.push(row);
       }
     });
-    groups = groups.filter(function(group) { return !group.contextOnly || group.children.length; });
+    groups = groups.filter(function(group) { return !group.hiddenStory && (!group.contextOnly || group.children.length); });
     if (sort && sort.column) {
       function value(row) { return sort.column === "age" ? row.ageMs : row[sort.column]; }
       function cmp(a, b) {

@@ -538,7 +538,7 @@ test("additional-task actions never invoke new Story creation and retain source 
   assert.deepEqual(calls[1], ["owner","row-owner-1"]);
 });
 
-test("exclude completed hides finished siblings but retains an active child's context parent", t => {
+test("exclude completed children keeps done parent as a normal row and clears globally", t => {
   const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
   state.rows[1].childStatuses[0].blocked = true;
   render();
@@ -548,10 +548,54 @@ test("exclude completed hides finished siblings but retains an active child's co
   $(".ujg-esi-filter-apply").trigger("click");
   assert.equal($("tr[data-key='P-12']").length, 0);
   assert.equal($("tr[data-key='P-11']").length, 1);
-  assert.equal($("tr[data-key='P-10']").hasClass("is-context"), true);
+  assert.equal($("tr[data-key='P-10']").hasClass("is-context"), false);
   assert.equal($(".ujg-esi-create-row").length, 1);
   $("[aria-label='Сбросить все фильтры']").trigger("click");
   assert.equal($("tr[data-key='P-12']").length, 1);
+});
+
+test("status popup drafts both exclusions, applies them, and resets them together", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  state.rows.push({id:"done-empty",jiraKey:"P-40",storyDetails:{key:"P-40",status:"Done"}});
+  state.rows.push({id:"active-story",jiraKey:"P-50",storyDetails:{key:"P-50",status:"Open"},childStatuses:[{key:"P-51",status:"Done"}]});
+  render();
+  const child = "input[aria-label='Исключить готовые']";
+  const story = "input[aria-label='Исключить готовые истории']";
+  $("[data-filter='status']").trigger("click");
+  assert.equal($(child).length,1);
+  assert.equal($(story).length,1);
+  $(child).prop("checked",true).trigger("change");
+  $(story).prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-actions button").last().trigger("click");
+  assert.equal($("tr[data-key='P-12']").length,1);
+  assert.equal($("tr[data-key='P-10']").length,1);
+  $("[data-filter='status']").trigger("click");
+  assert.equal($(child).prop("checked"),false);
+  assert.equal($(story).prop("checked"),false);
+  $(story).prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($("[data-filter='status']").hasClass("is-active"),true);
+  assert.equal($("tr[data-key='P-10']").length,0);
+  assert.equal($("tr[data-key='P-40']").length,0);
+  assert.equal($("tr[data-key='P-51']").length,1);
+  $("[data-filter='status']").trigger("click");
+  assert.equal($(story).prop("checked"),true);
+  $(child).prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($("tr[data-key='P-51']").length,0);
+  $("[data-filter='status']").trigger("click");
+  $(".ujg-esi-menu-command").last().trigger("click");
+  assert.equal($("[data-filter='status']").hasClass("is-active"),false);
+  assert.equal($("tr[data-key='P-10']").length,1);
+  assert.equal($("tr[data-key='P-12']").length,1);
+  $("[data-filter='status']").trigger("click");
+  $(child).prop("checked",true).trigger("change");
+  $(story).prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  $("[aria-label='Сбросить все фильтры']").trigger("click");
+  $("[data-filter='status']").trigger("click");
+  assert.equal($(child).prop("checked"),false);
+  assert.equal($(story).prop("checked"),false);
 });
 
 test("Jira view can explicitly load with no workbook and never shows an Excel dropzone", t => {
