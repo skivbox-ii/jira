@@ -54,8 +54,41 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return fields;
   }
 
+  function dueDateKey(key) {
+    var value = typeof key === "string" ? key.trim() : "";
+    return /^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(value) ? value : null;
+  }
+
+  function calendarDate(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    var date = new Date(value + "T00:00:00Z");
+    return isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+
   return {
     baseUrl: config.baseUrl,
+    getIssueDueDate: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
+        type: "GET",
+        timeout: 30000,
+        dataType: "json",
+        data: {fields:"duedate,summary"},
+      });
+    },
+    updateIssueDueDate: function(key, date) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey || !calendarDate(date)) return Promise.reject(new Error("Invalid Jira issue key or due date"));
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
+        type: "PUT",
+        timeout: 30000,
+        contentType: "application/json",
+        data: JSON.stringify({fields:{duedate:date}}),
+      });
+    },
     getProjects: function() {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/project",

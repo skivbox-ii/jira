@@ -11,7 +11,8 @@ define("_ujgESI_main", [
   "_ujgShared_llmClient",
   "_ujgESI_teams",
   "_ujgESI_activity",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule) {
+  "_ujgESI_dueDateSync",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -1079,6 +1080,24 @@ define("_ujgESI_main", [
     var teamSearchSeq = 0;
     var activitySeq = 0;
     var activityDate = "";
+    var dueDateSync = dueDateSyncModule ? dueDateSyncModule.create({api:api,onChange:function(snapshot) {
+      state.dueDateSync = snapshot;
+      if (rendering.renderDueDateSync) rendering.renderDueDateSync(state);
+      else render();
+    }}) : null;
+    state.dueDateSync = dueDateSync ? dueDateSync.getState() : null;
+
+    function closeDueDateSyncForContextChange() {
+      return !dueDateSync || !state.dueDateSync.open || dueDateSync.close() !== false;
+    }
+
+    function onOpenDueDateSync() {
+      if (!dueDateSync || state.dueDateSync.open || state.viewMode !== "excel" || !state.rows.length ||
+          state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
+      closeUserPicker();
+      closeEpicPicker();
+      dueDateSync.open(state.rows, {columnMap:copyColumnMap(state.mappingSettings.columnMap)});
+    }
 
     function invalidateActivityHistory() {
       activitySeq++;
@@ -2327,6 +2346,7 @@ define("_ujgESI_main", [
     function onViewModeChange(mode) {
       var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
       if (!next || next === state.viewMode) return;
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.viewMode === "excel") excelRows = state.rows;
       if (state.viewMode === "jira") registryRows = state.rows;
@@ -2433,6 +2453,7 @@ define("_ujgESI_main", [
     }
 
     function onProjectChange(projectKey) {
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       projectSelectionChanged = true;
       if (state.syncLoading) {
@@ -2466,6 +2487,7 @@ define("_ujgESI_main", [
     }
 
     function onEpicSelect(epicKey) {
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
@@ -2487,6 +2509,7 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
@@ -2537,6 +2560,7 @@ define("_ujgESI_main", [
     }
 
     function onMetaSheetSelect(sheetName) {
+      if (!closeDueDateSyncForContextChange()) return;
       var nextSheetName = copySheetName(sheetName);
       if (!nextSheetName || !state.sourceWorkbook) {
         state.sheetPickerOpen = false;
@@ -2568,6 +2592,7 @@ define("_ujgESI_main", [
     }
 
     function onOpenMappings() {
+      if (!closeDueDateSyncForContextChange()) return;
       state.mappingEditorOpen = true;
       state.activeMappingBlock = state.activeMappingBlock || "modules";
       closeUserPicker();
@@ -2586,6 +2611,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingColumnChange(field, value) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = field != null ? String(field) : "";
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
@@ -2594,6 +2620,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingTableStartChange(field, value) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
@@ -2602,6 +2629,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingSheetNameChange(value) {
+      if (!closeDueDateSyncForContextChange()) return;
       state.mappingSettings.sheetName = copySheetName(value);
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
@@ -2837,6 +2865,7 @@ define("_ujgESI_main", [
 
     function onSyncJira() {
       if (state.viewMode !== "excel") return;
+      if (!closeDueDateSyncForContextChange()) return;
       var rows = state.rows;
       var seq;
       function active() { return seq === syncSeq && state.viewMode === "excel" && state.rows === rows; }
@@ -3745,6 +3774,11 @@ define("_ujgESI_main", [
       onMappingLlmRemarkPromptChange: onMappingLlmRemarkPromptChange,
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
+      onOpenDueDateSync: onOpenDueDateSync,
+      onCloseDueDateSync: function() { if (dueDateSync) dueDateSync.close(); },
+      onSelectDueDateSyncRow: function(id, selected) { if (dueDateSync) dueDateSync.select(id, selected); },
+      onSelectAllDueDateSync: function(selected) { if (dueDateSync) dueDateSync.selectAll(selected); },
+      onConfirmDueDateSync: function() { if (dueDateSync) dueDateSync.confirm(); },
       onViewModeChange: onViewModeChange,
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
@@ -3755,6 +3789,7 @@ define("_ujgESI_main", [
       onActivityLlmRequest: onActivityLlmRequest,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
+        if (state.reportView !== view && !closeDueDateSyncForContextChange()) return;
         var enteringActivity = view === "activity" && state.reportView !== "activity";
         if (state.reportView !== view) invalidateActivityHistory();
         state.reportView = view;

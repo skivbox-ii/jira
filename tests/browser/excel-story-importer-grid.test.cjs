@@ -42,12 +42,30 @@ function setup(activityReport) {
     onAssignUserTeam: (user, teamId) => calls.push(["assign-team", user, teamId]),
     onViewModeChange: mode => calls.push(["mode", mode]), onLoadRegistry: () => calls.push(["load"]),
     onReportViewChange: view => calls.push(["report",view]),
+    onOpenDueDateSync: () => calls.push(["due-date"]), onSyncJira: () => calls.push(["read-jira"]),
     onLlmResetRequest: () => calls.push(["reset-request"]), onLlmResetConfirm: () => calls.push(["reset-confirm"]), onLlmResetCancel: () => calls.push(["reset-cancel"])
   });
   modules._ujgESI_rendering.render(state);
   return { dom, $, state, calls, modules, render: () => modules._ujgESI_rendering.render(state) };
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
+
+test("due date sync is a separate Excel-only action with loading guards", t => {
+  const {dom,$,state,calls,render} = setup(); t.after(() => dom.window.close());
+  const button = () => $("button[aria-label='Обновить сроки Jira из Excel']");
+  assert.equal(button().length, 1);
+  button().trigger("click");
+  assert.deepEqual(calls, [["due-date"]]);
+  $("button[aria-label='Синхронизировать из Jira']").trigger("click");
+  assert.deepEqual(calls[1], ["read-jira"]);
+  for (const flag of ["loading", "syncLoading"]) {
+    state[flag] = true; render(); assert.equal(button().prop("disabled"), true);
+    state[flag] = false;
+  }
+  state.dueDateSync = {open:true}; render(); assert.equal(button().prop("disabled"), true);
+  state.dueDateSync.open = false; state.rows = []; render(); assert.equal(button().prop("disabled"), true);
+  state.viewMode = "jira"; render(); assert.equal(button().length, 0);
+});
 
 test("Jira owners and source indices survive page two, size changes, and grid refresh", t => {
   const {dom,$,state,calls,render} = setup(); t.after(() => dom.window.close());

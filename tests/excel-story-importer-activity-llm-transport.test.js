@@ -20,7 +20,7 @@ function setup(options = {}) {
     _ujgESI_config:{STORY_ISSUE_TYPE:"Story",CREATE_TEMPLATE_ROLES:[],LLM_CONFIG_STORAGE_KEY:"test-llm"},
     _ujgESI_api:{baseUrl:"https://jira.example.test",getProjects:() => Promise.resolve([])},
     "_ujgESI_excel-loader":{},_ujgESI_parser:{},_ujgESI_creator:{},
-    _ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:null,_ujgESI_teams:null,_ujgESI_activity:null,
+    _ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:null,_ujgESI_teams:null,_ujgESI_dueDateSync: null, _ujgESI_activity:null,
     _ujgESI_rendering:{init(_container,services) { callbacks=services; },render() {}},
     _ujgShared_llmClient:client
   },{localStorage,window:{localStorage,prompt:message => { prompts.push(message); return null; }}});

@@ -19,6 +19,7 @@ window.modules = {jquery: jQuery};
 window.mutationCalls = 0;
 window.issueReadCalls = 0;
 window.historyReadCalls = [];
+window.dueDateWriteCalls = [];
 window.offlineApi = {
   baseUrl: "https://jira.example.test",
   getProjects: function(){return Promise.resolve([{key:"EVOSCADA",name:"EVO-SCADA"}]);},
@@ -26,6 +27,16 @@ window.offlineApi = {
   getProjectCreateMeta: function(){return Promise.resolve({projects:[]});},
   getIssuesByKeys: function(keys){window.issueReadCalls++;return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
   getIssueWithHistory: function(key){window.issueReadCalls++;window.historyReadCalls.push(key);return new Promise(function(resolve){setTimeout(function(){resolve(fixtureIssues[key]);},250);});},
+  getIssueDueDate: function(key){return new Promise(function(resolve,reject){setTimeout(function(){
+    var issue=fixtureIssues[key];
+    if(!issue){reject(new Error("Fixture not found"));return;}
+    resolve({key:issue.key,fields:{summary:issue.fields.summary,duedate:issue.fields.duedate || null}});
+  },15);});},
+  updateIssueDueDate: function(key,date){return new Promise(function(resolve,reject){setTimeout(function(){
+    var issue=fixtureIssues[key];
+    if(!issue || !/^\d{4}-\d{2}-\d{2}$/.test(date)){reject(new Error("Invalid fixture update"));return;}
+    window.mutationCalls++;window.dueDateWriteCalls.push({key:key,date:date});issue.fields.duedate=date;resolve();
+  },100);});},
   getProjectIssues: function(){window.issueReadCalls++;return Promise.resolve({issues:Object.values(fixtureIssues).filter(function(issue){return issue.fields.issuetype.name === "История";}).map(function(issue){
     if (issue.key !== "EVOSCADA-16104") return issue;
     var partial = Object.assign({},issue); delete partial.changelog; return partial;

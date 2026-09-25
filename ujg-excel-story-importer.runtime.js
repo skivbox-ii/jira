@@ -909,6 +909,192 @@ define("_ujgESI_deadlines", [], function() {
   return {resolve:resolve,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
 });
 
+/* === Module: due-date-sync.js === */
+define("_ujgESI_dueDateSync", ["_ujgESI_deadlines"], function(deadlines) {
+  "use strict";
+
+  var own = Object.prototype.hasOwnProperty;
+  function validKey(key) { return typeof key === "string" && /^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(key.trim()); }
+  function validDate(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    var parsed = new Date(value + "T00:00:00Z");
+    return isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }
+  function current(issue, expectedKey) {
+    if (!issue || !validKey(issue.key) || issue.key.trim().toUpperCase() !== expectedKey.toUpperCase()) throw new Error("unknown-issue");
+    if (!issue || !issue.fields || !own.call(issue.fields, "duedate")) throw new Error("unknown-date");
+    var date = issue.fields.duedate;
+    if (date === null) return null;
+    if (!validDate(date)) throw new Error("unknown-date");
+    return date;
+  }
+  function usableId(id) {
+    return typeof id === "string" && !!id.trim() || typeof id === "number" && isFinite(id);
+  }
+  function uniqueIds(rows) {
+    var reserved = new Set(), used = new Set();
+    rows.forEach(function(row) { if (usableId(row.id)) reserved.add(String(row.id)); });
+    rows.forEach(function(row, index) {
+      var id = usableId(row.id) ? String(row.id) : "";
+      if (id && !used.has(id)) { used.add(id); return; }
+      var generated = "due-row-" + (index + 1), suffix = 2;
+      while (reserved.has(generated) || used.has(generated)) generated = "due-row-" + (index + 1) + "-" + suffix++;
+      row.id = generated; used.add(generated);
+    });
+  }
+  function httpStatus(error) {
+    var value = error && error.status;
+    return typeof value === "number" && value >= 100 && value <= 599 && Math.floor(value) === value ? value : null;
+  }
+  function frozenRow(source, columnMap) {
+    var columns = source && source.sourceColumns;
+    var due = deadlines.resolve({sourceColumns:Array.isArray(columns) ? columns.map(function(entry) {
+      return {name:entry.name,value:entry.value};
+    }) : Object.assign({}, columns || {})}, {columnMap:columnMap});
+    var key = source && (source.createdKey || source.jiraKey);
+    key = typeof key === "string" ? key.trim() : "";
+    var remark = source && source.remarkId;
+    if (remark == null && columns && !Array.isArray(columns)) remark = columns["№"] || columns.ID || null;
+    return {
+      id:source && source.id, key:key, remarkId:remark == null ? null : String(remark),
+      summary:String(source && source.summary || ""), sourceRaw:due.candidates.map(function(item) { return item.raw; }).join("; "),
+      newDate:due.date, oldDate:null, eligible:false, selected:false,
+      status:due.problem === "conflict" && validKey(key) ? "conflict" : "skipped",
+      message:!validKey(key) ? "Нет корректного Jira-ключа" : due.reasonLabel || "",
+      problem:due.problem
+    };
+  }
+  function create(options) {
+    options = options || {};
+    var api = options.api, onChange = typeof options.onChange === "function" ? options.onChange : function() {};
+    var state = {open:false,loading:false,running:false,rows:[],error:null,completed:0,total:0};
+    var generation = 0;
+    function snapshot() {
+      return {open:state.open,loading:state.loading,running:state.running,error:state.error,
+        completed:state.completed,total:state.total,rows:state.rows.map(function(row) {
+          return {id:row.id,key:row.key,remarkId:row.remarkId,summary:row.summary,
+            sourceRaw:row.sourceRaw,newDate:row.newDate,oldDate:row.oldDate,
+            eligible:row.eligible,selected:row.selected,status:row.status,message:row.message};
+        })};
+    }
+    function notify() { onChange(snapshot()); }
+    function queue(items, limit, task, active) {
+      var next = 0;
+      function worker() {
+        if (!active() || next >= items.length) return Promise.resolve();
+        var item = items[next++];
+        return Promise.resolve().then(function() { return task(item); }).then(worker);
+      }
+      var workers = [];
+      for (var i = 0; i < Math.min(limit, items.length); i++) workers.push(worker());
+      return Promise.all(workers);
+    }
+    function open(rows, settings) {
+      if (state.running) return false;
+      var token = ++generation, grouped = new Map(), plan = [];
+      (Array.isArray(rows) ? rows : []).forEach(function(source) {
+        var item = frozenRow(source, settings && settings.columnMap);
+        if (validKey(item.key)) {
+          var normalized = item.key.toUpperCase();
+          if (grouped.has(normalized)) {
+            var existing = grouped.get(normalized);
+            existing.sourceRaw = [existing.sourceRaw,item.sourceRaw].filter(Boolean).join("; ");
+            if (item.problem && item.problem !== "missing" || existing.problem && existing.problem !== "missing" ||
+                item.newDate && existing.newDate && item.newDate !== existing.newDate) {
+              existing.problem = "conflict";
+              existing.newDate = null;
+              existing.message = "Противоречивые сроки Excel";
+              existing.status = "conflict";
+            } else if (!existing.newDate && item.newDate) {
+              existing.newDate = item.newDate; existing.problem = null; existing.message = "";
+            }
+            return;
+          }
+          grouped.set(normalized,item);
+        }
+        plan.push(item);
+      });
+      uniqueIds(plan);
+      state = {open:true,loading:true,running:false,rows:plan,error:null,completed:0,total:plan.length};
+      plan.forEach(function(item) {
+        if (validKey(item.key) && item.newDate && !item.problem) item.status = "loading";
+      });
+      notify();
+      var candidates = plan.filter(function(item) { return item.status === "loading"; });
+      return queue(candidates,3,function(item) {
+        return Promise.resolve().then(function() { return api.getIssueDueDate(item.key); }).then(function(issue) {
+          if (token !== generation) return;
+          var old = current(issue,item.key);
+          item.oldDate = old;
+          if (old === item.newDate) { item.status = "skipped"; item.message = "Срок уже совпадает"; }
+          else { item.status = "ready"; item.message = ""; item.eligible = true; item.selected = true; }
+          notify();
+        },function() {
+          if (token !== generation) return;
+          item.status = "skipped"; item.message = "Карточка Jira недоступна"; notify();
+        }).catch(function() {
+          if (token !== generation) return;
+          item.status = "skipped"; item.message = "Текущий срок Jira неизвестен"; notify();
+        });
+      },function() { return token === generation; }).then(function() {
+        if (token !== generation) return;
+        state.loading = false; notify();
+        return snapshot();
+      });
+    }
+    function close() {
+      if (state.running) return false;
+      ++generation; state.open = false; state.loading = false; state.rows = []; state.total = 0; state.completed = 0; state.error = null;
+      notify(); return true;
+    }
+    function select(id, selected) {
+      if (!state.open || state.loading || state.running) return false;
+      var item = state.rows.find(function(row) { return row.id === id; });
+      if (!item || !item.eligible || item.status === "updated") return false;
+      item.selected = !!selected; notify(); return true;
+    }
+    function selectAll(selected) {
+      if (!state.open || state.loading || state.running) return false;
+      state.rows.forEach(function(item) { if (item.eligible && item.status !== "updated") item.selected = !!selected; });
+      notify(); return true;
+    }
+    function confirm() {
+      if (!state.open || state.loading || state.running) return false;
+      var chosen = state.rows.filter(function(item) { return item.eligible && item.selected && item.status !== "updated"; });
+      if (!chosen.length) return false;
+      var token = generation;
+      state.running = true; state.completed = 0; state.total = chosen.length; notify();
+      return queue(chosen,2,function(item) {
+        item.status = "updating"; item.selected = false; notify();
+        return Promise.resolve().then(function() { return api.getIssueDueDate(item.key); }).then(function(issue) {
+          var now = current(issue,item.key);
+          if (now === item.newDate) { item.status = "skipped"; item.eligible = false; item.message = "Срок уже установлен"; return; }
+          if (now !== item.oldDate) { item.status = "conflict"; item.eligible = false; item.message = "Срок Jira изменился после просмотра"; return; }
+          if (!validKey(item.key) || !validDate(item.newDate)) { item.status = "error"; item.eligible = false; item.message = "Некорректный ключ или срок"; return; }
+          var request;
+          try { request = api.updateIssueDueDate(item.key,item.newDate); }
+          catch (_) { item.status = "error"; item.message = "Не удалось начать запись"; return; }
+          return Promise.resolve(request).then(function() {
+            item.status = "updated"; item.eligible = false; item.message = "Обновлено";
+          },function(error) {
+            var status = httpStatus(error);
+            item.status = status >= 400 && status < 500 ? "error" : "unconfirmed";
+            item.message = (item.status === "error" ? "Jira отклонила обновление" : "Результат записи не подтверждён") +
+              (status ? " (HTTP " + status + ")" : "");
+          });
+        }).catch(function(error) {
+          item.status = "error";
+          item.message = "Не удалось проверить текущий срок Jira";
+        }).then(function() { state.completed++; notify(); });
+      },function() { return token === generation; }).then(function() {
+        state.running = false; notify(); return snapshot();
+      });
+    }
+    return {open:open,close:close,select:select,selectAll:selectAll,confirm:confirm,getState:snapshot};
+  }
+  return {create:create};
+});
+
 /* === Module: parser.js === */
 define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   "use strict";
@@ -1821,8 +2007,41 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return fields;
   }
 
+  function dueDateKey(key) {
+    var value = typeof key === "string" ? key.trim() : "";
+    return /^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(value) ? value : null;
+  }
+
+  function calendarDate(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    var date = new Date(value + "T00:00:00Z");
+    return isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+
   return {
     baseUrl: config.baseUrl,
+    getIssueDueDate: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
+        type: "GET",
+        timeout: 30000,
+        dataType: "json",
+        data: {fields:"duedate,summary"},
+      });
+    },
+    updateIssueDueDate: function(key, date) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey || !calendarDate(date)) return Promise.reject(new Error("Invalid Jira issue key or due date"));
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
+        type: "PUT",
+        timeout: 30000,
+        contentType: "application/json",
+        data: JSON.stringify({fields:{duedate:date}}),
+      });
+    },
     getProjects: function() {
       return $.ajax({
         url: config.baseUrl + "/rest/api/2/project",
@@ -2865,6 +3084,7 @@ define("_ujgESI_icons", [], function() {
   "use strict";
   var nodes = {"ChevronDown":[["path",{"d":"m6 9 6 6 6-6"}]],"ChevronRight":[["path",{"d":"m9 18 6-6-6-6"}]],"Plus":[["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],"WandSparkles":[["path",{"d":"m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"}],["path",{"d":"m14 7 3 3"}],["path",{"d":"M5 6v4"}],["path",{"d":"M19 14v4"}],["path",{"d":"M10 2v2"}],["path",{"d":"M7 8H3"}],["path",{"d":"M21 16h-4"}],["path",{"d":"M11 3H9"}]],"Upload":[["path",{"d":"M12 3v12"}],["path",{"d":"m17 8-5-5-5 5"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}]],"Download":[["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],"Settings":[["path",{"d":"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"}],["circle",{"cx":"12","cy":"12","r":"3"}]],"RefreshCw":[["path",{"d":"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}],["path",{"d":"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"}],["path",{"d":"M8 16H3v5"}]],"Info":[["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],"Columns3":[["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}],["path",{"d":"M9 3v18"}],["path",{"d":"M15 3v18"}]],"Expand":[["path",{"d":"m15 15 6 6"}],["path",{"d":"m15 9 6-6"}],["path",{"d":"M21 16v5h-5"}],["path",{"d":"M21 8V3h-5"}],["path",{"d":"M3 16v5h5"}],["path",{"d":"m3 21 6-6"}],["path",{"d":"M3 8V3h5"}],["path",{"d":"M9 9 3 3"}]],"Minimize2":[["path",{"d":"m14 10 7-7"}],["path",{"d":"M20 10h-6V4"}],["path",{"d":"m3 21 7-7"}],["path",{"d":"M4 14h6v6"}]],"X":[["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],"Funnel":[["path",{"d":"M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"}]],"FunnelX":[["path",{"d":"M12.531 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14v6a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341l.427-.473"}],["path",{"d":"m16.5 3.5 5 5"}],["path",{"d":"m21.5 3.5-5 5"}]],"ArrowDownAZ":[["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"ArrowUpAZ":[["path",{"d":"m3 8 4-4 4 4"}],["path",{"d":"M7 4v16"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"Search":[["path",{"d":"m21 21-4.34-4.34"}],["circle",{"cx":"11","cy":"11","r":"8"}]],"TriangleAlert":[["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],"ExternalLink":[["path",{"d":"M15 3h6v6"}],["path",{"d":"M10 14 21 3"}],["path",{"d":"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}]],"Bookmark":[["path",{"d":"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"}]],"CheckSquare":[["path",{"d":"M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"}],["path",{"d":"m9 11 3 3L22 4"}]],"ChevronLeft":[["path",{"d":"m15 18-6-6 6-6"}]],"ArrowUp":[["path",{"d":"m5 12 7-7 7 7"}],["path",{"d":"M12 19V5"}]],"ArrowDown":[["path",{"d":"M12 5v14"}],["path",{"d":"m19 12-7 7-7-7"}]]};
   nodes.Equal = [["line",{"x1":"5","x2":"19","y1":"9","y2":"9"}],["line",{"x1":"5","x2":"19","y1":"15","y2":"15"}]];
+  nodes.ArrowDownUp = [["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"m21 8-4-4-4 4"}],["path",{"d":"M17 4v16"}]];
   nodes.Trash2 = [["path",{"d":"M10 11v6"}],["path",{"d":"M14 11v6"}],["path",{"d":"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"}],["path",{"d":"M3 6h18"}],["path",{"d":"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"}]];
   nodes.ListTree = [["path",{"d":"M8 5h13"}],["path",{"d":"M13 12h8"}],["path",{"d":"M13 19h8"}],["path",{"d":"M3 10a2 2 0 0 0 2 2h3"}],["path",{"d":"M3 5v12a2 2 0 0 0 2 2h3"}]];
   nodes.ChevronsUpDown = [["path",{"d":"m7 15 5 5 5-5"}],["path",{"d":"m7 9 5-5 5 5"}]];
@@ -2879,6 +3099,246 @@ define("_ujgESI_icons", [], function() {
     });
     return svg;
   };
+});
+
+/* === Module: due-date-sync-ui.js === */
+define("_ujgESI_dueDateSyncUi", ["jquery", "_ujgESI_icons"], function($, icon) {
+  "use strict";
+  var COLUMNS = [
+    {id:"remark", label:"Замечание", width:320},
+    {id:"key", label:"Jira", width:160},
+    {id:"oldDate", label:"Срок Jira", width:145},
+    {id:"newDate", label:"Срок Excel", width:180},
+    {id:"result", label:"Результат", width:220}
+  ];
+  var LABELS = {loading:"Загрузка", ready:"Готово к обновлению", skipped:"Пропущено", conflict:"Конфликт", error:"Ошибка", updating:"Обновление", updated:"Обновлено", unconfirmed:"Не подтверждено"};
+  function button(className, label, iconName) {
+    var el = $("<button type='button'/>").addClass(className).attr({"aria-label":label,title:label});
+    if (iconName) el.append(icon(iconName)); else el.text(label);
+    return el;
+  }
+  function date(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? value.slice(8,10)+"."+value.slice(5,7)+"."+value.slice(0,4) : "—";
+  }
+  function jiraUrl(base, key) {
+    if (!/^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/.test(String(key || ""))) return null;
+    try {
+      var url = new URL(String(base || ""));
+      if (!/^https?:$/.test(url.protocol)) return null;
+      return url.origin + url.pathname.replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key);
+    } catch (_) { return null; }
+  }
+  function value(row, column) {
+    if (column === "remark") return [row.remarkId, row.summary].filter(Boolean).join(" ");
+    if (column === "oldDate" || column === "newDate") return date(row[column]);
+    if (column === "result") return [LABELS[row.status] || row.status || "", row.message && row.message !== LABELS[row.status] ? row.message : ""].join(" ").trim();
+    return String(row[column] || "");
+  }
+  function validPrefs(raw) {
+    var source = raw && typeof raw === "object" ? raw : {};
+    var ids = COLUMNS.map(function(c) { return c.id; });
+    var order = Array.isArray(source.order) ? source.order.filter(function(id) { return ids.indexOf(id) >= 0; }) : [];
+    ids.forEach(function(id) { if (order.indexOf(id) < 0) order.push(id); });
+    var widths = {}, visible = {}, filters = {};
+    COLUMNS.forEach(function(c) {
+      widths[c.id] = Math.max(80, Math.min(800, Number(source.widths && source.widths[c.id]) || c.width));
+      visible[c.id] = !(source.visible && source.visible[c.id] === false);
+      if (source.filters && Array.isArray(source.filters[c.id])) filters[c.id] = source.filters[c.id].map(String);
+    });
+    if (!ids.some(function(id) { return visible[id]; })) visible[ids[0]] = true;
+    var sort = source.sort && ids.indexOf(source.sort.id) >= 0 && /^(asc|desc)$/.test(source.sort.dir) ? {id:source.sort.id,dir:source.sort.dir} : null;
+    return {order:order, widths:widths, visible:visible, filters:filters, sort:sort};
+  }
+  function create() {
+    var prefs = validPrefs(null), storageKey = null, host = null, anchor = null, open = false;
+    var popup = null, popupSearch = "", popupDraft = null, columnMenu = false, lastState = null, lastServices = null;
+    var doc = null, resize = null, bodyOverflow = null;
+    function save() {
+      try { if (storageKey) window.localStorage.setItem(storageKey, JSON.stringify(prefs)); } catch (_) {}
+    }
+    function load(state) {
+      var key = String(state.preferencesStorageKey || "") + ":due-date-sync-ui";
+      if (key === storageKey) return;
+      storageKey = key;
+      try { prefs = validPrefs(JSON.parse(window.localStorage.getItem(key))); } catch (_) { prefs = validPrefs(null); }
+    }
+    function dismiss() {
+      if (lastState && lastState.dueDateSync && !lastState.dueDateSync.running) lastServices.onCloseDueDateSync();
+    }
+    function onKey(e) {
+      if (!open) return;
+      if (e.key === "Escape") {
+        if (popup || columnMenu) { popup = null; popupDraft = null; columnMenu = false; draw(); e.preventDefault(); return; }
+        if (!lastState.dueDateSync.running) { dismiss(); e.preventDefault(); }
+      }
+      if (e.key === "Tab") {
+        var dialog = host.find(".ujg-esi-due-dialog")[0];
+        var items = $(dialog).find("button:not(:disabled),input:not(:disabled),a[href],[tabindex='0']").filter(":visible").toArray();
+        // jsdom has no layout, so use the DOM list if visibility cannot be measured.
+        if (!items.length) items = host.find(".ujg-esi-due-dialog button:not(:disabled),.ujg-esi-due-dialog input:not(:disabled),.ujg-esi-due-dialog a[href],.ujg-esi-due-dialog [tabindex='0']").toArray();
+        if (!items.length) return;
+        var first = items[0], last = items[items.length-1];
+        if (e.shiftKey && (document.activeElement === first || document.activeElement === dialog || !dialog.contains(document.activeElement))) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { first.focus(); e.preventDefault(); }
+      }
+    }
+    function onOutside(e) {
+      if (!open || (!popup && !columnMenu)) return;
+      if ($(e.target).closest(".ujg-esi-due-filter-menu,.ujg-esi-due-columns-menu,.ujg-esi-due-header-filter,.ujg-esi-due-columns-button,.ujg-esi-due-hidden-filter").length) return;
+      popup=null;popupDraft=null;columnMenu=false;draw();
+    }
+    function sortedFiltered(rows) {
+      var shown = rows.filter(function(row) {
+        return COLUMNS.every(function(c) { var chosen = prefs.filters[c.id]; return !Array.isArray(chosen) || chosen.indexOf(value(row,c.id)) >= 0; });
+      });
+      if (prefs.sort) shown.sort(function(a,b) {
+        var av = /^(oldDate|newDate)$/.test(prefs.sort.id) ? String(a[prefs.sort.id] || "") : value(a,prefs.sort.id);
+        var bv = /^(oldDate|newDate)$/.test(prefs.sort.id) ? String(b[prefs.sort.id] || "") : value(b,prefs.sort.id);
+        return av.localeCompare(bv,"ru",{numeric:true}) * (prefs.sort.dir === "asc" ? 1 : -1);
+      });
+      return shown;
+    }
+    function focusId(node) { return node && node.getAttribute && node.getAttribute("data-due-focus"); }
+    function draw() {
+      if (!host || !lastState || !lastState.dueDateSync) return;
+      var state = lastState, plan = state.dueDateSync, rows = Array.isArray(plan.rows) ? plan.rows : [];
+      var old = host.find(".ujg-esi-due-scroll")[0], top = old ? old.scrollTop : 0, left = old ? old.scrollLeft : 0;
+      var active = host[0].contains(document.activeElement) ? focusId(document.activeElement) : null;
+      host.empty().addClass("ujg-esi-due-active");
+      host.append($("<div/>").addClass("ujg-esi-due-overlay").attr("aria-hidden","true").on("wheel touchmove",function(e){e.preventDefault();}));
+      var dialog = $("<section/>").addClass("ujg-esi-due-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"Обновление сроков Jira из Excel",tabindex:"-1"});
+      var head = $("<header/>").addClass("ujg-esi-due-head").append($("<h2/>").text("Обновление сроков Jira из Excel"));
+      head.append(button("ujg-esi-due-close","Закрыть","X").attr("data-due-focus","close").prop("disabled",!!plan.running).on("click",dismiss));
+      dialog.append(head);
+      if (plan.loading || plan.running) dialog.append($("<div/>").addClass("ujg-esi-due-progress").attr({role:"status","aria-live":"polite"}).append($("<span/>").addClass("ujg-esi-due-spinner")).append($("<span/>").text(plan.running ? "Обновление сроков: "+(plan.completed || 0)+" из "+(plan.total || 0) : "Чтение сроков Jira…")));
+      if (plan.error) dialog.append($("<div/>").addClass("ujg-esi-due-error").attr("role","alert").text(plan.error));
+      var eligible = rows.filter(function(r) { return r.eligible && r.status !== "updated"; });
+      var selected = eligible.filter(function(r) { return r.selected; }).length;
+      var shown = sortedFiltered(rows), toolbar = $("<div/>").addClass("ujg-esi-due-tools");
+      toolbar.append($("<span/>").addClass("ujg-esi-due-count").text("Показано "+shown.length+" из "+rows.length+" · Выбрано "+selected+" из "+eligible.length));
+      Object.keys(prefs.filters).forEach(function(id) {
+        if (Array.isArray(prefs.filters[id]) && !prefs.visible[id]) toolbar.append(button("ujg-esi-due-hidden-filter",COLUMNS.find(function(c){return c.id===id;}).label+": фильтр").on("click",function(){ popup=id; popupDraft=null; popupSearch=""; columnMenu=false; draw(); }));
+      });
+      if (Object.keys(prefs.filters).some(function(id){return Array.isArray(prefs.filters[id]);})) toolbar.append(button("ujg-esi-due-reset-filters","Сбросить фильтры","FunnelX").on("click",function(){prefs.filters={};save();draw();}));
+      toolbar.append(button("ujg-esi-due-columns-button","Столбцы","Columns3").attr("data-due-focus","columns").on("click",function(){columnMenu=!columnMenu;popup=null;popupDraft=null;draw();}));
+      dialog.append(toolbar);
+      if (columnMenu) {
+        var menu = $("<div/>").addClass("ujg-esi-due-columns-menu");
+        COLUMNS.forEach(function(c) {
+          var input = $("<input type='checkbox'/>").attr("data-due-visible",c.id).prop("checked",prefs.visible[c.id]);
+          input.on("change",function(){ prefs.visible[c.id]=this.checked; if (!Object.keys(prefs.visible).some(function(id){return prefs.visible[id];})) {prefs.visible[c.id]=true;this.checked=true;} save();draw(); });
+          menu.append($("<label/>").append(input," ",c.label));
+        });
+        menu.append(button("ujg-esi-due-reset-columns","Сбросить столбцы").on("click",function(){var oldFilters=prefs.filters,oldSort=prefs.sort;prefs=validPrefs(null);prefs.filters=oldFilters;prefs.sort=oldSort;save();draw();}));
+        dialog.append(menu);
+      }
+      var scroll = $("<div/>").addClass("ujg-esi-due-scroll").attr("tabindex","0");
+      var visibleColumns = prefs.order.filter(function(id){return prefs.visible[id];});
+      var tableWidth = 42 + visibleColumns.reduce(function(sum,id){return sum+prefs.widths[id];},0);
+      var table = $("<table/>").addClass("ujg-esi-due-table").css("width",tableWidth+"px");
+      var colgroup = $("<colgroup/>").appendTo(table);
+      colgroup.append($("<col/>").attr("width","42"));
+      visibleColumns.forEach(function(id){colgroup.append($("<col/>").attr({"data-column":id,width:String(prefs.widths[id])}));});
+      var thead = $("<thead/>").appendTo(table), tr = $("<tr/>").appendTo(thead);
+      var all = $("<input type='checkbox'/>").addClass("ujg-esi-due-select-all").attr({"aria-label":"Выбрать все доступные строки","data-due-focus":"all"}).prop({checked:eligible.length>0 && selected===eligible.length,indeterminate:selected>0 && selected<eligible.length,disabled:!!(plan.loading||plan.running||!eligible.length)});
+      all.on("change",function(){lastServices.onSelectAllDueDateSync(this.checked);});
+      tr.append($("<th scope='col'/>").addClass("ujg-esi-due-select-head").append(all));
+      visibleColumns.forEach(function(id) {
+        var c = COLUMNS.find(function(item){return item.id===id;}), th = $("<th scope='col' draggable='true'/>").attr("data-column",id).css("width",prefs.widths[id]+"px");
+        var sortLabel = c.label+(prefs.sort && prefs.sort.id===id ? (prefs.sort.dir==="asc" ? " ↑":" ↓") : "");
+        th.append(button("ujg-esi-due-header-sort",sortLabel).attr({"data-due-sort":id,"data-due-focus":"sort-"+id}).on("click",function(){ prefs.sort={id:id,dir:prefs.sort && prefs.sort.id===id && prefs.sort.dir==="asc" ? "desc":"asc"};save();draw(); }));
+        th.append(button("ujg-esi-due-header-filter"+(Array.isArray(prefs.filters[id]) ? " is-active":""),"Фильтр: "+c.label,"Funnel").attr({"data-due-filter":id,"data-due-focus":"filter-"+id}).on("click",function(){popup=popup===id ? null : id;popupDraft=null;popupSearch="";columnMenu=false;draw();}));
+        th.append($("<span role='separator' tabindex='0'/>").addClass("ujg-esi-due-column-resize").attr({"aria-label":"Изменить ширину: "+c.label,"aria-orientation":"vertical","data-due-focus":"resize-"+id}).on("keydown",function(e){if(e.key!=="ArrowLeft"&&e.key!=="ArrowRight")return;prefs.widths[id]=Math.max(80,Math.min(800,prefs.widths[id]+(e.key==="ArrowRight"?10:-10)));save();draw();e.preventDefault();}).on("pointerdown mousedown",function(e){resize={id:id,x:e.clientX,width:prefs.widths[id]};e.stopPropagation();e.preventDefault();}));
+        th.on("dragstart",function(e){ if(resize){e.preventDefault();return;} e.originalEvent.dataTransfer.setData("text/plain",id); });
+        th.on("dragover",function(e){e.preventDefault();});
+        th.on("drop",function(e){e.preventDefault();var from=e.originalEvent.dataTransfer.getData("text/plain"), a=prefs.order.indexOf(from), b=prefs.order.indexOf(id);if(a<0||b<0||a===b)return;prefs.order.splice(a,1);prefs.order.splice(b,0,from);save();draw();});
+        tr.append(th);
+      });
+      var body = $("<tbody/>").appendTo(table);
+      shown.forEach(function(row) {
+        var item = $("<tr/>").addClass("ujg-esi-due-row").attr("data-row-id",String(row.id));
+        var check = $("<input type='checkbox'/>").addClass("ujg-esi-due-row-select").attr({"data-row-id":String(row.id),"data-due-focus":"row-"+row.id,"aria-label":"Выбрать "+(row.key || row.remarkId || row.id)}).prop({checked:!!row.selected,disabled:!!(plan.loading||plan.running||!row.eligible||row.status==="updated")});
+        check.on("change",function(){lastServices.onSelectDueDateSyncRow(row.id,this.checked);});
+        item.append($("<td/>").append(check));
+        prefs.order.filter(function(id){return prefs.visible[id];}).forEach(function(id) {
+          var cell = $("<td/>").css("width",prefs.widths[id]+"px");
+          if (id==="remark") cell.append($("<strong/>").text(row.remarkId || "—"),$("<span/>").addClass("ujg-esi-due-summary").text(row.summary || ""));
+          else if (id==="key") { var url=jiraUrl(state.baseUrl,row.key); if(url) cell.append($("<a target='_blank' rel='noopener noreferrer'/>").attr("href",url).text(row.key)); else cell.text(row.key || "—"); }
+          else if (id==="newDate") cell.append($("<span/>").text(date(row.newDate)), $("<small/>").text(row.sourceRaw || ""));
+          else if (id==="result") { cell.addClass("ujg-esi-due-result").addClass("is-"+(LABELS[row.status] ? row.status : "unknown")); if(row.status==="updated") cell.append(icon("CheckSquare")); cell.append($("<span/>").text(LABELS[row.status] || row.status || "—")); if(row.message && row.message !== LABELS[row.status]) cell.append($("<small/>").text(row.message)); }
+          else cell.text(date(row.oldDate));
+          item.append(cell);
+        });
+        body.append(item);
+      });
+      if (!shown.length) body.append($("<tr/>").append($("<td/>").attr("colspan",1+prefs.order.filter(function(id){return prefs.visible[id];}).length).text(rows.length ? "Нет строк по фильтрам" : "Нет строк для обновления")));
+      scroll.append(table);dialog.append(scroll);
+      if (popup) {
+        var c = COLUMNS.find(function(item){return item.id===popup;}), id=popup;
+        var values = Array.from(new Set(rows.map(function(row){return value(row,id);}).concat(prefs.filters[id] || []))).sort(function(a,b){return a.localeCompare(b,"ru",{numeric:true});});
+        if (popupDraft === null) popupDraft = Array.isArray(prefs.filters[id]) ? prefs.filters[id].slice() : values.slice();
+        var pop = $("<div/>").addClass("ujg-esi-due-filter-menu").attr("role","group").attr("aria-label","Фильтр: "+c.label);
+        pop.append(button("ujg-esi-due-sort-asc","Сортировать по возрастанию","ArrowDownAZ").on("click",function(){prefs.sort={id:id,dir:"asc"};save();popup=null;draw();}));
+        pop.append(button("ujg-esi-due-sort-desc","Сортировать по убыванию","ArrowUpAZ").on("click",function(){prefs.sort={id:id,dir:"desc"};save();popup=null;draw();}));
+        var search = $("<input type='search'/>").addClass("ujg-esi-due-filter-search").attr({placeholder:"Поиск","aria-label":"Поиск значений","data-due-focus":"search-"+id}).val(popupSearch);pop.append(search);
+        var list = $("<div/>").addClass("ujg-esi-due-filter-values");
+        function refreshList() {
+          list.empty();
+          values.filter(function(v){return v.toLocaleLowerCase().includes(popupSearch.toLocaleLowerCase());}).forEach(function(v) {
+            var check = $("<input type='checkbox'/>").attr("data-due-focus","value-"+id+"-"+v).prop("checked",popupDraft.indexOf(v)>=0);
+            check.on("change",function(){if(this.checked && popupDraft.indexOf(v)<0)popupDraft.push(v);if(!this.checked)popupDraft=popupDraft.filter(function(x){return x!==v;});});
+            var only = button("ujg-esi-due-filter-only","Только это значение: "+(v || "—")).attr("data-value",v).text("Только");
+            only.on("click",function(){popupDraft=[v];refreshList();});
+            list.append($("<div/>").addClass("ujg-esi-due-filter-value-row").append($("<label/>").append(check,$("<span/>").text(v || "—")),only));
+          });
+        }
+        search.on("input",function(){popupSearch=this.value;refreshList();});refreshList();pop.append(list);
+        pop.append(button("ujg-esi-due-filter-select","Выбрать найденные").on("click",function(){values.filter(function(v){return v.toLocaleLowerCase().includes(popupSearch.toLocaleLowerCase());}).forEach(function(v){if(popupDraft.indexOf(v)<0)popupDraft.push(v);});refreshList();}));
+        pop.append(button("ujg-esi-due-filter-clear","Снять найденные").on("click",function(){popupDraft=popupDraft.filter(function(v){return !v.toLocaleLowerCase().includes(popupSearch.toLocaleLowerCase());});refreshList();}));
+        pop.append(button("ujg-esi-due-filter-apply","Применить").on("click",function(){prefs.filters[id]=popupDraft;save();popup=null;popupDraft=null;draw();}));
+        pop.append(button("ujg-esi-due-filter-cancel","Отмена").on("click",function(){popup=null;popupDraft=null;draw();}));
+        pop.append(button("ujg-esi-due-filter-reset","Сбросить фильтр").on("click",function(){delete prefs.filters[id];save();popup=null;popupDraft=null;draw();}));
+        dialog.append(pop);
+      }
+      var foot = $("<footer/>").addClass("ujg-esi-due-foot");
+      foot.append($("<span/>").text("Excel → Jira · изменяется только срок исполнения"));
+      foot.append(button("ujg-esi-due-confirm","Обновить выбранные ("+selected+")").attr("data-due-focus","confirm").prop("disabled",!!(plan.loading||plan.running||!selected)).on("click",function(){lastServices.onConfirmDueDateSync();}));
+      dialog.append(foot);host.append(dialog);
+      var fresh=host.find(".ujg-esi-due-scroll")[0];if(fresh){fresh.scrollTop=top;fresh.scrollLeft=left;}
+      var target=active && host.find("[data-due-focus]").filter(function(){return this.getAttribute("data-due-focus")===active;})[0];
+      if (target && !target.disabled) target.focus();else if (active) dialog[0].focus();
+    }
+    function onPointerMove(e) {
+      if (!resize) return;
+      var visible = prefs.order.filter(function(id){return prefs.visible[id];});
+      prefs.widths[resize.id]=Math.max(80,Math.min(800,resize.width+e.clientX-resize.x));
+      host.find('.ujg-esi-due-table col[data-column="'+resize.id+'"]').attr("width",String(prefs.widths[resize.id]));
+      host.find('th[data-column="'+resize.id+'"]').css("width",prefs.widths[resize.id]+"px");
+      host.find(".ujg-esi-due-row").each(function(){ $(this).children().eq(1+visible.indexOf(resize.id)).css("width",prefs.widths[resize.id]+"px"); });
+      host.find(".ujg-esi-due-table").css("width",42+visible.reduce(function(sum,id){return sum+prefs.widths[id];},0)+"px");
+    }
+    function onPointerUp(){if(!resize)return;resize=null;save();draw();}
+    return {
+      render:function(nextHost,state,services) {
+        host=$(nextHost);lastState=state;lastServices=services;doc=host[0] && host[0].ownerDocument;
+        load(state);
+        if (!doc) return;
+        if (state.dueDateSync && state.dueDateSync.open) {
+          if(!open){anchor=doc.activeElement;bodyOverflow=doc.body.style.overflow;doc.body.style.overflow="hidden";open=true;$(doc).on("keydown.ujgDueSync",onKey).on("mousedown.ujgDueSync",onOutside).on("pointermove.ujgDueSync mousemove.ujgDueSync",onPointerMove).on("pointerup.ujgDueSync mouseup.ujgDueSync pointercancel.ujgDueSync",onPointerUp);}
+          draw();
+          if (!host[0].contains(doc.activeElement)) host.find(".ujg-esi-due-dialog")[0].focus();
+        } else if(open) {
+          open=false;popup=null;popupDraft=null;columnMenu=false;host.empty().removeClass("ujg-esi-due-active");$(doc).off(".ujgDueSync");
+          doc.body.style.overflow=bodyOverflow === null ? "" : bodyOverflow;bodyOverflow=null;
+          var validAnchor=anchor && doc.contains(anchor) && anchor.matches && anchor.matches('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])');
+          var restore=validAnchor ? anchor : doc.querySelector('button[aria-label="Обновить сроки Jira из Excel"]:not(:disabled)');
+          if(restore && restore.focus) restore.focus();anchor=null;
+        }
+      },
+      destroy:function(){if(doc){$(doc).off(".ujgDueSync");if(bodyOverflow !== null)doc.body.style.overflow=bodyOverflow;}if(host)host.empty().removeClass("ujg-esi-due-active");open=false;bodyOverflow=null;anchor=null;host=null;lastState=null;lastServices=null;}
+    };
+  }
+  return {create:create};
 });
 
 /* === Module: teams.js === */
@@ -6540,7 +7000,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
 });
 
 /* === Module: rendering.js === */
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi) {
   "use strict";
 
   var $root;
@@ -6549,6 +7009,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var epicSearchTimer = null;
   var grid;
   var activityView;
+  var dueDateView, $dueHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
@@ -6634,10 +7095,14 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
 
   function init(container, svc) {
     if (activityView && activityView.destroy) activityView.destroy();
+    if (dueDateView) dueDateView.destroy();
+    if ($dueHost) $dueHost.remove();
     $root = container;
     services = svc || {};
     grid = gridModule.create();
     activityView = activityUi ? activityUi.create() : null;
+    dueDateView = dueDateSyncUi ? dueDateSyncUi.create() : null;
+    $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
@@ -7064,7 +7529,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
       });
-    $actions.append($sync, $download);
+    var $due = $("<button/>").attr({type:"button",title:"Обновить сроки Jira из Excel","aria-label":"Обновить сроки Jira из Excel","aria-haspopup":"dialog"})
+      .addClass("ujg-esi-icon-button ujg-esi-sync-due-date").append(icon("ArrowDownUp"))
+      .on("click", function() { if (services && services.onOpenDueDateSync) services.onOpenDueDateSync(); });
+    $actions.append($sync, $due, $download);
   }
 
   function appendExcelActions($toolbar, state) {
@@ -8329,6 +8797,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (activityView && (state || {}).reportView !== "activity" && activityView.suspend) activityView.suspend();
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
+    if ($dueHost) $dueHost.detach();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -8404,6 +8873,17 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     restoreScrollState(scrollState);
     appendRowOwnerPopover($root, s);
+    renderDueDateSync(s);
+  }
+
+  function renderDueDateSync(state) {
+    if (!$root || !$root.length) return;
+    var s = state || {}, sync = s.dueDateSync || {};
+    $root.find(".ujg-esi-sync-due-date").prop("disabled", !s.rows || !s.rows.length || !!(s.loading || s.syncLoading || sync.open))
+      .attr("aria-expanded", String(!!sync.open));
+    if (!dueDateView) return;
+    if (!$dueHost.parent().length) $root.append($dueHost);
+    dueDateView.render($dueHost, s, services);
   }
 
   function clearMappingError() {
@@ -8414,6 +8894,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   return {
     init: init,
     render: render,
+    renderDueDateSync: renderDueDateSync,
     clearMappingError: clearMappingError,
   };
 });
@@ -8432,7 +8913,8 @@ define("_ujgESI_main", [
   "_ujgShared_llmClient",
   "_ujgESI_teams",
   "_ujgESI_activity",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule) {
+  "_ujgESI_dueDateSync",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -9500,6 +9982,24 @@ define("_ujgESI_main", [
     var teamSearchSeq = 0;
     var activitySeq = 0;
     var activityDate = "";
+    var dueDateSync = dueDateSyncModule ? dueDateSyncModule.create({api:api,onChange:function(snapshot) {
+      state.dueDateSync = snapshot;
+      if (rendering.renderDueDateSync) rendering.renderDueDateSync(state);
+      else render();
+    }}) : null;
+    state.dueDateSync = dueDateSync ? dueDateSync.getState() : null;
+
+    function closeDueDateSyncForContextChange() {
+      return !dueDateSync || !state.dueDateSync.open || dueDateSync.close() !== false;
+    }
+
+    function onOpenDueDateSync() {
+      if (!dueDateSync || state.dueDateSync.open || state.viewMode !== "excel" || !state.rows.length ||
+          state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
+      closeUserPicker();
+      closeEpicPicker();
+      dueDateSync.open(state.rows, {columnMap:copyColumnMap(state.mappingSettings.columnMap)});
+    }
 
     function invalidateActivityHistory() {
       activitySeq++;
@@ -10748,6 +11248,7 @@ define("_ujgESI_main", [
     function onViewModeChange(mode) {
       var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
       if (!next || next === state.viewMode) return;
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.viewMode === "excel") excelRows = state.rows;
       if (state.viewMode === "jira") registryRows = state.rows;
@@ -10854,6 +11355,7 @@ define("_ujgESI_main", [
     }
 
     function onProjectChange(projectKey) {
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       projectSelectionChanged = true;
       if (state.syncLoading) {
@@ -10887,6 +11389,7 @@ define("_ujgESI_main", [
     }
 
     function onEpicSelect(epicKey) {
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
@@ -10908,6 +11411,7 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
@@ -10958,6 +11462,7 @@ define("_ujgESI_main", [
     }
 
     function onMetaSheetSelect(sheetName) {
+      if (!closeDueDateSyncForContextChange()) return;
       var nextSheetName = copySheetName(sheetName);
       if (!nextSheetName || !state.sourceWorkbook) {
         state.sheetPickerOpen = false;
@@ -10989,6 +11494,7 @@ define("_ujgESI_main", [
     }
 
     function onOpenMappings() {
+      if (!closeDueDateSyncForContextChange()) return;
       state.mappingEditorOpen = true;
       state.activeMappingBlock = state.activeMappingBlock || "modules";
       closeUserPicker();
@@ -11007,6 +11513,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingColumnChange(field, value) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = field != null ? String(field) : "";
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
@@ -11015,6 +11522,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingTableStartChange(field, value) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
@@ -11023,6 +11531,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingSheetNameChange(value) {
+      if (!closeDueDateSyncForContextChange()) return;
       state.mappingSettings.sheetName = copySheetName(value);
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
@@ -11258,6 +11767,7 @@ define("_ujgESI_main", [
 
     function onSyncJira() {
       if (state.viewMode !== "excel") return;
+      if (!closeDueDateSyncForContextChange()) return;
       var rows = state.rows;
       var seq;
       function active() { return seq === syncSeq && state.viewMode === "excel" && state.rows === rows; }
@@ -12166,6 +12676,11 @@ define("_ujgESI_main", [
       onMappingLlmRemarkPromptChange: onMappingLlmRemarkPromptChange,
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
+      onOpenDueDateSync: onOpenDueDateSync,
+      onCloseDueDateSync: function() { if (dueDateSync) dueDateSync.close(); },
+      onSelectDueDateSyncRow: function(id, selected) { if (dueDateSync) dueDateSync.select(id, selected); },
+      onSelectAllDueDateSync: function(selected) { if (dueDateSync) dueDateSync.selectAll(selected); },
+      onConfirmDueDateSync: function() { if (dueDateSync) dueDateSync.confirm(); },
       onViewModeChange: onViewModeChange,
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
@@ -12176,6 +12691,7 @@ define("_ujgESI_main", [
       onActivityLlmRequest: onActivityLlmRequest,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
+        if (state.reportView !== view && !closeDueDateSyncForContextChange()) return;
         var enteringActivity = view === "activity" && state.reportView !== "activity";
         if (state.reportView !== view) invalidateActivityHistory();
         state.reportView = view;

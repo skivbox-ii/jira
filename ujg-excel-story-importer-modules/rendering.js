@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi) {
   "use strict";
 
   var $root;
@@ -7,6 +7,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var epicSearchTimer = null;
   var grid;
   var activityView;
+  var dueDateView, $dueHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
@@ -92,10 +93,14 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
 
   function init(container, svc) {
     if (activityView && activityView.destroy) activityView.destroy();
+    if (dueDateView) dueDateView.destroy();
+    if ($dueHost) $dueHost.remove();
     $root = container;
     services = svc || {};
     grid = gridModule.create();
     activityView = activityUi ? activityUi.create() : null;
+    dueDateView = dueDateSyncUi ? dueDateSyncUi.create() : null;
+    $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
@@ -522,7 +527,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       .on("click", function() {
         if (services && services.onDownloadPatchedExcel) services.onDownloadPatchedExcel();
       });
-    $actions.append($sync, $download);
+    var $due = $("<button/>").attr({type:"button",title:"Обновить сроки Jira из Excel","aria-label":"Обновить сроки Jira из Excel","aria-haspopup":"dialog"})
+      .addClass("ujg-esi-icon-button ujg-esi-sync-due-date").append(icon("ArrowDownUp"))
+      .on("click", function() { if (services && services.onOpenDueDateSync) services.onOpenDueDateSync(); });
+    $actions.append($sync, $due, $download);
   }
 
   function appendExcelActions($toolbar, state) {
@@ -1787,6 +1795,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (activityView && (state || {}).reportView !== "activity" && activityView.suspend) activityView.suspend();
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
+    if ($dueHost) $dueHost.detach();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -1862,6 +1871,17 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     restoreScrollState(scrollState);
     appendRowOwnerPopover($root, s);
+    renderDueDateSync(s);
+  }
+
+  function renderDueDateSync(state) {
+    if (!$root || !$root.length) return;
+    var s = state || {}, sync = s.dueDateSync || {};
+    $root.find(".ujg-esi-sync-due-date").prop("disabled", !s.rows || !s.rows.length || !!(s.loading || s.syncLoading || sync.open))
+      .attr("aria-expanded", String(!!sync.open));
+    if (!dueDateView) return;
+    if (!$dueHost.parent().length) $root.append($dueHost);
+    dueDateView.render($dueHost, s, services);
   }
 
   function clearMappingError() {
@@ -1872,6 +1892,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   return {
     init: init,
     render: render,
+    renderDueDateSync: renderDueDateSync,
     clearMappingError: clearMappingError,
   };
 });
