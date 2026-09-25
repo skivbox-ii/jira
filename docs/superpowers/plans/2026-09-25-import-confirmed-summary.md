@@ -23,3 +23,10 @@
 ## Scope
 
 The user approved this summary correction on 25.09 with “продолжай и убери ... больше меньше”. Deadline registry column and DUE-03 approval are separate; DUE-04 acceptance is not silently completed by this task.
+
+## Publication Checkpoint
+
+Published `6f846b5`; runtime/CSS match commit-pinned CDN. Citrix acceptance
+remains unchecked: the first refresh at 15:25 MSK revealed a network
+interruption. No further control actions were attempted. Resume read-only
+acceptance after connection recovery; see the ACT-02 acceptance record.
