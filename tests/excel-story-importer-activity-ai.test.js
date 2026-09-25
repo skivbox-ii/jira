@@ -55,6 +55,29 @@ function report(count = 1) {
   return {date:"2026-09-24",asOf:"2026-09-24T12:00:00Z",generatedAt:"2026-09-24T12:01:00Z",timezone:"МСК",coverage:{complete:count,total:count,isComplete:true,warnings:[]},metrics:{changed:count,newRemarks:0,completed:count,reopened:0,events:count},balance:{startOpen:count,endOpen:0},observed:{changed:count,newRemarks:0},groups,events,teams:[{name:"BE",color:"#123456"}]};
 }
 
+test("LLM separates confirmed subset from unknown global totals without comparison symbols", async () => {
+  const source=report();
+  source.coverage={complete:1,total:2,isComplete:false,warnings:["P-2: история не загружена"]};
+  source.metrics.completed=null;
+  source.metrics.overdue=null;
+  source.confirmed={metrics:{changed:1,newRemarks:0,completed:1,reopened:0,taskReturns:0,events:1,overdue:2},
+    balance:{startOpen:1,endOpen:0},remarks:1,totalRemarks:2,excluded:[{id:"jira:P-2",key:"P-2",summary:"Unverified",reasons:["История не загружена"]}]};
+  source.groups[0].confirmed=true;
+  const api=ai(), plan=api.prepare(source,scope), payload=JSON.parse(plan.parts[0].userPrompt);
+  assert.equal(payload.metrics.completed,null);
+  assert.equal(payload.confirmed.metrics.completed,1);
+  assert.equal(payload.confirmed.remarks,1);
+  assert.match(plan.parts[0].systemPrompt,/confirmed.*проверенн/);
+  assert.equal(payload.metrics.overdue,null);
+  assert.equal(payload.confirmed.metrics.overdue,2);
+  assert.match(plan.parts[0].systemPrompt,/Просрочку бери из deadline\.state и confirmed\.metrics\.overdue/);
+  const result=await api.run(plan,async()=>({text:"Проверено."}));
+  assert.match(result.markdown,/Подтверждено замечаний: 1 из 2/);
+  assert.match(result.markdown,/полностью завершённые замечания: 1/);
+  assert.match(result.markdown,/просроченные замечания: 2/);
+  assert.doesNotMatch(result.markdown,/[≥≤]/);
+});
+
 test("prepare preserves evidence, fixed totals and scope while ignoring generatedAt", () => {
   const source=report(), plan=ai().prepare(source,scope);
   assert.equal(plan.scopeKey.includes("alice"),true);

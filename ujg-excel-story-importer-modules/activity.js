@@ -93,7 +93,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       if (at && result.created && at < result.created) warn("Изменение раньше создания Jira");
       if (at && result.updated && at > result.updated) {
         var difference = "Изменение позже обновления Jira: " + at + " > " + result.updated;
-        if (Math.floor(Date.parse(at) / 1000) === Math.floor(Date.parse(result.updated) / 1000)) result.diagnostics.push(difference);
+        if (Date.parse(at) - Date.parse(result.updated) < 1000) result.diagnostics.push(difference);
         else warn(difference);
       }
       var items = [];
@@ -220,10 +220,15 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
         warnings.push(group.key + ": Связи задач изменились; синхронизируйте реестр.");
       }
     });
-    if (now >= window.start && now < window.end) issueKeys.forEach(function(issueKey) {
-      var snap = issues[issueKey].snapshot, captured = snap && Date.parse(snap.capturedAt);
-      if (isFinite(captured)) endpoint = Math.min(endpoint,captured);
-    });
+    if (now >= window.start && now < window.end) {
+      var captures = issueKeys.map(function(issueKey) {
+        var snap = issues[issueKey].snapshot;
+        return snap ? Date.parse(snap.capturedAt) : NaN;
+      }).filter(function(captured) { return isFinite(captured); });
+      var currentCaptures = captures.filter(function(captured) { return captured >= window.start; });
+      // Older snapshots stay excluded; they must not erase a fresh current-day slice.
+      (currentCaptures.length ? currentCaptures : captures).forEach(function(captured) { endpoint = Math.min(endpoint,captured); });
+    }
     if (options.scopeWarning) warnings.push(str(options.scopeWarning));
     conflicts.forEach(function(issueKey) { warnings.push(issueKey + ": противоречивые снимки Jira в разных замечаниях"); });
     if (now <= window.start) warnings.push("Выбранный день еще не начался");
@@ -235,7 +240,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       (snap.diagnostics || []).forEach(function(message) { diagnostics.push(issueKey + ": " + message); });
       if (!snap.complete) warnings.push(issueKey + ": история Jira неполна" + (snap.warnings && snap.warnings.length ? " (" + snap.warnings.join("; ") + ")" : ""));
       var captured = Date.parse(snap.capturedAt);
-      if (!isFinite(captured) || captured < endpoint) warnings.push(issueKey + ": снимок истории сделан до конца выбранного периода");
+      if (!isFinite(captured)) warnings.push(issueKey + ": Время загрузки данных задачи неизвестно; требуется обновление");
+      else if (captured < endpoint) warnings.push(issueKey + ": Данные задачи загружены раньше времени среза отчёта; требуется обновление");
       var current = snap.currentStatus || state("",entry.task.status,entry.task.statusCategory), currentPerson = snap.currentAssignee || {label:entry.task.assignee,identifiers:entry.task.assigneeIdentifiers || [],color:""};
       var status = state(current.id,current.name,current.category), assignee = currentPerson;
       function statusAt(id,name) { return state(id,name,id && id === current.id ? current.category : ""); }
@@ -339,7 +345,10 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       }
       if (openAt(false) === true) balanceStart++;
       if (openAt(true) === true) balanceEnd++;
-      if (first === null || last === null || openAt(false) === null || openAt(true) === null) warnings.push(group.key + ": статус не удалось классифицировать");
+      if (first === null || last === null || openAt(false) === null || openAt(true) === null) {
+        group.unknownStatus = true;
+        warnings.push(group.key + ": статус не удалось классифицировать");
+      }
       // Co-timed changes have no provable order across issues: evaluate them atomically.
       var live = Object.create(null);
       group.tasks.forEach(function(taskKey) { live[taskKey] = states[taskKey] && states[taskKey].start; });
@@ -533,7 +542,41 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     var counted = {complete:issueKeys.filter(usable).length,total:issueKeys.length,
       incomplete:issueKeys.filter(function(issueKey) { return !usable(issueKey); }).length,
       uncreated:order.filter(function(group) { return group.uncreated; }).length,warnings:warnings,diagnostics:diagnostics,isComplete:complete};
+    var confirmed = {metrics:{changed:0,newRemarks:0,completed:0,reopened:0,taskReturns:0,events:events.length,overdue:overdue},
+      balance:{startOpen:0,endOpen:0},remarks:0,totalRemarks:groups.length,excluded:[]};
+    var confirmedReturns = Object.create(null);
+    groups.forEach(function(group,index) {
+      var source = order[index];
+      group.confirmed = !source.uncreated && source.tasks.length > 0 && group.dayComplete;
+      if (!group.confirmed) {
+        var reasons = warnings.filter(function(warning) {
+          return source.tasks.concat([group.key]).some(function(issueKey) { return issueKey && warning.indexOf(issueKey + ":") === 0; });
+        });
+        if (source.uncreated) reasons.push("Исходная история Jira не создана");
+        if (source.missing) reasons.push("Не загружены все связанные задачи замечания");
+        if (now <= window.start) reasons.push("Выбранный день ещё не начался");
+        if (endpoint < window.start) reasons.push("Данные загружены до начала выбранного дня");
+        if (!reasons.length) reasons.push("История замечания не подтверждена");
+        confirmed.excluded.push({id:group.id,key:group.key,summary:group.summary,reasons:reasons});
+        return;
+      }
+      confirmed.remarks++;
+      if (group.management.changed) confirmed.metrics.changed++;
+      if (group.management.newRemark) confirmed.metrics.newRemarks++;
+      if (group.management.completed.length) confirmed.metrics.completed++;
+      if (group.management.reopened.length) confirmed.metrics.reopened++;
+      group.taskReturns.forEach(function(event) { confirmedReturns[event.issueKey] = true; });
+      ["start","end"].forEach(function(boundary) {
+        if (source.tasks.some(function(issueKey) { return states[issueKey] && kind(states[issueKey][boundary]) === "open"; })) confirmed.balance[boundary + "Open"]++;
+      });
+    });
+    confirmed.metrics.taskReturns = Object.keys(confirmedReturns).length;
+    if (!confirmed.remarks) {
+      ["changed","newRemarks","completed","reopened","taskReturns"].forEach(function(name) { confirmed.metrics[name] = null; });
+      confirmed.balance = {startOpen:null,endOpen:null};
+    }
     return {date:window.date,start:window.start,end:window.end,asOf:now <= window.start || endpoint < window.start ? null : new Date(endpoint).toISOString(),generatedAt:new Date(now).toISOString(),timezone:"МСК",coverage:counted,
+      confirmed:confirmed,
       metrics:{changed:complete ? Object.keys(changed).length : null,newRemarks:complete ? Object.keys(newRemarks).length : null,completed:complete ? Object.keys(completed).length : null,reopened:complete ? Object.keys(reopened).length : null,taskReturns:complete ? taskReturns : null,events:events.length,overdue:deadlinesComplete ? overdue : null},
       observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length,taskReturns:taskReturns,overdue:overdue},returns:returnCounts,deadlineCoverage:deadlineCoverage,deadlineReferenceDate:deadlineDay.date,
       balance:{startOpen:complete ? balanceStart : null,endOpen:complete ? balanceEnd : null},transitions:pairs(transitions),transfers:pairs(transfers),groups:groups,events:events,teams:teams};
@@ -661,14 +704,23 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       html += '</ul></details>';
     }
     html += '<style>.status{display:inline-block;padding:2px 6px;border-radius:3px;background:#edf0f3;color:#4b5664}.is-progress{background:#e2efff;color:#0755ab}.is-done{background:#dff3e7;color:#20653d}.is-review{background:#fff1d2;color:#77500b}.is-testing{background:#dcf3f1;color:#186962}.is-cancelled{background:#fae8e8;color:#914747}</style>';
-    html += '<h2>Итоги</h2><table><tbody>';
+    var summary = report.confirmed, summaryMetrics = summary ? summary.metrics : report.metrics || {}, summaryBalance = summary ? summary.balance : report.balance || {};
+    html += '<h2>Итоги</h2>';
+    if (summary) {
+      html += '<p>Подтверждено замечаний: ' + escape(summary.remarks) + ' из ' + escape(summary.totalRemarks) + '. Итоги замечаний рассчитаны по проверенным данным. События показаны по всей загруженной истории; просрочка — по подтверждённым текущим срокам и статусам.</p>';
+      if (summary.excluded.length) {
+        html += '<details><summary>Не включены в итоги замечаний: ' + escape(summary.excluded.length) + '</summary><ul>';
+        summary.excluded.forEach(function(group) { html += '<li>' + issueLink(group.key) + ' ' + escape(group.summary) + ': ' + escape(group.reasons.join('; ')) + '</li>'; });
+        html += '</ul></details>';
+      }
+    }
+    html += '<table><tbody>';
     [["changed","Изменённые замечания"],["newRemarks","Новые замечания"],["completed","Завершённые"],["taskReturns","Возвраты задач"],["reopened","Повторно открытые полностью готовые замечания"],["events","Наблюдаемые события"],["overdue","Просроченные"]].forEach(function(pair) {
-      var count = report.metrics && report.metrics[pair[0]];
-      if (count == null && (pair[0] === "overdue" || pair[0] === "taskReturns") && report.observed && report.observed[pair[0]] != null) count = "≥" + report.observed[pair[0]];
+      var count = summaryMetrics[pair[0]];
+      if (!summary && count == null && report.observed && report.observed[pair[0]] != null) count = report.observed[pair[0]];
       html += '<tr><th>' + pair[1] + '</th><td>' + escape(count == null ? '—' : count) + '</td></tr>';
     });
-    if (report.coverage && !report.coverage.isComplete && report.observed) html += '<tr><th>Зафиксировано: изменённые / новые</th><td>≥' + escape(report.observed.changed) + ' / ≥' + escape(report.observed.newRemarks) + '</td></tr>';
-    html += '</tbody></table><h2>Баланс</h2><p>Открыто в начале: ' + escape(report.balance && report.balance.startOpen == null ? '—' : report.balance && report.balance.startOpen) + '; в конце: ' + escape(report.balance && report.balance.endOpen == null ? '—' : report.balance && report.balance.endOpen) + '</p>';
+    html += '</tbody></table><h2>Баланс</h2><p>Открыто на начало дня: ' + escape(summaryBalance.startOpen == null ? '—' : summaryBalance.startOpen) + '; ' + (report.asOf && Date.parse(report.asOf) === report.end ? 'на конец дня' : 'на момент загрузки') + ': ' + escape(summaryBalance.endOpen == null ? '—' : summaryBalance.endOpen) + '</p>';
     var dueCoverage = report.deadlineCoverage || {};
     html += '<h2>Просроченные замечания</h2><p>На сегодня, ' + escape(str(report.deadlineReferenceDate).split("-").reverse().join(".")) + ' МСК. Сроки из текущего журнала сравниваются с текущей датой; история переносов не учитывается. Показаны текущие состояния задач, независимо от даты журнала событий.</p>';
     html += '<p>Срок известен: ' + escape(dueCoverage.known) + '; без срока: ' + escape(dueCoverage.missing) + '; не распознано: ' + escape(dueCoverage.invalid) + '; конфликт: ' + escape(dueCoverage.conflict) + '; состояние не подтверждено: ' + escape(dueCoverage.unknownState) + '</p>';
@@ -691,8 +743,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     });
     html += '</tbody></table>';
     var issueGroups = (report.deadlineGroups || report.groups || []).filter(function(group) { return group.deadline && (group.deadline.problem === "invalid" || group.deadline.problem === "conflict"); });
-    html += '<h2>Ошибки сроков: ' + issueGroups.length + '</h2><p>Снимок загруженных данных; Excel не проверялся в реальном времени. История переносов срока неизвестна.</p>';
-    html += '<table aria-label="Ошибки сроков"><thead><tr><th>Замечание</th><th>Причина</th><th>Источник</th><th>Поле</th><th>Значение</th></tr></thead><tbody>';
+    html += '<h2>Не распознаны сроки: ' + issueGroups.length + '</h2><p>Снимок загруженных данных; Excel не проверялся в реальном времени. История переносов срока неизвестна.</p>';
+    html += '<table aria-label="Не распознаны сроки"><thead><tr><th>Замечание</th><th>Причина</th><th>Источник</th><th>Поле</th><th>Значение</th></tr></thead><tbody>';
     issueGroups.forEach(function(group) {
       var due = group.deadline, reason = due.reasonLabel || deadlines.reasonLabel(due.reasonCode || (due.problem === "conflict" ? "conflict" : "unsupported-format"));
       var candidates = due.candidates && due.candidates.length ? due.candidates : [{raw:due.raw,source:due.source,field:due.field}];
@@ -703,7 +755,9 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     });
     html += '</tbody></table>';
     html += '<h2>Возвраты задач</h2><p>Каждая задача учтена один раз в итогах. Ниже все её возвраты в пределах фильтра журнала; причина без подтверждающего комментария неизвестна.</p><table aria-label="Возвраты задач"><thead><tr><th>МСК</th><th>Задача</th><th>Роль</th><th>Переход</th><th>Автор</th></tr></thead><tbody>';
-    (report.events || []).filter(function(event) { return !!event.returnKind; }).forEach(function(event) {
+    (report.events || []).filter(function(event) { return !!event.returnKind && (!summary || (report.groups || []).some(function(group) {
+      return group.confirmed && (group.taskReturns || []).some(function(candidate) { return candidate.id === event.id; });
+    })); }).forEach(function(event) {
       html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + issueLink(event.issueKey) + '</td><td>' + escape(event.role || 'История') + '</td><td>' + escape(eventText(event)) + '</td><td>' + escape(event.author && event.author.label) + '</td></tr>';
     });
     html += '</tbody></table>';

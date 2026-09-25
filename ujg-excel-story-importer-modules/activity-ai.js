@@ -10,8 +10,9 @@ define("_ujgESI_activityAi", [], function() {
     "Причину возврата и результат тестирования не придумывай. Числа metrics вычислены кодом: не пересчитывай их. " +
     "metrics.taskReturns — уникальные задачи с возвратом, metrics.reopened — повторно открытые полностью готовые замечания. event.returnKind: reopened — после завершения, review — с проверки, testing — с тестирования. Не смешивай эти случаи. " +
     "Отмечай неполные данные и не утверждай, что часть охватывает весь день. " +
+    "confirmed — итоги только по проверенным замечаниям, не полный итог при неполном покрытии. Используй эти числа без знаков сравнения; указывай remarks из totalRemarks и исключения. События и просрочка имеют отдельное покрытие. Глобальные metrics с null остаются неизвестными. " +
     "Сроки взяты из текущего журнала и сравнены с сегодняшней датой deadlineReferenceDate, независимо от дня событий. История переносов сроков не восстанавливается. " +
-    "Просрочку бери из deadline.state и metrics.overdue, не вычисляй её по дате создания или готовности. " +
+    "Просрочку бери из deadline.state и confirmed.metrics.overdue (при отсутствии confirmed — из metrics.overdue), учитывая отдельное deadlineCoverage; не вычисляй её по дате создания или готовности. " +
     "Покажи просроченные замечания и оставшиеся работы, учитывай deadlineCoverage и неизвестные сроки. " +
     "Если передан conversation.question, ответь на этот вопрос по данным среза, учитывая conversation.history или conversation.contextNotes; " +
     "не подменяй ответ общим отчётом. Иначе освети закрытые замечания, разработку и QA, возвраты, оставшиеся работы и краткую хронологию. " +
@@ -136,7 +137,7 @@ define("_ujgESI_activityAi", [], function() {
     return JSON.stringify({stage:stage || (conversation ? "answer" : "report"),
       scope:{projectKey:plan.scope.projectKey,epicKey:plan.scope.epicKey,baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode},
       date:plan.date,asOf:plan.asOf,timezone:plan.timezone,
-      metrics:plan.metrics,totals:plan.totals,coverage:plan.coverage,deadlineCoverage:plan.deadlineCoverage,deadlineReferenceDate:plan.deadlineReferenceDate,balance:plan.balance,observed:plan.observed,
+      metrics:plan.metrics,confirmed:plan.confirmed,totals:plan.totals,coverage:plan.coverage,deadlineCoverage:plan.deadlineCoverage,deadlineReferenceDate:plan.deadlineReferenceDate,balance:plan.balance,observed:plan.observed,
       transitions:plan.transitions,transfers:plan.transfers,teams:plan.teams,
       part:index,totalParts:total,eventCount:plan.eventCount,
       instruction:stage === "history-notes" ? "Извлеки только внутренние заметки для понимания вопроса; не отвечай пользователю." :
@@ -227,7 +228,7 @@ define("_ujgESI_activityAi", [], function() {
     delete signature.generatedAt;
     var scopeKey = JSON.stringify([currentScope.projectKey || "",currentScope.epicKey || "",currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || ""]);
     var plan = {scopeKey:scopeKey,fingerprint:fingerprint(signature),scope:currentScope,
-      date:data.date,asOf:data.asOf,timezone:data.timezone || "МСК",metrics:data.metrics || {},coverage:data.coverage || {},deadlineCoverage:data.deadlineCoverage || {},deadlineReferenceDate:data.deadlineReferenceDate || null,
+      date:data.date,asOf:data.asOf,timezone:data.timezone || "МСК",metrics:data.metrics || {},confirmed:data.confirmed || null,coverage:data.coverage || {},deadlineCoverage:data.deadlineCoverage || {},deadlineReferenceDate:data.deadlineReferenceDate || null,
       eventCount:data.events.length,balance:data.balance || {},observed:data.observed || {},totals:totals(data),transitions:data.transitions || [],
       transfers:data.transfers || [],teams:reportTeams(data),records:records(data)};
     if (bytes(BASE) > BASE_LIMIT || bytes(NOTES_BASE) > BASE_LIMIT) throw new Error("Базовый LLM-запрос превысил лимит 6000 байт");
@@ -235,7 +236,7 @@ define("_ujgESI_activityAi", [], function() {
     return freeze(plan);
   }
   function heading(plan) {
-    function metric(key) { return plan.metrics[key] == null ? "нет достоверного итога" : plan.metrics[key]; }
+    function metric(key) { var metrics = plan.confirmed ? plan.confirmed.metrics : plan.metrics; return metrics[key] == null ? "нет достоверного итога" : metrics[key]; }
     function effort(seconds) {
       if (seconds > 0 && seconds < 60) return "менее 1 мин";
       var minutes = Math.round(seconds / 60), hours = Math.floor(minutes / 60), remainder = minutes % 60;
@@ -251,6 +252,7 @@ define("_ujgESI_activityAi", [], function() {
     return "# LLM-отчёт за " + plan.date + "\n\n" +
       "Срез: " + (plan.asOf ? msk(plan.asOf) : "неизвестен") + ". Покрытие: " + (coverage.complete == null ? "?" : coverage.complete) +
       "/" + (coverage.total == null ? "?" : coverage.total) + ". Событий: " + plan.eventCount + ".\n\n" +
+      (plan.confirmed ? "Подтверждено замечаний: " + plan.confirmed.remarks + " из " + plan.confirmed.totalRemarks + ". Итоги замечаний ниже относятся к проверенной части; события — ко всей загруженной истории, просрочка — к подтверждённым текущим срокам и статусам.\n\n" : "") +
       "Изменённые замечания: " + metric("changed") + "; новые: " + metric("newRemarks") +
       "; полностью завершённые замечания: " + metric("completed") + "; " +
       (coverage.isComplete ? "завершённые задачи" : "наблюдаемые завершения задач") + ": " + plan.totals.taskCompletions +

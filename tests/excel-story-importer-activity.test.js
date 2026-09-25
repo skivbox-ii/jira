@@ -90,6 +90,123 @@ function detail(api, jira, role = "") {
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
 
+test("confirmed summary keeps verified remark totals beside an unrelated incomplete history", () => {
+  const api=activity(), done=detail(api,issue("P-1","Done",[
+    history("close","2026-09-24T05:00:00Z","Closer",[item("status","1","2","Open","Done")])
+  ])), open=detail(api,issue("P-2","Open")), bad=detail(api,issue("P-3","Open"));
+  bad.activity.complete=false; bad.activity.warnings=["Полнота истории Jira не подтверждена"];
+  const result=report(api,[row(done),row(open),row(bad)]);
+  assert.equal(result.metrics.completed,null,"Strict global totals remain unknown");
+  assert.equal(result.confirmed.metrics.completed,1);
+  assert.equal(result.confirmed.metrics.changed,1);
+  assert.equal(result.confirmed.remarks,2);
+  assert.equal(result.confirmed.totalRemarks,3);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.confirmed.balance)),{startOpen:2,endOpen:1});
+  assert.equal(result.confirmed.excluded[0].key,"P-3");
+  assert.match(result.confirmed.excluded[0].reasons.join(" "),/P-3.*Полнота истории/);
+  assert.deepEqual(Array.from(result.groups,g=>g.confirmed),[true,true,false]);
+});
+
+test("subsecond Jira skew remains diagnostic across a second boundary, but a full second stays blocking", () => {
+  const api=activity();
+  for (const [updated,expectedComplete] of [["2026-09-25T10:53:03.998Z",true],["2026-09-25T10:53:03.001Z",true],["2026-09-25T10:53:03.000Z",false],["2026-09-25T10:53:02.999Z",false]]) {
+    const jira=issue("P-21769","Open",[history("last","2026-09-25T10:53:04.000Z","Worker",[item("summary","Old","New")])],{fields:{updated}});
+    const result=api.capture(jira);
+    assert.equal(result.complete,expectedComplete,updated);
+    assert.equal(result.diagnostics.length,expectedComplete?1:0,updated);
+    assert.equal(result.histories[0].at,"2026-09-25T10:53:04.000Z","Do not alter source timestamps");
+    assert.equal(result.updated,updated);
+  }
+});
+
+test("confirmed summary never promotes incomplete, stale, future or missing-link groups to zero totals", () => {
+  const api=activity();
+  for (const mode of ["incomplete","stale","future","missing-links","conflict"]) {
+    const parent=detail(api,issue("P-1","Done"));
+    const source=row(parent), options={};
+    if (mode==="incomplete") parent.activity.complete=false;
+    if (mode==="stale") { parent.activity.capturedAt="2026-09-24T10:00:00Z"; options.now="2026-09-25T12:00:00Z"; }
+    if (mode==="future") options.date="2026-09-26";
+    if (mode==="missing-links") parent.activity.linkedKeys=["P-2"];
+    const rows=[source];
+    if (mode==="conflict") rows.push(row(detail(api,issue("P-1","Open"))));
+    const result=report(api,rows,options);
+    assert.equal(result.confirmed.remarks,0,mode);
+    assert.equal(result.confirmed.metrics.completed,null,mode);
+    assert.equal(result.confirmed.balance.endOpen,null,mode);
+    assert.equal(result.confirmed.excluded.length,1,mode);
+    assert.ok(result.confirmed.excluded[0].reasons.length,mode);
+  }
+});
+
+test("one previous-day snapshot cannot move the fresh current-day confirmed slice before midnight", () => {
+  const api=activity(), good=detail(api,issue("P-1","Done",[
+    history("close","2026-09-24T05:00:00Z","Closer",[item("status","1","2","Open","Done")])
+  ])), stale=detail(api,issue("P-2","Open"));
+  good.activity.capturedAt="2026-09-24T11:59:00Z";
+  stale.activity.capturedAt="2026-09-23T20:59:00Z";
+  const result=report(api,[row(good),row(stale)]);
+  assert.equal(result.asOf,"2026-09-24T11:59:00.000Z");
+  assert.equal(result.confirmed.metrics.completed,1);
+  assert.equal(result.confirmed.remarks,1);
+  assert.equal(result.confirmed.excluded[0].key,"P-2");
+  assert.match(result.confirmed.excluded[0].reasons.join(" "),/Данные задачи загружены раньше времени среза/);
+});
+
+test("confirmed summary excludes unknown boundary and intermediate statuses", () => {
+  const api=activity();
+  for (const histories of [[],[
+    history("a","2026-09-24T05:00:00Z","Worker",[item("status","3","2","Mystery","Done")])
+  ]]) {
+    const jira=issue("P-1",histories.length?"Done":"Mystery",histories);
+    if (!histories.length) jira.fields.status.statusCategory={key:""};
+    const result=report(api,[row(detail(api,jira))]);
+    assert.equal(result.confirmed.remarks,0);
+    assert.equal(result.confirmed.metrics.completed,null);
+    assert.match(result.confirmed.excluded[0].reasons.join(" "),/статус/);
+  }
+});
+
+test("confirmed summary counts shared returned tasks once and excludes unverified new remarks", () => {
+  const api=activity(), child=detail(api,issue("P-2","Open",[
+    history("return","2026-09-24T05:00:00Z","Reviewer",[item("status","2","1","Done","Open")])
+  ])), a=detail(api,issue("P-1","Open")), b=detail(api,issue("P-3","Open")), bad=detail(api,issue("P-4","Open",[],{fields:{created:"2026-09-24T01:00:00Z"}}));
+  bad.activity.complete=false;
+  const result=report(api,[row(a,[child]),row(b,[child]),row(bad)]);
+  assert.equal(result.confirmed.metrics.taskReturns,1);
+  assert.equal(result.confirmed.metrics.changed,2);
+  assert.equal(result.confirmed.metrics.newRemarks,0);
+  assert.equal(result.observed.newRemarks,1);
+  assert.equal(result.confirmed.metrics.events,result.events.length,"Events retain their observed meaning");
+});
+
+test("full coverage has identical confirmed and strict counts including original remarks only", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open")), child=detail(api,issue("P-2","Done",[
+    history("close","2026-09-24T05:00:00Z","Closer",[item("status","1","2","Open","Done")])
+  ]));
+  const result=report(api,[row(parent,[child])]);
+  assert.equal(result.confirmed.metrics.completed,0,"Closing a child is not closing the remark");
+  assert.deepEqual(JSON.parse(JSON.stringify(result.confirmed.metrics)),JSON.parse(JSON.stringify(result.metrics)));
+  assert.deepEqual(JSON.parse(JSON.stringify(result.confirmed.balance)),JSON.parse(JSON.stringify(result.balance)));
+  assert.equal(result.confirmed.excluded.length,0);
+});
+
+test("HTML confirmed summary has plain numbers and explicit exclusions with safe links", () => {
+  const api=activity(), good=detail(api,issue("P-1","Done",[
+    history("close","2026-09-24T05:00:00Z","Closer",[item("status","1","2","Open","Done")])
+  ])), bad=detail(api,issue("P-2","Open"));
+  bad.activity.complete=false; bad.activity.warnings=["<script>bad</script>"];
+  const result=report(api,[row(good),row(bad)]), html=api.exportHtml(result,{baseUrl:"https://jira.test"});
+  assert.match(html,/<th>Завершённые<\/th><td>1<\/td>/);
+  assert.doesNotMatch(html,/[≥≤]/);
+  assert.match(html,/Подтверждено замечаний: 1 из 2/);
+  assert.match(html,/Не включены в итоги замечаний/);
+  assert.match(html,/href="https:\/\/jira.test\/browse\/P-2"/);
+  assert.match(html,/&lt;script&gt;bad&lt;\/script&gt;/);
+  assert.match(html,/на момент загрузки/);
+  assert.doesNotMatch(html,/<script>bad/);
+});
+
 function withDeadline(parent, value, children = []) {
   return {...row(parent,children),sheetName:"Замечания",excelRowNumber:3,sourceColumns:{"Срок исполнения":value}};
 }
@@ -303,7 +420,7 @@ test("deadline conflict across source rows keeps all candidates in a quiet group
   ]);
   assert.equal(result.metrics.overdue,null);
   const html=api.exportHtml({...result,groups:[],deadlineGroups:result.groups},{baseUrl:"https://jira.example.test"});
-  assert.match(html,/Ошибки сроков/);
+  assert.match(html,/Не распознаны сроки/);
   assert.match(html,/&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.doesNotMatch(html,/<img src=x/);
   assert.match(html,/26\.09\.2026/);

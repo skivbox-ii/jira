@@ -36,7 +36,7 @@ test("parsed deadline export retains a leading newline and safe source text", t 
   x.report.groups[0].deadline={problem:"invalid",candidates:[{raw,source:"excel",field:"Срок"}]};
   const exported=new JSDOM(realActivity.exportHtml(x.report,x.state));
   t.after(()=>exported.window.close());
-  const value=exported.window.document.querySelector('table[aria-label="Ошибки сроков"] pre');
+  const value=exported.window.document.querySelector('table[aria-label="Не распознаны сроки"] pre');
   assert.equal(value.textContent,raw);
   assert.equal(value.querySelector("img"),null);
 });
@@ -51,6 +51,61 @@ test("metric lists use management flags and certified transitions", t => {
   const preview=x.ui.preview(x.report,"completed",x.state,x.services);
   assert.match(preview.text(),/История неполна/);
   assert.equal(preview.find(".ujg-esi-management-preview-open").length,1);
+});
+test("confirmed report limits history metric popups to certified groups but keeps overdue and events independent", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.groups[0].confirmed=true;
+  x.report.groups[1].confirmed=false;
+  x.report.groups[1].management.changed=true;
+  x.report.groups[1].deadline={date:"2026-09-20",state:"overdue",daysOverdue:4,pendingTasks:[]};
+  x.report.confirmed={metrics:{changed:1,newRemarks:1,completed:1,reopened:0,taskReturns:0,events:2,overdue:1},balance:{startOpen:1,endOpen:0},remarks:1,totalRemarks:2,excluded:[{id:"g2",key:"P-4",summary:"Remark two",reasons:["Неполная история"]}]};
+  for (const metric of ["changed","newRemarks","completed","reopened","taskReturns"]) {
+    const panel=x.ui.render(x.report,metric,x.state,x.services);
+    assert.doesNotMatch(panel.find(".ujg-esi-management-remark").text(),/P-4/);
+  }
+  assert.match(x.ui.render(x.report,"overdue",x.state,x.services).find(".ujg-esi-management-remark").text(),/P-4/);
+  assert.match(x.ui.render(x.report,"events",x.state,x.services).find(".ujg-esi-management-event").text(),/P-3/);
+  const preview=x.ui.preview(x.report,"changed",x.state,x.services);
+  assert.match(preview.find(".ujg-esi-management-warning").text(),/1 из 2/);
+  assert.match(preview.find(".ujg-esi-management-excluded").text(),/P-4.*Неполная история/s);
+  assert.equal(preview.find(".ujg-esi-management-excluded a[href='https://jira.example.test/base/browse/P-4']").length,1);
+});
+test("confirmed return summary uses its selected count rather than whole-report return totals", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.groups[0].confirmed=true; x.report.groups[1].confirmed=false;
+  const returned={id:"return",kind:"status",at:"2026-09-24T05:23:00Z",issueKey:"P-2",role:"QA",from:"Testing",to:"In Progress",returnKind:"testing",author:{label:"Ира"}};
+  x.report.groups[0].taskReturns=[returned,{...returned,id:"return-again",returnKind:"review"}];
+  x.report.groups[1].taskReturns=[{...returned,id:"unverified",issueKey:"P-3",returnKind:"reopened"}];
+  x.report.returns={remarks:9,events:12,reopened:4,review:4,testing:4};
+  x.report.confirmed={metrics:{taskReturns:1,reopened:0},remarks:1,totalRemarks:2,excluded:[]};
+  const summary=x.ui.preview(x.report,"taskReturns",x.state,x.services).find(".ujg-esi-management-definition").text();
+  assert.match(summary,/Замечаний: 1.*Задач: 1.*Переходов: 2.*после завершения: 0.*с проверки: 1.*с тестирования: 1/s);
+  assert.doesNotMatch(summary,/Замечаний: 9|Переходов: 12/);
+  assert.equal(x.ui.render(x.report,"taskReturns",x.state,x.services).find(".ujg-esi-management-return-events .ujg-esi-management-event").length,2);
+});
+test("shared return event counts once across two certified remarks", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  const event={id:"shared-return",kind:"status",at:"2026-09-24T05:23:00Z",issueKey:"P-2",role:"QA",from:"Testing",to:"In Progress",returnKind:"testing",author:{label:"Ира"}};
+  x.report.groups.forEach(group => { group.confirmed=true; group.taskReturns=[event]; });
+  x.report.confirmed={metrics:{taskReturns:1,reopened:0},remarks:2,totalRemarks:2,excluded:[]};
+  const summary=x.ui.preview(x.report,"taskReturns",x.state,x.services).find(".ujg-esi-management-definition").text();
+  assert.match(summary,/Замечаний: 2.*Задач: 1.*Переходов: 1.*с тестирования: 1/s);
+});
+test("events disclose all loaded records and overdue discloses independent current state", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.confirmed={metrics:{events:2,overdue:1},remarks:1,totalRemarks:2,excluded:[{id:"g2",key:"P-4",summary:"Remark two",reasons:["История неполна"]}]};
+  x.report.groups[0].confirmed=true; x.report.groups[1].confirmed=false;
+  x.report.groups[1].deadline={date:"2026-09-20",state:"overdue",daysOverdue:4,pendingTasks:[]};
+  assert.match(x.ui.preview(x.report,"events",x.state,x.services).find(".ujg-esi-management-warning").text(),/Все события из загруженной истории/);
+  assert.match(x.ui.render(x.report,"overdue",x.state,x.services).find(".ujg-esi-management-deadline-coverage").text(),/Просрочка по текущему состоянию/);
+});
+test("scope warning remains visible with every remark certified", t => {
+  const x=setup(); t.after(()=>x.dom.window.close());
+  x.report.coverage={isComplete:false,warnings:["Область Jira неполна"]};
+  x.report.confirmed={metrics:{changed:1},remarks:2,totalRemarks:2,excluded:[]};
+  x.report.groups.forEach(group => { group.confirmed=true; });
+  const warning=x.ui.preview(x.report,"changed",x.state,x.services).find(".ujg-esi-management-warning").text();
+  assert.match(warning,/Область Jira неполна|Покрытие.*неполно/);
 });
 test("task return preview and full report show only returned tasks with author time and reason", t => {
   const x=setup(); t.after(()=>x.dom.window.close());
@@ -115,7 +170,7 @@ test("overdue views show coverage and date basis for a confirmed lower bound", t
   for (const view of [x.ui.preview(x.report,"overdue",x.state,x.services),x.ui.render(x.report,"overdue",x.state,x.services)]) {
     const note=view.find(".ujg-esi-management-deadline-coverage").text();
     assert.match(note,/Подтверждено.*1.*итог может быть больше/i);
-    assert.match(note,/известны 2.*без срока 1.*ошибки 1.*конфликты 1.*состояние не подтверждено 1.*из 5/s);
+    assert.match(note,/известны 2.*без срока 1.*не удалось распознать 1.*конфликты 1.*состояние не подтверждено 1.*из 5/s);
     assert.match(note,/срок.*текущ.*журнал.*сохранённ.*описан.*история переносов.*не.*известна/is);
     assert.match(note,/На сегодня, 25\.09\.2026 МСК/i);
     assert.doesNotMatch(note,/выбранную дату|24\.09\.2026/i);
@@ -163,7 +218,7 @@ test("overdue empty states distinguish unknown totals, known zero, and missing d
   ]) {
     x.report.deadlineCoverage=coverage; x.report.metrics.overdue=metric; x.report.observed={overdue:0};
     for (const view of [x.ui.preview(x.report,"overdue",x.state,x.services),x.ui.render(x.report,"overdue",x.state,x.services)]) {
-      assert.match(view.find(".ujg-esi-management-deadline-coverage").text(),/без срока|ошибки/);
+      assert.match(view.find(".ujg-esi-management-deadline-coverage").text(),/без срока|не удалось распознать/);
       assert.match(view.find(".ujg-esi-management-empty").text(),expected);
       assert.doesNotMatch(view.find(".ujg-esi-management-empty").text(),/За выбранный день таких замечаний нет/);
     }

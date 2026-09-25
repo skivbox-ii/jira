@@ -31,7 +31,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     var date = deadline.date ? deadlineDate(deadline.date) : "";
     var state = deadline.state || "missing";
     if (state === "missing") return "Срок не указан";
-    if (state === "invalid") return "Некорректный срок";
+    if (state === "invalid") return "Не удалось распознать срок";
     if (state === "conflict") return "Противоречивый срок";
     var suffix = {today:"сегодня",tomorrow:"завтра",completed:"готово",cancelled:"отменено",unknown:"состояние не подтверждено"}[state];
     if (state === "overdue") suffix = "просрочено " + deadline.daysOverdue + " д";
@@ -413,7 +413,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var state = currentState || {}, services = currentServices || {};
       var report = activity.summarize(state.rows || [], state.teams || [], {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:state.mappingSettings && state.mappingSettings.columnMap, journalRows:state.deadlineJournalRows});
       aiUi.update(report,state,services);
-      var coverage = report.coverage || {}, metrics = report.metrics || {}, observed = report.observed || {}, balance = report.balance || {};
+      var coverage = report.coverage || {}, confirmed = report.confirmed, metrics = confirmed ? confirmed.metrics || {} : report.metrics || {}, observed = report.observed || {}, balance = confirmed ? confirmed.balance || {} : report.balance || {};
       var journal = filtered(report), $root = $("<div/>").addClass("ujg-esi-activity");
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");
       $toolbar.append($("<h2/>").text("Динамика замечаний"));
@@ -429,19 +429,19 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         if (validDate(this.value)) changeDate(this.value); else $(this).val(date);
       }));
       $controls.append(button("ChevronRight","Следующий день",function() { changeDate(shiftDate(date,1)); }));
-      $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text("00:00–" + cutoff(report) + " · МСК"));
+      $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text(report.asOf ? "00:00–" + cutoff(report) + " · МСК" : "Время среза неизвестно · МСК"));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
       $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
-      var partialDay = report.asOf && timestamp(report.asOf) !== Number(report.end);
-      var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(partialDay ? "Итоги на " + cutoff(report) + " МСК" : "Итоги за весь день"));
+      var fullDay = report.asOf && timestamp(report.asOf) === Number(report.end);
+      var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(!report.asOf ? "Срез на выбранный день не подтверждён" : fullDay ? "Итоги за весь день" : "Итоги на " + cutoff(report) + " МСК"));
       var $band = $("<div/>").addClass("ujg-esi-activity-metrics");
       [["changed","Замечаний с изменениями"],["newRemarks","Создано замечаний"],["completed","Стали готовы"],["taskReturns","Возвраты задач"],["events","Событий"],["overdue","Просроченные"]].forEach(function(item) {
-        var value = metrics[item[0]], lowerBound = value == null && (item[0] === "changed" || item[0] === "newRemarks" || item[0] === "overdue" || item[0] === "taskReturns") && observed[item[0]] != null;
-        var display = value != null ? String(value) : lowerBound ? "≥" + observed[item[0]] : "—";
-        var title = value != null ? item[1] : lowerBound ? item[0] === "overdue" ? "Подтверждённая просрочка; итог может быть больше" : "Зафиксировано по загруженной истории; итог может быть больше" : "Недостаточно истории для итогового значения";
+        var value = metrics[item[0]], observedOnly = !confirmed && value == null && observed[item[0]] != null;
+        var display = value != null ? String(value) : observedOnly ? String(observed[item[0]]) : "—";
+        var title = value != null ? item[1] : observedOnly ? "Зафиксировано в загруженных данных; итог может быть больше" : "Недостаточно истории для итогового значения";
         if (item[0] === "overdue") title += " · На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК";
         $band.append($("<button/>").addClass("ujg-esi-activity-metric").attr({type:"button","data-metric":item[0],"aria-haspopup":"dialog","aria-expanded":"false","aria-label":item[1]+": "+display})
           .append($("<strong/>").attr("title",title).text(display), $("<span/>").text(item[1]))
@@ -450,17 +450,31 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           .on("focus",function() { previewMetric(this,report,item[0],state); })
           .on("mouseleave blur",schedulePreviewClose));
       });
-      $metrics.append($band,$("<p/>").addClass("ujg-esi-activity-balance").text("Открытые замечания: " + metric(balance.startOpen) + " на начало · " + metric(balance.endOpen) + " на конец"));
+      $metrics.append($band,$("<p/>").addClass("ujg-esi-activity-balance").text("Открытые замечания: " + metric(balance.startOpen) + " на начало · " + metric(balance.endOpen) + (fullDay ? " на конец дня" : " на момент загрузки")));
+      if (confirmed && (confirmed.remarks < confirmed.totalRemarks || coverage.isComplete !== true)) {
+        var coverageMessage = confirmed.remarks < confirmed.totalRemarks ? 'Подтверждено ' + confirmed.remarks + ' из ' + confirmed.totalRemarks + ' замечаний; остальные не включены в итоги истории.' : '';
+        if (coverage.isComplete !== true) coverageMessage += (coverageMessage ? ' ' : '') + 'Покрытие всего отчёта неполно: проверьте область загрузки и историю.';
+        $metrics.append($('<p/>').addClass('ujg-esi-activity-confirmed-coverage').text(coverageMessage));
+        if (Array.isArray(confirmed.excluded) && confirmed.excluded.length) {
+          var $excluded = $('<details/>').addClass('ujg-esi-activity-excluded').append($('<summary/>').text('Не вошло: ' + confirmed.excluded.length));
+          confirmed.excluded.forEach(function(item) {
+            var $row = $('<div/>').addClass('ujg-esi-activity-excluded-item').append(issueKeyNode(item.key,state.baseUrl),$('<span/>').text(item.summary || ''));
+            if (Array.isArray(item.reasons) && item.reasons.length) $row.append($('<small/>').text(item.reasons.join('; ')));
+            $excluded.append($row);
+          });
+          $metrics.append($excluded);
+        }
+      }
       if (report.deadlineCoverage) {
         var deadlines = report.deadlineCoverage;
         var issueCount = (deadlines.invalid || 0) + (deadlines.conflict || 0);
         var $deadlineCoverage = $("<p/>").addClass("ujg-esi-activity-deadline-coverage").append(document.createTextNode("На сегодня, " + deadlineDate(report.deadlineReferenceDate) + " МСК · Покрытие сроками: известны " + (deadlines.known || 0) + " · без срока " + (deadlines.missing || 0) + " · "));
-        $deadlineCoverage.append($("<button/>").addClass("ujg-esi-activity-deadline-issues").attr({type:"button","data-metric":"deadlineIssues","aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>").text("Ошибки сроков: " + issueCount))
+        $deadlineCoverage.append($("<button/>").addClass("ujg-esi-activity-deadline-issues").attr({type:"button","data-metric":"deadlineIssues","aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>").text("Не распознаны сроки: " + issueCount))
           .on("click",function() { openManagement(this,report,"deadlineIssues",state); })
           .on("mouseenter",function() { var anchor=this; clearTimeout(previewTimer); clearTimeout(previewCloseTimer); previewTimer=setTimeout(function() { previewMetric(anchor,report,"deadlineIssues",state); },160); })
           .on("focus",function() { previewMetric(this,report,"deadlineIssues",state); })
           .on("mouseleave blur",schedulePreviewClose));
-        $deadlineCoverage.append(document.createTextNode(" · ошибки " + (deadlines.invalid || 0) + " · конфликты " + (deadlines.conflict || 0) + " · состояние не подтверждено " + (deadlines.unknownState || 0) + " из " + (deadlines.total || 0) + " · Текущий срок из журнала или сохранённого описания; история переносов не учитывается"));
+        $deadlineCoverage.append(document.createTextNode(" · не удалось распознать " + (deadlines.invalid || 0) + " · конфликты " + (deadlines.conflict || 0) + " · состояние не подтверждено " + (deadlines.unknownState || 0) + " из " + (deadlines.total || 0) + " · Текущий срок из журнала или сохранённого описания; история переносов не учитывается"));
         $metrics.append($deadlineCoverage);
       }
       if ((state.rows || []).length) $root.append($metrics);
@@ -491,7 +505,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
               var events = matchingEvents(report,function(event) { return event.kind === "status" && String(event.from) === from && String(event.to) === to && (event.from !== event.to || event.fromId && event.toId && event.fromId !== event.toId); });
               var hasReturn = events.some(function(event) { return !!event.returnKind; });
               var $count = eventCount(match.count,(hasReturn ? "Возврат · " : "Переход ") + activity.statusLabel(from) + " → " + activity.statusLabel(to),events,state);
-              if (hasReturn) $count.prepend(icon("ChevronLeft"));
+              if (hasReturn) {
+                $count.attr("title","Возврат задачи").prepend($(icon("Undo2")).attr("data-icon","Undo2"));
+              }
               $cell.toggleClass("is-return",hasReturn).append($count);
             } else $cell.text("–");
             $row.append($cell);
@@ -535,9 +551,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
         "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
       $coverage.append($("<span/>").text(coverageText));
+      var $details;
       if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
         var warnings = coverage.warnings;
-        var $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
+        $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
         $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
         var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
         warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
@@ -548,7 +565,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
         var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
         coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
-        $coverage.append($diagnostics.append($diagnosticList));
+        if (!$details) {
+          $details = $("<details/>").addClass("ujg-esi-activity-warning-details").append($("<summary/>").text("Технические подробности"));
+          $coverage.append($details);
+        }
+        $details.append($diagnostics.append($diagnosticList));
       }
       if (coverage.total || state.activityError || state.activityLoading) {
         if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));

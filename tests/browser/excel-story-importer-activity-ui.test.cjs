@@ -61,6 +61,10 @@ test("status matrix colors both axes and marks task return cells with their evid
   assert.equal(x.$(".ujg-esi-activity-status-matrix td.is-return").length,1);
   const button=x.$(".ujg-esi-activity-status-matrix td.is-return button");
   assert.match(button.attr("aria-label"),/Возврат/);
+  assert.equal(button.text(),"1");
+  assert.equal(button.find("svg[data-icon='Undo2']").length,1);
+  assert.equal(button.attr("title"),"Возврат задачи");
+  assert.doesNotMatch(button.text(),/[‹›<>≤≥]/);
   button.trigger("click");
   assert.match(x.$(".ujg-esi-activity-event-popover").text(),/P-2/);
 });
@@ -180,8 +184,8 @@ test("deadline metric and badges use controller states and show coverage", t => 
   const x=setup(report); t.after(()=>x.dom.window.close());
   const metric=x.$("[data-metric='overdue']");
   assert.equal(x.$(".ujg-esi-activity-metric").length,6);
-  assert.match(metric.text(),/≥2.*Просроченные/);
-  assert.match(metric.find("strong").attr("title"),/подтвержд/i);
+  assert.match(metric.text(),/^2.*Просроченные/);
+  assert.match(metric.find("strong").attr("title"),/зафиксировано/i);
   assert.match(metric.find("strong").attr("title"),/На сегодня, 25\.09\.2026 МСК/);
   assert.match(x.$(".ujg-esi-activity-group-deadline").text(),/23\.09\.2026.*просрочено 2 д/);
   assert.ok(x.$(".ujg-esi-activity-group-deadline").hasClass("is-overdue"));
@@ -199,7 +203,7 @@ test("deadline metric and badges use controller states and show coverage", t => 
 test("deadline badges distinguish near dates and neutral states", t => {
   const report=fixture();
   const x=setup(report); t.after(()=>x.dom.window.close());
-  for (const [state,date,phrase,klass] of [["today","2026-09-24","сегодня","is-near"],["tomorrow","2026-09-25","завтра","is-near"],["completed","2026-09-20","готово","is-neutral"],["missing",null,"Срок не указан","is-neutral"],["invalid",null,"Некорректный срок","is-neutral"],["conflict",null,"Противоречивый срок","is-neutral"],["unknown","2026-09-20","состояние не подтверждено","is-neutral"]]) {
+  for (const [state,date,phrase,klass] of [["today","2026-09-24","сегодня","is-near"],["tomorrow","2026-09-25","завтра","is-near"],["completed","2026-09-20","готово","is-neutral"],["missing",null,"Срок не указан","is-neutral"],["invalid",null,"Не удалось распознать срок","is-neutral"],["conflict",null,"Противоречивый срок","is-neutral"],["unknown","2026-09-20","состояние не подтверждено","is-neutral"]]) {
     report.groups[0].deadline={date,state}; x.render();
     const badge=x.$(".ujg-esi-activity-group-deadline");
     assert.match(badge.text(),new RegExp(phrase,"i"));
@@ -244,7 +248,7 @@ test("deadline issue count opens preview and full report for quiet groups regard
   selectFilter(x,"role",["QA"]);
   const trigger=x.$(".ujg-esi-activity-deadline-issues");
   assert.equal(trigger.attr("data-metric"),"deadlineIssues");
-  assert.equal(trigger.text(),"Ошибки сроков: 2");
+  assert.equal(trigger.text(),"Не распознаны сроки: 2");
   assert.equal(x.$(".ujg-esi-activity-metric").length,6);
   trigger.trigger("focus");
   const preview=x.$(".ujg-esi-activity-metric-preview");
@@ -269,20 +273,20 @@ test("overdue report includes deadline issue details without claiming an exact o
   report.groups[0].deadline={problem:"invalid",state:"invalid",reasonCode:"invalid-calendar",reasonLabel:"Несуществующая календарная дата",source:"excel",field:"Срок",raw:"31.02.2026",candidates:[{raw:"31.02.2026",source:"excel",field:"Срок"}]};
   const x=setup(report); t.after(()=>x.dom.window.close());
   x.$("[data-metric='overdue']").trigger("focus");
-  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Ошибки сроков: 1/);
+  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Не распознаны сроки: 1/);
   x.$("[data-metric='overdue']").trigger("click");
   assert.match(x.$(".ujg-esi-management-dialog").text(),/Подтверждено 0; итог может быть больше/);
   assert.equal(x.$(".ujg-esi-management-dialog .ujg-esi-management-deadline-issue").length,0);
   x.$(".ujg-esi-management-dialog .ujg-esi-management-deadline-open").trigger("click");
   assert.match(x.$(".ujg-esi-management-dialog").text(),/31\.02\.2026/);
-  assert.equal(x.$(".ujg-esi-management-dialog").attr("aria-label"),"Ошибки сроков");
+  assert.equal(x.$(".ujg-esi-management-dialog").attr("aria-label"),"Не распознаны сроки");
 });
 
 test("empty deadline issue report uses snapshot wording and remains safe with partial coverage", t => {
   const report=fixture(); report.deadlineCoverage={known:0,missing:0,invalid:0,conflict:0,unknownState:1,total:1};
   const x=setup(report); t.after(()=>x.dom.window.close());
   x.$("[data-metric='deadlineIssues']").trigger("focus");
-  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Ошибок срока в загруженных данных не обнаружено/);
+  assert.match(x.$(".ujg-esi-activity-metric-preview").text(),/Сроков, которые не удалось распознать, в загруженных данных нет/);
   assert.doesNotMatch(x.$(".ujg-esi-activity-metric-preview").text(),/За выбранный день/);
   x.$("[data-metric='deadlineIssues']").trigger("click");
   assert.match(x.$(".ujg-esi-management-dialog").text(),/состояние не подтверждено|Снимок загруженных данных/i);
@@ -367,7 +371,7 @@ test("empty change selection survives migration and current selections survive e
 test("renders daily totals, unknown balances, current scope and grouped journal", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const text=x.$("#root").text();
-  assert.match(text,/Итоги за весь день/); assert.match(text,/Проверена история 1 из 2 задач/);
+  assert.match(text,/Срез на выбранный день не подтверждён/); assert.match(text,/Проверена история 1 из 2 задач/);
   assert.match(text,/Нет данных/); assert.match(text,/P-EPIC/); assert.match(text,/текущ/);
   assert.doesNotMatch(x.$(".ujg-esi-activity-scope").text(),/Scope warning/);
   assert.match(text,/P-1/); assert.match(text,/P-2/);
@@ -461,18 +465,65 @@ test("as-of cutoff distinguishes current partial day from historical 24:00", t =
   report.asOf="2026-09-24T21:00:00.000Z"; x.render();
   assert.match(x.$(".ujg-esi-activity-zone").text(),/24:00/);
 });
-test("partial daily metrics show observed lower bounds and compact unknown values", t => {
+test("partial legacy metrics show plain observed counts and compact unknown values", t => {
   const report=fixture(); report.asOf="2026-09-24T06:15:00.000Z"; report.end=Date.parse("2026-09-24T21:00:00.000Z");
   report.metrics={changed:null,newRemarks:null,completed:null,reopened:null,events:47};
   report.observed={changed:18,newRemarks:6};
   const x=setup(report); t.after(()=>x.dom.window.close());
   assert.match(x.$(".ujg-esi-activity-summary h3").text(),/Итоги на 09:15/);
-  assert.equal(x.$("[data-metric='changed'] strong").text(),"≥18");
-  assert.equal(x.$("[data-metric='newRemarks'] strong").text(),"≥6");
+  assert.equal(x.$("[data-metric='changed'] strong").text(),"18");
+  assert.equal(x.$("[data-metric='newRemarks'] strong").text(),"6");
   assert.equal(x.$("[data-metric='completed'] strong").text(),"—");
   assert.equal(x.$("[data-metric='taskReturns'] strong").text(),"—");
   assert.match(x.$("[data-metric='changed'] strong").attr("title"),/итог может быть больше/);
   assert.match(x.$("[data-metric='completed'] strong").attr("title"),/Недостаточно/);
+});
+test("confirmed metrics and balance remain visible with excluded remarks", t => {
+  const report=fixture();
+  report.asOf="2026-09-24T21:00:00.000Z"; report.end=Date.parse(report.asOf);
+  report.confirmed={metrics:{changed:1,newRemarks:0,completed:1,reopened:0,taskReturns:0,events:2,overdue:1},balance:{startOpen:2,endOpen:1},remarks:1,totalRemarks:2,excluded:[{id:"bad",key:"P-9",summary:"<img src=x>",reasons:["История загружена частично"]}]};
+  const x=setup(report); t.after(()=>x.dom.window.close()); x.state.baseUrl="https://jira.example.test/base"; x.render();
+  assert.equal(x.$("[data-metric='completed'] strong").text(),"1");
+  assert.equal(x.$("[data-metric='overdue'] strong").text(),"1");
+  assert.match(x.$(".ujg-esi-activity-balance").text(),/2 на начало.*1 на конец дня/);
+  assert.match(x.$(".ujg-esi-activity-confirmed-coverage").text(),/Подтверждено 1 из 2 замечаний/);
+  const excluded=x.$(".ujg-esi-activity-excluded");
+  assert.match(excluded.find("summary").text(),/Не вошло: 1/);
+  assert.equal(excluded.find("a[href='https://jira.example.test/base/browse/P-9']").length,1);
+  assert.equal(excluded.find("img").length,0);
+  assert.match(excluded.text(),/История загружена частично/);
+});
+test("zero certified remarks leave history counts and balance unknown while events remain observed", t => {
+  const report=fixture();
+  report.confirmed={metrics:{changed:null,newRemarks:null,completed:null,reopened:null,taskReturns:null,events:2,overdue:0},balance:{startOpen:null,endOpen:null},remarks:0,totalRemarks:1,excluded:[]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$("[data-metric='changed'] strong").text(),"—");
+  assert.equal(x.$("[data-metric='events'] strong").text(),"2");
+  assert.equal(x.$("[data-metric='overdue'] strong").text(),"0");
+  assert.match(x.$(".ujg-esi-activity-balance").text(),/Нет данных.*Нет данных/);
+});
+test("complete certified subset still discloses incomplete global scope", t => {
+  const report=fixture(); report.confirmed={metrics:{changed:1,events:2},balance:{startOpen:1,endOpen:1},remarks:1,totalRemarks:1,excluded:[]};
+  report.coverage={isComplete:false,complete:1,total:1,warnings:["Область Jira неполна"]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.match(x.$(".ujg-esi-activity-confirmed-coverage").text(),/Покрытие.*неполно/);
+  assert.match(x.$(".ujg-esi-activity-warning-list").text(),/Область Jira неполна/);
+});
+test("missing cutoff never claims a full past day or end-day balance", t => {
+  const report=fixture(); report.asOf=null; report.end=Date.parse("2026-09-24T21:00:00.000Z");
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.doesNotMatch(x.$(".ujg-esi-activity-summary h3").text(),/весь день|24:00/);
+  assert.match(x.$(".ujg-esi-activity-summary h3").text(),/Срез.*не подтверждён/);
+  assert.match(x.$(".ujg-esi-activity-balance").text(),/на момент загрузки/);
+  assert.doesNotMatch(x.$(".ujg-esi-activity-zone").text(),/24:00/);
+});
+test("current partial-day balance says at load and time diagnostics stay inside technical details", t => {
+  const report=fixture(); report.asOf="2026-09-24T06:15:00.000Z"; report.end=Date.parse("2026-09-24T21:00:00.000Z");
+  report.coverage.diagnostics=["P-1: same-second timestamp"];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.match(x.$(".ujg-esi-activity-balance").text(),/на момент загрузки/);
+  assert.equal(x.$(".ujg-esi-activity-coverage > .ujg-esi-activity-diagnostic-details").length,0);
+  assert.equal(x.$(".ujg-esi-activity-warning-details .ujg-esi-activity-diagnostic-details").length,1);
 });
 test("render preserves parent toolbar and reuses one private mount", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -534,7 +585,7 @@ test("a complete current-day snapshot still offers explicit refresh", t => {
 test("coverage keeps long warnings in a compact scrollable disclosure", t => {
   const report=fixture(); report.coverage.warnings=["First warning","Second warning","Third warning"];
   const x=setup(report); t.after(()=>x.dom.window.close());
-  assert.equal(x.$(".ujg-esi-activity-coverage details").length,1);
+  assert.equal(x.$(".ujg-esi-activity-coverage > details").length,1);
   assert.match(x.$(".ujg-esi-activity-coverage summary").text(),/проблем.*3/);
   assert.doesNotMatch(x.$(".ujg-esi-activity-coverage summary").text(),/First warning/);
   assert.match(x.$(".ujg-esi-activity-warning-list").text(),/Third warning/);

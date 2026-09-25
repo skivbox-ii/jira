@@ -1980,6 +1980,11 @@
 .ujg-esi-activity-metric[data-metric="reopened"] strong { color: #c43d3d; }
 .ujg-esi-activity-metric[data-metric="overdue"] strong { color: #ae2a19; }
 .ujg-esi-activity-balance { text-align: center; font-weight: 600; }
+.ujg-esi-activity-confirmed-coverage { margin: 3px 0 0; text-align: center; color: #835609; font-size: 12px; }
+.ujg-esi-activity-excluded { max-width: 760px; margin: 4px auto 0; color: #526174; font-size: 12px; }
+.ujg-esi-activity-excluded summary, .ujg-esi-management-excluded summary { cursor: pointer; }
+.ujg-esi-activity-excluded-item, .ujg-esi-management-excluded > div { display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 3px 0; overflow-wrap: anywhere; }
+.ujg-esi-activity-excluded-item small, .ujg-esi-management-excluded small { flex-basis: 100%; color: #526174; }
 .ujg-esi-activity-deadline-coverage { margin: 3px 0 0; color: #526174; font-size: 11px; text-align: center; overflow-wrap: anywhere; }
 .ujg-esi-activity-deadline-issues { padding: 0 2px; border: 0; background: transparent; color: #075fc4; font: inherit; text-decoration: underline; cursor: pointer; }
 .ujg-esi-activity-deadline-issues:hover, .ujg-esi-activity-deadline-issues:focus-visible { color: #064d9f; outline-offset: 2px; }
@@ -2011,6 +2016,7 @@
 .ujg-esi-activity-popover-title { font-weight: 600; overflow-wrap: anywhere; }
 .ujg-esi-activity-coverage { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; }
 .ujg-esi-activity-warning-details, .ujg-esi-activity-diagnostic-details { min-width: 0; flex: 1 1 260px; }
+.ujg-esi-activity-warning-details > .ujg-esi-activity-diagnostic-details { display: block; margin-top: 5px; }
 .ujg-esi-activity-warning-details summary, .ujg-esi-activity-diagnostic-details summary { cursor: pointer; overflow-wrap: anywhere; }
 .ujg-esi-activity-warning-list { max-height: 160px; overflow-y: auto; margin-top: 5px; padding: 6px 8px; border: 1px solid #e6c99d; background: #fffaf0; color: #835609; overflow-wrap: anywhere; }
 .ujg-esi-activity-warning-list > div + div { border-top: 1px solid #f0dfbd; margin-top: 4px; padding-top: 4px; }
@@ -2106,6 +2112,8 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-management-close:hover, .ujg-esi-management-close:focus-visible { background: #eaf3fc; }
 .ujg-esi-management-close svg { width: 16px; height: 16px; }
 .ujg-esi-management-warning { flex: 0 0 auto; padding: 7px 16px; color: #785b32; background: #fbf6ec; border-bottom: 1px solid #e8d9bd; }
+.ujg-esi-management-excluded { flex: 0 0 auto; max-height: 150px; overflow-y: auto; padding: 5px 16px; border-bottom: 1px solid #dce3eb; color: #526174; }
+.ujg-esi-management-preview > .ujg-esi-management-excluded { padding: 5px 0; }
 .ujg-esi-management-deadline-coverage { flex: 0 0 auto; padding: 6px 16px; border-bottom: 1px solid #dce3eb; color: #526174; font-size: 11px; overflow-wrap: anywhere; }
 .ujg-esi-management-preview > .ujg-esi-management-deadline-coverage { padding: 5px 0 8px; }
 .ujg-esi-management-deadline-open { flex: 0 0 auto; align-self: start; margin: 5px 16px; padding: 3px 0; border: 0; background: transparent; color: #075fc4; font: inherit; text-decoration: underline; cursor: pointer; }
