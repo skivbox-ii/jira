@@ -111,6 +111,19 @@ function loadRegistry() {
   return loadAmdModule(path.join(MODULE_DIR, "registry.js"), {"_ujgESI_remarkId":loadRemarkId()});
 }
 
+test("owner values survive parsing and registry mapping across 72 Excel rows", function () {
+  const rows = [["Замечание", "Ответственный"]];
+  for (let i = 1; i <= 72; i += 1) rows.push(["Замечание " + i, "Ответственный " + i]);
+  const parsed = loadParser().parseWorkbook({SheetNames:["Лист"],Sheets:{Лист:{__rows:rows}}});
+  const entries = loadRegistry().buildRows(parsed.rows);
+  assert.equal(parsed.rows.length, 72);
+  for (const index of [0, 49, 50, 71]) {
+    assert.equal(parsed.rows[index].sourceColumns["Ответственный"], "Ответственный " + (index + 1));
+    assert.equal(entries[index].owner, "Ответственный " + (index + 1));
+    assert.equal(entries[index].rowIndex, index);
+  }
+});
+
 test("default owner mapping accepts exact TNT header with a line break", function () {
   const parser = loadParser(), registry = loadRegistry();
   const result = parser.parseWorkbook({SheetNames:["Лист"],Sheets:{"Лист":{__rows:[

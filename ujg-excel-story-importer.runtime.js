@@ -8361,7 +8361,6 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (s.loading) $root.append($("<div/>").addClass("ujg-esi-loading").text("Загрузка..."));
     if (s.reportView === "activity" && activityView) activityView.render($root,s,Object.assign({},services,{renderDescription:function(text) { return renderManagementDescription(text,s.baseUrl); }}));
     else appendPreview($root, s);
-    appendRowOwnerPopover($root, s);
     appendConfirmModal($root, s);
     appendLlmReviewDialog($root, s, "summary");
     appendLlmReviewDialog($root, s, "remark");
@@ -8379,6 +8378,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       }
     }
     restoreScrollState(scrollState);
+    appendRowOwnerPopover($root, s);
   }
 
   function clearMappingError() {

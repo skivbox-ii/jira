@@ -32,6 +32,16 @@ test("owner team identity comes only from selected Jira identity or the Jira reg
   assert.deepEqual(Array.from(registry().buildRows(input)[0].ownerIdentifiers),["jira-owner"]);
 });
 
+test("blank Excel owner is not replaced by the Jira assignee", () => {
+  const input = source();
+  input[0].sourceColumns["Ответственный"] = "";
+  input[0].sourceColumns["Исполнитель в Jira"] = "Old Jira assignee";
+  input[0].storyDetails.assignee = "Current Jira assignee";
+  const row = registry().buildRows(input)[0];
+  assert.equal(row.owner, "");
+  assert.equal(row.assignee, "Current Jira assignee");
+});
+
 test("child-only filter retains context parent and excludes unrelated siblings", () => {
   const r = registry();
   const groups = r.selectGroups(r.buildRows(source()), { status: ["Open"] });

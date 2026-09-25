@@ -49,6 +49,55 @@ function setup(activityReport) {
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
 
+test("Jira owners and source indices survive page two, size changes, and grid refresh", t => {
+  const {dom,$,state,calls,render} = setup(); t.after(() => dom.window.close());
+  state.viewMode = "jira";
+  state.rows = Array.from({length:182}, (_, index) => ({
+    id:"P-" + (index + 1), jiraKey:"P-" + (index + 1), alreadyLinked:true,
+    summary:"Remark " + (index + 1),
+    sourceColumns:{"Ответственный":"Owner " + (index + 1)},
+    storyDetails:{key:"P-" + (index + 1), assignee:"Jira assignee " + (index + 1)}
+  }));
+  render();
+  $("button[aria-label='Следующая страница']").trigger("click");
+  let owner = $("tr[data-source-index='50'] .ujg-esi-cell-owner");
+  assert.match(owner.text(), /Owner 51/);
+  owner.find("[data-owner-index]").trigger("click");
+  assert.deepEqual(calls.pop(), ["owner", "row-owner-50"]);
+  state.userPicker = {target:"row-owner-50",query:"",rows:[],loading:true,error:""};
+  render();
+  owner = $("tr[data-source-index='50'] .ujg-esi-cell-owner");
+  assert.match(owner.text(), /Owner 51/);
+  assert.equal($(".ujg-esi-row-owner-popover").length, 1);
+  state.userPicker.target = "";
+  $("select[aria-label='Замечаний на странице']").val("100").trigger("change");
+  owner = $("tr[data-source-index='71'] .ujg-esi-cell-owner");
+  assert.match(owner.text(), /Owner 72/);
+  owner.find("[data-owner-index]").trigger("click");
+  assert.deepEqual(calls.pop(), ["owner", "row-owner-71"]);
+  $("button[aria-label='Следующая страница']").trigger("click");
+  assert.match($("tr[data-source-index='100'] .ujg-esi-cell-owner").text(), /Owner 101/);
+});
+
+test("owner popup uses anchor geometry after restoring grid scroll", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  dom.window.innerHeight = 2000;
+  const original = dom.window.HTMLElement.prototype.getBoundingClientRect;
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function() {
+    if (this.getAttribute("data-owner-index") === "1") {
+      const bottom = 1200 - $(".ujg-esi-registry-scroll").scrollTop();
+      return {left:120,top:bottom - 24,right:260,bottom,width:140,height:24};
+    }
+    return original.call(this);
+  };
+  $(".ujg-esi-registry-scroll").scrollTop(700);
+  state.userPicker = {target:"row-owner-1",query:"",rows:[],loading:true,error:""};
+  render();
+  assert.equal($(".ujg-esi-registry-scroll").scrollTop(), 700);
+  assert.equal($(".ujg-esi-row-owner-popover").length, 1);
+  assert.equal($(".ujg-esi-row-owner-popover").css("top"), "504px");
+});
+
 test("activity tab is independent from source mode and leaves registry/fullscreen available", () => {
   const {$,state,calls,render} = setup();
   const initialRows = $(".ujg-esi-grid tbody tr").length;

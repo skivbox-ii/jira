@@ -56,6 +56,43 @@ function createLocalStorage() {
   };
 }
 
+test("row owner selection uses the source index after Jira page two", async function () {
+  let callbacks, state;
+  const rendering = {
+    init: function (_container, services) { callbacks = services; },
+    render: function (value) { state = value; },
+  };
+  const api = {
+    getProjects: function () { return Promise.resolve([]); },
+    searchUsers: function () { return Promise.resolve([{accountId:"next-owner",displayName:"New Owner"}]); },
+  };
+  const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
+    jquery: function () { return {length:1}; },
+    "_ujgESI_config": CONFIG,
+    "_ujgESI_api": api,
+    "_ujgESI_excel-loader": {},
+    "_ujgESI_parser": {},
+    "_ujgESI_creator": {},
+    "_ujgESI_mappingStore": null,
+    "_ujgESI_xlsxPatcher": null,
+    "_ujgESI_rendering": rendering,
+    _ujgESI_teams: null,
+    _ujgESI_activity: null,
+    "_ujgShared_llmClient": null,
+  });
+  new Gadget({getGadgetContentEl: function () { return {find: function () { return {length:1}; }}; }});
+  state.viewMode = "jira";
+  state.rows = Array.from({length:182}, (_, index) => ({
+    id:"P-" + (index + 1), sourceColumns:{"Ответственный":"Old " + (index + 1)}
+  }));
+  await callbacks.onRowOwnerSearch(50, "New");
+  callbacks.onDialogAssigneeSelect("row-owner-50", "next-owner");
+  assert.equal(state.rows[49].sourceColumns["Ответственный"], "Old 50");
+  assert.equal(state.rows[50].sourceColumns["Ответственный"], "New Owner");
+  assert.equal(state.rows[50].ownerAssigneeId, "next-owner");
+  assert.equal(state.rows[51].sourceColumns["Ответственный"], "Old 52");
+});
+
 test("file import surfaces parser exceptions as visible errors", async function () {
   const states = [];
   let callbacks = null;
