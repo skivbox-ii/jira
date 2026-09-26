@@ -1141,6 +1141,15 @@ test("Jira-only remark ID uses numeric summary prefix or Jira key", () => {
   assert.equal(result.groups[1].remarkId,"P-2");
 });
 
+test("Jira-only activity and registry reject dates and use the same Story prefix", () => {
+  const api = activity();
+  for (const [summary, expected] of [["2026.09.26 release","P-1"],["12.5 volts","P-1"],["2795.Линия","2795"]]) {
+    const r = row(detail(api,issue("P-1","Open")));
+    r.storyDetails.summary=summary;
+    assert.equal(report(api,[r]).groups[0].remarkId,expected,summary);
+  }
+});
+
 test("creation uses birth status and assignee before later changes", () => {
   const api = activity();
   const jira = issue("P-1","Done",[

@@ -161,6 +161,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
   function remarkId(row) {
     var source = sourceRemarkId(row);
     if (source) return source;
+    var linkedKey = key(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key);
+    if (linkedKey && row.storyDetails) return linkedKey;
     var summary = str(row.storyDetails && row.storyDetails.summary || row.summary);
     var prefix = /^(?:№|#)?\s*(\d+)(?:[. ]|$)/.exec(summary);
     return prefix ? prefix[1] : key(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key);

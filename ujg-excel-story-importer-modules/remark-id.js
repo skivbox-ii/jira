@@ -15,6 +15,10 @@ define("_ujgESI_remarkId", [], function() {
         return true;
       });
     });
-    return result;
+    if (result) return result;
+    var story = row && row.storyDetails;
+    if (!story || !(row.jiraKey || row.createdKey || story.key)) return "";
+    var prefix = /^\s*(?:№|#)?\s*(\d+)(?:\.(?!\d)|\s|$)/.exec(String(story.summary || ""));
+    return prefix ? prefix[1] : "";
   };
 });

@@ -168,6 +168,33 @@ test("ID aliases and numeric zero identify the same remark regardless of column 
   }
 });
 
+test("Jira-only rows and children use the parent Story summary ID", () => {
+  const r = registry();
+  for (const summary of ["2650. Problem", "2650.Problem", "  №2650. Problem", "#2650 Problem", "2650 Problem", "2650"]) {
+    const input = {id:"P-1",jiraKey:"P-1",summary:"Old title",sourceColumns:{},
+      storyDetails:{key:"P-1",summary},childStatuses:[{key:"P-2",summary:"9999. Child"}]};
+    assert.deepEqual(Array.from(r.buildRows([input]), x => x.remarkId),["2650","2650"],summary);
+    assert.deepEqual(input.sourceColumns,{});
+  }
+});
+
+test("source ID wins over the Story summary including zero and custom mapped IDs", () => {
+  const r = registry();
+  for (const id of ["744",0,"ALPHA"]) {
+    assert.equal(r.remarkId({jiraKey:"P-1",sourceColumns:{ID:id},sourceColumnIndexes:{ID:0},storyDetails:{summary:"2650. Problem"}}),String(id));
+  }
+  assert.equal(r.remarkId({jiraKey:"P-1",sourceColumns:{ID:" "},storyDetails:{summary:"2650. Problem"}}),"2650");
+});
+
+test("summary fallback does not infer IDs from dates, inner numbers, children or raw Excel", () => {
+  const r = registry();
+  for (const summary of ["Problem 2650", "[BE] 2650. Problem", "2026.09.26 release", "12.5 volts", "P-2650 Problem", ""]) {
+    const rows=r.buildRows([{jiraKey:"P-1",summary:"9999. Source",storyDetails:{key:"P-1",summary},childStatuses:[{summary:"7777. Child"}]}]);
+    assert.deepEqual(Array.from(rows,x=>x.remarkId),["",""],summary);
+  }
+  assert.equal(r.remarkId({summary:"1234. Raw Excel",sourceColumns:{}}),"");
+});
+
 test("priority sorting follows severity, retains the tree, and leaves missing values last", () => {
   const r = registry();
   const input = ["Низкий", "Высокий", "Средний", "Критический", "", "Особый", "Блокер"].map((priority, index) => ({
