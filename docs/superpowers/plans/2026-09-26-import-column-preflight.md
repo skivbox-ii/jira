@@ -50,6 +50,6 @@ and `build-excel-story-importer.js`; focused main/browser tests.
 - [x] Build importer only; verify diff and runtime. Run full suite with existing NODE_PATH.
 - [x] Independently review spec compliance and then code quality; fix with regressions.
 - [x] Personally inspect desktop/mobile in local browser with synthetic Excel fixtures.
-- [ ] Commit scoped changes, publish existing importer process, compare CDN bytes.
+- [x] Commit scoped changes, publish existing importer process, compare CDN bytes.
 - [ ] Personally verify Citrix mismatch preview, choices, cancel and local import;
   never create/update Jira. Record evidence, limitations and final backlog status.
