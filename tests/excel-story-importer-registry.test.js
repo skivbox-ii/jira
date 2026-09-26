@@ -13,6 +13,13 @@ const source = () => [
   { id: "Sheet:4", excelRowNumber: 4, summary: "New remark", status: "ready", sourceColumns: { "№": "20", "Статус": "Ready in Excel" } }
 ];
 
+test("registry uses current workbook deadline mapping without changing saved settings", () => {
+  const context = {mappingSettings:{columnMap:{deadline:"Old due"}},sourceColumnSettings:{columnMap:{deadline:"New due"}}};
+  const rows = registry().buildRows([{summary:"Remark",sourceColumns:{"Old due":"2026-10-01","Срок исполнения":"2026-11-01"}}],null,context);
+  assert.equal(rows[0].deadline, "2026-11-01");
+  assert.equal(context.mappingSettings.columnMap.deadline,"Old due");
+});
+
 test("registry keeps actual source ID and leaves uncreated Jira fields empty", () => {
   const rows = registry().buildRows(source());
   assert.equal(rows[0].remarkId, "744");

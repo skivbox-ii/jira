@@ -24,6 +24,7 @@ var MODULE_ORDER = [
   "registry.js",
   "icons.js",
   "due-date-sync-ui.js",
+  "column-preflight-ui.js",
   "teams.js",
   "teams-ui.js",
   "statistics.js",

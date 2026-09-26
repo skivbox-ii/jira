@@ -536,7 +536,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
-      var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:state.mappingSettings && state.mappingSettings.columnMap, journalRows:state.deadlineJournalRows};
+      var sourceSettings = Object.assign({}, state.mappingSettings || {}, state.sourceColumnSettings || {});
+      var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:sourceSettings.columnMap, journalRows:state.deadlineJournalRows};
       if (fullReport && fullReport.deadlineReferenceDate && fullReport.deadlineReferenceDate !== moscowToday()) fullReport=scopedReport=null;
       if (!fullReport) fullReport = activity.summarize(state.rows || [],state.teams || [],options);
       var facets = activity.componentFacets(fullReport);

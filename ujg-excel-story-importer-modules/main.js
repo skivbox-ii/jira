@@ -1055,6 +1055,8 @@ define("_ujgESI_main", [
       sourceFileBuffer: null,
       sourceFileName: "",
       sourceWorkbook: null,
+      sourceColumnSettings: null,
+      pendingImport: null,
       sheetNames: [],
       sheetPickerOpen: false,
       exportBuffer: null,
@@ -1087,6 +1089,7 @@ define("_ujgESI_main", [
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
+    var fileReadSeq = 0;
     var epicSeq = 0;
     var dialogEpicSeq = 0;
     var projectEpics = [];
@@ -1132,7 +1135,7 @@ define("_ujgESI_main", [
           state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
       closeUserPicker();
       closeEpicPicker();
-      dueDateSync.open(state.rows, {columnMap:copyColumnMap(state.mappingSettings.columnMap)});
+      dueDateSync.open(state.rows, {columnMap:copyColumnMap(sourceImportSettings().columnMap)});
     }
 
     function onOpenComponentSync() {
@@ -1390,9 +1393,13 @@ define("_ujgESI_main", [
       state.syncSummary = "";
     }
 
+    function sourceImportSettings() {
+      return Object.assign({}, state.mappingSettings, state.sourceColumnSettings || {});
+    }
+
     function parseLoadedWorkbook() {
       invalidateActivityHistory();
-      var parsed = parser.parseWorkbook(state.sourceWorkbook, state.mappingSettings);
+      var parsed = parser.parseWorkbook(state.sourceWorkbook, sourceImportSettings());
       excelRows = (parsed.rows || []).map(copyRow);
       if (state.viewMode === "excel") state.rows = excelRows;
       state.parseMeta = {
@@ -1429,7 +1436,9 @@ define("_ujgESI_main", [
     }
 
   function exportColumnNames(settings, canonicalName, mappingKey) {
+    if (settings && settings.columnBindings && settings.columnBindings[mappingKey] === null) return [];
     var out = [canonicalName];
+    if (settings && settings.headerRowNumber) return out;
     var mapped = settings && settings.columnMap && settings.columnMap[mappingKey] != null
       ? String(settings.columnMap[mappingKey]).trim()
       : "";
@@ -1455,16 +1464,18 @@ define("_ujgESI_main", [
       var values = {};
       var comments = {};
       var createdKey = row && row.createdKey ? issueKeyFromRow(row) : "";
-      if (createdKey) values[jiraColumnName()] = createdKey;
-      if (nonBlank(synced[jiraColumnName()])) values[jiraColumnName()] = synced[jiraColumnName()];
+      if (!(settings.columnBindings && settings.columnBindings.jira === null)) {
+        if (createdKey) values[jiraColumnName()] = createdKey;
+        if (nonBlank(synced[jiraColumnName()])) values[jiraColumnName()] = synced[jiraColumnName()];
+      }
       setExportValue(values, settings, "Статус в Jira", "statusInJira", syncedValue(synced, "Статус в Jira"));
       setExportValue(values, settings, "Исполнитель в Jira", "assigneeInJira", syncedValue(synced, "Исполнитель в Jira"));
       setExportValue(values, settings, "Спринт", "sprintInJira", syncedValue(synced, "Спринт"));
-      if (row && row.ownerEdited) {
+      if (row && row.ownerEdited && !(settings.columnBindings && settings.columnBindings.owner === null)) {
         var ownerColumn = settings && settings.columnMap && settings.columnMap.owner != null
           ? String(settings.columnMap.owner).trim()
           : "";
-        values[ownerColumn || "Ответственный"] = row.sourceColumns && row.sourceColumns["Ответственный"] != null
+        values[settings.headerRowNumber ? "Ответственный" : ownerColumn || "Ответственный"] = row.sourceColumns && row.sourceColumns["Ответственный"] != null
           ? String(row.sourceColumns["Ответственный"])
           : "";
       }
@@ -1792,6 +1803,7 @@ define("_ujgESI_main", [
     }
 
     function summaryColumnName() {
+      if (state.sourceColumnSettings) return config.SUMMARY_COLUMN || "Замечание";
       var map = state.mappingSettings && state.mappingSettings.columnMap ? state.mappingSettings.columnMap : {};
       return String(map.summary || config.SUMMARY_COLUMN || "Замечание").trim();
     }
@@ -2576,40 +2588,113 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      var seq = ++fileReadSeq;
+      if (createInFlight) return;
       if (!closeDueDateSyncForContextChange()) return;
-      invalidateActivityHistory();
-      if (state.syncLoading) {
-        syncSeq += 1;
-        state.syncLoading = false;
-      }
-      if (state.viewMode !== "excel") onViewModeChange("excel");
       state.loading = true;
       state.error = "";
-      state.sourceFileBuffer = null;
-      state.sourceFileName = file && file.name != null ? String(file.name) : "";
-      state.sourceWorkbook = null;
-      state.sheetNames = [];
-      state.sheetPickerOpen = false;
-      state.createDialog = null;
-      resetExportState();
-      closeEpicPicker();
-      closeUserPicker();
-      closeIssueTypePicker();
+      state.pendingImport = null;
       render();
       readInputWorkbook(file).then(function(result) {
-        state.sourceFileBuffer = result.buffer;
-        state.sourceWorkbook = result.workbook;
-        state.sheetNames = result.workbook && Array.isArray(result.workbook.SheetNames)
-          ? result.workbook.SheetNames.map(function(name) { return String(name); })
-          : [];
-        parseLoadedWorkbook();
+        if (seq !== fileReadSeq) return;
+        var settings = normalizeMappingSettings(state.mappingSettings);
+        state.pendingImport = {fileName:String(file.name || ""),buffer:result.buffer,workbook:result.workbook,
+          settings:settings,remember:true,report:null,error:""};
         state.loading = false;
-        render();
+        if (parser.inspectWorkbook) {
+          inspectPendingImport();
+          if (!state.pendingImport.report || state.pendingImport.report.needsReview) { render(); return; }
+        }
+        commitPendingImport(false);
       }).then(null,
         function(err) {
+          if (seq !== fileReadSeq) return;
           setError("Не удалось прочитать Excel: " + (err && err.message ? err.message : "unknown error"));
         }
       );
+    }
+
+    function inspectPendingImport() {
+      var pending = state.pendingImport;
+      if (!pending) return;
+      pending.error = "";
+      try { pending.report = parser.inspectWorkbook(pending.workbook, pending.settings); }
+      catch (err) { pending.report = null; pending.error = "Не удалось проверить колонки: " + err.message; }
+    }
+
+    function onImportColumnChoice(key, index) {
+      var pending = state.pendingImport, report = pending && pending.report;
+      if (!report || !(report.fields || []).some(function(field) { return field.key === key; })) return;
+      var column = (report.columns || []).filter(function(col) { return col.index === index; })[0];
+      if (index !== null && !column) return;
+      pending.settings.columnBindings = Object.assign({}, pending.settings.columnBindings || {});
+      pending.settings.columnBindings[key] = column ? {header:column.header,occurrence:column.occurrence} : null;
+      if (column) pending.settings.columnMap[key] = column.header;
+      inspectPendingImport(); render();
+    }
+
+    function onImportSheetChange(name) {
+      var pending = state.pendingImport;
+      if (!pending || (pending.workbook.SheetNames || []).indexOf(name) < 0) return;
+      pending.settings.sheetName = name;
+      delete pending.settings.headerRowNumber;
+      inspectPendingImport(); render();
+    }
+
+    function onImportHeaderChange(row) {
+      var pending = state.pendingImport;
+      if (!pending || !Number.isInteger(Number(row)) || Number(row) < 1) return;
+      pending.settings.headerRowNumber = Number(row);
+      inspectPendingImport(); render();
+    }
+
+    function onCancelColumnImport() {
+      fileReadSeq += 1;
+      state.pendingImport = null; state.loading = false; render();
+    }
+
+    function commitPendingImport(confirmed) {
+      var pending = state.pendingImport;
+      if (!pending) return;
+      if (confirmed) {
+        inspectPendingImport();
+        if (!pending.report || !pending.report.canApply) { render(); return; }
+      }
+      var settings = Object.assign({}, pending.settings);
+      if (pending.report) {
+        settings.sheetName = pending.report.sheetName;
+        settings.headerRowNumber = pending.report.headerRowNumber;
+      }
+      var parsed;
+      try { parsed = parser.parseWorkbook(pending.workbook, settings); }
+      catch (err) {
+        pending.error = "Не удалось прочитать Excel: " + err.message;
+        if (!parser.inspectWorkbook) setError(pending.error); else render();
+        return;
+      }
+      // The previous workbook stays intact until the new one has parsed successfully.
+      invalidateActivityHistory(); resetExportState();
+      if (state.viewMode === "jira") registryRows = state.rows;
+      registrySeq += 1; state.registryLoading = false;
+      state.viewMode = "excel"; state.reportView = "registry";
+      state.sourceFileBuffer = pending.buffer; state.sourceFileName = pending.fileName;
+      state.sourceWorkbook = pending.workbook;
+      state.sourceColumnSettings = pending.report ? {columnMap:settings.columnMap,columnBindings:settings.columnBindings || {},
+        sheetName:settings.sheetName,headerRowNumber:settings.headerRowNumber,tableStart:settings.tableStart} : null;
+      state.sheetNames = (pending.workbook.SheetNames || []).map(String);
+      state.sheetPickerOpen = false; state.mappingEditorOpen = false;
+      state.createDialog = null; state.summaryDialog = null; state.descriptionDialog = null;
+      closeEpicPicker(); closeUserPicker(); closeIssueTypePicker();
+      excelRows = (parsed.rows || []).map(copyRow); state.rows = excelRows;
+      state.parseMeta = {sheetName:parsed.sheetName,headerRowNumber:parsed.headerRowNumber,headerColumns:parsed.headerColumns || {}};
+      state.pendingImport = null; state.loading = false; state.error = "";
+      if (confirmed && pending.remember) {
+        state.mappingSettings = normalizeMappingSettings(Object.assign({}, state.mappingSettings, {
+          columnMap:settings.columnMap,columnBindings:settings.columnBindings || {},sheetName:settings.sheetName,tableStart:settings.tableStart
+        }));
+        saveMappings({render:false});
+      }
+      render();
     }
 
     function onSubtasksChange(enabled) {
@@ -2635,6 +2720,10 @@ define("_ujgESI_main", [
         return;
       }
       state.mappingSettings.sheetName = nextSheetName;
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.sheetName = nextSheetName;
+        delete state.sourceColumnSettings.headerRowNumber;
+      }
       state.sheetPickerOpen = false;
       state.createDialog = null;
       state.error = "";
@@ -2682,6 +2771,13 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
+      if (state.mappingSettings.columnBindings) delete state.mappingSettings.columnBindings[key];
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.columnMap = Object.assign({}, state.sourceColumnSettings.columnMap);
+        state.sourceColumnSettings.columnMap[key] = value != null ? String(value) : "";
+        state.sourceColumnSettings.columnBindings = Object.assign({}, state.sourceColumnSettings.columnBindings);
+        delete state.sourceColumnSettings.columnBindings[key];
+      }
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
     }
@@ -2691,6 +2787,10 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
+        delete state.sourceColumnSettings.headerRowNumber;
+      }
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
     }
@@ -2698,6 +2798,10 @@ define("_ujgESI_main", [
     function onMappingSheetNameChange(value) {
       if (!closeDueDateSyncForContextChange()) return;
       state.mappingSettings.sheetName = copySheetName(value);
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.sheetName = state.mappingSettings.sheetName;
+        delete state.sourceColumnSettings.headerRowNumber;
+      }
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
     }
@@ -3033,7 +3137,8 @@ define("_ujgESI_main", [
           sheetName: state.parseMeta && state.parseMeta.sheetName,
           headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
-          rows: patchRowsForExport(state.rows, state.mappingSettings),
+          boundHeaderColumns: state.sourceColumnSettings && state.parseMeta ? state.parseMeta.headerColumns : undefined,
+          rows: patchRowsForExport(state.rows, sourceImportSettings()),
         })).then(function(buffer) {
           if (!active()) return;
           state.exportBuffer = buffer;
@@ -3137,6 +3242,7 @@ define("_ujgESI_main", [
       var confirmedWorkbook = state.sourceWorkbook;
       var confirmedBuffer = state.sourceFileBuffer;
       var confirmedFileName = state.sourceFileName;
+      var confirmedFileReadSeq = fileReadSeq;
       var previousStatus = row.status;
       var previousErrors = row.errors;
       var childCreateStarted = false;
@@ -3144,7 +3250,7 @@ define("_ujgESI_main", [
         return dialog.scopeProjectKey !== state.projectKey || state.epicKey !== confirmedEpicKey ||
           state.viewMode !== confirmedViewMode || state.rows !== confirmedRows || state.rows[dialog.rowIndex] !== row ||
           state.sourceWorkbook !== confirmedWorkbook || state.sourceFileBuffer !== confirmedBuffer ||
-          state.sourceFileName !== confirmedFileName || state.loading || issueKeyFromRow(row) !== parentKey;
+          state.sourceFileName !== confirmedFileName || fileReadSeq !== confirmedFileReadSeq || state.loading || issueKeyFromRow(row) !== parentKey;
       }
       function releaseStale() {
         createInFlight = false;
@@ -3898,6 +4004,12 @@ define("_ujgESI_main", [
       onSelectAllDueDateSync: function(selected) { if (dueDateSync) dueDateSync.selectAll(selected); },
       onConfirmDueDateSync: function() { if (dueDateSync) dueDateSync.confirm(); },
       onViewModeChange: onViewModeChange,
+      onImportColumnChoice: onImportColumnChoice,
+      onImportSheetChange: onImportSheetChange,
+      onImportHeaderChange: onImportHeaderChange,
+      onImportRememberChange: function(value) { if (state.pendingImport) state.pendingImport.remember = !!value; },
+      onCancelColumnImport: onCancelColumnImport,
+      onConfirmColumnImport: function() { commitPendingImport(true); },
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
       onActivityDateChange: function(date) {

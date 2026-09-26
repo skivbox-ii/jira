@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi) {
   "use strict";
 
   var $root;
@@ -8,6 +8,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var grid;
   var activityView;
   var dueDateView, $dueHost, componentView, $componentHost;
+  var columnPreflightView, $columnPreflightHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
@@ -92,6 +93,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function init(container, svc) {
+    if (columnPreflightView) columnPreflightView.destroy();
+    if ($columnPreflightHost) $columnPreflightHost.remove();
     if (activityView && activityView.destroy) activityView.destroy();
     if (dueDateView) dueDateView.destroy();
     if ($dueHost) $dueHost.remove();
@@ -105,6 +108,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
     componentView = dueDateSyncUi ? dueDateSyncUi.create({kind:"component"}) : null;
     $componentHost = $("<div/>").addClass("ujg-esi-component-sync-mount");
+    columnPreflightView = columnPreflightUi ? columnPreflightUi.create() : null;
+    $columnPreflightHost = $("<div/>").addClass("ujg-esi-column-preflight-mount");
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
@@ -1827,6 +1832,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     if ($dueHost) $dueHost.detach();
+    if ($columnPreflightHost) $columnPreflightHost.detach();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -1903,6 +1909,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     restoreScrollState(scrollState);
     appendRowOwnerPopover($root, s);
     renderDueDateSync(s);
+    if (columnPreflightView) {
+      $root.append($columnPreflightHost);
+      columnPreflightView.render($columnPreflightHost,s,services);
+    }
   }
 
   function renderDueDateSync(state) {

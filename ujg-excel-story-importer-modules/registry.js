@@ -60,7 +60,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     var result = [];
     now = now == null ? Date.now() : now;
     context = context || {};
-    var settings = context.mappingSettings || {};
+    var settings = Object.assign({}, context.mappingSettings || {}, context.sourceColumnSettings || {});
     (rows || []).forEach(function(row, index) {
       var cols = row.sourceColumns || {};
       var deadline = deadlines && deadlines.resolve ? deadlines.resolve({sourceColumns:cols}, {columnMap:settings.columnMap}) : null;

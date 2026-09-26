@@ -857,6 +857,50 @@ test("owner edit invalidates a pending export so its late result cannot replace 
   assert.equal(patches[1].rows[0].values["Ответственный"], "");
 });
 
+test("preflight export uses chosen physical owner occurrence, not another identical header", async () => {
+  const patches=[];
+  const app=await loadImporter([{excelRowNumber:2,jiraKey:"TEST-1",sourceColumns:{"Ответственный":"Selected"},ownerEdited:true}],{
+    getIssuesByKeys:()=>Promise.resolve({issues:[{key:"TEST-1",fields:{summary:"Story"}}]})
+  },null,{patchWorkbook:(_,p)=>{patches.push(plain(p));return Promise.resolve(new ArrayBuffer(1));}});
+  app.state.sourceColumnSettings={headerRowNumber:1,columnMap:{owner:"Owner"},columnBindings:{owner:{header:"Owner",occurrence:1}}};
+  app.state.parseMeta.headerColumns={"Ответственный":3};
+  app.callbacks.onSyncJira();await flush();await flush();
+  assert.equal(patches[0].rows[0].values["Ответственный"],"Selected");
+  assert.equal(patches[0].rows[0].values.Owner,undefined);
+});
+
+test("remark editor uses current workbook summary instead of old saved column", async () => {
+  const app=await loadImporter([{summary:"Chosen summary",sourceColumns:{"Old summary":"Wrong text","Замечание":"Chosen summary"}}]);
+  app.state.mappingSettings.columnMap.summary="Old summary";
+  app.state.sourceColumnSettings={columnMap:{summary:"New summary"},headerRowNumber:1};
+  app.callbacks.onRowImproveRemark(0);
+  assert.equal(app.state.remarkDialog.beforeText,"Chosen summary");
+});
+
+test("preflight export never writes explicitly skipped Jira columns", async () => {
+  const patches=[];
+  const app=await loadImporter([{excelRowNumber:2,jiraKey:"TEST-1",createdKey:"TEST-1",sourceColumns:{}}],{
+    getIssuesByKeys:()=>Promise.resolve({issues:[{key:"TEST-1",fields:{summary:"Story",status:{name:"Done"},assignee:{displayName:"Ann"}}}]})
+  },null,{patchWorkbook:(_,p)=>{patches.push(plain(p));return Promise.resolve(new ArrayBuffer(1));}});
+  app.state.sourceColumnSettings={headerRowNumber:1,columnMap:{},columnBindings:{jira:null,statusInJira:null,assigneeInJira:null,sprintInJira:null}};
+  app.callbacks.onSyncJira();await flush();await flush();
+  assert.deepEqual(patches[0].rows,[]);
+});
+
+test("preflight export patches only the selected duplicate Jira status in worksheet XML", async () => {
+  const patcher=loadAmdModule(path.join(MODULE_DIR,"xlsx-patcher.js"),{_ujgESI_config:{}});
+  const xml='<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Статус в Jira</t></is></c><c r="B1" t="inlineStr"><is><t>Статус в Jira</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Preserve</t></is></c><c r="B2" t="inlineStr"><is><t>Old</t></is></c></row></sheetData></worksheet>';
+  let output;
+  const app=await loadImporter([{excelRowNumber:2,jiraKey:"TEST-1",sourceColumns:{}}],{
+    getIssuesByKeys:()=>Promise.resolve({issues:[{key:"TEST-1",fields:{summary:"Story",status:{name:"Done"}}}]})
+  },null,{patchWorkbook:(_,p)=>{output=patcher.patchWorksheetXml(xml,p);return Promise.resolve(new ArrayBuffer(1));}});
+  app.state.sourceColumnSettings={headerRowNumber:1,columnMap:{statusInJira:"Статус в Jira"},columnBindings:{statusInJira:{header:"Статус в Jira",occurrence:1}}};
+  app.state.parseMeta={headerRowNumber:1,headerColumns:{"Статус в Jira":2}};
+  app.callbacks.onSyncJira();await flush();await flush();
+  assert.match(output,/<c r="A2"[^>]*><is><t>Preserve<\/t>/);
+  assert.match(output,/<c r="B2"[^>]*><is><t>Done<\/t>/);
+});
+
 test("modal project override creates Story in the chosen project", async function () {
   const calls = [];
   const app = await loadImporter([{ summary: "Remark", sourceColumns: {} }], {}, {

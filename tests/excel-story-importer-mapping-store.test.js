@@ -188,3 +188,16 @@ test("mapping store keeps draft mapping rows with empty Jira value", async funct
   assert.deepEqual(Object.assign({}, loaded.moduleComponentMap), { "Новый модуль": "" });
   assert.deepEqual(Object.assign({}, loaded.priorityMap), { "Новое значение": "" });
 });
+
+test("mapping store remembers validated bindings without header row or input mutation", async () => {
+  const localStorage = createLocalStorage();
+  const store = loadStore({},localStorage,{location:{search:""}}).create();
+  const bindings = {remarkId:{header:" Код ",occurrence:1},jira:null,owner:{header:"Owner",occurrence:-1},module:{header:123,occurrence:0},other:{header:"X",occurrence:0}};
+  const saved = await store.save({columnBindings:bindings,headerRowNumber:9});
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.columnBindings)),{remarkId:{header:"Код",occurrence:1},jira:null});
+  assert.equal(saved.headerRowNumber,undefined);
+  assert.equal(bindings.remarkId.header," Код ");
+  const loaded = await store.load();
+  assert.deepEqual(JSON.parse(JSON.stringify(loaded.columnBindings)),{remarkId:{header:"Код",occurrence:1},jira:null});
+  assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.headerRowNumber,undefined);
+});

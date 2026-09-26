@@ -594,6 +594,22 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyColumnBindings(input) {
+    var source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+    var out = {};
+    Object.keys(config.COLUMN_MAP || {}).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+      var binding = source[key];
+      if (binding === null) { out[key] = null; return; }
+      if (!binding || typeof binding !== "object" || Array.isArray(binding)) return;
+      var header = typeof binding.header === "string" ? binding.header.replace(/\s+/g, " ").trim() : "";
+      if (header && Number.isInteger(binding.occurrence) && binding.occurrence >= 0) {
+        out[key] = { header: header, occurrence: binding.occurrence };
+      }
+    });
+    return out;
+  }
+
   function copyTableStart(input) {
     var defaults = config.TABLE_START || {};
     var source = input && typeof input === "object" ? input : {};
@@ -655,6 +671,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
+      columnBindings: {},
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
       storyAssigneeId: "",
@@ -681,6 +698,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       columnMap: hasInput && input.columnMap && typeof input.columnMap === "object"
         ? copyColumnMap(input.columnMap)
         : defaults.columnMap,
+      columnBindings: hasInput ? copyColumnBindings(input.columnBindings) : defaults.columnBindings,
       tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,
@@ -1260,17 +1278,25 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return String(value).replace(/\s+/g, " ").trim();
   }
 
-  function sheetRows(sheet, raw) {
+  function sheetRows(sheet, raw, includeHidden) {
     if (!sheet) return [];
     var hiddenRows = sheet["!rows"] || [];
     function visibleRows(rows) {
       return (rows || []).map(function(row, index) {
-        return hiddenRows[index] && hiddenRows[index].hidden ? [] : row;
+        return !includeHidden && hiddenRows[index] && hiddenRows[index].hidden ? [] : row;
       });
     }
     if (Array.isArray(sheet.__rows)) return visibleRows(sheet.__rows);
     if (typeof XLSX !== "undefined" && XLSX.utils && XLSX.utils.sheet_to_json) {
-      return visibleRows(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: !!raw, defval: "" }));
+      var rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: !!raw, defval: "" });
+      if (sheet["!ref"] && XLSX.utils.decode_range) {
+        var start = XLSX.utils.decode_range(sheet["!ref"]).s;
+        rows = rows.map(function(row) {
+          return Array(start.c).fill("").concat(row || []);
+        });
+        rows = Array(start.r).fill(null).map(function() { return []; }).concat(rows);
+      }
+      return visibleRows(rows);
     }
     return [];
   }
@@ -1307,6 +1333,8 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return {
       sheetName: source.sheetName != null && String(source.sheetName).trim() ? String(source.sheetName).trim() : "",
       columnMap: columnMap,
+      columnBindings: source.columnBindings && typeof source.columnBindings === "object" ? source.columnBindings : {},
+      headerRowNumber: Number.isInteger(source.headerRowNumber) && source.headerRowNumber > 0 ? source.headerRowNumber : 0,
       tableStart: {
         headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
           ? String(source.tableStart.headerMarker).trim()
@@ -1333,14 +1361,17 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return text;
   }
 
-  function findHeader(rows, settings) {
+  function findHeader(rows, settings, boundSummary) {
     var i;
     var j;
-    var marker = settings && settings.tableStart ? cellText(settings.tableStart.headerMarker) : config.SUMMARY_COLUMN;
+    var marker = boundSummary ? cellText(boundSummary.header)
+      : settings && settings.tableStart ? cellText(settings.tableStart.headerMarker) : config.SUMMARY_COLUMN;
     for (i = 0; i < rows.length; i += 1) {
+      var occurrence = 0;
       for (j = 0; j < (rows[i] || []).length; j += 1) {
         if (cellText(rows[i][j]) === marker) {
-          return { rowIndex: i, summaryIndex: j };
+          if (!boundSummary || occurrence === boundSummary.occurrence) return { rowIndex: i, summaryIndex: j };
+          occurrence += 1;
         }
       }
     }
@@ -1439,6 +1470,129 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       "Срок выполнения", "Срок", "Планируемая дата устранения"].indexOf(base) !== -1;
   }
 
+  var FIELD_LABELS = {
+    remarkId: "ID", summary: "Замечание", jira: "Jira", owner: "Ответственный",
+    module: "Модуль", priority: "Приоритет", statusInJira: "Статус в Jira",
+    assigneeInJira: "Исполнитель в Jira", sprintInJira: "Спринт", deadline: "Срок исполнения",
+  };
+  var REPORT_LABELS = {remarkId:"ID замечания",jira:"Ключ Jira"};
+
+  function columnLetter(index) {
+    var value = index + 1, out = "";
+    while (value > 0) { value -= 1; out = String.fromCharCode(65 + value % 26) + out; value = Math.floor(value / 26); }
+    return out;
+  }
+
+  function fieldCandidates(key, settings) {
+    var expected = cellText(settings.columnMap[key]);
+    var aliases = key === "owner" && expected === "Ответственный" ? ["Ответственный от ТНТ"]
+      : key === "module" && expected === "Модуль" ? ["Компонент"]
+      : key === "remarkId" && expected === "ID" ? ["№", "номер", "Номер замечания"]
+      : key === "deadline" && expected === "Срок" ? ["Срок исполнения", "Срок исполнения замечания", "Срок устранения", "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения", "Срок выполнения", "Планируемая дата устранения"] : [];
+    return [expected].concat(aliases);
+  }
+
+  function inspectWorkbook(workbook, options) {
+    var settings = parserSettings(options);
+    var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames.map(String) : [];
+    var name = settings.sheetName || "";
+    var sheet = null, rows = [], header = null, error = "";
+    if (name && sheetNames.indexOf(name) === -1) error = 'Лист "' + name + '" не найден';
+    else {
+      for (var s = 0; s < (name ? 1 : sheetNames.length); s += 1) {
+        var candidate = name || sheetNames[s];
+        var candidateSheet = workbook.Sheets && workbook.Sheets[candidate];
+        var candidateRows = sheetRows(candidateSheet, false, true);
+        var summaryBinding = settings.columnBindings.summary;
+        var found = settings.headerRowNumber
+          ? {rowIndex:settings.headerRowNumber - 1,summaryIndex:0}
+          : summaryBinding && typeof summaryBinding === "object"
+            ? findHeader(candidateRows, settings, summaryBinding)
+            : findHeader(candidateRows, settings);
+        if (found && candidateRows[found.rowIndex]) {
+          name = candidate; sheet = candidateSheet; rows = candidateRows; header = found; break;
+        }
+      }
+      if (!header) error = 'Колонка "' + String(settings.tableStart.headerMarker || config.SUMMARY_COLUMN) + '" не найдена';
+    }
+    var columns = [], fields = [], counts = {total:0,visible:0,hidden:0};
+    if (header) {
+      var headerRow = rows[header.rowIndex] || [], occurrences = {};
+      headerRow.forEach(function(value, index) {
+        var text = cellText(value);
+        if (!text) return;
+        var occurrence = occurrences[text] || 0;
+        occurrences[text] = occurrence + 1;
+        columns.push({index:index,header:text,letter:columnLetter(index),occurrence:occurrence,examples:[],nonEmptyCount:0});
+      });
+    }
+    Object.keys(FIELD_LABELS).forEach(function(key) {
+      var binding = settings.columnBindings[key], explicit = Object.prototype.hasOwnProperty.call(settings.columnBindings,key);
+      var matches = [];
+      if (explicit && binding === null) fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:key === "summary",selectedIndex:null,status:"skipped"});
+      else {
+        if (explicit && binding && typeof binding === "object") matches = columns.filter(function(col) {
+          return col.header === cellText(binding.header) && col.occurrence === binding.occurrence;
+        });
+        else if (!explicit) {
+          var candidates = fieldCandidates(key, settings);
+          matches = columns.filter(function(col) { return col.header === candidates[0]; });
+          if (!matches.length) matches = columns.filter(function(col) { return candidates.slice(1).indexOf(col.header) !== -1; });
+        }
+        var chosen = matches.length === 1 ? matches[0] : null;
+        fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:key === "summary",
+          selectedIndex:chosen ? chosen.index : null,
+          status:matches.length > 1 ? "ambiguous" : !chosen ? "missing" : "matched"});
+      }
+    });
+    fields.forEach(function(field) {
+      if (field.selectedIndex != null && fields.some(function(other) { return other !== field && other.selectedIndex === field.selectedIndex; })) field.status = "conflict";
+    });
+    if (header) {
+      var summary = fields.filter(function(field) { return field.key === "summary"; })[0];
+      if (summary.selectedIndex != null) {
+        for (var i = header.rowIndex + 1; i < rows.length; i += 1) {
+          if (!cellText((rows[i] || [])[summary.selectedIndex])) continue;
+          counts.total += 1;
+          if (sheet["!rows"] && sheet["!rows"][i] && sheet["!rows"][i].hidden) counts.hidden += 1;
+          else {
+            counts.visible += 1;
+            columns.forEach(function(column) {
+              var sample = cellText((rows[i] || [])[column.index]);
+              if (!sample) return;
+              column.nonEmptyCount += 1;
+              if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
+            });
+          }
+        }
+      } else {
+        for (var sampleRow = header.rowIndex + 1; sampleRow < rows.length; sampleRow += 1) {
+          if (sheet["!rows"] && sheet["!rows"][sampleRow] && sheet["!rows"][sampleRow].hidden) continue;
+          columns.forEach(function(column) {
+            var sample = cellText((rows[sampleRow] || [])[column.index]);
+            if (!sample) return;
+            column.nonEmptyCount += 1;
+            if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
+          });
+        }
+      }
+    }
+    fields.forEach(function(field) {
+      if (field.status !== "matched") return;
+      if (!fields.some(function(candidate) { return candidate.key === "summary" && candidate.selectedIndex != null; })) return;
+      var selectedColumn = columns.filter(function(column) { return column.index === field.selectedIndex; })[0];
+      if (selectedColumn && !selectedColumn.nonEmptyCount) field.status = "empty";
+    });
+    var needsReview = !!error || fields.some(function(field) { return field.status !== "matched" && field.status !== "skipped"; });
+    var canApply = !error && fields.every(function(field) {
+      return field.status === "matched" || field.status === "empty" || field.status === "skipped" && !field.required;
+    });
+    var report = {sheetName:name,headerRowNumber:header ? header.rowIndex + 1 : 0,sheetNames:sheetNames,
+      columns:columns,fields:fields,counts:counts,needsReview:needsReview,canApply:canApply};
+    if (error) report.error = error;
+    return report;
+  }
+
   function parseRows(sheetName, rows, header, settings, rawRows, date1904) {
     var headers = headerNames(rows[header.rowIndex], settings);
     var indexes = columnIndexes(headers);
@@ -1508,8 +1662,64 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     return { rows: out, headerColumns: indexes };
   }
 
+  function parseBoundRows(workbook, sheetName, sheet, report, settings) {
+    var rows = sheetRows(sheet), rawRows = sheetRows(sheet, true);
+    var headerIndex = report.headerRowNumber - 1;
+    var selected = {}, indexes = {}, names = {};
+    report.fields.forEach(function(field) {
+      if (field.selectedIndex != null && field.status !== "conflict") {
+        selected[field.selectedIndex] = field.key;
+        indexes[FIELD_LABELS[field.key]] = field.selectedIndex + 1;
+      }
+    });
+    report.columns.forEach(function(column) {
+      if (Object.prototype.hasOwnProperty.call(selected, column.index)) return;
+      var normalizedHeader = cellText(column.header).toLocaleLowerCase();
+      var semantic = Object.keys(FIELD_LABELS).some(function(key) {
+        return fieldCandidates(key, settings).concat(FIELD_LABELS[key]).some(function(name) {
+          return cellText(name).toLocaleLowerCase() === normalizedHeader;
+        });
+      }) || isDeadlineColumn(column.header, settings) || ["Исполнитель", "№", "номер", "номер замечания"].some(function(name) {
+        return name.toLocaleLowerCase() === normalizedHeader;
+      });
+      var name = semantic ? "Исходная колонка " + column.letter + ": " + column.header : column.header;
+      if (Object.prototype.hasOwnProperty.call(indexes, name)) name += " (колонка " + String(column.index + 1) + ")";
+      names[column.index] = name;
+      indexes[name] = column.index + 1;
+    });
+    var summaryField = report.fields.filter(function(field) { return field.key === "summary"; })[0];
+    var out = [];
+    for (var i = headerIndex + 1; i < rows.length; i += 1) {
+      var row = rows[i] || [];
+      var summary = cellText(row[summaryField.selectedIndex]);
+      if (!summary) continue;
+      var sourceColumns = {};
+      report.columns.forEach(function(column) {
+        var index = column.index, key = selected[index];
+        var name = key ? FIELD_LABELS[key] : names[index];
+        var value = key === "deadline"
+          ? deadlineCell((rawRows[i] || [])[index], !!(workbook.Workbook && workbook.Workbook.WBProps && workbook.Workbook.WBProps.date1904))
+          : cellText(row[index]);
+        if (name && value) sourceColumns[name] = value;
+      });
+      var jiraKey = extractJiraKey(sourceColumns[config.JIRA_COLUMN]);
+      out.push({id:sheetName + ":" + String(i + 1),sheetName:sheetName,excelRowNumber:i + 1,
+        summary:summary,sourceColumns:sourceColumns,sourceColumnIndexes:indexes,jiraKey:jiraKey,
+        alreadyLinked:!!jiraKey,status:jiraKey ? "linked" : "ready",createdKey:"",errors:[]});
+    }
+    return {sheetName:sheetName,headerRowNumber:report.headerRowNumber,headerColumns:indexes,rows:out};
+  }
+
   function parseWorkbook(workbook, options) {
     var settings = parserSettings(options);
+    if (settings.headerRowNumber || Object.keys(settings.columnBindings).length) {
+      var report = inspectWorkbook(workbook, options);
+      var summary = report.fields.filter(function(field) { return field.key === "summary"; })[0];
+      if (report.error) throw new Error(report.error);
+      if (summary.selectedIndex == null || summary.status === "conflict") throw new Error('Колонка "Замечание" не выбрана');
+      if (report.fields.some(function(field) { return field.status === "conflict"; })) throw new Error("Одна колонка выбрана для нескольких полей");
+      return parseBoundRows(workbook, report.sheetName, workbook.Sheets[report.sheetName], report, settings);
+    }
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
     var selectedSheetName = settings.sheetName;
     var scanSheetNames = selectedSheetName ? sheetNames.filter(function(name) {
@@ -1549,6 +1759,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   return {
     parseWorkbook: parseWorkbook,
+    inspectWorkbook: inspectWorkbook,
     extractJiraKey: extractJiraKey,
     cellText: cellText,
     columnIndexes: columnIndexes,
@@ -2705,10 +2916,16 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
 
   function headerColumnsForPatch(xml, options) {
     options = options || {};
-    return mergeColumns(
+    var columns = mergeColumns(
       headerColumnsFromWorksheetXml(xml, options.headerRowNumber || 0, options.sharedStrings || []),
       options.headerColumns || {}
     );
+    // Preflight bindings identify an exact physical column, including duplicate headers.
+    Object.keys(options.boundHeaderColumns || {}).forEach(function(name) {
+      var index = options.boundHeaderColumns[name];
+      if (Number.isInteger(index) && index > 0 && index <= 16384) columns[name] = index;
+    });
+    return columns;
   }
 
   function buildInlineCell(ref, value, styleAttr) {
@@ -3230,7 +3447,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     var result = [];
     now = now == null ? Date.now() : now;
     context = context || {};
-    var settings = context.mappingSettings || {};
+    var settings = Object.assign({}, context.mappingSettings || {}, context.sourceColumnSettings || {});
     (rows || []).forEach(function(row, index) {
       var cols = row.sourceColumns || {};
       var deadline = deadlines && deadlines.resolve ? deadlines.resolve({sourceColumns:cols}, {columnMap:settings.columnMap}) : null;
@@ -3590,6 +3807,261 @@ define("_ujgESI_dueDateSyncUi", ["jquery", "_ujgESI_icons"], function($, icon) {
         }
       },
       destroy:function(){if(doc){$(doc).off(eventNamespace);if(bodyOverflow !== null)doc.body.style.overflow=bodyOverflow;}if(host)host.empty().removeClass("ujg-esi-due-active");open=false;bodyOverflow=null;anchor=null;host=null;lastState=null;lastServices=null;}
+    };
+  }
+  return {create:create};
+});
+
+/* === Module: column-preflight-ui.js === */
+define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, icon) {
+  "use strict";
+  var LABELS = {matched:"Найдена",missing:"Не найдена",ambiguous:"Несколько совпадений",empty:"Значения пустые",skipped:"Не импортировать",conflict:"Колонка уже используется"};
+  var COLUMNS = [{id:"field",label:"Поле импортера",width:220},{id:"column",label:"Колонка Excel",width:330},
+    {id:"examples",label:"Примеры значений",width:300},{id:"status",label:"Проверка",width:210}];
+  function validPrefs(raw) {
+    var source=raw && typeof raw === "object" ? raw : {}, ids=COLUMNS.map(function(c) {return c.id;});
+    var order=Array.isArray(source.order) ? source.order.filter(function(id,i,a) {return ids.indexOf(id)>=0 && a.indexOf(id)===i;}) : [];
+    ids.forEach(function(id) {if(order.indexOf(id)<0)order.push(id);});
+    var widths={},visible={},filters={};
+    COLUMNS.forEach(function(c) {
+      var width=Number(source.widths && source.widths[c.id]);
+      widths[c.id]=Number.isFinite(width) && width>0 ? Math.max(100,Math.min(800,width)) : c.width;
+      visible[c.id]=!(source.visible && source.visible[c.id]===false);
+      if (source.filters && Array.isArray(source.filters[c.id])) filters[c.id]=source.filters[c.id].map(String);
+    });
+    if (!ids.some(function(id) {return visible[id];})) visible.field=true;
+    var sort=source.sort && ids.indexOf(source.sort.id)>=0 && /^(asc|desc)$/.test(source.sort.dir) ? {id:source.sort.id,dir:source.sort.dir}:null;
+    return {order:order,widths:widths,visible:visible,filters:filters,sort:sort};
+  }
+  function button(label, name) {
+    var node = $("<button type='button'/>").attr({title:label,"aria-label":label});
+    return name ? node.append(icon(name)) : node.text(label);
+  }
+  function columnLabel(column, report) {
+    var count=(report.columns || []).filter(function(other) {return other.header===column.header;}).length;
+    return column.letter+" · "+column.header+(count>1 ? " ("+(column.occurrence+1)+" из "+count+")":"");
+  }
+  function create() {
+    var host, state, services, opened = false, anchor, overflow, popup = null, popupAnchor = null;
+    var prefs=validPrefs(null), storageKey=null, resize=null, columnMenu=null;
+    function save() {try {window.localStorage.setItem(storageKey,JSON.stringify(prefs));} catch (_) {}}
+    function load() {
+      var key=String(state.preferencesStorageKey || "ujg-esi-state")+":column-preflight-ui";
+      if (key===storageKey) return;
+      storageKey=key;
+      try {prefs=validPrefs(JSON.parse(window.localStorage.getItem(key)));} catch (_) {prefs=validPrefs(null);}
+    }
+    function fieldValue(field,id,report) {
+      var column=(report.columns || []).filter(function(col) {return col.index===field.selectedIndex;})[0];
+      if (id==="field") return field.label;
+      if (id==="column") return column ? columnLabel(column,report) : field.status==="skipped" ? "Не импортировать":"Выбрать колонку";
+      if (id==="examples") return column ? (column.examples || []).join(" · ") : "";
+      return LABELS[field.status] || field.status;
+    }
+    function shownFields(report) {
+      var rows=(report.fields || []).filter(function(field) {return COLUMNS.every(function(c) {
+        return !Array.isArray(prefs.filters[c.id]) || prefs.filters[c.id].indexOf(fieldValue(field,c.id,report))>=0;
+      });});
+      if(prefs.sort) rows.sort(function(a,b) {return fieldValue(a,prefs.sort.id,report).localeCompare(fieldValue(b,prefs.sort.id,report),"ru",{numeric:true})*(prefs.sort.dir==="asc"?1:-1);});
+      return rows;
+    }
+    function closePopup() {
+      if (!popup) return false;
+      popup.remove(); popup = null;
+      if (popupAnchor && popupAnchor.isConnected) { popupAnchor.setAttribute("aria-expanded","false"); popupAnchor.focus(); }
+      return true;
+    }
+    function closeColumnMenu() {
+      if (!columnMenu) return;
+      columnMenu.remove();columnMenu=null;
+      host.find("[data-preflight-columns]").attr("aria-expanded","false");
+    }
+    function onKey(event) {
+      if (!opened) return;
+      if (event.key === "Escape") {
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (columnMenu) {columnMenu.remove();columnMenu=null;var trigger=host.find("[data-preflight-columns]")[0];if(trigger){trigger.setAttribute("aria-expanded","false");trigger.focus();}}
+        else if (!closePopup()) services.onCancelColumnImport();
+      }
+      if (event.key !== "Tab") return;
+      var scope = popup || host.find(".ujg-esi-preflight-dialog");
+      var items = scope.find("button:not(:disabled),input:not(:disabled),[tabindex='0']").filter(function() { return !$(this).closest("[hidden]").length; }).toArray();
+      if (!items.length) return;
+      var first=items[0], last=items[items.length-1];
+      if (event.shiftKey && (document.activeElement === first || !scope[0].contains(document.activeElement))) { last.focus();event.preventDefault(); }
+      else if (!event.shiftKey && (document.activeElement === last || !scope[0].contains(document.activeElement))) { first.focus();event.preventDefault(); }
+    }
+    function openPicker(trigger, title, choices, choose, skip) {
+      closeColumnMenu();closePopup(); popupAnchor=trigger;
+      trigger.setAttribute("aria-expanded","true");
+      popup=$("<div/>").addClass("ujg-esi-preflight-picker").attr({role:"dialog","aria-label":title});
+      popup.append($("<div/>").addClass("ujg-esi-preflight-picker-head").append($("<strong/>").text(title),button("Закрыть список","X").on("click",closePopup)));
+      var search=$("<input type='search'/>").attr({"data-preflight-search":"","aria-label":"Поиск колонки","placeholder":"Поиск"});
+      var list=$("<div/>").addClass("ujg-esi-preflight-options");
+      if (skip) popup.append(button("Не импортировать").attr("data-preflight-skip","").on("click",function() { closePopup();choose(null); }));
+      choices.forEach(function(choice) {
+        var node=button(choice.label).attr(choice.sheet ? "data-preflight-sheet-option":"data-preflight-option",String(choice.value));
+        if (choice.example) node.append($("<small/>").text(choice.example));
+        node.attr("data-search",(choice.label+" "+(choice.example || "")).toLocaleLowerCase("ru"));
+        node.on("click",function() { closePopup();choose(choice.value); });list.append(node);
+      });
+      var empty=$("<div/>").addClass("ujg-esi-preflight-empty").text("Совпадений нет").prop("hidden",!!choices.length);
+      search.on("input",function() {
+        var query=String(search.val()).toLocaleLowerCase("ru");var count=0;
+        list.children("button").each(function() { var match=$(this).attr("data-search").indexOf(query)>=0;$(this).prop("hidden",!match);if(match) count++; });
+        empty.prop("hidden",!!count);
+      });
+      popup.append(search,list,empty);host.append(popup);
+      var rect=trigger.getBoundingClientRect(), width=Math.min(560,window.innerWidth-24);
+      var height=Math.min(440,window.innerHeight-32), top=Math.max(12,Math.min(rect.bottom+5,window.innerHeight-height-12));
+      popup.css({width:width,left:Math.max(12,Math.min(rect.left,window.innerWidth-width-12)),top:top,maxHeight:height});search[0].focus();
+    }
+    function placePopup(trigger,width,maxHeight) {
+      var rect=trigger.getBoundingClientRect(), w=Math.min(width,window.innerWidth-24), h=Math.min(maxHeight,window.innerHeight-32);
+      popup.css({width:w,left:Math.max(12,Math.min(rect.left,window.innerWidth-w-12)),top:Math.max(12,Math.min(rect.bottom+5,window.innerHeight-h-12)),maxHeight:h});
+    }
+    function openFilter(trigger,id,report) {
+      closeColumnMenu();closePopup();popupAnchor=trigger;trigger.setAttribute("aria-expanded","true");
+      var title=COLUMNS.filter(function(c){return c.id===id;})[0].label;
+      var values=Array.from(new Set((report.fields || []).map(function(field){return fieldValue(field,id,report);}).concat(prefs.filters[id] || []))).sort(function(a,b){return a.localeCompare(b,"ru",{numeric:true});});
+      var draft=Array.isArray(prefs.filters[id]) ? prefs.filters[id].slice() : values.slice(), query="";
+      popup=$("<div/>").addClass("ujg-esi-preflight-picker ujg-esi-preflight-filter-menu").attr({role:"dialog","aria-label":"Фильтр: "+title});
+      popup.append($("<div/>").addClass("ujg-esi-preflight-picker-head").append($("<strong/>").text(title),button("Закрыть список","X").on("click",closePopup)));
+      popup.append(button("По возрастанию","ArrowDownAZ").on("click",function(){prefs.sort={id:id,dir:"asc"};save();draw();}));
+      popup.append(button("По убыванию","ArrowUpAZ").on("click",function(){prefs.sort={id:id,dir:"desc"};save();draw();}));
+      var search=$("<input type='search'/>").attr({"data-preflight-filter-search":"","aria-label":"Поиск значений",placeholder:"Поиск"});
+      var list=$("<div/>").addClass("ujg-esi-preflight-filter-values");
+      function matches(value){return value.toLocaleLowerCase("ru").indexOf(query)>=0;}
+      values.forEach(function(value){
+        var check=$("<input type='checkbox'/>").prop("checked",draft.indexOf(value)>=0).on("change",function(){
+          if(this.checked && draft.indexOf(value)<0)draft.push(value);
+          if(!this.checked)draft=draft.filter(function(item){return item!==value;});
+        });
+        var row=$("<div/>").addClass("ujg-esi-preflight-filter-value").attr("data-preflight-filter-value",id==="status" ? Object.keys(LABELS).filter(function(key){return LABELS[key]===value;})[0] || value : value);
+        row.append($("<label/>").append(check,$("<span/>").text(value || "—")),button("Только это значение").text("Только").on("click",function(){draft=[value];list.find("input").each(function(){this.checked=this===check[0];});}));
+        list.append(row);
+      });
+      search.on("input",function(){query=String(this.value).toLocaleLowerCase("ru");list.children().each(function(){this.hidden=!matches($(this).find("span").text());});});
+      popup.append(search,list);
+      var actions=$("<div/>").addClass("ujg-esi-preflight-filter-actions");
+      actions.append(button("Выбрать найденные").on("click",function(){list.children().each(function(){if(!this.hidden){var input=$(this).find("input")[0];if(!input.checked){input.checked=true;$(input).trigger("change");}}});}));
+      actions.append(button("Снять найденные").on("click",function(){list.children().each(function(){if(!this.hidden){var input=$(this).find("input")[0];if(input.checked){input.checked=false;$(input).trigger("change");}}});}));
+      actions.append(button("Применить").attr("data-preflight-filter-apply","").on("click",function(){prefs.filters[id]=draft;save();draw();}));
+      actions.append(button("Сбросить фильтр").attr("data-preflight-filter-reset","").on("click",function(){delete prefs.filters[id];save();draw();}));
+      popup.append(actions);host.append(popup);placePopup(trigger,440,510);search[0].focus();
+    }
+    function draw() {
+      var pending=state.pendingImport, report=pending.report || {}, focus=document.activeElement && document.activeElement.getAttribute("data-preflight-focus");
+      var old=host.find(".ujg-esi-preflight-scroll")[0], scroll=old ? {top:old.scrollTop,left:old.scrollLeft}:null;
+      closePopup();columnMenu=null;host.empty();
+      host.append($("<div/>").addClass("ujg-esi-due-overlay").on("wheel touchmove",function(e) {e.preventDefault();}));
+      var dialog=$("<section/>").addClass("ujg-esi-due-dialog ujg-esi-preflight-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"Соответствие колонок Excel",tabindex:"-1"});
+      dialog.append($("<header/>").addClass("ujg-esi-due-head").append($("<h2/>").text("Соответствие колонок Excel"),
+        button("Отменить импорт","X").attr("data-preflight-focus","cancel-icon").on("click",services.onCancelColumnImport)));
+      dialog.append($("<div/>").addClass("ujg-esi-preflight-file").text(pending.fileName));
+      var tools=$("<div/>").addClass("ujg-esi-preflight-meta");
+      tools.append($("<label/>").text("Лист ").append(button(report.sheetName || "Выбрать лист").attr({"data-preflight-sheet":"","data-preflight-focus":"sheet","aria-haspopup":"dialog"}).append(icon("ChevronDown")).on("click",function() {
+        openPicker(this,"Лист Excel",(report.sheetNames || pending.workbook && pending.workbook.SheetNames || []).map(function(name) {return {value:name,label:name,sheet:true};}),services.onImportSheetChange,false);
+      })));
+      tools.append($("<label/>").text("Строка заголовков ").append($("<input type='number' min='1' step='1'/>").attr({"data-preflight-header":"","data-preflight-focus":"header","aria-label":"Строка заголовков"})
+        .val(report.headerRowNumber || pending.settings.headerRowNumber || "").on("change",function() {services.onImportHeaderChange(Number(this.value));})));
+      dialog.append(tools);
+      var counts=report.counts || {};
+      var summary=(report.fields || []).filter(function(field){return field.key==="summary";})[0];
+      dialog.append($("<div/>").addClass("ujg-esi-preflight-counts").text(!summary || summary.selectedIndex==null
+        ? "Число замечаний не определено: колонка замечания не выбрана"
+        : "Замечаний: "+(counts.total || 0)+" · К импорту: "+(counts.visible || 0)+" · Скрыто в Excel: "+(counts.hidden || 0)));
+      if (pending.error || report.error) dialog.append($("<div/>").addClass("ujg-esi-due-error").attr("role","alert").text(pending.error || report.error));
+      var tableTools=$("<div/>").addClass("ujg-esi-preflight-table-tools");
+      Object.keys(prefs.filters).forEach(function(id){if(prefs.visible[id])return;var column=COLUMNS.filter(function(c){return c.id===id;})[0];
+        tableTools.append(button("Фильтр: "+column.label,"Funnel").addClass("ujg-esi-preflight-hidden-filter").on("click",function(){openFilter(this,id,report);}));});
+      if(Object.keys(prefs.filters).length)tableTools.append(button("Сбросить фильтры","FunnelX").on("click",function(){prefs.filters={};save();draw();}));
+      tableTools.append(button("Столбцы","Columns3").attr({"data-preflight-columns":"","aria-expanded":"false"}).on("click",function(){
+        if(columnMenu){columnMenu.remove();columnMenu=null;this.setAttribute("aria-expanded","false");return;}
+        closePopup();var trigger=this;trigger.setAttribute("aria-expanded","true");
+        columnMenu=$("<div/>").addClass("ujg-esi-preflight-columns-menu").attr({role:"group","aria-label":"Столбцы"});
+        COLUMNS.forEach(function(c){var check=$("<input type='checkbox'/>").attr("data-preflight-visible",c.id).prop("checked",prefs.visible[c.id]);
+          check.on("change",function(){prefs.visible[c.id]=this.checked;if(!COLUMNS.some(function(col){return prefs.visible[col.id];})){prefs.visible[c.id]=true;this.checked=true;return;}
+            save();draw();host.find("[data-preflight-columns]")[0].click();host.find('[data-preflight-visible="'+c.id+'"]').trigger("focus");});
+          columnMenu.append($("<label/>").append(check,$("<span/>").text(c.label)));});
+        columnMenu.append(button("Сбросить столбцы").on("click",function(){var filters=prefs.filters,sort=prefs.sort;prefs=validPrefs(null);prefs.filters=filters;prefs.sort=sort;save();draw();}));
+        tableTools.append(columnMenu);
+      }));
+      dialog.append(tableTools);
+      var scrollHost=$("<div/>").addClass("ujg-esi-preflight-scroll");
+      var table=$("<table/>").addClass("ujg-esi-preflight-table").attr("aria-label","Соответствия полей импорта");
+      var visible=prefs.order.filter(function(id){return prefs.visible[id];});
+      table.css("width",Math.max(1,visible.reduce(function(sum,id){return sum+prefs.widths[id];},0))+"px");
+      var colgroup=$("<colgroup/>").appendTo(table);
+      visible.forEach(function(id){colgroup.append($("<col/>").attr("data-column",id).css("width",prefs.widths[id]+"px"));});
+      var head=$("<tr/>");visible.forEach(function(id){
+        var column=COLUMNS.filter(function(c){return c.id===id;})[0], th=$("<th scope='col' draggable='true'/>").attr("data-column",id).css("width",prefs.widths[id]+"px");
+        th.append(button(column.label+(prefs.sort && prefs.sort.id===id ? prefs.sort.dir==="asc" ? " ↑":" ↓":"")).addClass("ujg-esi-preflight-header-sort")
+          .attr({"data-preflight-sort":id,"data-preflight-focus":"sort-"+id}).on("click",function(){prefs.sort={id:id,dir:prefs.sort && prefs.sort.id===id && prefs.sort.dir==="asc" ? "desc":"asc"};save();draw();}));
+        th.append(button("Фильтр: "+column.label,"Funnel").addClass("ujg-esi-preflight-header-filter"+(Array.isArray(prefs.filters[id]) ? " is-active":""))
+          .attr({"data-preflight-filter":id,"data-preflight-focus":"filter-"+id,"aria-expanded":"false"}).on("click",function(){openFilter(this,id,report);}));
+        th.append($("<span role='separator' tabindex='0'/>").addClass("ujg-esi-preflight-column-resize")
+          .attr({"data-preflight-resize":id,"data-preflight-focus":"resize-"+id,"aria-label":"Изменить ширину: "+column.label,"aria-orientation":"vertical"})
+          .on("keydown",function(e){if(e.key!=="ArrowLeft" && e.key!=="ArrowRight")return;e.preventDefault();prefs.widths[id]=Math.max(100,Math.min(800,prefs.widths[id]+(e.key==="ArrowRight"?10:-10)));save();draw();})
+          .on("pointerdown",function(e){resize={id:id,x:e.pageX,width:prefs.widths[id]};e.stopPropagation();e.preventDefault();}));
+        th.on("dragstart",function(e){if(resize){e.preventDefault();return;}e.originalEvent.dataTransfer.setData("text/plain",id);});
+        th.on("dragover",function(e){e.preventDefault();});
+        th.on("drop",function(e){e.preventDefault();var from=e.originalEvent.dataTransfer.getData("text/plain"),a=prefs.order.indexOf(from),b=prefs.order.indexOf(id);
+          if(a<0||b<0||a===b)return;prefs.order.splice(a,1);prefs.order.splice(b,0,from);save();draw();});
+        head.append(th);
+      });table.append($("<thead/>").append(head));
+      var body=$("<tbody/>");
+      shownFields(report).forEach(function(field) {
+        var column=(report.columns || []).filter(function(col) {return col.index === field.selectedIndex;})[0];
+        var caption=column ? columnLabel(column,report) : field.status === "skipped" ? "Не импортировать":"Выбрать колонку";
+        var choice=button(caption).addClass("ujg-esi-preflight-choice").attr({"data-preflight-field":field.key,"data-preflight-focus":field.key,"aria-haspopup":"dialog","aria-expanded":"false"}).append(icon("ChevronDown"));
+        choice.on("click",function() {
+          openPicker(this,field.label,(report.columns || []).map(function(col) {return {value:col.index,label:columnLabel(col,report),example:(col.examples || []).join(" · ")};}),function(index) {services.onImportColumnChoice(field.key,index);},!field.required);
+        });
+        var examples=$("<td/>");(column && column.examples || []).forEach(function(value) { examples.append($("<div/>").text(value)); });
+        if (column) examples.append($("<small/>").text("Заполнено: "+(column.nonEmptyCount || 0)));
+        var cells={field:$("<td/>").text(field.label+(field.required ? " *":"")),column:$("<td/>").append(choice),examples:examples,
+          status:$("<td/>").append($("<span/>").addClass("ujg-esi-preflight-status is-"+field.status).text(LABELS[field.status] || field.status))};
+        var row=$("<tr/>").attr("data-preflight-row",field.key);
+        visible.forEach(function(id){row.append(cells[id].attr("data-column",id).css("width",prefs.widths[id]+"px"));});body.append(row);
+      });
+      if(!body.children().length)body.append($("<tr/>").append($("<td/>").attr("colspan",visible.length).text("Нет строк по фильтрам")));
+      table.append(body);scrollHost.append(table);dialog.append(scrollHost);
+      var foot=$("<footer/>").addClass("ujg-esi-due-foot");
+      foot.append($("<label/>").append($("<input type='checkbox'/>").attr({"data-preflight-remember":"","data-preflight-focus":"remember"}).prop("checked",pending.remember).on("change",function() { services.onImportRememberChange(this.checked); })," Запомнить соответствия"));
+      foot.append($("<div/>").addClass("ujg-esi-preflight-actions").append(button("Отмена").attr("data-preflight-focus","cancel").on("click",services.onCancelColumnImport),
+        button("Применить и загрузить").addClass("ujg-esi-due-confirm").attr({"data-preflight-confirm":"","data-preflight-focus":"confirm"}).prop("disabled",!report.canApply).on("click",services.onConfirmColumnImport)));
+      dialog.append(foot);host.append(dialog);
+      if (scroll) {scrollHost[0].scrollTop=scroll.top;scrollHost[0].scrollLeft=scroll.left;}
+      var restore=host.find("[data-preflight-focus]").filter(function() {return $(this).attr("data-preflight-focus") === focus;})[0];
+      (restore || dialog[0]).focus();
+    }
+    function destroy() {
+      closePopup();if(columnMenu)columnMenu.remove();columnMenu=null;resize=null;$(document).off(".ujgColumnPreflight");
+      if (opened) {document.body.style.overflow=overflow;opened=false;}
+      if (host) host.empty();
+    }
+    return {
+      render:function(target, nextState, nextServices) {
+        host=target;state=nextState;services=nextServices;load();
+        if (!state.pendingImport) {
+          var wasOpen=opened;destroy();
+          if (wasOpen) {var back=anchor && anchor.isConnected ? anchor : document.querySelector(".ujg-esi-file");if(back) back.focus();}
+          return;
+        }
+        if (!opened) {
+          opened=true;anchor=document.activeElement;overflow=document.body.style.overflow;document.body.style.overflow="hidden";
+          $(document).on("keydown.ujgColumnPreflight",onKey).on("mousedown.ujgColumnPreflight",function(event) {
+            if (popup && !popup[0].contains(event.target) && popupAnchor !== event.target && !popupAnchor.contains(event.target)) closePopup();
+            if(columnMenu && !columnMenu[0].contains(event.target) && !$(event.target).closest("[data-preflight-columns]").length){columnMenu.remove();columnMenu=null;}
+          });
+          $(document).on("pointermove.ujgColumnPreflight",function(event){if(!resize)return;prefs.widths[resize.id]=Math.max(100,Math.min(800,resize.width+event.pageX-resize.x));
+            host.find('col[data-column="'+resize.id+'"],th[data-column="'+resize.id+'"],td[data-column="'+resize.id+'"]').css("width",prefs.widths[resize.id]+"px");
+            var ids=prefs.order.filter(function(id){return prefs.visible[id];});host.find(".ujg-esi-preflight-table").css("width",ids.reduce(function(sum,id){return sum+prefs.widths[id];},0)+"px");
+          }).on("pointerup.ujgColumnPreflight",function(){if(!resize)return;resize=null;save();draw();}).on("pointercancel.ujgColumnPreflight",function(){if(!resize)return;prefs.widths[resize.id]=resize.width;resize=null;draw();});
+        }
+        draw();
+      },destroy:destroy
     };
   }
   return {create:create};
@@ -6726,7 +7198,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
-      var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:state.mappingSettings && state.mappingSettings.columnMap, journalRows:state.deadlineJournalRows};
+      var sourceSettings = Object.assign({}, state.mappingSettings || {}, state.sourceColumnSettings || {});
+      var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:sourceSettings.columnMap, journalRows:state.deadlineJournalRows};
       if (fullReport && fullReport.deadlineReferenceDate && fullReport.deadlineReferenceDate !== moscowToday()) fullReport=scopedReport=null;
       if (!fullReport) fullReport = activity.summarize(state.rows || [],state.teams || [],options);
       var facets = activity.componentFacets(fullReport);
@@ -7635,7 +8108,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
 });
 
 /* === Module: rendering.js === */
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi) {
   "use strict";
 
   var $root;
@@ -7645,6 +8118,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var grid;
   var activityView;
   var dueDateView, $dueHost, componentView, $componentHost;
+  var columnPreflightView, $columnPreflightHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
@@ -7729,6 +8203,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function init(container, svc) {
+    if (columnPreflightView) columnPreflightView.destroy();
+    if ($columnPreflightHost) $columnPreflightHost.remove();
     if (activityView && activityView.destroy) activityView.destroy();
     if (dueDateView) dueDateView.destroy();
     if ($dueHost) $dueHost.remove();
@@ -7742,6 +8218,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
     componentView = dueDateSyncUi ? dueDateSyncUi.create({kind:"component"}) : null;
     $componentHost = $("<div/>").addClass("ujg-esi-component-sync-mount");
+    columnPreflightView = columnPreflightUi ? columnPreflightUi.create() : null;
+    $columnPreflightHost = $("<div/>").addClass("ujg-esi-column-preflight-mount");
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
@@ -9464,6 +9942,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     if ($dueHost) $dueHost.detach();
+    if ($columnPreflightHost) $columnPreflightHost.detach();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -9540,6 +10019,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     restoreScrollState(scrollState);
     appendRowOwnerPopover($root, s);
     renderDueDateSync(s);
+    if (columnPreflightView) {
+      $root.append($columnPreflightHost);
+      columnPreflightView.render($columnPreflightHost,s,services);
+    }
   }
 
   function renderDueDateSync(state) {
@@ -10630,6 +11113,8 @@ define("_ujgESI_main", [
       sourceFileBuffer: null,
       sourceFileName: "",
       sourceWorkbook: null,
+      sourceColumnSettings: null,
+      pendingImport: null,
       sheetNames: [],
       sheetPickerOpen: false,
       exportBuffer: null,
@@ -10662,6 +11147,7 @@ define("_ujgESI_main", [
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
+    var fileReadSeq = 0;
     var epicSeq = 0;
     var dialogEpicSeq = 0;
     var projectEpics = [];
@@ -10707,7 +11193,7 @@ define("_ujgESI_main", [
           state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
       closeUserPicker();
       closeEpicPicker();
-      dueDateSync.open(state.rows, {columnMap:copyColumnMap(state.mappingSettings.columnMap)});
+      dueDateSync.open(state.rows, {columnMap:copyColumnMap(sourceImportSettings().columnMap)});
     }
 
     function onOpenComponentSync() {
@@ -10965,9 +11451,13 @@ define("_ujgESI_main", [
       state.syncSummary = "";
     }
 
+    function sourceImportSettings() {
+      return Object.assign({}, state.mappingSettings, state.sourceColumnSettings || {});
+    }
+
     function parseLoadedWorkbook() {
       invalidateActivityHistory();
-      var parsed = parser.parseWorkbook(state.sourceWorkbook, state.mappingSettings);
+      var parsed = parser.parseWorkbook(state.sourceWorkbook, sourceImportSettings());
       excelRows = (parsed.rows || []).map(copyRow);
       if (state.viewMode === "excel") state.rows = excelRows;
       state.parseMeta = {
@@ -11004,7 +11494,9 @@ define("_ujgESI_main", [
     }
 
   function exportColumnNames(settings, canonicalName, mappingKey) {
+    if (settings && settings.columnBindings && settings.columnBindings[mappingKey] === null) return [];
     var out = [canonicalName];
+    if (settings && settings.headerRowNumber) return out;
     var mapped = settings && settings.columnMap && settings.columnMap[mappingKey] != null
       ? String(settings.columnMap[mappingKey]).trim()
       : "";
@@ -11030,16 +11522,18 @@ define("_ujgESI_main", [
       var values = {};
       var comments = {};
       var createdKey = row && row.createdKey ? issueKeyFromRow(row) : "";
-      if (createdKey) values[jiraColumnName()] = createdKey;
-      if (nonBlank(synced[jiraColumnName()])) values[jiraColumnName()] = synced[jiraColumnName()];
+      if (!(settings.columnBindings && settings.columnBindings.jira === null)) {
+        if (createdKey) values[jiraColumnName()] = createdKey;
+        if (nonBlank(synced[jiraColumnName()])) values[jiraColumnName()] = synced[jiraColumnName()];
+      }
       setExportValue(values, settings, "Статус в Jira", "statusInJira", syncedValue(synced, "Статус в Jira"));
       setExportValue(values, settings, "Исполнитель в Jira", "assigneeInJira", syncedValue(synced, "Исполнитель в Jira"));
       setExportValue(values, settings, "Спринт", "sprintInJira", syncedValue(synced, "Спринт"));
-      if (row && row.ownerEdited) {
+      if (row && row.ownerEdited && !(settings.columnBindings && settings.columnBindings.owner === null)) {
         var ownerColumn = settings && settings.columnMap && settings.columnMap.owner != null
           ? String(settings.columnMap.owner).trim()
           : "";
-        values[ownerColumn || "Ответственный"] = row.sourceColumns && row.sourceColumns["Ответственный"] != null
+        values[settings.headerRowNumber ? "Ответственный" : ownerColumn || "Ответственный"] = row.sourceColumns && row.sourceColumns["Ответственный"] != null
           ? String(row.sourceColumns["Ответственный"])
           : "";
       }
@@ -11367,6 +11861,7 @@ define("_ujgESI_main", [
     }
 
     function summaryColumnName() {
+      if (state.sourceColumnSettings) return config.SUMMARY_COLUMN || "Замечание";
       var map = state.mappingSettings && state.mappingSettings.columnMap ? state.mappingSettings.columnMap : {};
       return String(map.summary || config.SUMMARY_COLUMN || "Замечание").trim();
     }
@@ -12151,40 +12646,113 @@ define("_ujgESI_main", [
 
     function onFileChange(file) {
       if (!file) return;
+      var seq = ++fileReadSeq;
+      if (createInFlight) return;
       if (!closeDueDateSyncForContextChange()) return;
-      invalidateActivityHistory();
-      if (state.syncLoading) {
-        syncSeq += 1;
-        state.syncLoading = false;
-      }
-      if (state.viewMode !== "excel") onViewModeChange("excel");
       state.loading = true;
       state.error = "";
-      state.sourceFileBuffer = null;
-      state.sourceFileName = file && file.name != null ? String(file.name) : "";
-      state.sourceWorkbook = null;
-      state.sheetNames = [];
-      state.sheetPickerOpen = false;
-      state.createDialog = null;
-      resetExportState();
-      closeEpicPicker();
-      closeUserPicker();
-      closeIssueTypePicker();
+      state.pendingImport = null;
       render();
       readInputWorkbook(file).then(function(result) {
-        state.sourceFileBuffer = result.buffer;
-        state.sourceWorkbook = result.workbook;
-        state.sheetNames = result.workbook && Array.isArray(result.workbook.SheetNames)
-          ? result.workbook.SheetNames.map(function(name) { return String(name); })
-          : [];
-        parseLoadedWorkbook();
+        if (seq !== fileReadSeq) return;
+        var settings = normalizeMappingSettings(state.mappingSettings);
+        state.pendingImport = {fileName:String(file.name || ""),buffer:result.buffer,workbook:result.workbook,
+          settings:settings,remember:true,report:null,error:""};
         state.loading = false;
-        render();
+        if (parser.inspectWorkbook) {
+          inspectPendingImport();
+          if (!state.pendingImport.report || state.pendingImport.report.needsReview) { render(); return; }
+        }
+        commitPendingImport(false);
       }).then(null,
         function(err) {
+          if (seq !== fileReadSeq) return;
           setError("Не удалось прочитать Excel: " + (err && err.message ? err.message : "unknown error"));
         }
       );
+    }
+
+    function inspectPendingImport() {
+      var pending = state.pendingImport;
+      if (!pending) return;
+      pending.error = "";
+      try { pending.report = parser.inspectWorkbook(pending.workbook, pending.settings); }
+      catch (err) { pending.report = null; pending.error = "Не удалось проверить колонки: " + err.message; }
+    }
+
+    function onImportColumnChoice(key, index) {
+      var pending = state.pendingImport, report = pending && pending.report;
+      if (!report || !(report.fields || []).some(function(field) { return field.key === key; })) return;
+      var column = (report.columns || []).filter(function(col) { return col.index === index; })[0];
+      if (index !== null && !column) return;
+      pending.settings.columnBindings = Object.assign({}, pending.settings.columnBindings || {});
+      pending.settings.columnBindings[key] = column ? {header:column.header,occurrence:column.occurrence} : null;
+      if (column) pending.settings.columnMap[key] = column.header;
+      inspectPendingImport(); render();
+    }
+
+    function onImportSheetChange(name) {
+      var pending = state.pendingImport;
+      if (!pending || (pending.workbook.SheetNames || []).indexOf(name) < 0) return;
+      pending.settings.sheetName = name;
+      delete pending.settings.headerRowNumber;
+      inspectPendingImport(); render();
+    }
+
+    function onImportHeaderChange(row) {
+      var pending = state.pendingImport;
+      if (!pending || !Number.isInteger(Number(row)) || Number(row) < 1) return;
+      pending.settings.headerRowNumber = Number(row);
+      inspectPendingImport(); render();
+    }
+
+    function onCancelColumnImport() {
+      fileReadSeq += 1;
+      state.pendingImport = null; state.loading = false; render();
+    }
+
+    function commitPendingImport(confirmed) {
+      var pending = state.pendingImport;
+      if (!pending) return;
+      if (confirmed) {
+        inspectPendingImport();
+        if (!pending.report || !pending.report.canApply) { render(); return; }
+      }
+      var settings = Object.assign({}, pending.settings);
+      if (pending.report) {
+        settings.sheetName = pending.report.sheetName;
+        settings.headerRowNumber = pending.report.headerRowNumber;
+      }
+      var parsed;
+      try { parsed = parser.parseWorkbook(pending.workbook, settings); }
+      catch (err) {
+        pending.error = "Не удалось прочитать Excel: " + err.message;
+        if (!parser.inspectWorkbook) setError(pending.error); else render();
+        return;
+      }
+      // The previous workbook stays intact until the new one has parsed successfully.
+      invalidateActivityHistory(); resetExportState();
+      if (state.viewMode === "jira") registryRows = state.rows;
+      registrySeq += 1; state.registryLoading = false;
+      state.viewMode = "excel"; state.reportView = "registry";
+      state.sourceFileBuffer = pending.buffer; state.sourceFileName = pending.fileName;
+      state.sourceWorkbook = pending.workbook;
+      state.sourceColumnSettings = pending.report ? {columnMap:settings.columnMap,columnBindings:settings.columnBindings || {},
+        sheetName:settings.sheetName,headerRowNumber:settings.headerRowNumber,tableStart:settings.tableStart} : null;
+      state.sheetNames = (pending.workbook.SheetNames || []).map(String);
+      state.sheetPickerOpen = false; state.mappingEditorOpen = false;
+      state.createDialog = null; state.summaryDialog = null; state.descriptionDialog = null;
+      closeEpicPicker(); closeUserPicker(); closeIssueTypePicker();
+      excelRows = (parsed.rows || []).map(copyRow); state.rows = excelRows;
+      state.parseMeta = {sheetName:parsed.sheetName,headerRowNumber:parsed.headerRowNumber,headerColumns:parsed.headerColumns || {}};
+      state.pendingImport = null; state.loading = false; state.error = "";
+      if (confirmed && pending.remember) {
+        state.mappingSettings = normalizeMappingSettings(Object.assign({}, state.mappingSettings, {
+          columnMap:settings.columnMap,columnBindings:settings.columnBindings || {},sheetName:settings.sheetName,tableStart:settings.tableStart
+        }));
+        saveMappings({render:false});
+      }
+      render();
     }
 
     function onSubtasksChange(enabled) {
@@ -12210,6 +12778,10 @@ define("_ujgESI_main", [
         return;
       }
       state.mappingSettings.sheetName = nextSheetName;
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.sheetName = nextSheetName;
+        delete state.sourceColumnSettings.headerRowNumber;
+      }
       state.sheetPickerOpen = false;
       state.createDialog = null;
       state.error = "";
@@ -12257,6 +12829,13 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
+      if (state.mappingSettings.columnBindings) delete state.mappingSettings.columnBindings[key];
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.columnMap = Object.assign({}, state.sourceColumnSettings.columnMap);
+        state.sourceColumnSettings.columnMap[key] = value != null ? String(value) : "";
+        state.sourceColumnSettings.columnBindings = Object.assign({}, state.sourceColumnSettings.columnBindings);
+        delete state.sourceColumnSettings.columnBindings[key];
+      }
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
     }
@@ -12266,6 +12845,10 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
+        delete state.sourceColumnSettings.headerRowNumber;
+      }
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
     }
@@ -12273,6 +12856,10 @@ define("_ujgESI_main", [
     function onMappingSheetNameChange(value) {
       if (!closeDueDateSyncForContextChange()) return;
       state.mappingSettings.sheetName = copySheetName(value);
+      if (state.sourceColumnSettings) {
+        state.sourceColumnSettings.sheetName = state.mappingSettings.sheetName;
+        delete state.sourceColumnSettings.headerRowNumber;
+      }
       reparseLoadedWorkbookAfterMappingChange();
       saveMappings({ render: false });
     }
@@ -12608,7 +13195,8 @@ define("_ujgESI_main", [
           sheetName: state.parseMeta && state.parseMeta.sheetName,
           headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
-          rows: patchRowsForExport(state.rows, state.mappingSettings),
+          boundHeaderColumns: state.sourceColumnSettings && state.parseMeta ? state.parseMeta.headerColumns : undefined,
+          rows: patchRowsForExport(state.rows, sourceImportSettings()),
         })).then(function(buffer) {
           if (!active()) return;
           state.exportBuffer = buffer;
@@ -12712,6 +13300,7 @@ define("_ujgESI_main", [
       var confirmedWorkbook = state.sourceWorkbook;
       var confirmedBuffer = state.sourceFileBuffer;
       var confirmedFileName = state.sourceFileName;
+      var confirmedFileReadSeq = fileReadSeq;
       var previousStatus = row.status;
       var previousErrors = row.errors;
       var childCreateStarted = false;
@@ -12719,7 +13308,7 @@ define("_ujgESI_main", [
         return dialog.scopeProjectKey !== state.projectKey || state.epicKey !== confirmedEpicKey ||
           state.viewMode !== confirmedViewMode || state.rows !== confirmedRows || state.rows[dialog.rowIndex] !== row ||
           state.sourceWorkbook !== confirmedWorkbook || state.sourceFileBuffer !== confirmedBuffer ||
-          state.sourceFileName !== confirmedFileName || state.loading || issueKeyFromRow(row) !== parentKey;
+          state.sourceFileName !== confirmedFileName || fileReadSeq !== confirmedFileReadSeq || state.loading || issueKeyFromRow(row) !== parentKey;
       }
       function releaseStale() {
         createInFlight = false;
@@ -13473,6 +14062,12 @@ define("_ujgESI_main", [
       onSelectAllDueDateSync: function(selected) { if (dueDateSync) dueDateSync.selectAll(selected); },
       onConfirmDueDateSync: function() { if (dueDateSync) dueDateSync.confirm(); },
       onViewModeChange: onViewModeChange,
+      onImportColumnChoice: onImportColumnChoice,
+      onImportSheetChange: onImportSheetChange,
+      onImportHeaderChange: onImportHeaderChange,
+      onImportRememberChange: function(value) { if (state.pendingImport) state.pendingImport.remember = !!value; },
+      onCancelColumnImport: onCancelColumnImport,
+      onConfirmColumnImport: function() { commitPendingImport(true); },
       onLoadRegistry: onLoadRegistry,
       onLoadActivityHistory: onLoadActivityHistory,
       onActivityDateChange: function(date) {

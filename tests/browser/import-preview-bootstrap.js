@@ -37,10 +37,24 @@
   };
   rendering.render = function(state) {
     currentState = state;
+    if (phase === "loading" && !state.loading && state.pendingImport) {
+      phase = "mapping-fixture";
+      Promise.resolve().then(function() {
+        callbacks.onImportRememberChange(false);
+        state.pendingImport.report.fields.forEach(function(field) {
+          if (field.key === "deadline" && field.status === "ambiguous") {
+            var deadline = state.pendingImport.report.columns.filter(function(column) { return column.header === "Срок"; })[0];
+            callbacks.onImportColumnChoice(field.key, deadline.index);
+          } else if (!field.required && field.selectedIndex == null) callbacks.onImportColumnChoice(field.key, null);
+        });
+        phase = "loading";
+        callbacks.onConfirmColumnImport();
+      });
+    }
     if (phase === "loading" && !state.loading && state.rows.length) {
       phase = "syncing";
       state.rows.forEach(function(row) {
-        var id = String(row.sourceColumns["№"]);
+        var id = String(row.sourceColumns.ID || row.sourceColumns["№"]);
         if (id === "816") { row.status = "failed"; row.errors = ["Jira не приняла обязательное поле компонента."]; }
         if (id === "817") { row.status = "partial"; row.createdKey = row.jiraKey; row.errors = ["Story и BE созданы, QA не создана: не указан исполнитель."]; }
       });
@@ -55,7 +69,7 @@
     return response.arrayBuffer();
   }).then(function(buffer) {
     if (!currentState.projectKey) callbacks.onProjectChange("EVOSCADA");
-    phase = "loading";
+    phase = new URLSearchParams(location.search).has("preflight") ? "review-fixture" : "loading";
     callbacks.onFileChange(new File([buffer], "График замечаний.xlsx", {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
   }).catch(function(error) {
     document.querySelector("footer").textContent = error.message;

@@ -61,6 +61,22 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  function copyColumnBindings(input) {
+    var source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+    var out = {};
+    Object.keys(config.COLUMN_MAP || {}).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+      var binding = source[key];
+      if (binding === null) { out[key] = null; return; }
+      if (!binding || typeof binding !== "object" || Array.isArray(binding)) return;
+      var header = typeof binding.header === "string" ? binding.header.replace(/\s+/g, " ").trim() : "";
+      if (header && Number.isInteger(binding.occurrence) && binding.occurrence >= 0) {
+        out[key] = { header: header, occurrence: binding.occurrence };
+      }
+    });
+    return out;
+  }
+
   function copyTableStart(input) {
     var defaults = config.TABLE_START || {};
     var source = input && typeof input === "object" ? input : {};
@@ -122,6 +138,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       moduleComponentMap: copyMap(config.MODULE_COMPONENT_MAP),
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
+      columnBindings: {},
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
       storyAssigneeId: "",
@@ -148,6 +165,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       columnMap: hasInput && input.columnMap && typeof input.columnMap === "object"
         ? copyColumnMap(input.columnMap)
         : defaults.columnMap,
+      columnBindings: hasInput ? copyColumnBindings(input.columnBindings) : defaults.columnBindings,
       tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,

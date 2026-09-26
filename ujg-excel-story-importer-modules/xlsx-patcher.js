@@ -203,10 +203,16 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
 
   function headerColumnsForPatch(xml, options) {
     options = options || {};
-    return mergeColumns(
+    var columns = mergeColumns(
       headerColumnsFromWorksheetXml(xml, options.headerRowNumber || 0, options.sharedStrings || []),
       options.headerColumns || {}
     );
+    // Preflight bindings identify an exact physical column, including duplicate headers.
+    Object.keys(options.boundHeaderColumns || {}).forEach(function(name) {
+      var index = options.boundHeaderColumns[name];
+      if (Number.isInteger(index) && index > 0 && index <= 16384) columns[name] = index;
+    });
+    return columns;
   }
 
   function buildInlineCell(ref, value, styleAttr) {

@@ -540,3 +540,197 @@ test("parseWorkbook reports missing remarks header", function () {
     parser.parseWorkbook(workbook);
   }, /Колонка "Замечание" не найдена/);
 });
+
+test("inspectWorkbook reports all fields, examples, hidden counts, and unresolved optional fields", () => {
+  const parser = loadParser();
+  const workbook = {SheetNames:["Журнал"],Sheets:{Журнал:{"!rows":[{},{},{hidden:true},{}],__rows:[
+    ["Замечание","Ответственный от ТНТ","Модуль"],
+    ["Ошибка","Анна","PARA"],
+    ["Скрытая","Борис","ACU"],
+    ["Ошибка","Анна","PARA"],
+  ]}}};
+  const report = parser.inspectWorkbook(workbook);
+  assert.equal(report.headerRowNumber, 1);
+  assert.equal(report.fields.length, 10);
+  assert.equal(report.fields.find(f => f.key === "remarkId").label, "ID замечания");
+  assert.equal(report.fields.find(f => f.key === "jira").label, "Ключ Jira");
+  assert.deepEqual(Object.assign({}, report.counts), {total:3,visible:2,hidden:1});
+  assert.equal(report.fields.find(f => f.key === "owner").status, "matched");
+  assert.equal(report.fields.find(f => f.key === "jira").status, "missing");
+  assert.equal(report.canApply, false);
+  assert.deepEqual(Array.from(report.columns[0].examples), ["Ошибка"]);
+  assert.equal(report.columns[0].nonEmptyCount, 2);
+});
+
+test("inspectWorkbook resolves duplicates by occurrence and warns about empty columns", () => {
+  const parser = loadParser();
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[["Замечание","Код","Код","Jira"],["Issue","A","B",""]]}}};
+  const unresolved = parser.inspectWorkbook(workbook, {columnMap:{remarkId:"Код"}});
+  assert.equal(unresolved.fields.find(f => f.key === "remarkId").status, "ambiguous");
+  const options = {columnMap:{remarkId:"Код"},columnBindings:{remarkId:{header:"Код",occurrence:1},jira:null}};
+  const report = parser.inspectWorkbook(workbook, options);
+  assert.equal(report.fields.find(f => f.key === "remarkId").selectedIndex, 2);
+  assert.equal(report.fields.find(f => f.key === "jira").status, "skipped");
+  assert.equal(parser.parseWorkbook(workbook, options).rows[0].sourceColumns.ID, "B");
+  const skips = Object.fromEntries(report.fields.filter(f => f.key !== "summary" && f.key !== "remarkId").map(f => [f.key,null]));
+  const ready = parser.inspectWorkbook(workbook,{columnMap:{remarkId:"Код"},columnBindings:Object.assign(skips,{remarkId:{header:"Код",occurrence:1}})});
+  assert.equal(ready.canApply,true);
+  assert.equal(ready.needsReview,false);
+  const warning = parser.inspectWorkbook(workbook,{columnBindings:Object.assign(skips,{remarkId:null})});
+  assert.equal(warning.canApply,true);
+  assert.equal(warning.fields.find(f => f.key === "summary").status,"matched");
+});
+
+test("an empty selected column needs review but permits apply after optional skips", () => {
+  const parser = loadParser();
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[["Замечание","Jira"],["Issue",""]]}}};
+  const skips = Object.fromEntries(Object.keys(loadConfig().COLUMN_MAP)
+    .filter(key => key !== "summary" && key !== "jira").map(key => [key,null]));
+  const report = parser.inspectWorkbook(workbook,{columnBindings:skips});
+  assert.equal(report.fields.find(f => f.key === "jira").status,"empty");
+  assert.equal(report.canApply,true);
+  assert.equal(report.needsReview,true);
+  const skippedSummary = parser.inspectWorkbook(workbook,{columnBindings:Object.assign({},skips,{summary:null})});
+  assert.equal(skippedSummary.canApply,false);
+  assert.throws(() => parser.parseWorkbook(workbook,{columnBindings:{summary:null}}),/Замечание/);
+});
+
+test("inspectWorkbook detects conflicts and explicit skip prevents canonical fallback", () => {
+  const parser = loadParser();
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[["Замечание","ID","Ответственный"],["Issue","A-1","Анна"]]}}};
+  const conflict = parser.inspectWorkbook(workbook, {columnBindings:{remarkId:{header:"ID",occurrence:0},owner:{header:"ID",occurrence:0}}});
+  assert.equal(conflict.fields.find(f => f.key === "owner").status, "conflict");
+  assert.equal(conflict.canApply, false);
+  const parsed = parser.parseWorkbook(workbook, {columnBindings:{remarkId:null,owner:null}});
+  assert.equal(parsed.rows[0].sourceColumns.ID, undefined);
+  assert.equal(parsed.rows[0].sourceColumns["Ответственный"], undefined);
+  assert.equal(parsed.rows[0].sourceColumns["Исходная колонка B: ID"], "A-1");
+});
+
+test("inspectWorkbook allows explicit header and sheet selection but reports missing marker", () => {
+  const parser = loadParser();
+  const workbook = {SheetNames:["Other","Data"],Sheets:{Other:{__rows:[["Замечание"],["Wrong"]]},Data:{__rows:[["Title","Code"],["Issue","X"]]}}};
+  const missing = parser.inspectWorkbook(workbook, {sheetName:"Data"});
+  assert.equal(missing.sheetName, "Data");
+  assert.equal(missing.headerRowNumber, 0);
+  assert.deepEqual(Array.from(missing.columns), []);
+  assert.equal(missing.needsReview, true);
+  assert.ok(missing.error);
+  const selected = parser.inspectWorkbook(workbook, {sheetName:"Data",headerRowNumber:1,columnMap:{summary:"Title"}});
+  assert.equal(selected.fields.find(f => f.key === "summary").selectedIndex, 0);
+  assert.equal(parser.parseWorkbook(workbook, {sheetName:"Data",headerRowNumber:1,columnMap:{summary:"Title"}}).rows[0].summary, "Issue");
+  assert.equal(parser.inspectWorkbook(workbook, {sheetName:"Absent"}).sheetName, "Absent");
+});
+
+test("physical SheetJS range offsets preserve rows, columns, and hidden counts", () => {
+  const config = loadConfig();
+  const parser = loadAmdModule(path.join(MODULE_DIR,"parser.js"),{"_ujgESI_config":config},{XLSX:{utils:{
+    sheet_to_json:() => [["Замечание","ID"],["Visible","X"],["Hidden","Y"]],
+    decode_range:() => ({s:{r:4,c:2},e:{r:7,c:3}}),
+    encode_col:c => String.fromCharCode(65+c),
+  }}});
+  const workbook = {SheetNames:["S"],Sheets:{S:{"!ref":"C5:D8","!rows":[{},{},{},{},{},{},{hidden:true}]}}};
+  const report = parser.inspectWorkbook(workbook);
+  assert.equal(report.headerRowNumber, 5);
+  assert.equal(report.columns[0].index, 2);
+  assert.equal(report.columns[0].letter, "C");
+  assert.deepEqual(Object.assign({},report.counts),{total:2,visible:1,hidden:1});
+  const parsed = parser.parseWorkbook(workbook);
+  assert.equal(parsed.rows[0].excelRowNumber, 6);
+  assert.equal(parsed.rows[0].sourceColumnIndexes.ID, 4);
+});
+
+test("skipped owner preserves raw Исполнитель without filling registry owner", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[
+    ["Замечание","Исполнитель"], ["Issue","Анна"],
+  ]}}};
+  const row = loadParser().parseWorkbook(workbook,{columnBindings:{owner:null}}).rows[0];
+  assert.equal(loadRegistry().buildRows([row])[0].owner, "");
+  assert.equal(Object.values(row.sourceColumns).includes("Анна"), true);
+  const description = loadAmdModule(path.join(MODULE_DIR,"description.js"),{}).buildDescription(row);
+  assert.match(description,/Анна/);
+});
+
+test("skipped ID keeps case-insensitive legacy aliases only as source data", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[
+    ["Замечание","НОМЕР","id"], ["Issue","17","A-18"],
+  ]}}};
+  const row = loadParser().parseWorkbook(workbook,{columnBindings:{remarkId:null}}).rows[0];
+  assert.equal(loadRemarkId()(row), "");
+  assert.deepEqual(Object.values(row.sourceColumns).filter(value => value === "17" || value === "A-18"), ["17","A-18"]);
+});
+
+test("skipped custom semantic names from the current map remain source-only", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[
+    ["Замечание","Владелец","Код"], ["Issue","Анна","A-7"],
+  ]}}};
+  const row = loadParser().parseWorkbook(workbook,{columnMap:{owner:"Владелец",remarkId:"Код"},columnBindings:{owner:null,remarkId:null}}).rows[0];
+  assert.equal(loadRegistry().buildRows([row])[0].owner, "");
+  assert.equal(loadRemarkId()(row), "");
+  assert.equal(row.sourceColumns["Исходная колонка B: Владелец"], "Анна");
+  assert.equal(row.sourceColumns["Исходная колонка C: Код"], "A-7");
+});
+
+test("saved summary binding rediscovers a moved renamed header", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[
+    ["Export metadata"], ["Other","value"], ["Code","Title"], ["A-1","Issue"],
+  ]}}};
+  const options = {columnMap:{summary:"Title"},columnBindings:{summary:{header:"Title",occurrence:0}}};
+  const report = loadParser().inspectWorkbook(workbook,options);
+  assert.equal(report.headerRowNumber, 3);
+  assert.equal(report.fields.find(field => field.key === "summary").selectedIndex, 1);
+  assert.equal(loadParser().parseWorkbook(workbook,options).rows[0].summary,"Issue");
+});
+
+test("column examples and empty status use visible imported remark rows", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{"!rows":[{},{},{hidden:true},{}],__rows:[
+    ["Замечание","Ответственный"], ["Visible",""], ["Hidden","Анна"], ["","Борис"],
+  ]}}};
+  const report = loadParser().inspectWorkbook(workbook);
+  const owner = report.fields.find(field => field.key === "owner");
+  const ownerColumn = report.columns.find(column => column.header === "Ответственный");
+  assert.equal(owner.status,"empty");
+  assert.deepEqual(Array.from(ownerColumn.examples),[]);
+  assert.equal(ownerColumn.nonEmptyCount,0);
+  assert.deepEqual(Object.assign({},report.counts),{total:2,visible:1,hidden:1});
+});
+
+test("skipped deadline cannot leak through a suffixed duplicate header", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[
+    ["Замечание","Срок","Срок"], ["Issue","2026-09-25","2026-09-26"],
+  ]}}};
+  const options = {columnMap:{deadline:"Плановая дата"},columnBindings:{deadline:null}};
+  const row = loadParser().parseWorkbook(workbook,options).rows[0];
+  assert.equal(row.sourceColumns["Срок"],undefined);
+  assert.equal(row.sourceColumns["Срок (колонка 3)"],undefined);
+  assert.equal(loadAmdModule(path.join(MODULE_DIR,"deadlines.js"),{}).resolve(row,{columnMap:options.columnMap}).date,null);
+  assert.equal(Object.values(row.sourceColumns).includes("2026-09-25"),true);
+  assert.equal(Object.values(row.sourceColumns).includes("2026-09-26"),true);
+});
+
+test("raw Excel status remains distinct from Jira status in bound rows", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{__rows:[
+    ["Замечание","Статус","Статус в Jira"], ["Issue","Открыто","В работе"],
+  ]}}};
+  const row = loadParser().parseWorkbook(workbook,{columnBindings:{statusInJira:{header:"Статус в Jira",occurrence:0}}}).rows[0];
+  assert.equal(row.sourceColumns["Статус"],"Открыто");
+  assert.equal(row.sourceColumns["Статус в Jira"],"В работе");
+  assert.equal(loadRegistry().buildRows([row])[0].sourceStatus,"Открыто");
+});
+
+test("unresolved duplicate summaries retain visible candidate samples without inventing row counts", () => {
+  const workbook = {SheetNames:["S"],Sheets:{S:{"!rows":[{},{},{hidden:true},{}],__rows:[
+    ["Замечание","Замечание","Ответственный"],
+    ["First","Alternative","Анна"],
+    ["Hidden","Hidden alternative","Борис"],
+    ["Second","Alternative 2","Мария"],
+  ]}}};
+  const report = loadParser().inspectWorkbook(workbook);
+  assert.equal(report.fields.find(field => field.key === "summary").status,"ambiguous");
+  assert.equal(report.fields.find(field => field.key === "owner").status,"matched");
+  assert.deepEqual(Array.from(report.columns[0].examples),["First","Second"]);
+  assert.deepEqual(Array.from(report.columns[2].examples),["Анна","Мария"]);
+  assert.equal(report.columns[2].nonEmptyCount,2);
+  assert.deepEqual(Object.assign({},report.counts),{total:0,visible:0,hidden:0});
+  assert.equal(report.canApply,false);
+});

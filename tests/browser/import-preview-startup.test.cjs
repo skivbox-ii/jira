@@ -92,7 +92,8 @@ test("the shared preview URL opens a populated tree without manual import or syn
   assert.ok(deadlineIssues,"The coverage line exposes deadline diagnostics");
   deadlineIssues.focus();
   const deadlinePreview=doc.querySelector('.ujg-esi-management-preview');
-  for (const key of ["EVOSCADA-24006","EVOSCADA-24007","EVOSCADA-24008"]) {
+  // The preview preflight explicitly chooses the first duplicate deadline column.
+  for (const key of ["EVOSCADA-24006","EVOSCADA-24007"]) {
     assert.match(deadlinePreview.textContent,new RegExp(key),"Diagnostics includes quiet remarks");
   }
   assert.match(deadlinePreview.textContent,/24\/09\/26/);
@@ -132,7 +133,7 @@ test("the shared preview URL opens a populated tree without manual import or syn
   date.dispatchEvent(new dom.window.Event("change",{bubbles:true}));
   assert.equal(doc.querySelector('[aria-label="Дата отчёта"]').value,"2026-09-01");
   doc.querySelector('[data-metric="deadlineIssues"]').focus();
-  assert.match(doc.querySelector('.ujg-esi-management-preview').textContent,/EVOSCADA-24008/,"Deadline diagnostics are independent of the selected event day");
+  assert.match(doc.querySelector('.ujg-esi-management-preview').textContent,/EVOSCADA-24007/,"Deadline diagnostics are independent of the selected event day");
   assert.equal(dom.window.issueReadCalls, readsAfterActivityLoad, "Report date changes use loaded data only");
   Array.from(doc.querySelectorAll('[role="tab"]')).find(node => node.textContent === "Реестр").click();
   assert.equal(doc.querySelectorAll(".ujg-esi-parent-row").length,50);
