@@ -81,6 +81,17 @@ for (const key of ["EVOSCADA-20914","EVOSCADA-30051"]) {
 }
 movement("EVOSCADA-20914","10:10","status","Готово","В работе","sokolova");
 movement("EVOSCADA-20914","10:30","status","В работе","Тестирование");
+const descriptionTarget = issues["EVOSCADA-30040"];
+const beforeWiki = descriptionTarget.fields.description + "\n\nЛокальный пример: исходный порядок проверки сохраняет значения параметров после обновления.\n".repeat(12) +
+  "\n||Параметр||Значение||\n|Режим|Ручной|\n|Проверка|До обновления|";
+const afterWiki = descriptionTarget.fields.description + "\n\nЛокальный пример: новый порядок проверки сохраняет значения параметров и показывает результат повторного открытия.\n".repeat(12) +
+  "\n||Параметр||Значение||\n|Режим|Автоматический|\n|Проверка|После обновления|";
+const descriptionAt = activityDate + "T14:20:00+03:00";
+descriptionTarget.changelog.histories.push({id:descriptionTarget.key+"-description-day",created:descriptionAt,
+  author:{name:"ivanov",displayName:"Иванов И."},items:[{field:"description",fromString:beforeWiki,toString:afterWiki}]});
+descriptionTarget.changelog.total = descriptionTarget.changelog.histories.length;
+descriptionTarget.fields.description = afterWiki;
+descriptionTarget.fields.updated = descriptionAt;
 const worked = issues["EVOSCADA-18057"];
 worked.changelog.histories.push({id:worked.key+"-work",created:activityDate+"T11:15:00.853+03:00",author:{name:"petrov",displayName:"Петров П."},items:[
   {field:"timeestimate",from:"14400",fromString:"14400",to:"10800",toString:"10800"},

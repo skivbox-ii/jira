@@ -6512,6 +6512,50 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       if (fromId && toId) return fromId !== toId;
       return String(event.from || "").trim() !== String(event.to || "").trim();
     }
+    function longFieldChange(event) {
+      if (event.kind !== "field") return false;
+      var field = String(event.fieldId || event.field || "").toLowerCase(), name = String(event.field || "").toLowerCase();
+      if (field === "resolution" || name === "resolution") return false;
+      var from = String(event.from == null ? "" : event.from), to = String(event.to == null ? "" : event.to);
+      return [field,name].some(function(value) { return value === "description" || value === "comment" || value === "описание" || value === "комментарий"; }) ||
+        from.length > 120 || to.length > 120 || /[\r\n]/.test(from) || /[\r\n]/.test(to);
+    }
+    function briefAction(event) {
+      if (!longFieldChange(event)) return activity.eventText(event);
+      var field = String(event.fieldId || event.field || "").toLowerCase(), name = String(event.field || "").toLowerCase();
+      if (field === "description" || name === "description" || name === "описание") return "Изменено описание";
+      if (field === "comment" || name === "comment" || name === "комментарий") return "Изменён комментарий";
+      var full = activity.eventText(event), separator = full.indexOf("»: ");
+      return separator < 0 ? full : full.slice(0,separator+1);
+    }
+    function eventDetail(item, services, lazyFormats) {
+      var verbose = longFieldChange(item), $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
+      var $action = $("<span/>").text(verbose ? briefAction(item) : activity.eventText(item));
+      if (completedAction(item)) $action.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+      $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · Автор: " + label(item.author) + " · Исполнитель: " + label(item.assignee)));
+      if (item.kind === "assignee") $detail.append($("<small/>").text(" · " + label(item.fromTeam) + " → " + label(item.toTeam)));
+      if (!verbose) return $detail;
+      var formatted = /^(description|comment|описание|комментарий)$/i.test(String(item.fieldId || item.field || "")) ||
+        /^(description|comment|описание|комментарий)$/i.test(String(item.field || ""));
+      [["before","До",item.from,"не задано"],["after","После",item.to,"очищено"]].forEach(function(side) {
+        var raw = String(side[2] == null ? "" : side[2]), $section = $("<section/>").attr("data-value-side",side[0]).css({marginTop:"8px",minWidth:0});
+        $section.append($("<strong/>").text(side[1]));
+        if (!raw) { $section.append($("<div/>").text(side[3])); $detail.append($section); return; }
+        var $raw = $("<pre/>").css({whiteSpace:"pre-wrap",overflowWrap:"anywhere",margin:"4px 0"}).text(raw);
+        if (formatted && services.renderDescription) {
+          var $source = $("<details/>").append($("<summary/>").text("Исходный текст"),$raw);
+          $section.append($source);
+          lazyFormats.push(function() {
+            var rendered = services.renderDescription(raw);
+            if (rendered && (rendered.jquery || rendered.nodeType)) {
+              $source.before($("<div/>").css({maxHeight:"320px",overflow:"auto"}).append($(rendered).css({minHeight:0,padding:0})));
+            } else $source.replaceWith($raw);
+          });
+        } else $section.append($raw);
+        $detail.append($section);
+      });
+      return $detail;
+    }
     function sortedGroups(groups) {
       var field = fields.filter(function(item) { return item.key === sort.key; })[0] || fields[0];
       return groups.slice().sort(function(a,b) {
@@ -6918,7 +6962,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           if (!mixedAssignees && event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
           else if (!mixedAssignees && event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
           var $change = $("<td/>");
-          if (rowEvents.length === 1) {
+          if (rowEvents.length === 1 && !longFieldChange(event)) {
             $change.text(activity.eventText(event));
             if (completedAction(event)) $change.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
           } else {
@@ -6926,19 +6970,17 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             var count = rowEvents.length, plural = count % 10 === 1 && count % 100 !== 11 ? "изменение" : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? "изменения" : "изменений";
             var $summary = $("<summary/>");
             rowEvents.slice().sort(function(a,b) { return timestamp(a.at)-timestamp(b.at); }).forEach(function(item) {
-              var $action = $("<span/>").addClass("ujg-esi-activity-brief-action").text(activity.eventText(item));
+              var $action = $("<span/>").addClass("ujg-esi-activity-brief-action").text(briefAction(item));
               if (completedAction(item)) $action.addClass("is-done");
               $summary.append($action);
             });
-            $summary.append($("<small/>").text(count + " " + plural + " · подробно"));
+            if (count > 1) $summary.append($("<small/>").text(count + " " + plural + " · подробно"));
             $details.append($summary);
-            rowEvents.forEach(function(item) {
-              var $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
-              var $action = $("<span/>").text(activity.eventText(item));
-              if (completedAction(item)) $action.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
-              $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · Автор: " + label(item.author) + " · Исполнитель: " + label(item.assignee)));
-              if (item.kind === "assignee") $detail.append($("<small/>").text(" · " + label(item.fromTeam) + " → " + label(item.toTeam)));
-              $details.append($detail);
+            var lazyFormats = [];
+            rowEvents.forEach(function(item) { $details.append(eventDetail(item,services,lazyFormats)); });
+            if (lazyFormats.length) $details.on("toggle",function() {
+              if (!this.open) return;
+              lazyFormats.splice(0).forEach(function(render) { render(); });
             });
             $change.append($details);
           }

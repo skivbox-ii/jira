@@ -136,6 +136,86 @@ test("minute groups show actual actions without disclosure and details name thei
   assert.match(x.$(".ujg-esi-activity-event-details [data-event-id='e3']").text(),/Ira/);
 });
 
+test("single description change stays brief and reveals exact before and after safely", async t => {
+  const before="{color:#FF0000}ВАЖНО{color}\n".repeat(80)+"<img src=x onerror=alert(1)>";
+  const after="h2. Новый текст\n".repeat(70)+"<script>alert(1)</script>";
+  const report=fixture(), event={...report.events[0],kind:"field",field:"description",from:before,to:after};
+  report.events=[event]; report.groups[0].events=[event];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const rendered=[];
+  x.modules._ujgESI_activity.eventText=activity.eventText;
+  x.services.renderDescription=value=>{rendered.push(value); return x.$("<div/>").addClass("wiki-render").text(value);};
+  x.render();
+  const change=x.$(".ujg-esi-activity-event td").filter(function() { return x.$(this).find("details").length; });
+  assert.equal(change.find(".ujg-esi-activity-event-details > summary").text(),"Изменено описание");
+  assert.equal(change.find(".ujg-esi-activity-event-details > summary").text().includes("ВАЖНО"),false);
+  assert.deepEqual(rendered,[],"Closed details must not format wiki text");
+  assert.equal(change.find(".wiki-render").length,0);
+  const disclosure=change.find(".ujg-esi-activity-event-details");
+  const opened=new Promise(resolve => disclosure.one("toggle",resolve));
+  disclosure.children("summary")[0].click();
+  await opened;
+  assert.equal(change.find("[data-value-side='before'] .wiki-render").text(),before);
+  assert.equal(change.find("[data-value-side='after'] .wiki-render").text(),after);
+  assert.deepEqual(rendered,[before,after]);
+  disclosure.prop("open",false).trigger("toggle");
+  disclosure.prop("open",true).trigger("toggle");
+  assert.deepEqual(rendered,[before,after],"Reopening keeps the formatted content");
+  assert.equal(change.find("img,script").length,0);
+  assert.equal(event.from,before); assert.equal(event.to,after);
+});
+
+test("comment change has a brief label and escaped full text without a wiki renderer", t => {
+  const report=fixture(), before="<img src=x onerror=alert(1)>\nстарый комментарий", after="{color:red}новый комментарий{color}";
+  const event={...report.events[0],kind:"field",field:"comment",from:before,to:after};
+  report.events=[event]; report.groups[0].events=[event];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.modules._ujgESI_activity.eventText=activity.eventText; x.render();
+  const details=x.$(".ujg-esi-activity-event-details");
+  assert.equal(details.find("summary").text(),"Изменён комментарий");
+  details.prop("open",true).trigger("toggle");
+  assert.equal(details.find("[data-value-side='before']").text().includes(before),true);
+  assert.equal(details.find("[data-value-side='after']").text().includes(after),true);
+  assert.equal(details.find("img").length,0);
+});
+
+test("minute summary keeps status and resolution visible beside a long custom field", t => {
+  const report=fixture(), status=report.events[0], resolution={...status,id:"resolution",kind:"field",field:"resolution",from:"",to:"Готово"};
+  const long={...status,id:"custom",kind:"field",field:"Custom field",from:"before ".repeat(45),to:"after ".repeat(45)};
+  report.events=[status,resolution,long]; report.groups[0].events=report.events;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.modules._ujgESI_activity.eventText=activity.eventText; x.render();
+  const summary=x.$(".ujg-esi-activity-event-details summary").text();
+  assert.match(summary,/Задача выполнена/);
+  assert.match(summary,/Установлен результат: Готово/);
+  assert.match(summary,/Изменено поле «Custom field»/);
+  assert.doesNotMatch(summary,/before before|after after/);
+  x.$(".ujg-esi-activity-event-details").prop("open",true).trigger("toggle");
+  assert.equal(x.$("[data-event-id='custom'] [data-value-side='before']").text().includes(long.from),true);
+  assert.equal(x.$("[data-event-id='custom'] [data-value-side='after']").text().includes(long.to),true);
+});
+
+test("brief label keeps a colon in a custom field name and preserves numeric zero", t => {
+  const report=fixture(), event={...report.events[0],kind:"field",field:"System: details",from:0,to:"updated ".repeat(40)};
+  report.events=[event]; report.groups[0].events=[event];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.modules._ujgESI_activity.eventText=activity.eventText; x.render();
+  const details=x.$(".ujg-esi-activity-event-details");
+  assert.equal(details.children("summary").text(),"Изменено поле «System: details»");
+  details.prop("open",true).trigger("toggle");
+  assert.equal(details.find("[data-value-side='before'] pre").text(),"0");
+  assert.equal(event.from,0);
+});
+
+test("single short resolution remains fully visible without disclosure", t => {
+  const report=fixture(), event={...report.events[0],kind:"field",field:"resolution",from:"",to:"Готово"};
+  report.events=[event]; report.groups[0].events=[event];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.modules._ujgESI_activity.eventText=activity.eventText; x.render();
+  assert.match(x.$(".ujg-esi-activity-event td").text(),/Установлен результат: Готово/);
+  assert.equal(x.$(".ujg-esi-activity-event-details").length,0);
+});
+
 test("global components scope selects source rows before totals, AI and export; drafts cancel", t => {
   const report=fixture(); report.groups[0].components=[{id:"component:10",name:"Экран"}]; report.groups[0].openAtEnd=true;
   report.asOf="2026-09-24T09:00:00.000Z"; report.generatedAt="2026-09-24T12:00:00.000Z";
@@ -661,8 +741,9 @@ test("journal combines one actor's changes on one issue in one Moscow minute and
   const x=setup(report); t.after(()=>x.dom.window.close());
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
   assert.match(x.$(".ujg-esi-activity-event").text(),/2 изменения/);
+  x.$(".ujg-esi-activity-event-details").prop("open",true).trigger("toggle");
   assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,2);
-  assert.match(x.$(".ujg-esi-activity-event").text(),/Статус:.*Описание|Статус:.*Создано/s);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/Статус:.*Изменено описание/s);
   assert.equal(x.$("[data-metric='events'] strong").text(),"2");
   assert.equal(x.calls.aiUpdates,1);
 });
@@ -686,7 +767,9 @@ test("journal filters grouped events by category and export keeps each raw detai
   const x=setup(report); t.after(()=>x.dom.window.close());
   selectFilter(x,"change",[activity.eventCategory(second)]);
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
-  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,0);
+  x.$(".ujg-esi-activity-event-details").prop("open",true).trigger("toggle");
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id='description']").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event-details > summary").text(),"Изменено описание");
   assert.equal(x.$("[data-metric='events'] strong").text(),"2");
   x.dom.window.URL.createObjectURL=()=>"blob:test";
   x.dom.window.URL.revokeObjectURL=()=>{};
