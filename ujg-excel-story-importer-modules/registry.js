@@ -1,4 +1,4 @@
-define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
+define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(remarkId, deadlines) {
   "use strict";
 
   function text(value) { return value == null ? "" : String(value).trim(); }
@@ -34,16 +34,42 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
     if (hours) return hours + " ч " + Math.floor(ms / 60000 % 60) + " мин";
     return Math.floor(ms / 60000) + " мин";
   }
-  function buildRows(rows, now) {
+  function normalized(value) { return text(value).replace(/\s+/g, " ").toLocaleLowerCase(); }
+  function mappedComponent(module, settings) {
+    var map = settings && settings.moduleComponentMap || {};
+    var match = Object.keys(map).filter(function(key) { return normalized(key) === normalized(module); })[0];
+    return match ? text(map[match]) : "";
+  }
+  function componentData(row, details, settings, componentOptions, componentsLoaded) {
+    var module = text((row.sourceColumns || {})["Модуль"]);
+    var configured = mappedComponent(module, settings), mapped = configured;
+    var actual = (details && Array.isArray(details.components) ? details.components : [])
+      .map(function(component) { return text(component && component.name); }).filter(Boolean);
+    var available = Array.isArray(componentOptions) ? componentOptions : [];
+    var option = available.filter(function(component) { return normalized(component && component.name) === normalized(mapped); })[0];
+    var inProject = !componentsLoaded || !!option;
+    if (option) mapped = text(option.name);
+    var reason = module && !mapped ? "Модуль не сопоставлен с компонентом" :
+      mapped && !inProject ? "Компонент не найден в проекте" :
+      mapped && details && Array.isArray(details.components) && !actual.length ? "В Jira компонент не указан" :
+      mapped && actual.length && !actual.some(function(name) { return normalized(name) === normalized(mapped); }) ? "Компонент Jira не совпадает с сопоставлением" :
+      mapped && option && configured !== mapped ? "Точное имя компонента в сопоставлении отличается от Jira" : "";
+    return {mappedComponent:mapped,jiraComponent:actual.join(", "),componentReason:reason};
+  }
+  function buildRows(rows, now, context) {
     var result = [];
     now = now == null ? Date.now() : now;
+    context = context || {};
+    var settings = context.mappingSettings || {};
     (rows || []).forEach(function(row, index) {
       var cols = row.sourceColumns || {};
+      var deadline = deadlines && deadlines.resolve ? deadlines.resolve({sourceColumns:cols}, {columnMap:settings.columnMap}) : null;
       var groupId = text(row.id) || String(index);
       var parentKey = text(row.createdKey || row.jiraKey);
       function entry(details, child, childIndex) {
         var synced = !!details;
         details = details || {};
+        var component = componentData(row, child ? details : row.storyDetails, settings, context.componentOptions, context.componentsLoaded);
         var key = text(details.key || (child ? "" : parentKey));
         var since = key && details.statusSince ? Date.parse(details.statusSince) : NaN;
         var ms = isFinite(since) && since <= now ? now - since : null;
@@ -51,7 +77,10 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
           source: row, rowIndex: index, groupId: groupId, uid: groupId + ":" + (child ? childIndex : "story"), isChild: !!child,
           remarkId: remarkId(row), remark: text(row.summary), owner: text(Object.prototype.hasOwnProperty.call(cols, "Ответственный") ? cols["Ответственный"] : cols["Исполнитель"]),
           ownerIdentifiers: ["accountId", "key", "name", "username"].map(function(field) { return text(row.ownerAssignee && row.ownerAssignee[field]); }).concat(text(row.ownerAssigneeId),Array.isArray(row.ownerIdentifiers) ? row.ownerIdentifiers : []).filter(function(id, index, all) { return id && all.indexOf(id) === index; }),
-          module: text(cols["Модуль"]), sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
+          module: text(cols["Модуль"]), mappedComponent: component.mappedComponent, jiraComponent: component.jiraComponent,
+          componentReason: component.componentReason, deadline: deadline && deadline.date || "",
+          deadlineSource: deadline && deadline.field || "", deadlineReason: deadline && deadline.reasonLabel || "",
+          sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
           type: key ? text(details.issueType) : "",
           role: child ? text(details.role) : "",
           summary: text(details.summary || (child ? "" : row.summary)),
@@ -106,6 +135,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
       function cmp(a, b) {
         var av = value(a), bv = value(b);
         if (sort.column === "priority") return comparePriority(av, bv, sort.direction);
+        if (sort.column === "deadline" && (!av || !bv)) return av ? -1 : bv ? 1 : 0;
         var result = sort.column === "age" ? (av == null ? -1 : av) - (bv == null ? -1 : bv) : compare(av, bv);
         return result * (sort.direction === "desc" ? -1 : 1);
       }

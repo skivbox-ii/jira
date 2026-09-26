@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const load = require("./helpers/load-amd-module");
 const registry = () => load(path.join(__dirname, "../ujg-excel-story-importer-modules/registry.js"), {
-  _ujgESI_remarkId: load(path.join(__dirname, "../ujg-excel-story-importer-modules/remark-id.js"), {})
+  _ujgESI_remarkId: load(path.join(__dirname, "../ujg-excel-story-importer-modules/remark-id.js"), {}),
+  _ujgESI_deadlines: load(path.join(__dirname, "../ujg-excel-story-importer-modules/deadlines.js"), {})
 });
 const source = () => [
   { id: "Sheet:3", excelRowNumber: 3, summary: "Original remark", jiraKey: "P-10", sourceColumns: { "№": "744", "Исполнитель": "Owner", "Статус": "Source only" },

@@ -258,6 +258,29 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         return (sort.descending ? -comparison : comparison) || String(a.id || "").localeCompare(String(b.id || ""));
       });
     }
+    function journalRows(events, group) {
+      var rows = [], byKey = Object.create(null);
+      sortedEvents(events,group).forEach(function(event) {
+        var at = timestamp(event.at), author = event.author || {}, ids = Array.isArray(author.identifiers) ? author.identifiers.filter(Boolean) : [];
+        var actor = ids.length ? String(ids[0]) : "";
+        var key = isFinite(at) && actor && event.issueKey ? JSON.stringify([String(event.issueKey),actor,Math.floor((at + 10800000) / 60000)]) : "";
+        var row = key && byKey[key];
+        if (!row) {
+          row = [];
+          rows.push(row);
+          if (key) byKey[key] = row;
+        }
+        row.push(event);
+      });
+      return rows;
+    }
+    function completedAction(event) {
+      if (event.kind !== "status" || activity.statusTone(event.toStatus || event.to) !== "done") return false;
+      var fromId = String(event.fromId || event.fromStatus && event.fromStatus.id || "").trim();
+      var toId = String(event.toId || event.toStatus && event.toStatus.id || "").trim();
+      if (fromId && toId) return fromId !== toId;
+      return String(event.from || "").trim() !== String(event.to || "").trim();
+    }
     function sortedGroups(groups) {
       var field = fields.filter(function(item) { return item.key === sort.key; })[0] || fields[0];
       return groups.slice().sort(function(a,b) {
@@ -636,18 +659,42 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             $("<span/>").addClass("ujg-esi-activity-group-badge ujg-esi-activity-group-deadline " + (group.deadline && group.deadline.state === "overdue" ? "is-overdue" : group.deadline && (group.deadline.state === "today" || group.deadline.state === "tomorrow") ? "is-near" : "is-neutral")).attr("title",deadlineTitle(group.deadline,report.deadlineReferenceDate)).text(deadlineText(group.deadline)))));
         $body.append($group);
         if (isCollapsed) return;
-        sortedEvents(group.events,group).forEach(function(event) {
+        journalRows(group.events,group).forEach(function(rowEvents) {
+          var event = rowEvents[0];
           var $row = $("<tr/>").addClass("ujg-esi-activity-event");
           var $role = $("<span/>").addClass("ujg-esi-activity-role " + roleClass(event.role)).text(roleLabel(event.role));
           if (safeColor(event.roleColor)) $role.css("border-color",event.roleColor).css("color",event.roleColor);
           var assignee = event.kind === "assignee" ? label(event.fromAssignee || event.from) + " → " + label(event.toAssignee || event.to) : label(event.assignee);
-          var $assigneeCell = $("<td/>").append(personNode(event.assignee));
-          if (event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
-          else if (event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
+          var mixedAssignees = rowEvents.some(function(item) { return label(item.assignee) !== label(event.assignee); });
+          var $assigneeCell = $("<td/>").append(mixedAssignees ? $("<span/>").text("Несколько исполнителей") : personNode(event.assignee));
+          if (!mixedAssignees && event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
+          else if (!mixedAssignees && event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
+          var $change = $("<td/>");
+          if (rowEvents.length === 1) {
+            $change.text(activity.eventText(event));
+            if (completedAction(event)) $change.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+          } else {
+            var $details = $("<details/>").addClass("ujg-esi-activity-event-details");
+            var count = rowEvents.length, plural = count % 10 === 1 && count % 100 !== 11 ? "изменение" : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? "изменения" : "изменений";
+            var completion = rowEvents.filter(completedAction)[0];
+            var completionText = completion && activity.eventText(completion).split(" · ")[0];
+            var $summary = $("<summary/>").text((completion ? (/^Задача /.test(completionText) ? completionText : "Задача выполнена") + " · " : "") + count + " " + plural);
+            if (completion) $summary.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+            $details.append($summary);
+            rowEvents.forEach(function(item) {
+              var $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
+              var $action = $("<span/>").text(activity.eventText(item));
+              if (completedAction(item)) $action.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+              $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · " + label(item.assignee)));
+              if (item.kind === "assignee") $detail.append($("<small/>").text(" · " + label(item.fromTeam) + " → " + label(item.toTeam)));
+              $details.append($detail);
+            });
+            $change.append($details);
+          }
           var cells = {
             time:$("<td/>").text(time(event.at)), remark:$("<td/>").text(group.key || group.remarkId || ""),
             role:$("<td/>").append($("<span/>").addClass("ujg-esi-activity-issue").append(issueKeyNode(event.issueKey,state.baseUrl)),$role,event.summary ? $("<div/>").addClass("ujg-esi-activity-task-summary").text(event.summary) : $("<span/>")),
-            change:$("<td/>").text(activity.eventText(event)), assignee:$assigneeCell, author:$("<td/>").append(personNode(event.author))
+            change:$change, assignee:$assigneeCell, author:$("<td/>").append(personNode(event.author))
           };
           shown.forEach(function(field) { $row.append(cells[field.key]); }); $body.append($row);
         });

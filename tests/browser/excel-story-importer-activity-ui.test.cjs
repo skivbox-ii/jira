@@ -46,8 +46,8 @@ function selectFilter(x,key,values) {
 }
 function fixture() {
   const events = [
-    {id:"e1",at:"2026-09-24T12:00:00.000Z",kind:"status",issueKey:"P-2",role:"QA",from:"Testing",to:"Done",author:{label:"Ira"},assignee:{label:"Bob"}},
-    {id:"e2",at:"2026-09-24T13:00:00.000Z",kind:"assignee",issueKey:"P-3",role:"BE",from:"Bob",to:"Ann",author:{label:"Ira"},assignee:{label:"Ann"},fromTeam:"BE",toTeam:"QA"}
+    {id:"e1",at:"2026-09-24T12:00:00.000Z",kind:"status",issueKey:"P-2",role:"QA",from:"Testing",to:"Done",author:{label:"Ira",identifiers:["ira-id"]},assignee:{label:"Bob"}},
+    {id:"e2",at:"2026-09-24T13:00:00.000Z",kind:"assignee",issueKey:"P-3",role:"BE",from:"Bob",to:"Ann",author:{label:"Ira",identifiers:["ira-id"]},assignee:{label:"Ann"},fromTeam:"BE",toTeam:"QA"}
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
@@ -312,19 +312,22 @@ test("change filter offers unique categories, not individual event descriptions"
 test("category multi-select filters all matching events while keeping details and totals", t => {
   const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
   selectFilter(x,"change",["Статус","Описание"]);
-  assert.equal(x.$(".ujg-esi-activity-event").length,4);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,4);
   assert.match(x.$(".ujg-esi-activity-event").text(),/Статус: Тестирование → Готово/);
   assert.match(x.$(".ujg-esi-activity-event").text(),/Открыто → In Progress/);
   assert.equal(x.$("[data-metric='events'] strong").text(),"8");
   const saved=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
   assert.deepEqual(saved.filters.change,["Статус","Описание"]);
   const next=x.modules._ujgESI_activityUi.create(); next.render(x.$("#root"),x.state,{});
-  assert.equal(x.$(".ujg-esi-activity-mount").last().find(".ujg-esi-activity-event").length,4);
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-mount").last().find(".ujg-esi-activity-event [data-event-id]").length,4);
 });
 test("worklog category groups records and spent time without including estimates", t => {
   const x=setup(categoryFixture()); t.after(()=>x.dom.window.close());
   selectFilter(x,"change",["Трудозатраты"]);
-  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,2);
   selectFilter(x,"change",["Оценка трудозатрат"]);
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
 });
@@ -359,14 +362,16 @@ test("empty change selection survives migration and current selections survive e
   t.after(()=>x.dom.window.close());
   assert.equal(x.$(".ujg-esi-activity-event").length,0);
   selectFilter(x,"change",["Описание"]);
-  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,2);
   const groups=report.groups;
   report.groups=[]; x.render();
   x.$("[data-activity-filter='change']").trigger("click");
   assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"Описание");
   x.$(".ujg-esi-activity-filter-apply").trigger("click");
   report.groups=groups; x.render();
-  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,2);
 });
 test("renders daily totals, unknown balances, current scope and grouped journal", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -560,6 +565,86 @@ test("journal filter and sort leave totals intact, collapse survives render", t 
   assert.equal(x.$(".ujg-esi-activity-event").length,0);
   x.render(); assert.equal(x.$(".ujg-esi-activity-group-toggle").attr("aria-expanded"),"false");
 });
+test("journal combines one actor's changes on one issue in one Moscow minute and retains details", t => {
+  const report=fixture();
+  const first=report.events[0];
+  const second={...first,id:"e1b",at:"2026-09-24T12:00:45.000Z",kind:"field",field:"description",from:"old",to:"new"};
+  report.groups[0].events=[first,second]; report.events=[first,second]; report.metrics.events=2;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/2 изменения/);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,2);
+  assert.match(x.$(".ujg-esi-activity-event").text(),/Статус:.*Описание|Статус:.*Создано/s);
+  assert.equal(x.$("[data-metric='events'] strong").text(),"2");
+  assert.equal(x.calls.aiUpdates,1);
+});
+test("journal keeps issues, actors, calendar minutes and unknown actors separate", t => {
+  const report=fixture(), base=report.events[0];
+  const events=[base,
+    {...base,id:"other-issue",issueKey:"P-7"},
+    {...base,id:"other-actor",author:{label:"Nina",identifiers:["nina"]}},
+    {...base,id:"same-name-different-id",author:{label:"Ira",identifiers:["other-ira-id"]}},
+    {...base,id:"other-minute",at:"2026-09-24T12:01:00.000Z"},
+    {...base,id:"unknown-a",author:{label:"Ira",identifiers:[]}},
+    {...base,id:"unknown-b",author:{label:"Ira",identifiers:[]}}];
+  report.groups[0].events=events; report.events=events; report.metrics.events=events.length;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event").length,7);
+});
+test("journal filters grouped events by category and export keeps each raw detail", t => {
+  const report=fixture(), first=report.events[0];
+  const second={...first,id:"description",kind:"field",field:"description",from:"old",to:"new"};
+  report.groups[0].events=[first,second]; report.events=[first,second]; report.metrics.events=2;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"change",[activity.eventCategory(second)]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,0);
+  assert.equal(x.$("[data-metric='events'] strong").text(),"2");
+  x.dom.window.URL.createObjectURL=()=>"blob:test";
+  x.dom.window.URL.revokeObjectURL=()=>{};
+  x.dom.window.HTMLAnchorElement.prototype.click=function(){};
+  x.$("[aria-label='Скачать HTML']").trigger("click");
+  assert.deepEqual(x.calls.exports[0].value.groups[0].events.map(event=>event.id),["description"]);
+});
+test("completed-task action stays green in a grouped journal row", t => {
+  const report=fixture(), first=report.events[0];
+  const second={...first,id:"field",kind:"field",field:"description",from:"old",to:"new"};
+  report.groups[0].events=[first,second]; report.events=[first,second];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.match(x.$(".ujg-esi-activity-event-details summary").text(),/Задача выполнена.*2 изменения/);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id='e1'] .is-done").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id='field'] .is-done").length,0);
+});
+test("unchanged Done status is neutral alone and in a grouped summary", t => {
+  const report=fixture(), original=report.events[0];
+  const noop={...original,id:"noop",from:"Done",to:"Done",fromId:"3",toId:"3"};
+  report.groups[0].events=[noop]; report.events=[noop];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event .is-done").length,0);
+  const detail={...noop,id:"detail",kind:"field",field:"description",from:"old",to:"new"};
+  report.groups[0].events=[noop,detail]; report.events=[noop,detail]; x.render();
+  assert.equal(x.$(".ujg-esi-activity-event-details summary").text(),"2 изменения");
+  assert.equal(x.$(".ujg-esi-activity-event .is-done").length,0);
+});
+test("status IDs distinguish a real Done-to-Done transition from a no-op", t => {
+  const report=fixture(), original=report.events[0];
+  const changed={...original,from:"Done",to:"Done",fromId:"3",toId:"4"};
+  report.groups[0].events=[changed]; report.events=[changed];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event td.is-done").length,1);
+  const sameId={...changed,from:"Finished",to:"Done",fromId:"4",toId:"4"};
+  report.groups[0].events=[sameId]; report.events=[sameId]; x.render();
+  assert.equal(x.$(".ujg-esi-activity-event td.is-done").length,0);
+});
+test("grouped assignment changes identify mixed assignees and retain each assignment", t => {
+  const report=fixture(), first=report.events[0];
+  const second={...first,id:"reassign",kind:"assignee",from:"Bob",to:"Ann",assignee:{label:"Ann"},fromTeam:"BE",toTeam:"QA"};
+  report.groups[0].events=[first,second]; report.events=[first,second];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.match(x.$(".ujg-esi-activity-event td").eq(3).text(),/Несколько исполнителей/);
+  assert.match(x.$(".ujg-esi-activity-event [data-event-id='reassign']").text(),/Bob.*Ann.*BE.*QA/);
+});
 test("time sort orders remark groups by their first visible event", t => {
   const report=fixture();
   report.groups.push({id:"g2",remarkId:"1052",key:"P-4",summary:"Later",events:[{id:"e3",at:"2026-09-24T15:00:00.000Z",kind:"created",issueKey:"P-4",role:"История",author:{label:"Ira"}}]});
@@ -740,7 +825,8 @@ test("header funnel applies multiple values with no native selects or duplicate 
   assert.equal(x.$(".ujg-esi-activity-table thead tr").length,1);
   assert.equal(x.$(".ujg-esi-activity-table thead select").length,0);
   selectFilter(x,"role",["QA","FE"]);
-  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event [data-event-id]").length,2);
   assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),true);
   x.$("[data-activity-filter='role']").trigger("click");
   assert.equal(x.$(".ujg-esi-activity-selected-chip").length,0);

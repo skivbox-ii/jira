@@ -108,7 +108,7 @@ function loadRemarkId() {
 }
 
 function loadRegistry() {
-  return loadAmdModule(path.join(MODULE_DIR, "registry.js"), {"_ujgESI_remarkId":loadRemarkId()});
+  return loadAmdModule(path.join(MODULE_DIR, "registry.js"), {"_ujgESI_remarkId":loadRemarkId(),"_ujgESI_deadlines":loadAmdModule(path.join(MODULE_DIR,"deadlines.js"),{})});
 }
 
 test("owner values survive parsing and registry mapping across 72 Excel rows", function () {

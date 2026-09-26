@@ -322,6 +322,7 @@ define("_ujgESI_config", [], function() {
     "Замечание",
     "Статус",
     "Модуль",
+    "Компонент",
     "Приоритет",
     "Автор",
     "Дата",
@@ -1195,9 +1196,11 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   function headerNames(row, settings) {
     var raw = (row || []).map(cellText);
     var useOwnerAlias = cellText(settings.columnMap.owner) === "Ответственный" && raw.indexOf("Ответственный") === -1;
+    var useModuleAlias = cellText(settings.columnMap.module) === "Модуль" && raw.indexOf("Модуль") === -1;
     var names = raw.map(function(value, index) {
       var text = canonicalColumnName(value, settings);
       if (useOwnerAlias && value === "Ответственный от ТНТ" && text === value) text = "Ответственный";
+      if (useModuleAlias && value === "Компонент" && text === value) text = "Модуль";
       return text || "Колонка " + String(index + 1);
     });
     var preferred = {
@@ -1515,6 +1518,10 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (priority) fields.priority = { name: priority };
   }
 
+  function priorityName(value) {
+    return String(value && typeof value === "object" ? value.name || "" : value || "").trim();
+  }
+
   function storyFields(row, options) {
     var opts = options || {};
     var fields = {
@@ -1576,7 +1583,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     return limitSummary((prefix ? "[" + prefix + "] " : "") + summary);
   }
 
-  function subtaskFields(projectKey, parentKey, role, storySummary) {
+  function subtaskFields(projectKey, parentKey, role, storySummary, parentPriority) {
     var fields = {
       project: { key: String(projectKey || "") },
       summary: limitSummary(role && role.summary != null ? role.summary : childSummary(role, storySummary)),
@@ -1585,6 +1592,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     };
     appendAssignee(fields, role && role.assignee);
     appendTimetracking(fields, role && role.originalEstimate, role && role.remainingEstimate);
+    var priority = priorityName(parentPriority);
+    if (priority) fields.priority = { name: priority };
     return fields;
   }
 
@@ -1809,12 +1818,12 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     });
   }
 
-  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors, created, childLinkType) {
+  function createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index, errors, created, childLinkType, parentPriority) {
     created = created || [];
     if (index >= roles.length) {
       return Promise.resolve({ ok: errors.length === 0, errors: errors, created: created });
     }
-    var fields = subtaskFields(projectKey, parentKey, roles[index], storySummary);
+    var fields = subtaskFields(projectKey, parentKey, roles[index], storySummary, parentPriority);
     return Promise.resolve().then(function() {
       return api.createIssue({ fields: fields });
     }).then(
@@ -1822,7 +1831,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
         var key = createdKey(res);
         if (!key) {
           errors.push("Subtask response missing issue key: " + roles[index].role);
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType, parentPriority);
         }
         var child = { key: key, role: roles[index], fields: fields, linkedToParent: false };
         created.push(child);
@@ -1832,12 +1841,12 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
             child.linkError = link.error;
             errors.push(roles[index].role + " link: " + link.error);
           }
-          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
+          return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType, parentPriority);
         });
       },
       function(err) {
         errors.push(roles[index].role + ": " + ajaxErrorText(err));
-        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType);
+        return createSubtasksSequential(api, projectKey, parentKey, storySummary, roles, index + 1, errors, created, childLinkType, parentPriority);
       }
     );
   }
@@ -1855,8 +1864,9 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
     var storySummary = summaryWithRemarkId(row, opts.summary != null ? opts.summary : row && row.summary);
     var roles = preparedRoles(row, storySummary, tasks);
+    var parentPriority = priorityName(opts.parentPriority) || priorityName(row && row.storyDetails && row.storyDetails.priority);
     return resolveChildLinkType(api).then(function(childLinkType) {
-      return createSubtasksSequential(api, opts.projectKey, parentKey, storySummary, roles, 0, [], [], childLinkType);
+      return createSubtasksSequential(api, opts.projectKey, parentKey, storySummary, roles, 0, [], [], childLinkType, parentPriority);
     }).then(function(sub) {
       return linkTestingTasksBlockedBy(api, sub.created, 0, sub.errors, knownExistingChildren(row, parentKey)).then(function() {
         return {
@@ -1872,13 +1882,14 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   function createRow(api, row, options) {
     var opts = options || {};
+    var initialFields;
     if (row && (row.alreadyLinked || row.jiraKey || row.createdKey)) {
       return Promise.resolve({ ok: true, skipped: true, createdKey: row.createdKey || row.jiraKey || "", createdChildren: [] });
     }
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
     }
-    function finishStory(res, warnings, epicLinkSkipped) {
+    function finishStory(res, warnings, epicLinkSkipped, submittedFields) {
       var key = createdKey(res);
       warnings = warnings || [];
       if (!key) return { ok: false, errors: warnings.concat(["Story response missing issue key"]) };
@@ -1895,14 +1906,30 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
             return out;
           });
       roles = preparedRoles(row, storySummary, roles);
-      return resolveChildLinkType(api).then(function(childLinkType) {
-        return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType).then(function(sub) {
-          return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
-            linked.created = sub.created;
-            return linked;
-          });
+      var priorityRead = typeof api.getIssueWithHistory === "function"
+        ? Promise.resolve().then(function() { return api.getIssueWithHistory(key); }).then(function(issue) {
+            var value = issue && issue.fields && issue.fields.priority;
+            var name = value && typeof value.name === "string" ? value.name.trim() : "";
+            if (createdKey(issue).toUpperCase() !== key.toUpperCase() || !name) {
+              throw new Error("Missing priority for created Story " + key);
+            }
+            return name;
+          })
+        : Promise.resolve(priorityName(submittedFields && submittedFields.priority));
+      return priorityRead.then(function(parentPriority) {
+        return resolveChildLinkType(api).then(function(childLinkType) {
+          return createSubtasksSequential(api, opts.projectKey, key, storySummary, roles, 0, [], [], childLinkType, parentPriority);
+        });
+      }, function(err) {
+        return { ok: false, partial: true, createdKey: key, createdChildren: [], errors: warnings.concat(["Story priority: " + ajaxErrorText(err)]), epicLinkSkipped: !!epicLinkSkipped };
+      }).then(function(sub) {
+        if (sub && sub.createdChildren) return sub;
+        return linkTestingTasksBlockedBy(api, sub.created || [], 0, sub.errors || []).then(function(linked) {
+          linked.created = sub.created;
+          return linked;
         });
       }).then(function(sub) {
+        if (sub && sub.createdChildren) return sub;
         return {
           ok: sub.errors.length === 0,
           partial: sub.errors.length > 0,
@@ -1914,15 +1941,17 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
       });
     }
 
-    return Promise.resolve(api.createIssue({ fields: storyFields(row, opts) })).then(
+    initialFields = storyFields(row, opts);
+    return Promise.resolve(api.createIssue({ fields: initialFields })).then(
       function(res) {
-        return finishStory(res, [], false);
+        return finishStory(res, [], false, initialFields);
       },
       function(err) {
         if (opts.epicKey && opts.omitEpicLink !== true && epicLinkRejected(err)) {
-          return Promise.resolve(api.createIssue({ fields: storyFields(row, withoutEpicLinkOptions(opts)) })).then(
+          var retryFields = storyFields(row, withoutEpicLinkOptions(opts));
+          return Promise.resolve(api.createIssue({ fields: retryFields })).then(
             function(res) {
-              return finishStory(res, [epicSkippedWarning(opts.epicKey)], true);
+              return finishStory(res, [epicSkippedWarning(opts.epicKey)], true, retryFields);
             },
             function(retryErr) {
               return { ok: false, errors: [ajaxErrorText(retryErr)] };
@@ -2000,7 +2029,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
   }
 
   function issueFields() {
-    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "creator", "issuelinks", "priority", "issuetype", "updated", "created", "timespent", "worklog", "comment"];
+    var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "creator", "issuelinks", "priority", "components", "issuetype", "updated", "created", "timespent", "worklog", "comment"];
     [config.SPRINT_FIELD, "customfield_10020", "customfield_10007"].forEach(function(field) {
       if (field && fields.indexOf(field) < 0) fields.push(field);
     });
@@ -2059,6 +2088,14 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
           fields: ["summary", "status"],
           maxResults: 100,
         }),
+      });
+    },
+    getProjectComponents: function(projectKey) {
+      return $.ajax({
+        url: config.baseUrl + "/rest/api/2/project/" + encodeURIComponent(String(projectKey || "")) + "/components",
+        type: "GET",
+        timeout: 30000,
+        dataType: "json",
       });
     },
     getProjectCreateMeta: function(projectKey) {
@@ -2957,7 +2994,7 @@ define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
 });
 
 /* === Module: registry.js === */
-define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
+define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(remarkId, deadlines) {
   "use strict";
 
   function text(value) { return value == null ? "" : String(value).trim(); }
@@ -2993,16 +3030,42 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
     if (hours) return hours + " ч " + Math.floor(ms / 60000 % 60) + " мин";
     return Math.floor(ms / 60000) + " мин";
   }
-  function buildRows(rows, now) {
+  function normalized(value) { return text(value).replace(/\s+/g, " ").toLocaleLowerCase(); }
+  function mappedComponent(module, settings) {
+    var map = settings && settings.moduleComponentMap || {};
+    var match = Object.keys(map).filter(function(key) { return normalized(key) === normalized(module); })[0];
+    return match ? text(map[match]) : "";
+  }
+  function componentData(row, details, settings, componentOptions, componentsLoaded) {
+    var module = text((row.sourceColumns || {})["Модуль"]);
+    var configured = mappedComponent(module, settings), mapped = configured;
+    var actual = (details && Array.isArray(details.components) ? details.components : [])
+      .map(function(component) { return text(component && component.name); }).filter(Boolean);
+    var available = Array.isArray(componentOptions) ? componentOptions : [];
+    var option = available.filter(function(component) { return normalized(component && component.name) === normalized(mapped); })[0];
+    var inProject = !componentsLoaded || !!option;
+    if (option) mapped = text(option.name);
+    var reason = module && !mapped ? "Модуль не сопоставлен с компонентом" :
+      mapped && !inProject ? "Компонент не найден в проекте" :
+      mapped && details && Array.isArray(details.components) && !actual.length ? "В Jira компонент не указан" :
+      mapped && actual.length && !actual.some(function(name) { return normalized(name) === normalized(mapped); }) ? "Компонент Jira не совпадает с сопоставлением" :
+      mapped && option && configured !== mapped ? "Точное имя компонента в сопоставлении отличается от Jira" : "";
+    return {mappedComponent:mapped,jiraComponent:actual.join(", "),componentReason:reason};
+  }
+  function buildRows(rows, now, context) {
     var result = [];
     now = now == null ? Date.now() : now;
+    context = context || {};
+    var settings = context.mappingSettings || {};
     (rows || []).forEach(function(row, index) {
       var cols = row.sourceColumns || {};
+      var deadline = deadlines && deadlines.resolve ? deadlines.resolve({sourceColumns:cols}, {columnMap:settings.columnMap}) : null;
       var groupId = text(row.id) || String(index);
       var parentKey = text(row.createdKey || row.jiraKey);
       function entry(details, child, childIndex) {
         var synced = !!details;
         details = details || {};
+        var component = componentData(row, child ? details : row.storyDetails, settings, context.componentOptions, context.componentsLoaded);
         var key = text(details.key || (child ? "" : parentKey));
         var since = key && details.statusSince ? Date.parse(details.statusSince) : NaN;
         var ms = isFinite(since) && since <= now ? now - since : null;
@@ -3010,7 +3073,10 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
           source: row, rowIndex: index, groupId: groupId, uid: groupId + ":" + (child ? childIndex : "story"), isChild: !!child,
           remarkId: remarkId(row), remark: text(row.summary), owner: text(Object.prototype.hasOwnProperty.call(cols, "Ответственный") ? cols["Ответственный"] : cols["Исполнитель"]),
           ownerIdentifiers: ["accountId", "key", "name", "username"].map(function(field) { return text(row.ownerAssignee && row.ownerAssignee[field]); }).concat(text(row.ownerAssigneeId),Array.isArray(row.ownerIdentifiers) ? row.ownerIdentifiers : []).filter(function(id, index, all) { return id && all.indexOf(id) === index; }),
-          module: text(cols["Модуль"]), sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
+          module: text(cols["Модуль"]), mappedComponent: component.mappedComponent, jiraComponent: component.jiraComponent,
+          componentReason: component.componentReason, deadline: deadline && deadline.date || "",
+          deadlineSource: deadline && deadline.field || "", deadlineReason: deadline && deadline.reasonLabel || "",
+          sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
           type: key ? text(details.issueType) : "",
           role: child ? text(details.role) : "",
           summary: text(details.summary || (child ? "" : row.summary)),
@@ -3065,6 +3131,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId"], function(remarkId) {
       function cmp(a, b) {
         var av = value(a), bv = value(b);
         if (sort.column === "priority") return comparePriority(av, bv, sort.direction);
+        if (sort.column === "deadline" && (!av || !bv)) return av ? -1 : bv ? 1 : 0;
         var result = sort.column === "age" ? (av == null ? -1 : av) - (bv == null ? -1 : bv) : compare(av, bv);
         return result * (sort.direction === "desc" ? -1 : 1);
       }
@@ -6122,6 +6189,29 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         return (sort.descending ? -comparison : comparison) || String(a.id || "").localeCompare(String(b.id || ""));
       });
     }
+    function journalRows(events, group) {
+      var rows = [], byKey = Object.create(null);
+      sortedEvents(events,group).forEach(function(event) {
+        var at = timestamp(event.at), author = event.author || {}, ids = Array.isArray(author.identifiers) ? author.identifiers.filter(Boolean) : [];
+        var actor = ids.length ? String(ids[0]) : "";
+        var key = isFinite(at) && actor && event.issueKey ? JSON.stringify([String(event.issueKey),actor,Math.floor((at + 10800000) / 60000)]) : "";
+        var row = key && byKey[key];
+        if (!row) {
+          row = [];
+          rows.push(row);
+          if (key) byKey[key] = row;
+        }
+        row.push(event);
+      });
+      return rows;
+    }
+    function completedAction(event) {
+      if (event.kind !== "status" || activity.statusTone(event.toStatus || event.to) !== "done") return false;
+      var fromId = String(event.fromId || event.fromStatus && event.fromStatus.id || "").trim();
+      var toId = String(event.toId || event.toStatus && event.toStatus.id || "").trim();
+      if (fromId && toId) return fromId !== toId;
+      return String(event.from || "").trim() !== String(event.to || "").trim();
+    }
     function sortedGroups(groups) {
       var field = fields.filter(function(item) { return item.key === sort.key; })[0] || fields[0];
       return groups.slice().sort(function(a,b) {
@@ -6500,18 +6590,42 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             $("<span/>").addClass("ujg-esi-activity-group-badge ujg-esi-activity-group-deadline " + (group.deadline && group.deadline.state === "overdue" ? "is-overdue" : group.deadline && (group.deadline.state === "today" || group.deadline.state === "tomorrow") ? "is-near" : "is-neutral")).attr("title",deadlineTitle(group.deadline,report.deadlineReferenceDate)).text(deadlineText(group.deadline)))));
         $body.append($group);
         if (isCollapsed) return;
-        sortedEvents(group.events,group).forEach(function(event) {
+        journalRows(group.events,group).forEach(function(rowEvents) {
+          var event = rowEvents[0];
           var $row = $("<tr/>").addClass("ujg-esi-activity-event");
           var $role = $("<span/>").addClass("ujg-esi-activity-role " + roleClass(event.role)).text(roleLabel(event.role));
           if (safeColor(event.roleColor)) $role.css("border-color",event.roleColor).css("color",event.roleColor);
           var assignee = event.kind === "assignee" ? label(event.fromAssignee || event.from) + " → " + label(event.toAssignee || event.to) : label(event.assignee);
-          var $assigneeCell = $("<td/>").append(personNode(event.assignee));
-          if (event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
-          else if (event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
+          var mixedAssignees = rowEvents.some(function(item) { return label(item.assignee) !== label(event.assignee); });
+          var $assigneeCell = $("<td/>").append(mixedAssignees ? $("<span/>").text("Несколько исполнителей") : personNode(event.assignee));
+          if (!mixedAssignees && event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
+          else if (!mixedAssignees && event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
+          var $change = $("<td/>");
+          if (rowEvents.length === 1) {
+            $change.text(activity.eventText(event));
+            if (completedAction(event)) $change.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+          } else {
+            var $details = $("<details/>").addClass("ujg-esi-activity-event-details");
+            var count = rowEvents.length, plural = count % 10 === 1 && count % 100 !== 11 ? "изменение" : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? "изменения" : "изменений";
+            var completion = rowEvents.filter(completedAction)[0];
+            var completionText = completion && activity.eventText(completion).split(" · ")[0];
+            var $summary = $("<summary/>").text((completion ? (/^Задача /.test(completionText) ? completionText : "Задача выполнена") + " · " : "") + count + " " + plural);
+            if (completion) $summary.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+            $details.append($summary);
+            rowEvents.forEach(function(item) {
+              var $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
+              var $action = $("<span/>").text(activity.eventText(item));
+              if (completedAction(item)) $action.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+              $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · " + label(item.assignee)));
+              if (item.kind === "assignee") $detail.append($("<small/>").text(" · " + label(item.fromTeam) + " → " + label(item.toTeam)));
+              $details.append($detail);
+            });
+            $change.append($details);
+          }
           var cells = {
             time:$("<td/>").text(time(event.at)), remark:$("<td/>").text(group.key || group.remarkId || ""),
             role:$("<td/>").append($("<span/>").addClass("ujg-esi-activity-issue").append(issueKeyNode(event.issueKey,state.baseUrl)),$role,event.summary ? $("<div/>").addClass("ujg-esi-activity-task-summary").text(event.summary) : $("<span/>")),
-            change:$("<td/>").text(activity.eventText(event)), assignee:$assigneeCell, author:$("<td/>").append(personNode(event.author))
+            change:$change, assignee:$assigneeCell, author:$("<td/>").append(personNode(event.author))
           };
           shown.forEach(function(field) { $row.append(cells[field.key]); }); $body.append($row);
         });
@@ -6569,13 +6683,16 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
   var sequence = 0;
   var columns = [
     ["remarkId", "ID", 54], ["remark", "Замечание из Excel", 236], ["owner", "Ответственный", 138],
-    ["module", "Модуль", 110], ["sourceStatus", "Статус Excel", 112], ["importState", "Импорт", 136], ["key", "Ключ Jira", 152],
+    ["module", "Модуль Excel", 116], ["deadline", "Срок исполнения Excel", 150],
+    ["mappedComponent", "Компонент по модулю", 160], ["jiraComponent", "Компонент Jira", 150],
+    ["componentReason", "Сверка компонента", 190],
+    ["sourceStatus", "Статус Excel", 112], ["importState", "Импорт", 136], ["key", "Ключ Jira", 152],
     ["type", "Тип", 58], ["role", "Роль", 64], ["summary", "Тема задачи", 276],
     ["status", "Статус Jira", 112], ["age", "В статусе", 94], ["assignee", "Исполнитель", 124],
     ["priority", "Приоритет", 94], ["updated", "Обновлено", 94]
   ];
-  var sourceFields = ["remarkId", "remark", "owner", "module", "sourceStatus", "importState"];
-  var defaultHidden = { module: true, sourceStatus: true, importState: true };
+  var sourceFields = ["remarkId", "remark", "owner", "module", "deadline", "mappedComponent", "sourceStatus", "importState"];
+  var defaultHidden = { mappedComponent: true, componentReason: true, sourceStatus: true, importState: true };
   function storageKey(state) { return state.preferencesStorageKey || "ujg-esi-state"; }
   function readLayout(key) {
     try {
@@ -6614,6 +6731,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
 
     function loadLayout(key) {
       layoutKey = key; hidden = Object.assign({}, defaultHidden); widths = {};
+      filters = Object.create(null); sort = null;
       order = columns.map(function(c) { return c[0]; });
       var layout = readLayout(key);
       if (!layout) return;
@@ -6625,17 +6743,30 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       if (Array.isArray(layout.visible)) {
         var visible = layout.visible.filter(function(id) { return known.indexOf(id) !== -1; });
         if (visible.length) known.forEach(function(id) { hidden[id] = visible.indexOf(id) === -1; });
+        if (!Array.isArray(layout.order) || layout.order.indexOf("deadline") === -1) hidden.deadline = false;
+        if (!Array.isArray(layout.order) || layout.order.indexOf("jiraComponent") === -1) hidden.jiraComponent = false;
       }
       if (layout.widths && typeof layout.widths === "object" && !Array.isArray(layout.widths)) columns.forEach(function(column) {
         widths[column[0]] = clampWidth(layout.widths[column[0]], column[2]);
       });
+      if (layout.sort && known.indexOf(layout.sort.column) !== -1 && (layout.sort.direction === "asc" || layout.sort.direction === "desc")) {
+        sort = {column:layout.sort.column,direction:layout.sort.direction};
+      }
+      if (layout.filters && typeof layout.filters === "object" && !Array.isArray(layout.filters)) {
+        known.forEach(function(id) {
+          if (Array.isArray(layout.filters[id])) filters[id] = layout.filters[id].filter(function(value) { return typeof value === "string"; });
+        });
+        if (layout.filters.excludeDone === true) filters.excludeDone = true;
+        if (layout.filters.excludeDoneStories === true) filters.excludeDoneStories = true;
+      }
     }
     function saveLayout() {
       try {
         var storage = window.localStorage, stored;
         try { stored = JSON.parse(storage.getItem(layoutKey) || "{}"); } catch (ignore) { stored = {}; }
         if (!stored || typeof stored !== "object" || Array.isArray(stored)) stored = {};
-        stored.gridLayout = { order: order.slice(), visible: order.filter(function(id) { return !hidden[id]; }), widths: widths };
+        stored.gridLayout = { order: order.slice(), visible: order.filter(function(id) { return !hidden[id]; }), widths: widths,
+          sort: sort, filters: filters };
         storage.setItem(layoutKey, JSON.stringify(stored));
       } catch (ignore) { /* Storage is best-effort. */ }
     }
@@ -6781,9 +6912,9 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var selected = Array.isArray(filters[key]) ? filters[key].slice() : options.slice();
       var $box = popup(anchor, "Фильтр: " + column[1]);
       [ ["asc", "ArrowDownAZ", key === "priority" ? "Сначала низкий приоритет" : "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", key === "priority" ? "Сначала высокий приоритет" : "Сортировка по убыванию"] ].forEach(function(item) {
-        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
+        $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; saveLayout(); refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
       });
-      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } page = 0; refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } page = 0; saveLayout(); refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые" }).prop("checked", excludeDone).on("change", function() { excludeDone = this.checked; }), $("<span/>").text("Исключить готовые")));
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые истории" }).prop("checked", excludeDoneStories).on("change", function() { excludeDoneStories = this.checked; }), $("<span/>").text("Исключить готовые истории")));
       var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
@@ -6830,7 +6961,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; if (excludeDoneStories) filters.excludeDoneStories = true; else delete filters.excludeDoneStories; }
         var allValues = registry.values(rows, key, {});
         if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
-        page = 0; refresh();
+        page = 0; saveLayout(); refresh();
         $host.find('[data-filter="' + key + '"]').trigger("focus");
       });
       $box.append($("<div/>").addClass("ujg-esi-filter-actions").append($apply, $("<button/>").attr("type", "button").text("Отмена").on("click", function() { closeMenu(true); })));
@@ -6900,6 +7031,12 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     function cell(entry, key) {
       var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
+      if (key === "deadline") {
+        var displayed = /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value.slice(8, 10) + "." + value.slice(5, 7) + "." + value.slice(0, 4) : value;
+        return $td.text(displayed || entry.deadlineReason || "—").attr("title", [entry.deadlineSource, entry.deadlineReason].filter(Boolean).join(" · "));
+      }
+      if (key === "jiraComponent") return $td.text(value || "—").attr("title", ["По модулю: " + (entry.mappedComponent || "не сопоставлен"), entry.componentReason].filter(Boolean).join(" · "));
+      if (key === "componentReason") return $td.text(value || "—").attr("title", value || "");
       if (key === "owner") {
         if (hooks.editOwner) $td.append($("<button/>").attr({ type: "button", "data-owner-index": entry.rowIndex, title: "Изменить ответственного", "aria-label": "Ответственный: " + (value || "Не указан"), "aria-haspopup": "dialog" }).addClass("ujg-esi-owner-button").append(teamPerson(value, entry.ownerIdentifiers), icon("ChevronDown")).on("click", function() { hooks.editOwner(entry); }));
         else $td.append(teamPerson(value, entry.ownerIdentifiers));
@@ -6963,7 +7100,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           .on("click", function() {
             if (suppressSort) { suppressSort = false; return; }
             sort = { column: column[0], direction: sorted ? (sort.direction === "asc" ? "desc" : "asc") : column[0] === "priority" ? "desc" : "asc" };
-            page = 0; refresh(); $host.find('[data-sort="' + column[0] + '"]').trigger("focus");
+            page = 0; saveLayout(); refresh(); $host.find('[data-sort="' + column[0] + '"]').trigger("focus");
           });
         var $resize = $("<span/>").addClass("ujg-esi-column-resize").attr({ role:"separator", tabindex:"0", "aria-label":"Ширина: " + heading, "aria-orientation":"vertical" })
           .on("pointerdown", function(event) {
@@ -7044,7 +7181,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var $size = $("<select/>").attr("aria-label", "Замечаний на странице").on("change", function() { pageSize = Number(this.value); page = 0; refresh(); });
       [20, 50, 100].forEach(function(n) { $size.append($("<option/>").val(n).text(n + " на странице")); });
       $size.val(pageSize);
-      $footer.append($size, button("FunnelX", "Сбросить все фильтры", function() { filters = Object.create(null); page = 0; refresh(); }).prop("disabled", !Object.keys(filters).length));
+      $footer.append($size, button("FunnelX", "Сбросить все фильтры", function() { filters = Object.create(null); page = 0; saveLayout(); refresh(); }).prop("disabled", !Object.keys(filters).length));
       $footer.append($("<span/>").addClass("ujg-esi-page-spacer"), button("ChevronLeft", "Предыдущая страница", function() { page -= 1; refresh(); }).prop("disabled", page === 0), $("<span/>").text((page + 1) + " / " + pages), button("ChevronRight", "Следующая страница", function() { page += 1; refresh(); }).prop("disabled", page >= pages - 1));
       $host.append($footer);
       $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
@@ -7061,13 +7198,14 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         if (layoutKey !== storageKey(state)) loadLayout(storageKey(state));
         closeMenu(); closeDescription();
         if (sourceRows !== state.rows) {
-          sourceRows = state.rows; filters = Object.create(null); collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
+          if (sourceRows !== undefined) { filters = Object.create(null); saveLayout(); }
+          sourceRows = state.rows; collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
           var linked = 0;
           (state.rows || []).forEach(function(row, index) {
             if ((row.createdKey || row.jiraKey) && linked++ >= 3 && row.status !== "partial") collapsed[String(row.id || index)] = true;
           });
         }
-        rows = registry.buildRows(state.rows);
+        rows = registry.buildRows(state.rows, null, state);
         $host = $("<div/>").addClass("ujg-esi-registry"); $parent.append($host); $viewport = null;
         $(document).off("click.ujgRegistry" + id).on("click.ujgRegistry" + id, function(event) {
           if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
@@ -8165,6 +8303,30 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     $table.append($tbody);
     $parent.append($head, $table);
+    if (blockKey === "modules") {
+      var components = state.componentOptions || [];
+      var message = state.componentsError || (!state.componentsLoaded
+        ? "Компоненты Jira ещё не проверены."
+        : "Компоненты проекта: " + (components.map(function(item) { return item.name; }).join(", ") || "нет"));
+      $parent.append($("<p/>").addClass("ujg-esi-component-catalog").text(message));
+      if (state.componentsLoaded) {
+        function componentName(value) { return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase(); }
+        function matchingComponent(entry) {
+          return components.filter(function(component) { return componentName(component.name) === componentName(entry.jira); })[0];
+        }
+        var missing = (entries || []).filter(function(entry) {
+          return entry.jira && !matchingComponent(entry);
+        });
+        if (missing.length) $parent.append($("<p/>").addClass("ujg-esi-component-warning")
+          .text("Не найдены в проекте Jira: " + missing.map(function(entry) { return entry.jira; }).join(", ")));
+        var renamed = (entries || []).filter(function(entry) {
+          var match = matchingComponent(entry);
+          return match && entry.jira !== match.name;
+        });
+        if (renamed.length) $parent.append($("<p/>").addClass("ujg-esi-component-name-warning")
+          .text("Уточните точное имя компонента: " + renamed.map(function(entry) { return entry.jira + " → " + matchingComponent(entry).name; }).join(", ")));
+      }
+    }
   }
 
   function appendColumnMappings($parent, settings) {
@@ -9730,6 +9892,9 @@ define("_ujgESI_main", [
       assignee: issueAssigneeName(issue),
       assigneeIdentifiers: userIdentifiers(fields.assignee),
       priority: name(fields.priority),
+      components: (Array.isArray(fields.components) ? fields.components : []).filter(Boolean).map(function(component) {
+        return { id: String(component.id || ""), name: name(component) };
+      }),
       issueType: name(fields.issuetype),
       updated: fields.updated != null ? String(fields.updated) : "",
       created: fields.created != null ? String(fields.created) : "",
@@ -9884,6 +10049,7 @@ define("_ujgESI_main", [
         assigneeIdentifiers: details.assigneeIdentifiers,
         blocked: issueIsBlocked(resolved, mergedIssueMap),
         priority: details.priority,
+        components: details.components,
         issueType: details.issueType,
         updated: details.updated,
         created: details.created,
@@ -10048,6 +10214,11 @@ define("_ujgESI_main", [
       createMetaLoading: false,
       createMetaError: "",
       priorityOptions: defaultPriorityOptions(),
+      componentOptions: [],
+      componentsLoaded: false,
+      componentsError: "",
+      componentsProjectKey: "",
+      componentsSequence: 0,
       mappingSettings: defaultMappingSettings(),
       mappingEditorOpen: false,
       activeMappingBlock: "modules",
@@ -11255,6 +11426,7 @@ define("_ujgESI_main", [
 
     function loadCreateMeta(projectKey) {
       var key = projectKey != null ? String(projectKey) : "";
+      if (key === String(state.projectKey || "")) loadComponents(key);
       if (!key || !api || typeof api.getProjectCreateMeta !== "function") return Promise.resolve();
       state.createMetaLoading = true;
       state.createMetaError = "";
@@ -11288,6 +11460,28 @@ define("_ujgESI_main", [
           render();
         }
       );
+    }
+
+    function loadComponents(key) {
+      var sequence = ++state.componentsSequence;
+      state.componentsProjectKey = key;
+      state.componentOptions = [];
+      state.componentsLoaded = false;
+      state.componentsError = "";
+      if (!key || !api || typeof api.getProjectComponents !== "function") return;
+      Promise.resolve().then(function() { return promiseOf(api.getProjectComponents(key)); }).then(function(data) {
+        if (sequence !== state.componentsSequence || key !== String(state.projectKey || "")) return;
+        if (!Array.isArray(data)) throw new Error("Invalid component catalog");
+        state.componentOptions = data.filter(function(item) { return item && item.name; }).map(function(item) {
+          return { id: String(item.id || ""), name: String(item.name) };
+        });
+        state.componentsLoaded = true;
+        render();
+      }).catch(function() {
+        if (sequence !== state.componentsSequence || key !== String(state.projectKey || "")) return;
+        state.componentsError = "Не удалось проверить компоненты проекта Jira.";
+        render();
+      });
     }
 
     function loadUsers() {
@@ -12078,6 +12272,29 @@ define("_ujgESI_main", [
         render();
         return;
       }
+      var confirmedRows = state.rows;
+      var confirmedViewMode = state.viewMode;
+      var confirmedEpicKey = state.epicKey;
+      var confirmedWorkbook = state.sourceWorkbook;
+      var confirmedBuffer = state.sourceFileBuffer;
+      var confirmedFileName = state.sourceFileName;
+      var previousStatus = row.status;
+      var previousErrors = row.errors;
+      var childCreateStarted = false;
+      function staleContext() {
+        return dialog.scopeProjectKey !== state.projectKey || state.epicKey !== confirmedEpicKey ||
+          state.viewMode !== confirmedViewMode || state.rows !== confirmedRows || state.rows[dialog.rowIndex] !== row ||
+          state.sourceWorkbook !== confirmedWorkbook || state.sourceFileBuffer !== confirmedBuffer ||
+          state.sourceFileName !== confirmedFileName || state.loading || issueKeyFromRow(row) !== parentKey;
+      }
+      function releaseStale() {
+        createInFlight = false;
+        if (row.status === "creating") {
+          row.status = previousStatus;
+          row.errors = previousErrors;
+        }
+        render();
+      }
       createInFlight = true;
       row.status = "creating";
       row.errors = [];
@@ -12088,9 +12305,27 @@ define("_ujgESI_main", [
       closeUserPicker();
       render();
       Promise.resolve().then(function() {
+        if (api && typeof api.getIssuesByKeys === "function") {
+          return promiseOf(api.getIssuesByKeys([parentKey])).then(function(data) {
+            return normalizeIssues(data).filter(function(issue) { return normalizeIssueKey(issue && issue.key) === parentKey; })[0];
+          });
+        }
+        if (api && typeof api.getIssueWithHistory === "function") return api.getIssueWithHistory(parentKey);
+        throw new Error("Jira API для чтения родительской Story недоступен.");
+      }).then(null, function(err) {
+        throw new Error("Не удалось прочитать приоритет родительской Story " + parentKey + " из Jira: " + (err && err.message ? err.message : "request failed"));
+      }).then(function(parentIssue) {
+        if (staleContext()) return { stale: true };
+        var priority = parentIssue && parentIssue.fields && parentIssue.fields.priority;
+        var parentPriority = priority && typeof priority.name === "string" ? priority.name.trim() : "";
+        if (normalizeIssueKey(parentIssue && parentIssue.key) !== parentKey || !parentPriority) {
+          throw new Error("Не удалось определить текущий приоритет родительской Story " + parentKey + " в Jira.");
+        }
+        childCreateStarted = true;
         return creator.createAdditionalTasks(api, row, {
           projectKey: dialog.projectKey,
           parentKey: parentKey,
+          parentPriority: parentPriority,
           parentSummary: dialog.parentSummary,
           summary: dialog.parentSummary,
           sourceRows: dialog.sourceRows,
@@ -12098,9 +12333,11 @@ define("_ujgESI_main", [
           mappings: state.mappingSettings,
         });
       }).then(function(result) {
+        if (result && result.stale) return releaseStale();
         createInFlight = false;
         completeCreate(row, result);
       }, function(err) {
+        if (!childCreateStarted && staleContext()) return releaseStale();
         createInFlight = false;
         completeCreate(row, { ok: false, createdKey: parentKey, errors: [err && err.message ? err.message : "request failed"] });
       });

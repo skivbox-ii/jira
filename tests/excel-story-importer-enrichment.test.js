@@ -50,6 +50,40 @@ function history(created, to, toString, from, fromString) {
   return { created, items: [{ field: "status", to, toString, from, fromString }] };
 }
 
+function parentPriorityIssue(key) {
+  return { key, fields: { priority: { name: "High" } } };
+}
+
+test("project change loads component options", async function () {
+  const app = await loadImporter([], {
+    getProjectComponents: key => {
+      assert.equal(key, "TEST");
+      return Promise.resolve([{ id: "1", name: "X" }]);
+    },
+  });
+  app.callbacks.onProjectChange("TEST");
+  await flush();
+  assert.equal(app.state.componentsLoaded, true);
+  assert.deepEqual(plain(app.state.componentOptions), [{ id: "1", name: "X" }]);
+});
+
+test("late component response from prior project cannot replace current options", async function () {
+  let resolveTest;
+  const app = await loadImporter([], {
+    getProjectComponents: key => key === "TEST"
+      ? new Promise(resolve => { resolveTest = resolve; })
+      : Promise.resolve([{ id: "2", name: "Other" }]),
+  });
+  app.callbacks.onProjectChange("TEST");
+  app.callbacks.onProjectChange("OTHER");
+  await flush();
+  assert.equal(app.state.componentsLoaded, true);
+  assert.deepEqual(plain(app.state.componentOptions), [{ id: "2", name: "Other" }]);
+  resolveTest([{ id: "1", name: "X" }]);
+  await flush();
+  assert.deepEqual(plain(app.state.componentOptions), [{ id: "2", name: "Other" }]);
+});
+
 test("opening Dynamics refreshes the scope on entry while retaining Excel rows", async () => {
   const calls=[];
   const excel=[{jiraKey:"TEST-10",summary:"Excel source",sourceColumns:{}}];
@@ -250,8 +284,8 @@ test("a cancelled refresh after success is retried instead of silently reusing t
 
 test("daily activity retains history on parent and child and explicitly enriches only incomplete issues", async () => {
   const calls = [];
-  const child = { key: "TEST-2", fields: { summary: "[QA] Child", created: "2026-09-01T00:00:00Z" }, changelog: { startAt: 0, total: 0, histories: [] } };
-  const parent = { key: "TEST-1", fields: { summary: "Parent", created: "2026-09-01T00:00:00Z", issuelinks: [{ type: { name: "Child" }, outwardIssue: child }] } };
+  const child = { key: "TEST-2", fields: { summary: "[QA] Child", created: "2026-09-01T00:00:00Z", components: [{ id: "2", name: "Y" }] }, changelog: { startAt: 0, total: 0, histories: [] } };
+  const parent = { key: "TEST-1", fields: { summary: "Parent", created: "2026-09-01T00:00:00Z", components: [{ id: "1", name: "X" }], issuelinks: [{ type: { name: "Child" }, outwardIssue: child }] } };
   const app = await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}], {
     getIssuesByKeys: keys => Promise.resolve({issues: keys.map(key => key === parent.key ? parent : child)}),
     getIssueWithHistory: key => { calls.push(key); return Promise.resolve(Object.assign({}, parent, {changelog: {startAt:0,total:0,histories:[]}})); }
@@ -260,6 +294,8 @@ test("daily activity retains history on parent and child and explicitly enriches
   assert.equal(app.state.rows[0].storyDetails.activity.complete, false);
   assert.equal(app.state.rows[0].childStatuses[0].activity.complete, true);
   assert.equal(app.state.rows[0].storyDetails.created, parent.fields.created);
+  assert.deepEqual(plain(app.state.rows[0].storyDetails.components), [{ id: "1", name: "X" }]);
+  assert.deepEqual(plain(app.state.rows[0].childStatuses[0].components), [{ id: "2", name: "Y" }]);
   assert.equal(calls.length, 0);
   app.callbacks.onLoadActivityHistory(); await flush(); await flush();
   assert.deepEqual(calls, ["TEST-1"]);
@@ -407,7 +443,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     key: "TEST-1", summary: "Existing Story", description: "Story detail", descriptionLoaded: true, status: "In Progress", assignee: "Иван",
     statusCategory: "", statusState: "progress", done: false,
     assigneeIdentifiers: ["JIRAUSER100", "ivan"],
-    priority: "High", issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
+    priority: "High", components: [], issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
     created: issues[0].fields.created,
     activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
@@ -417,7 +453,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     role: "FE", key: "TEST-2", summary: "[FE] Existing child", description: "Child detail", descriptionLoaded: true, status: "Open", linkedToParent: true,
     statusCategory: "new", statusState: "todo", done: false, assignee: "developer", blocked: false,
     assigneeIdentifiers: ["developer"],
-    priority: "Low", issueType: "Task", updated: "2026-02-02T00:00:00Z",
+    priority: "Low", components: [], issueType: "Task", updated: "2026-02-02T00:00:00Z",
     created: child.fields.created,
     activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[]},
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
@@ -828,7 +864,9 @@ test("modal project override creates Story in the chosen project", async functio
 
 test("existing Story opens child-only dialog and keeps partial created children without duplicate parent", async function () {
   const calls = [];
-  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {}, {
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {
+    getIssueWithHistory: key => Promise.resolve(parentPriorityIssue(key)),
+  }, {
     createRow() { assert.fail("Existing Story must not be recreated"); },
     createAdditionalTasks(_api, row, options) {
       calls.push({ row, options });
@@ -857,9 +895,109 @@ test("existing Story opens child-only dialog and keeps partial created children 
   assert.deepEqual(Array.from(app.state.rows[0].errors), ["QA failed"]);
 });
 
+test("child confirmation reads current Jira priority before invoking creator", async function () {
+  const calls = [];
+  let resolveParent;
+  const app = await loadImporter([{
+    jiraKey: "TEST-1", summary: "Remark", storyDetails: { priority: "Low" },
+    sourceColumns: { "Приоритет": "Высокий" },
+  }], {
+    getIssuesByKeys(keys) {
+      calls.push(["read", plain(keys)]);
+      return new Promise(resolve => { resolveParent = resolve; });
+    },
+  }, {
+    createAdditionalTasks(_api, _row, options) {
+      calls.push(["create", plain(options)]);
+      return Promise.resolve({ ok: true, createdKey: "TEST-1", createdChildren: [], errors: [] });
+    },
+  });
+  app.callbacks.onAddChildTasks(0);
+  app.callbacks.onDialogChildToggle(0, true);
+  app.callbacks.onConfirmCreate();
+  await flush();
+  assert.deepEqual(calls, [["read", ["TEST-1"]]]);
+  resolveParent({ issues: [{ key: "TEST-1", fields: { priority: { name: "Highest" } } }] });
+  await flush(); await flush();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1][1].parentPriority, "Highest");
+  assert.equal(app.state.rows[0].status, "created");
+});
+
+for (const change of ["project", "workbook", "row"]) {
+  test("child confirmation cancels before writes when " + change + " changes during parent read", async function () {
+    let resolveParent, creates = 0;
+    const row = { jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} };
+    const app = await loadImporter([row], {
+      getIssuesByKeys() { return new Promise(resolve => { resolveParent = resolve; }); },
+    }, {
+      createAdditionalTasks() { creates++; return Promise.resolve({ ok: true, createdKey: "TEST-1", createdChildren: [], errors: [] }); },
+    });
+    const confirmedRow = app.state.rows[0];
+    app.callbacks.onProjectChange("TEST");
+    app.callbacks.onAddChildTasks(0);
+    app.callbacks.onDialogChildToggle(0, true);
+    app.callbacks.onConfirmCreate();
+    await flush();
+    assert.equal(app.state.createDialog, null, "Submitting closes the dialog before the read completes");
+    assert.equal(confirmedRow.status, "creating");
+    if (change === "project") app.callbacks.onProjectChange("OTHER");
+    else if (change === "workbook") {
+      app.callbacks.onFileChange({ name: "replacement.xlsx" });
+      await flush(); await flush();
+    } else app.state.rows[0] = { jiraKey: "TEST-1", summary: "Replacement", sourceColumns: {} };
+    resolveParent({ issues: [parentPriorityIssue("TEST-1")] });
+    await flush(); await flush();
+    assert.equal(creates, 0);
+    assert.notEqual(confirmedRow.status, "creating", "The old row must not stay locked");
+  });
+}
+
+for (const scenario of [
+  { name: "missing issue", response: { issues: [] } },
+  { name: "wrong issue", response: { issues: [{ key: "TEST-2", fields: { priority: { name: "High" } } }] } },
+  { name: "missing priority", response: { issues: [{ key: "TEST-1", fields: {} }] } },
+  { name: "blank priority", response: { issues: [{ key: "TEST-1", fields: { priority: { name: "  " } } }] } },
+  { name: "read failure", error: new Error("offline") },
+]) {
+  test("child confirmation blocks writes on " + scenario.name + " and can retry", async function () {
+    let reads = 0, creates = 0;
+    const app = await loadImporter([{
+      jiraKey: "TEST-1", summary: "Remark", storyDetails: { priority: "Low" },
+      sourceColumns: { "Приоритет": "Высокий" },
+    }], {
+      getIssuesByKeys() {
+        reads++;
+        return reads === 1
+          ? scenario.error ? Promise.reject(scenario.error) : Promise.resolve(scenario.response)
+          : Promise.resolve({ issues: [{ key: "TEST-1", fields: { priority: { name: "Medium" } } }] });
+      },
+    }, {
+      createAdditionalTasks(_api, _row, options) {
+        creates++;
+        assert.equal(options.parentPriority, "Medium");
+        return Promise.resolve({ ok: true, createdKey: "TEST-1", createdChildren: [], errors: [] });
+      },
+    });
+    app.callbacks.onAddChildTasks(0);
+    app.callbacks.onDialogChildToggle(0, true);
+    app.callbacks.onConfirmCreate();
+    await flush(); await flush();
+    assert.equal(creates, 0);
+    assert.equal(app.state.rows[0].status, "failed");
+    assert.match(app.state.rows[0].errors.join(" "), /приоритет|priority/i);
+    app.callbacks.onAddChildTasks(0);
+    app.callbacks.onDialogChildToggle(0, true);
+    app.callbacks.onConfirmCreate();
+    await flush(); await flush();
+    assert.equal(reads, 2);
+    assert.equal(creates, 1);
+  });
+}
+
 test("failed parent link metadata and child key survive a later Jira sync", async function () {
   const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {
-    getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [] } }] }),
+    getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" }, priority: { name: "High" }, issuelinks: [] } }] }),
   }, {
     createAdditionalTasks: () => Promise.resolve({
       ok: false, partial: true, createdKey: "TEST-1", errors: ["link denied"],
@@ -882,7 +1020,7 @@ test("failed parent link metadata and child key survive a later Jira sync", asyn
 test("failed-link child remains visible after manual registry refresh", async function () {
   const app = await loadImporter([], {
     getProjectIssues: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [] } }] }),
-    getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+    getIssuesByKeys: keys => Promise.resolve({ issues: keys.indexOf("TEST-1") !== -1 ? [parentPriorityIssue("TEST-1")] : [] }),
   }, {
     createAdditionalTasks: () => Promise.resolve({
       ok: false, partial: true, createdKey: "TEST-1", errors: ["link denied"],
@@ -911,7 +1049,7 @@ for (const scope of ["project", "epic"]) {
         key: project !== "TEST" ? "OTHER-1" : epic ? "TEST-2" : "TEST-1",
         fields: { summary: "Story", issuetype: { name: "Story" }, issuelinks: [] },
       }] }),
-      getIssuesByKeys: () => Promise.resolve({ issues: [] }),
+      getIssuesByKeys: keys => Promise.resolve({ issues: keys.indexOf("TEST-1") !== -1 ? [parentPriorityIssue("TEST-1")] : [] }),
     }, {
       createAdditionalTasks: () => Promise.resolve({
         ok: false, partial: true, createdKey: "TEST-1", errors: ["link denied"],
@@ -952,6 +1090,7 @@ test("controller passes existing Story to real creator and creates only selected
     },
     createIssueLink(payload) { links.push(plain(payload)); return Promise.resolve({}); },
     getIssueLinkTypes: () => Promise.resolve({ issueLinkTypes: [{ name: "Child", outward: "child of", inward: "parent of" }] }),
+    getIssueWithHistory: key => Promise.resolve(parentPriorityIssue(key)),
   });
   app.callbacks.onProjectChange("TEST");
   app.callbacks.onAddChildTasks(0);
@@ -960,6 +1099,7 @@ test("controller passes existing Story to real creator and creates only selected
   await flush(); await flush(); await flush();
   assert.equal(payloads.length, 1);
   assert.match(payloads[0].fields.summary, /Source remark/);
+  assert.equal(payloads[0].fields.priority.name, "High");
   assert.equal(links.length, 1);
   assert.equal(app.state.rows[0].createdKey, "TEST-1");
   assert.equal(app.state.rows[0].childStatuses[0].key, "TEST-2");
@@ -967,7 +1107,9 @@ test("controller passes existing Story to real creator and creates only selected
 
 test("existing parent supplies child project when no project is selected", async function () {
   const calls = [];
-  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {}, {
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {
+    getIssueWithHistory: key => Promise.resolve(parentPriorityIssue(key)),
+  }, {
     createAdditionalTasks(_api, _row, options) {
       calls.push(options);
       return Promise.resolve({ ok: true, createdKey: "TEST-1", createdChildren: [], errors: [] });
@@ -982,7 +1124,9 @@ test("existing parent supplies child project when no project is selected", async
 });
 
 test("synchronous child creator failure releases the row for retry", async function () {
-  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {}, {
+  const app = await loadImporter([{ jiraKey: "TEST-1", summary: "Remark", sourceColumns: {} }], {
+    getIssueWithHistory: key => Promise.resolve(parentPriorityIssue(key)),
+  }, {
     createAdditionalTasks() { throw new Error("transport setup failed"); },
   });
   app.callbacks.onAddChildTasks(0);

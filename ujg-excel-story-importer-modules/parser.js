@@ -97,9 +97,11 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   function headerNames(row, settings) {
     var raw = (row || []).map(cellText);
     var useOwnerAlias = cellText(settings.columnMap.owner) === "Ответственный" && raw.indexOf("Ответственный") === -1;
+    var useModuleAlias = cellText(settings.columnMap.module) === "Модуль" && raw.indexOf("Модуль") === -1;
     var names = raw.map(function(value, index) {
       var text = canonicalColumnName(value, settings);
       if (useOwnerAlias && value === "Ответственный от ТНТ" && text === value) text = "Ответственный";
+      if (useModuleAlias && value === "Компонент" && text === value) text = "Модуль";
       return text || "Колонка " + String(index + 1);
     });
     var preferred = {

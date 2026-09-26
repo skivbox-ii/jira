@@ -1048,6 +1048,30 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     $table.append($tbody);
     $parent.append($head, $table);
+    if (blockKey === "modules") {
+      var components = state.componentOptions || [];
+      var message = state.componentsError || (!state.componentsLoaded
+        ? "Компоненты Jira ещё не проверены."
+        : "Компоненты проекта: " + (components.map(function(item) { return item.name; }).join(", ") || "нет"));
+      $parent.append($("<p/>").addClass("ujg-esi-component-catalog").text(message));
+      if (state.componentsLoaded) {
+        function componentName(value) { return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase(); }
+        function matchingComponent(entry) {
+          return components.filter(function(component) { return componentName(component.name) === componentName(entry.jira); })[0];
+        }
+        var missing = (entries || []).filter(function(entry) {
+          return entry.jira && !matchingComponent(entry);
+        });
+        if (missing.length) $parent.append($("<p/>").addClass("ujg-esi-component-warning")
+          .text("Не найдены в проекте Jira: " + missing.map(function(entry) { return entry.jira; }).join(", ")));
+        var renamed = (entries || []).filter(function(entry) {
+          var match = matchingComponent(entry);
+          return match && entry.jira !== match.name;
+        });
+        if (renamed.length) $parent.append($("<p/>").addClass("ujg-esi-component-name-warning")
+          .text("Уточните точное имя компонента: " + renamed.map(function(entry) { return entry.jira + " → " + matchingComponent(entry).name; }).join(", ")));
+      }
+    }
   }
 
   function appendColumnMappings($parent, settings) {

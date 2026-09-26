@@ -14,7 +14,7 @@ function setup(activityReport) {
   modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
   if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,statusLabel: value => value,statusTone: () => "unknown",eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
-  const files=["remark-id", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
+  const files=["remark-id", "deadlines", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
   if (activityReport) {
     modules._ujgESI_marked = require("../../vendor/marked-16.4.2.umd.js");
     files.push("activity-ai","activity-markdown","activity-ai-ui","activity-management-ui","activity-ui");
@@ -887,14 +887,14 @@ test("restored layouts validate IDs and widths and remain scoped to the active u
   const a = "ujg-esi-state:user:key:a", b = "ujg-esi-state:user:key:b";
   dom.window.localStorage.setItem(a, JSON.stringify({gridLayout:{order:["summary","summary","invented","remark"],visible:["summary","remark"],widths:{summary:9000,remark:-4}},projectKey:"P"}));
   state.preferencesStorageKey = a; render();
-  assert.deepEqual($("thead th[data-column]").toArray().map(th => th.dataset.column),["summary","remark"]);
+  assert.deepEqual($("thead th[data-column]").toArray().map(th => th.dataset.column),["summary","remark","deadline","jiraComponent"]);
   assert.equal($("col[data-column='summary']").attr("width"),"600");
   assert.equal($("col[data-column='remark']").attr("width"),"50");
   state.preferencesStorageKey = b; render();
   assert.equal($("thead th[data-column='remarkId']").length,1);
   assert.equal($("col[data-column='summary']").attr("width"),"276");
   state.preferencesStorageKey = a; render();
-  assert.deepEqual($("thead th[data-column]").toArray().map(th => th.dataset.column),["summary","remark"]);
+  assert.deepEqual($("thead th[data-column]").toArray().map(th => th.dataset.column),["summary","remark","deadline","jiraComponent"]);
   state.preferencesStorageKey = b; render();
   dom.window.localStorage.setItem(b,"not json"); render();
   assert.equal($("thead th[data-column='remarkId']").length,1);
@@ -981,9 +981,10 @@ test("interleaved More button occupies the widest task run", t => {
   dom.window.localStorage.setItem("wide-more",JSON.stringify({gridLayout:{order:["type","owner","summary"],visible:["type","owner","summary"],widths:{type:50,summary:310}}}));
   render();
   const cells = $(".ujg-esi-more-row").first().find("td");
-  assert.equal(cells.length,2);
+  assert.equal(cells.length,3);
   assert.equal(cells.eq(0).find(".ujg-esi-more-children").length,0);
   assert.equal(cells.eq(1).find(".ujg-esi-more-children").length,1);
+  assert.equal(cells.eq(2).find(".ujg-esi-more-children").length,0);
 });
 
 test("Mermaid resource syntax stays readable without entering the library", async t => {

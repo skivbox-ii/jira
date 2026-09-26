@@ -713,6 +713,9 @@ define("_ujgESI_main", [
       assignee: issueAssigneeName(issue),
       assigneeIdentifiers: userIdentifiers(fields.assignee),
       priority: name(fields.priority),
+      components: (Array.isArray(fields.components) ? fields.components : []).filter(Boolean).map(function(component) {
+        return { id: String(component.id || ""), name: name(component) };
+      }),
       issueType: name(fields.issuetype),
       updated: fields.updated != null ? String(fields.updated) : "",
       created: fields.created != null ? String(fields.created) : "",
@@ -867,6 +870,7 @@ define("_ujgESI_main", [
         assigneeIdentifiers: details.assigneeIdentifiers,
         blocked: issueIsBlocked(resolved, mergedIssueMap),
         priority: details.priority,
+        components: details.components,
         issueType: details.issueType,
         updated: details.updated,
         created: details.created,
@@ -1031,6 +1035,11 @@ define("_ujgESI_main", [
       createMetaLoading: false,
       createMetaError: "",
       priorityOptions: defaultPriorityOptions(),
+      componentOptions: [],
+      componentsLoaded: false,
+      componentsError: "",
+      componentsProjectKey: "",
+      componentsSequence: 0,
       mappingSettings: defaultMappingSettings(),
       mappingEditorOpen: false,
       activeMappingBlock: "modules",
@@ -2238,6 +2247,7 @@ define("_ujgESI_main", [
 
     function loadCreateMeta(projectKey) {
       var key = projectKey != null ? String(projectKey) : "";
+      if (key === String(state.projectKey || "")) loadComponents(key);
       if (!key || !api || typeof api.getProjectCreateMeta !== "function") return Promise.resolve();
       state.createMetaLoading = true;
       state.createMetaError = "";
@@ -2271,6 +2281,28 @@ define("_ujgESI_main", [
           render();
         }
       );
+    }
+
+    function loadComponents(key) {
+      var sequence = ++state.componentsSequence;
+      state.componentsProjectKey = key;
+      state.componentOptions = [];
+      state.componentsLoaded = false;
+      state.componentsError = "";
+      if (!key || !api || typeof api.getProjectComponents !== "function") return;
+      Promise.resolve().then(function() { return promiseOf(api.getProjectComponents(key)); }).then(function(data) {
+        if (sequence !== state.componentsSequence || key !== String(state.projectKey || "")) return;
+        if (!Array.isArray(data)) throw new Error("Invalid component catalog");
+        state.componentOptions = data.filter(function(item) { return item && item.name; }).map(function(item) {
+          return { id: String(item.id || ""), name: String(item.name) };
+        });
+        state.componentsLoaded = true;
+        render();
+      }).catch(function() {
+        if (sequence !== state.componentsSequence || key !== String(state.projectKey || "")) return;
+        state.componentsError = "Не удалось проверить компоненты проекта Jira.";
+        render();
+      });
     }
 
     function loadUsers() {
@@ -3061,6 +3093,29 @@ define("_ujgESI_main", [
         render();
         return;
       }
+      var confirmedRows = state.rows;
+      var confirmedViewMode = state.viewMode;
+      var confirmedEpicKey = state.epicKey;
+      var confirmedWorkbook = state.sourceWorkbook;
+      var confirmedBuffer = state.sourceFileBuffer;
+      var confirmedFileName = state.sourceFileName;
+      var previousStatus = row.status;
+      var previousErrors = row.errors;
+      var childCreateStarted = false;
+      function staleContext() {
+        return dialog.scopeProjectKey !== state.projectKey || state.epicKey !== confirmedEpicKey ||
+          state.viewMode !== confirmedViewMode || state.rows !== confirmedRows || state.rows[dialog.rowIndex] !== row ||
+          state.sourceWorkbook !== confirmedWorkbook || state.sourceFileBuffer !== confirmedBuffer ||
+          state.sourceFileName !== confirmedFileName || state.loading || issueKeyFromRow(row) !== parentKey;
+      }
+      function releaseStale() {
+        createInFlight = false;
+        if (row.status === "creating") {
+          row.status = previousStatus;
+          row.errors = previousErrors;
+        }
+        render();
+      }
       createInFlight = true;
       row.status = "creating";
       row.errors = [];
@@ -3071,9 +3126,27 @@ define("_ujgESI_main", [
       closeUserPicker();
       render();
       Promise.resolve().then(function() {
+        if (api && typeof api.getIssuesByKeys === "function") {
+          return promiseOf(api.getIssuesByKeys([parentKey])).then(function(data) {
+            return normalizeIssues(data).filter(function(issue) { return normalizeIssueKey(issue && issue.key) === parentKey; })[0];
+          });
+        }
+        if (api && typeof api.getIssueWithHistory === "function") return api.getIssueWithHistory(parentKey);
+        throw new Error("Jira API для чтения родительской Story недоступен.");
+      }).then(null, function(err) {
+        throw new Error("Не удалось прочитать приоритет родительской Story " + parentKey + " из Jira: " + (err && err.message ? err.message : "request failed"));
+      }).then(function(parentIssue) {
+        if (staleContext()) return { stale: true };
+        var priority = parentIssue && parentIssue.fields && parentIssue.fields.priority;
+        var parentPriority = priority && typeof priority.name === "string" ? priority.name.trim() : "";
+        if (normalizeIssueKey(parentIssue && parentIssue.key) !== parentKey || !parentPriority) {
+          throw new Error("Не удалось определить текущий приоритет родительской Story " + parentKey + " в Jira.");
+        }
+        childCreateStarted = true;
         return creator.createAdditionalTasks(api, row, {
           projectKey: dialog.projectKey,
           parentKey: parentKey,
+          parentPriority: parentPriority,
           parentSummary: dialog.parentSummary,
           summary: dialog.parentSummary,
           sourceRows: dialog.sourceRows,
@@ -3081,9 +3154,11 @@ define("_ujgESI_main", [
           mappings: state.mappingSettings,
         });
       }).then(function(result) {
+        if (result && result.stale) return releaseStale();
         createInFlight = false;
         completeCreate(row, result);
       }, function(err) {
+        if (!childCreateStarted && staleContext()) return releaseStale();
         createInFlight = false;
         completeCreate(row, { ok: false, createdKey: parentKey, errors: [err && err.message ? err.message : "request failed"] });
       });
