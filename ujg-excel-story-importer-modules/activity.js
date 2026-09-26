@@ -847,7 +847,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     (report.teams || []).forEach(function(team) { html += '<li>' + escape(team.name) + ' (' + escape(team.id) + '): ' + escape((team.members || []).map(function(member) { return member.label + ' [' + member.identifiers.join(', ') + ']'; }).join('; ')) + '</li>'; });
     html += '</ul><h2>Журнал</h2>';
     (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3>';
-      if (group.components && group.components.length) html += '<p>Компоненты: ' + escape(group.components.map(function(item) { return item.name; }).join(', ')) + '</p>';
+      var moduleValues = !Array.isArray(group.components) ? ["Компоненты неизвестны"] : !group.components.length ? ["Без компонента"] :
+        group.components.map(function(item) { return item && item.name || "Компоненты неизвестны"; })
+          .filter(function(value,index,all) { return all.indexOf(value) === index; }).sort(function(a,b) { return a.localeCompare(b,"ru"); });
+      var moduleNames = moduleValues.join(', ');
+      if (Array.isArray(group.components) && group.components.length) html += '<p>Компоненты: ' + escape(moduleNames) + '</p>';
       if (group.screenForms && group.screenForms.length) html += '<p>Форма: ' + escape(group.screenForms.join('; ')) + '</p>';
       if (group.deadline) html += '<p>' + escape(deadlineText(group.deadline)) + '</p>';
       if (group.dayHighlights) {
@@ -862,11 +866,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
         if (!group.dayComplete) highlights.push('История неполна');
         html += '<p>Сейчас: ' + escape(statusLabel(group.currentStatus)) + ' · Связанных задач: ' + escape(group.linkedTaskCount) + ' · За день: ' + escape(highlights.join(' · ')) + ' <small>(исходная история и связанные задачи)</small></p>';
       }
-      html += '<table><thead><tr><th>Время</th><th>Задача</th><th>Роль</th><th>Что произошло</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
+      html += '<table><thead><tr><th>Время</th><th>Задача</th><th>Модуль</th><th>Роль</th><th>Что произошло</th><th>Автор</th><th>Исполнитель</th><th>Команда</th></tr></thead><tbody>';
       (group.events || []).forEach(function(event) {
         var assignee = event.kind === "assignee" ? (str(event.fromAssignee && event.fromAssignee.label) || "Не назначен") + ' → ' + (str(event.toAssignee && event.toAssignee.label) || "Не назначен") : str(event.assignee && event.assignee.label) || "Не назначен";
         var team = event.kind === "assignee" && event.fromTeam !== event.toTeam ? str(event.fromTeam) + ' → ' + str(event.toTeam) : str(event.toTeam);
-        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(event.role || "История") + '</td><td>' + escape(eventText(event)) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(assignee) + '</td><td>' + escape(team) + '</td></tr>';
+        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(moduleNames) + '</td><td>' + escape(event.role || "История") + '</td><td>' + escape(eventText(event)) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(assignee) + '</td><td>' + escape(team) + '</td></tr>';
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }

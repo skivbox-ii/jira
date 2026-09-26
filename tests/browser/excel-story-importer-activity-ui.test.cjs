@@ -53,6 +53,106 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+test("module column is visible and uses every parent component with safe text", t => {
+  const report=fixture();
+  report.groups[0].components=[{id:"component:1",name:"Сервер"},{id:"component:2",name:"<img src=x>"}];
+  report.events[0].components=[{name:"Child only"}];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$("th[data-column='module'] [data-activity-sort]").text(),"Модуль");
+  assert.equal(x.$("th[data-column='role']").next().attr("data-column"),"module");
+  const cells=x.$(".ujg-esi-activity-event td[data-column='module']");
+  assert.equal(cells.length,2);
+  assert.match(cells.first().text(),/Сервер/);
+  assert.match(cells.first().text(),/<img src=x>/);
+  assert.doesNotMatch(cells.text(),/Child only/);
+  assert.equal(cells.find("img").length,0);
+});
+test("module column distinguishes empty and unknown parent components", t => {
+  const report=fixture(); report.groups[0].components=[];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  assert.equal(x.$("td[data-column='module']").first().text(),"Без компонента");
+  delete report.groups[0].components; x.render();
+  assert.equal(x.$("td[data-column='module']").first().text(),"Компоненты неизвестны");
+});
+test("module filter offers individual components and keeps all matching parent events and export", t => {
+  const report=fixture(); report.groups[0].components=[{id:"component:1",name:"Сервер"},{id:"component:2",name:"Экран"}];
+  const extra={...report.events[0],id:"other",issueKey:"P-10"};
+  report.groups.push({id:"g2",key:"P-9",components:[{id:"component:3",name:"Отчёты"}],events:[extra]});
+  report.events=report.events.concat(extra);
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const globalReport=x.calls.aiReport;
+  x.$("[data-activity-filter='module']").trigger("click");
+  assert.deepEqual(x.$(".ujg-esi-activity-filter-option").map(function(){return x.$(this).text();}).get().sort(),["Отчёты","Сервер","Экран"].sort());
+  x.$(".ujg-esi-activity-filter-menu").trigger(x.$.Event("keydown",{key:"Escape"}));
+  selectFilter(x,"module",["Экран"]);
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  assert.equal(x.$(".ujg-esi-activity-group").length,1);
+  assert.equal(x.calls.aiReport,globalReport,"Column filter must not change global report");
+  x.dom.window.URL.createObjectURL=()=>"blob:test"; x.dom.window.URL.revokeObjectURL=()=>{};
+  x.dom.window.HTMLAnchorElement.prototype.click=()=>{};
+  x.$("[aria-label='Скачать HTML']").trigger("click");
+  assert.equal(x.calls.exports.at(-1).value.groups.length,1);
+  assert.deepEqual(Array.from(x.calls.exports.at(-1).context.filters.module),["Экран"]);
+});
+test("module sort orders whole groups by parent component", t => {
+  const report=fixture(); report.groups[0].components=[{name:"Ядро"}];
+  report.groups.push({...report.groups[0],id:"g2",key:"P-9",components:[{name:"Алармы"}],events:[{...report.events[0],id:"e9"}]});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-sort='module']").trigger("click");
+  assert.match(x.$(".ujg-esi-activity-group").first().text(),/P-9/);
+  x.$("[data-activity-sort='module']").trigger("click");
+  assert.match(x.$(".ujg-esi-activity-group").first().text(),/P-1/);
+});
+test("legacy layout gains a visible module next to role without losing preferences", t => {
+  const saved={version:2,changeFilterVersion:1,order:["author","role","time","change","assignee","remark"],visible:["author","role","time"],widths:{role:381},sort:{key:"author",descending:true},filters:{role:["QA"]}};
+  const x=setup(fixture(),window=>window.localStorage.setItem("ujg-esi-state:activity-layout",JSON.stringify(saved))); t.after(()=>x.dom.window.close());
+  assert.equal(x.$("th[data-column='module']").length,1);
+  assert.equal(x.$("th[data-column='role']").next().attr("data-column"),"module");
+  const migrated=JSON.parse(x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout"));
+  assert.equal(migrated.widths.role,381);
+  assert.deepEqual(migrated.filters,saved.filters);
+  assert.deepEqual(migrated.sort,saved.sort);
+  assert.equal(migrated.visible.includes("change"),false);
+  x.$("[aria-label='Столбцы журнала']").trigger("click");
+  x.$(".ujg-esi-activity-column-option").filter(function(){return x.$(this).text()==="Модуль";}).find("input").prop("checked",false).trigger("change");
+  x.$(".ujg-esi-activity-columns-apply").trigger("click");
+  const persisted=x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout");
+  const reloaded=setup(fixture(),window=>window.localStorage.setItem("ujg-esi-state:activity-layout",persisted)); t.after(()=>reloaded.dom.window.close());
+  assert.equal(reloaded.$("th[data-column='module']").length,0);
+});
+test("module group sorting uses Russian collation in both directions and export", t => {
+  const report=fixture(), base=report.groups[0];
+  report.groups=["Ёлка","Журнал","Единый"].map((name,index)=>({...base,id:"g"+index,key:"P-"+index,components:[{name}],events:[{...base.events[0],id:"e"+index}]}));
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const modules=()=>x.$(".ujg-esi-activity-event td[data-column='module']").map(function(){return x.$(this).text();}).get();
+  x.$("[data-activity-sort='module']").trigger("click");
+  assert.deepEqual(modules(),["Единый","Ёлка","Журнал"]);
+  x.$("[data-activity-sort='module']").trigger("click");
+  assert.deepEqual(modules(),["Журнал","Ёлка","Единый"]);
+  x.dom.window.URL.createObjectURL=()=>"blob:test"; x.dom.window.URL.revokeObjectURL=()=>{};
+  x.dom.window.HTMLAnchorElement.prototype.click=()=>{};
+  x.$("[aria-label='Скачать HTML']").trigger("click");
+  assert.deepEqual(Array.from(x.calls.exports.at(-1).value.groups,group=>group.components[0].name),modules());
+});
+test("module width order and filter persist across reload and stay user scoped", t => {
+  const report=fixture(); report.groups[0].components=[{name:"Экран"},{name:"Сервер"}];
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"module",["Экран"]);
+  x.$("th[data-column='module'] .ujg-esi-activity-column-resize").trigger(x.$.Event("keydown",{key:"ArrowRight"}));
+  x.$("th[data-column='module']").trigger(x.$.Event("pointerdown",{pageX:100}));
+  x.$("th[data-column='role']").trigger(x.$.Event("pointerup",{pageX:40}));
+  const persisted=x.dom.window.localStorage.getItem("ujg-esi-state:activity-layout");
+  const saved=JSON.parse(persisted);
+  assert.equal(saved.widths.module,170);
+  assert.deepEqual(saved.filters.module,["Экран"]);
+  assert.ok(saved.order.indexOf("module")<saved.order.indexOf("role"));
+  const reloaded=setup(report,window=>window.localStorage.setItem("ujg-esi-state:activity-layout",persisted)); t.after(()=>reloaded.dom.window.close());
+  assert.equal(reloaded.$("th[data-column='module']").next().attr("data-column"),"role");
+  assert.equal(reloaded.$("col[data-column='module']").css("width"),"170px");
+  assert.equal(reloaded.$("[data-activity-filter='module']").hasClass("is-active"),true);
+  reloaded.state.preferencesStorageKey="other-user"; reloaded.render();
+  assert.equal(reloaded.$("[data-activity-filter='module']").hasClass("is-active"),false);
+});
 test("status matrix colors both axes and marks task return cells with their evidence", t => {
   const report=fixture(), event={...report.events[0],from:"Done",to:"In Progress",returnKind:"reopened"};
   report.events=[event]; report.groups[0].events=[event];
@@ -813,7 +913,7 @@ test("grouped assignment changes identify mixed assignees and retain each assign
   report.groups[0].events=[first,second]; report.events=[first,second];
   const x=setup(report); t.after(()=>x.dom.window.close());
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
-  assert.match(x.$(".ujg-esi-activity-event td").eq(3).text(),/Несколько исполнителей/);
+  assert.match(x.$(".ujg-esi-activity-event td[data-column='assignee']").text(),/Несколько исполнителей/);
   assert.match(x.$(".ujg-esi-activity-event [data-event-id='reassign']").text(),/Bob.*Ann.*BE.*QA/);
 });
 test("time sort orders remark groups by their first visible event", t => {
@@ -1070,7 +1170,7 @@ test("sort filter width and order persist per user-scoped activity layout", t =>
   assert.ok(saved.order.indexOf("role")>saved.order.indexOf("change"));
   x.render();
   assert.equal(x.$(".ujg-esi-activity-table thead th[data-column='author']").attr("aria-sort"),"ascending");
-  assert.equal(x.$(".ujg-esi-activity-table thead th").eq(1).attr("data-column"),"change");
+  assert.equal(x.$(".ujg-esi-activity-table thead th[data-column='change']").next().attr("data-column"),"role");
 });
 test("transfer count opens every matching event with safe text and closes on Escape", t => {
   const report=fixture(), event=report.groups[0].events[1];
@@ -1092,10 +1192,10 @@ test("column visibility and reset preserve at least one visible column", t => {
   x.$("[aria-label='Столбцы журнала']").trigger("click");
   x.$(".ujg-esi-activity-column-option input").last().prop("checked",false).trigger("change");
   x.$(".ujg-esi-activity-columns-apply").trigger("click");
-  assert.equal(x.$(".ujg-esi-activity-table thead th").length,4);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
   x.$("[aria-label='Столбцы журнала']").trigger("click");
   x.$(".ujg-esi-activity-columns-reset").trigger("click");
-  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,6);
 });
 test("resetting columns preserves applied filters and sort", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
@@ -1107,7 +1207,7 @@ test("resetting columns preserves applied filters and sort", t => {
   assert.deepEqual(saved.filters.role,["QA"]);
   assert.deepEqual(saved.sort,{key:"time",descending:true});
   assert.equal(x.$(".ujg-esi-activity-event").length,1);
-  assert.equal(x.$(".ujg-esi-activity-table thead th").length,5);
+  assert.equal(x.$(".ujg-esi-activity-table thead th").length,6);
 });
 test("empty Dynamics shows registry loading and error context", t => {
   const report=fixture(); report.groups=[]; report.events=[];

@@ -85,10 +85,17 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     var resizeObserver, observedViewportWidth;
     var $managementDialog, managementAnchor, bodyOverflow, previewTimer, previewCloseTimer;
     var componentSelection = null, componentKey, componentNames = Object.create(null), fullReport, scopedReport, lastAiReport;
+    function moduleValues(event, group) {
+      if (!Array.isArray(group.components)) return ["Компоненты неизвестны"];
+      if (!group.components.length) return ["Без компонента"];
+      return group.components.map(function(item) { return item && item.name || "Компоненты неизвестны"; })
+        .filter(function(value,index,all) { return all.indexOf(value) === index; }).sort(function(a,b) { return a.localeCompare(b,"ru"); });
+    }
     var fields = [
       {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
       {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
       {key:"role", title:"Тикет · Роль", width:240, value:function(event) { return roleLabel(event.role); }},
+      {key:"module", title:"Модуль", width:160, value:function(event,group) { return moduleValues(event,group).join(", "); },filterValue:moduleValues},
       {key:"change", title:"Изменение", width:230, value:function(event) { return activity.eventText(event); }, filterValue:function(event) { return activity.eventCategory(event); }},
       {key:"assignee", title:"Исполнитель / передача", width:190, value:function(event) { return label(event.assignee); }},
       {key:"author", title:"Кто изменил", width:145, value:function(event) { return label(event.author); }}
@@ -104,6 +111,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         if (Array.isArray(data.order)) order = data.order.filter(function(id) { if (known.indexOf(id) < 0 || seen[id]) return false; seen[id] = true; return true; }).concat(known.filter(function(id) { return !seen[id]; }));
         if (Array.isArray(data.visible) && data.visible.some(function(id) { return known.indexOf(id) >= 0; })) known.forEach(function(id) { hidden[id] = data.visible.indexOf(id) < 0; });
         if (data.version !== 2) { hidden.remark = true; if (known.every(function(id) { return hidden[id]; })) hidden.time = false; }
+        if (data.moduleColumnVersion !== 1) {
+          hidden.module = false;
+          order = order.filter(function(id) { return id !== "module"; });
+          order.splice(order.indexOf("role") + 1,0,"module");
+        }
         fields.forEach(function(field) {
           if (data.widths && typeof data.widths[field.key] === "number" && isFinite(data.widths[field.key])) widths[field.key] = clampWidth(data.widths[field.key],field.width);
         });
@@ -113,11 +125,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         });
         // Old selections contain full event text, not change categories.
         if (data.changeFilterVersion !== 1 && filters.change && filters.change.length) delete filters.change;
-        if (data.version !== 2 || data.changeFilterVersion !== 1) saveLayout();
+        if (data.version !== 2 || data.changeFilterVersion !== 1 || data.moduleColumnVersion !== 1) saveLayout();
       } catch (ignore) { /* Storage is best-effort. */ }
     }
     function saveLayout() {
-      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,changeFilterVersion:1,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
+      try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,changeFilterVersion:1,moduleColumnVersion:1,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
       catch (ignore) { /* Storage is best-effort. */ }
     }
     function loadComponentScope(state) {
@@ -281,7 +293,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $popover.css("top",Math.max(12,Math.min(rect.bottom+4,viewportHeight-$popover.outerHeight()-12)));
     }
     function matching(event, group) {
-      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || filters[field.key].indexOf((field.filterValue || field.value)(event,group)) >= 0; });
+      return fields.every(function(field) { return !Array.isArray(filters[field.key]) || [].concat((field.filterValue || field.value)(event,group)).some(function(value) { return filters[field.key].indexOf(value) >= 0; }); });
     }
     function filtered(report) {
       var groups = (report.groups || []).map(function(group) {
@@ -376,12 +388,13 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         var first = sortedEvents(a.events,a)[0], second = sortedEvents(b.events,b)[0];
         var left = field.key === "time" ? timestamp(first.at) : field.value(first,a).toLocaleLowerCase();
         var right = field.key === "time" ? timestamp(second.at) : field.value(second,b).toLocaleLowerCase();
-        return (left < right ? -1 : left > right ? 1 : 0) * (sort.descending ? -1 : 1);
+        var comparison = field.key === "module" ? left.localeCompare(right,"ru") : left < right ? -1 : left > right ? 1 : 0;
+        return comparison * (sort.descending ? -1 : 1);
       });
     }
     function filterMenu(anchor, field, report) {
       var values = Object.create(null), options;
-      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { values[(field.filterValue || field.value)(event,group)] = true; }); });
+      (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { [].concat((field.filterValue || field.value)(event,group)).forEach(function(value) { values[value] = true; }); }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
       var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
       var isPerson = field.key === "assignee" || field.key === "author";
@@ -801,9 +814,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           var cells = {
             time:$("<td/>").text(time(event.at)), remark:$("<td/>").text(group.key || group.remarkId || ""),
             role:$("<td/>").append($("<span/>").addClass("ujg-esi-activity-issue").append(issueKeyNode(event.issueKey,state.baseUrl)),$role,event.summary ? $("<div/>").addClass("ujg-esi-activity-task-summary").text(event.summary) : $("<span/>")),
+            module:$("<td/>").attr("data-column","module").append(moduleValues(event,group).map(function(name) { return $("<div/>").text(name)[0]; })),
             change:$change, assignee:$assigneeCell, author:$("<td/>").append(personNode(event.author))
           };
-          shown.forEach(function(field) { $row.append(cells[field.key]); }); $body.append($row);
+          shown.forEach(function(field) { $row.append(cells[field.key].attr("data-column",field.key)); }); $body.append($row);
         });
       });
       $journal.append($scroll.append($table.append($cols,$("<thead/>").append($head),$body)));

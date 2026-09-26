@@ -173,6 +173,40 @@ test("HTML names the global component scope and explicit screen form safely", ()
   assert.match(html,/Форма: &lt;Главная&gt;/);
 });
 
+test("HTML journal rows show current parent modules with explicit empty and unknown labels", () => {
+  const api=activity();
+  const parent=detail(api,issue("P-1","Open"));
+  const child=detail(api,issue("P-2","Open",[history("edit","2026-09-24T05:00:00Z","Editor",[item("summary","old","new")])]));
+  parent.components=[{id:"10",name:"Экран <A>"},{id:"20",name:"Сервер & API"}];
+  child.components=[{id:"30",name:"Только дочерняя"}];
+  const empty=detail(api,issue("P-3","Open",[history("empty","2026-09-24T06:00:00Z","Editor",[item("summary","old","new")])]));
+  empty.components=[];
+  const unknown=detail(api,issue("P-4","Open",[history("unknown","2026-09-24T07:00:00Z","Editor",[item("summary","old","new")])]));
+  const html=api.exportHtml(report(api,[row(parent,[child]),row(empty),row(unknown)]));
+  const groups=html.split('<h2>Журнал</h2>')[1].split('<h3>').slice(1);
+  assert.equal(groups.length,3);
+  for (const group of groups) assert.match(group,/<th>Задача<\/th><th>Модуль<\/th><th>Роль<\/th>/);
+  assert.match(groups[0],/<td>Сервер &amp; API, Экран &lt;A&gt;<\/td>/);
+  assert.doesNotMatch(groups[0],/Только дочерняя/);
+  assert.match(groups[1],/<td>Без компонента<\/td>/);
+  assert.match(groups[2],/<td>Компоненты неизвестны<\/td>/);
+});
+
+test("HTML journal module cells follow UI values for raw groups", () => {
+  const api=activity();
+  const rows=["P-1","P-2","P-3"].map((key,index) => row(detail(api,issue(key,"Open",[
+    history("edit"+index,"2026-09-24T05:00:00Z","Editor",[item("summary","old","new")])
+  ]))));
+  const result=report(api,rows);
+  result.groups[0].components=[];
+  result.groups[1].components=undefined;
+  result.groups[2].components=[{name:"Я <2>"},null,{name:"А & 1"},{name:"Я <2>"},{name:""}];
+  const groups=api.exportHtml(result).split('<h2>Журнал</h2>')[1].split('<h3>').slice(1);
+  assert.match(groups[0],/<td>Без компонента<\/td>/);
+  assert.match(groups[1],/<td>Компоненты неизвестны<\/td>/);
+  assert.match(groups[2],/<td>А &amp; 1, Компоненты неизвестны, Я &lt;2&gt;<\/td>/);
+});
+
 test("confirmed summary keeps verified remark totals beside an unrelated incomplete history", () => {
   const api=activity(), done=detail(api,issue("P-1","Done",[
     history("close","2026-09-24T05:00:00Z","Closer",[item("status","1","2","Open","Done")])
