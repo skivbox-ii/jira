@@ -46,7 +46,7 @@ async function loadImporter(options = {}) {
       render: state => { app.state = state; },
     },
     _ujgESI_teams: null,
-    _ujgESI_dueDateSync: null, _ujgESI_activity: null,
+    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_activity: null,
     _ujgShared_llmClient: null,
   }, globals);
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });

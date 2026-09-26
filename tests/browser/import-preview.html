@@ -20,6 +20,7 @@ window.mutationCalls = 0;
 window.issueReadCalls = 0;
 window.historyReadCalls = [];
 window.dueDateWriteCalls = [];
+window.componentWriteCalls = [];
 window.offlineApi = {
   baseUrl: "https://jira.example.test",
   getProjects: function(){return Promise.resolve([{key:"EVOSCADA",name:"EVO-SCADA"}]);},
@@ -33,6 +34,23 @@ window.offlineApi = {
     if(!issue){reject(new Error("Fixture not found"));return;}
     resolve({key:issue.key,fields:{summary:issue.fields.summary,duedate:issue.fields.duedate || null}});
   },15);});},
+  getIssueComponents: function(key){return new Promise(function(resolve,reject){setTimeout(function(){
+    var issue=fixtureIssues[key];
+    if(!issue){reject(new Error("Fixture not found"));return;}
+    resolve({key:issue.key,fields:{summary:issue.fields.summary,
+      project:issue.fields.project,issuetype:issue.fields.issuetype,
+      components:Array.isArray(issue.fields.components) ? issue.fields.components.map(function(component){return {id:component.id,name:component.name};}) : undefined}});
+  },15);});},
+  updateIssueComponents: function(key,ids){return new Promise(function(resolve,reject){setTimeout(function(){
+    var issue=fixtureIssues[key], catalog=[{id:"1",name:"АСУТП"},{id:"2",name:"Алармы"},{id:"3",name:"PARA"}];
+    var selected=Array.isArray(ids)&&ids.length===1&&catalog.find(function(component){return component.id===ids[0];});
+    if(!issue || !selected || !issue.fields.project || issue.fields.project.key!=="EVOSCADA" ||
+        !issue.fields.issuetype || issue.fields.issuetype.name!=="История"){
+      reject(new Error("Invalid fixture component update"));return;
+    }
+    issue.fields.components=[{id:selected.id,name:selected.name}];
+    window.mutationCalls++;window.componentWriteCalls.push({key:key,ids:ids.slice()});resolve();
+  },100);});},
   updateIssueDueDate: function(key,date){return new Promise(function(resolve,reject){setTimeout(function(){
     var issue=fixtureIssues[key];
     if(!issue || !/^\d{4}-\d{2}-\d{2}$/.test(date)){reject(new Error("Invalid fixture update"));return;}

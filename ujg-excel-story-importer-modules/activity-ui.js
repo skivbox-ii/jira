@@ -84,6 +84,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
     var resizeObserver, observedViewportWidth;
     var $managementDialog, managementAnchor, bodyOverflow, previewTimer, previewCloseTimer;
+    var componentSelection = null, componentKey, componentNames = Object.create(null), fullReport, scopedReport, lastAiReport;
     var fields = [
       {key:"time", title:"Время", width:100, value:function(event) { return time(event.at); }},
       {key:"remark", title:"ID · Замечание", width:130, value:function(event,group) { return String(group.remarkId || group.key || ""); }},
@@ -118,6 +119,50 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function saveLayout() {
       try { window.localStorage.setItem(layoutKey,JSON.stringify({version:2,changeFilterVersion:1,order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,sort:sort,filters:filters})); }
       catch (ignore) { /* Storage is best-effort. */ }
+    }
+    function loadComponentScope(state) {
+      var nextKey = (state.preferencesStorageKey || "ujg-esi-state") + ":activity-components:" + JSON.stringify([state.projectKey || "",state.epicKey || ""]);
+      if (nextKey === componentKey) return;
+      componentKey = nextKey; componentSelection = null; componentNames = Object.create(null);
+      try {
+        var saved = JSON.parse(window.localStorage.getItem(nextKey) || "null");
+        if (Array.isArray(saved)) componentSelection = saved.filter(function(item) { return item && typeof item.id === "string" && typeof item.name === "string"; }).map(function(item) { componentNames[item.id] = item.name; return item.id; }).filter(function(id,index,all) { return all.indexOf(id) === index; });
+      } catch (ignore) { /* Storage is best-effort. */ }
+    }
+    function saveComponentScope() {
+      try { window.localStorage.setItem(componentKey,JSON.stringify(componentSelection && componentSelection.map(function(id) { return {id:id,name:componentNames[id] || id}; }))); } catch (ignore) {}
+    }
+    function componentMenu(anchor, facets) {
+      var options = facets.slice(), ids = options.map(function(item) { return item.id; });
+      (componentSelection || []).forEach(function(id) { if (ids.indexOf(id) < 0) options.push({id:id,name:componentNames[id] || id,open:0,unknown:0,total:0}); });
+      var selected = componentSelection === null ? options.map(function(item) { return item.id; }) : componentSelection.slice();
+      var $box = popup(anchor,"Компоненты замечаний","ujg-esi-grid-menu ujg-esi-activity-filter-menu ujg-esi-component-filter-menu",480);
+      var $search = $("<input type='search'/>").addClass("ujg-esi-filter-search").attr({placeholder:"Поиск компонентов","aria-label":"Поиск компонентов"});
+      var $all = $("<input type='checkbox'/>").attr("aria-label","Выбрать все найденные компоненты");
+      var $list = $("<div/>").addClass("ujg-esi-filter-values"), $count = $("<span/>").addClass("ujg-esi-filter-count");
+      $box.append($search,$("<label/>").addClass("ujg-esi-filter-all").append($all,"Все найденные",$count),$list);
+      function found(item) { return item.name.toLocaleLowerCase().indexOf(String($search.val() || "").toLocaleLowerCase()) >= 0; }
+      var candidates = options.map(function(item) {
+        var $check = $("<input type='checkbox'/>").attr("data-component-id",item.id).on("change",function() {
+          selected = selected.filter(function(id) { return id !== item.id; }); if (this.checked) selected.push(item.id); update();
+        });
+        var $only = button("Funnel","Только компонент: " + item.name,function() { selected = [item.id]; update(); }).addClass("ujg-esi-filter-only");
+        var $row = $("<div/>").addClass("ujg-esi-filter-value-row").append($("<label/>").addClass("ujg-esi-filter-option").append($check,$("<span/>").text(item.name),$("<small/>").text(item.open + " открытых" + (item.unknown ? " · " + item.unknown + " не подтверждено" : "") + (!item.total ? " · нет в срезе" : ""))),$only).appendTo($list);
+        return {item:item,row:$row,check:$check};
+      });
+      function update() {
+        var matching = options.filter(found), chosen = matching.filter(function(item) { return selected.indexOf(item.id) >= 0; });
+        $all.prop({checked:!!matching.length && chosen.length === matching.length,indeterminate:!!chosen.length && chosen.length < matching.length});
+        $count.text("Выбрано " + selected.length);
+        candidates.forEach(function(candidate) { candidate.row.prop("hidden",!found(candidate.item)); candidate.check.prop("checked",selected.indexOf(candidate.item.id) >= 0); });
+      }
+      $search.on("input",update);
+      $all.on("change",function() { var checked=this.checked; options.filter(found).forEach(function(item) { selected=selected.filter(function(id) { return id!==item.id; }); if(checked) selected.push(item.id); }); update(); });
+      $box.append($("<div/>").addClass("ujg-esi-filter-actions").append(
+        $("<button type='button'/>").text("Сбросить").on("click",function() { componentSelection=null; scopedReport=null; saveComponentScope(); draw(); }),
+        $("<button type='button'/>").text("Отмена").on("click",function() { closePopover(true); }),
+        $("<button type='button'/>").addClass("ujg-esi-component-filter-apply").text("Применить").on("click",function() { componentSelection=selected.slice(); scopedReport=null; saveComponentScope(); draw(); })));
+      update(); placePopover(anchor); $search.trigger("focus");
     }
     function visibleFields() { return order.filter(function(id) { return !hidden[id]; }).map(function(id) { return fields.filter(function(field) { return field.key === id; })[0]; }); }
     function tableLayout(shown, available) {
@@ -434,8 +479,18 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
-      var report = activity.summarize(state.rows || [], state.teams || [], {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:state.mappingSettings && state.mappingSettings.columnMap, journalRows:state.deadlineJournalRows});
-      aiUi.update(report,state,services);
+      var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:state.mappingSettings && state.mappingSettings.columnMap, journalRows:state.deadlineJournalRows};
+      if (fullReport && fullReport.deadlineReferenceDate && fullReport.deadlineReferenceDate !== moscowToday()) fullReport=scopedReport=null;
+      if (!fullReport) fullReport = activity.summarize(state.rows || [],state.teams || [],options);
+      var facets = activity.componentFacets(fullReport);
+      facets.forEach(function(item) { componentNames[item.id] = item.name; });
+      if (!scopedReport) {
+        var scopedCutoff = fullReport.asOf || (Number.isFinite(fullReport.start) ? new Date(fullReport.start-1).toISOString() : null);
+        scopedReport = componentSelection === null ? fullReport : activity.summarize(activity.componentRows(state.rows || [],componentSelection),state.teams || [],Object.assign({},options,{now:fullReport.generatedAt,cutoff:scopedCutoff}));
+        if (componentSelection !== null) scopedReport = Object.assign({},scopedReport,{componentScope:componentSelection.map(function(id) { return {id:id,name:componentNames[id] || id}; })});
+      }
+      var report = scopedReport;
+      if (lastAiReport !== report) { aiUi.update(report,state,services); lastAiReport = report; }
       var coverage = report.coverage || {}, confirmed = report.confirmed, metrics = confirmed ? confirmed.metrics || {} : report.metrics || {}, observed = report.observed || {}, balance = confirmed ? confirmed.balance || {} : report.balance || {};
       var journal = filtered(report), $root = $("<div/>").addClass("ujg-esi-activity");
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");
@@ -443,7 +498,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var $controls = $("<div/>").addClass("ujg-esi-activity-controls");
       function changeDate(nextDate) {
         if (!validDate(nextDate) || nextDate === date) return;
-        date = nextDate; filters = {}; saveLayout();
+        date = nextDate; filters = {}; fullReport=null; scopedReport=null; saveLayout();
         if (currentServices && currentServices.onActivityDateChange) currentServices.onActivityDateChange(date);
         draw();
       }
@@ -453,11 +508,13 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }));
       $controls.append(button("ChevronRight","Следующий день",function() { changeDate(shiftDate(date,1)); }));
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text(report.asOf ? "00:00–" + cutoff(report) + " · МСК" : "Время среза неизвестно · МСК"));
+      $controls.append(button("Funnel","Компоненты замечаний",function() { componentMenu(this,facets); }).addClass("ujg-esi-component-filter").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).toggleClass("is-active",componentSelection!==null).append($("<span/>").text("Компоненты" + (componentSelection === null ? "" : ": " + componentSelection.length))));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
       $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
+      if (componentSelection !== null) $root.append($("<p/>").addClass("ujg-esi-activity-component-scope").text("Компоненты: " + (report.componentScope.map(function(item) { return item.name; }).join(", ") || "не выбраны") + " · текущие компоненты исходных историй"));
       var fullDay = report.asOf && timestamp(report.asOf) === Number(report.end);
       var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(!report.asOf ? "Срез на выбранный день не подтверждён" : fullDay ? "Итоги за весь день" : "Итоги на " + cutoff(report) + " МСК"));
       var $band = $("<div/>").addClass("ujg-esi-activity-metrics");
@@ -641,10 +698,16 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         var dayBadgeTitle = "За выбранный день: исходная история и связанные задачи; каждая задача учтена один раз в каждом итоге.";
         var $group = $("<tr/>").addClass("ujg-esi-activity-group");
         $group.append($("<th/>").attr({scope:"rowgroup",colspan:shown.length}).append(
-          button(isCollapsed ? "ChevronRight" : "ChevronDown",(isCollapsed ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),function() { collapsed[key] = !collapsed[key]; draw(); })
+          button(isCollapsed ? "ChevronRight" : "ChevronDown",(isCollapsed ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),function() {
+            collapsed[key] = !collapsed[key];
+            $(this).empty().append(icon(collapsed[key] ? "ChevronRight" : "ChevronDown")).attr({"aria-expanded":String(!collapsed[key]),"aria-label":(collapsed[key] ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),title:(collapsed[key] ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key)});
+            $group.nextUntil(".ujg-esi-activity-group").prop("hidden",collapsed[key]);
+          })
             .addClass("ujg-esi-activity-group-toggle").attr("aria-expanded",String(!isCollapsed)),
           $("<span/>").addClass("ujg-esi-activity-group-key").append($("<span/>").text("#" + label(group.remarkId || group.key)),group.key ? issueKeyNode(group.key,state.baseUrl) : $("<span/>")),
           $("<span/>").addClass("ujg-esi-activity-group-summary").text(group.summary || ""),
+          $("<span/>").addClass("ujg-esi-activity-group-components").text((group.components || []).map(function(item) { return item.name; }).join(", ")),
+          group.screenForms && group.screenForms.length ? $("<span/>").addClass("ujg-esi-activity-group-screen").text("Форма: " + group.screenForms.join("; ")) : $("<span/>"),
           $("<span/>").addClass("ujg-esi-activity-group-context").append(
             $("<span/>").addClass("ujg-esi-activity-group-badge is-status" + (group.currentStatusKind ? " is-" + group.currentStatusKind : "")).text("Сейчас: " + activity.statusLabel(group.currentStatus)),
             $("<span/>").addClass("ujg-esi-activity-group-badge").text("Связанных задач: " + group.linkedTaskCount),
@@ -658,10 +721,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             group.dayComplete === false ? $("<span/>").addClass("ujg-esi-activity-group-badge is-incomplete").text("История неполна") : $("<span/>"),
             $("<span/>").addClass("ujg-esi-activity-group-badge ujg-esi-activity-group-deadline " + (group.deadline && group.deadline.state === "overdue" ? "is-overdue" : group.deadline && (group.deadline.state === "today" || group.deadline.state === "tomorrow") ? "is-near" : "is-neutral")).attr("title",deadlineTitle(group.deadline,report.deadlineReferenceDate)).text(deadlineText(group.deadline)))));
         $body.append($group);
-        if (isCollapsed) return;
         journalRows(group.events,group).forEach(function(rowEvents) {
           var event = rowEvents[0];
-          var $row = $("<tr/>").addClass("ujg-esi-activity-event");
+          var $row = $("<tr/>").addClass("ujg-esi-activity-event").prop("hidden",isCollapsed);
           var $role = $("<span/>").addClass("ujg-esi-activity-role " + roleClass(event.role)).text(roleLabel(event.role));
           if (safeColor(event.roleColor)) $role.css("border-color",event.roleColor).css("color",event.roleColor);
           var assignee = event.kind === "assignee" ? label(event.fromAssignee || event.from) + " → " + label(event.toAssignee || event.to) : label(event.assignee);
@@ -676,16 +738,19 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           } else {
             var $details = $("<details/>").addClass("ujg-esi-activity-event-details");
             var count = rowEvents.length, plural = count % 10 === 1 && count % 100 !== 11 ? "изменение" : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? "изменения" : "изменений";
-            var completion = rowEvents.filter(completedAction)[0];
-            var completionText = completion && activity.eventText(completion).split(" · ")[0];
-            var $summary = $("<summary/>").text((completion ? (/^Задача /.test(completionText) ? completionText : "Задача выполнена") + " · " : "") + count + " " + plural);
-            if (completion) $summary.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
+            var $summary = $("<summary/>");
+            rowEvents.slice().sort(function(a,b) { return timestamp(a.at)-timestamp(b.at); }).forEach(function(item) {
+              var $action = $("<span/>").addClass("ujg-esi-activity-brief-action").text(activity.eventText(item));
+              if (completedAction(item)) $action.addClass("is-done");
+              $summary.append($action);
+            });
+            $summary.append($("<small/>").text(count + " " + plural + " · подробно"));
             $details.append($summary);
             rowEvents.forEach(function(item) {
               var $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
               var $action = $("<span/>").text(activity.eventText(item));
               if (completedAction(item)) $action.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
-              $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · " + label(item.assignee)));
+              $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · Автор: " + label(item.author) + " · Исполнитель: " + label(item.assignee)));
               if (item.kind === "assignee") $detail.append($("<small/>").text(" · " + label(item.fromTeam) + " → " + label(item.toTeam)));
               $details.append($detail);
             });
@@ -718,6 +783,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
+      fullReport=null; scopedReport=null;
+      loadComponentScope(currentState);
       var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";
       if (layoutKey !== key) loadLayout(key);
       $(window).off("resize"+namespace).on("resize"+namespace,resize);

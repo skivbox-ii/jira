@@ -12,7 +12,8 @@ define("_ujgESI_main", [
   "_ujgESI_teams",
   "_ujgESI_activity",
   "_ujgESI_dueDateSync",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule) {
+  "_ujgESI_componentSync",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -697,6 +698,10 @@ define("_ujgESI_main", [
 
   function issueDetails(issue) {
     var fields = issue && issue.fields || {};
+    var componentsKnown = Array.isArray(fields.components) && fields.components.every(function(component) {
+      return component && component.id != null && String(component.id).trim() &&
+        component.name != null && String(component.name).trim();
+    });
     var since = issueStatusSince(issue);
     var activity = activityModule ? activityModule.capture(issue) : null;
     if (activity) activity.linkedKeys = childIssueKeysFromIssues([issue]);
@@ -716,6 +721,7 @@ define("_ujgESI_main", [
       components: (Array.isArray(fields.components) ? fields.components : []).filter(Boolean).map(function(component) {
         return { id: String(component.id || ""), name: name(component) };
       }),
+      componentsKnown: !!componentsKnown,
       issueType: name(fields.issuetype),
       updated: fields.updated != null ? String(fields.updated) : "",
       created: fields.created != null ? String(fields.created) : "",
@@ -871,6 +877,7 @@ define("_ujgESI_main", [
         blocked: issueIsBlocked(resolved, mergedIssueMap),
         priority: details.priority,
         components: details.components,
+        componentsKnown: details.componentsKnown,
         issueType: details.issueType,
         updated: details.updated,
         created: details.created,
@@ -1095,17 +1102,45 @@ define("_ujgESI_main", [
       else render();
     }}) : null;
     state.dueDateSync = dueDateSync ? dueDateSync.getState() : null;
+    var componentSyncDirty = false;
+    var componentSync = componentSyncModule ? componentSyncModule.create({api:api,onChange:function(snapshot) {
+      state.componentSync = snapshot;
+      if (componentSyncDirty && !snapshot.running) {
+        componentSyncDirty = false;
+        invalidateRegistry();
+        invalidateActivityHistory();
+        render();
+      } else if (rendering.renderDueDateSync) rendering.renderDueDateSync(state); else render();
+    },onUpdated:function(key, component) {
+      [excelRows,registryRows].forEach(function(rows) { rows.forEach(function(row) {
+        if (issueKeyFromRow(row) !== key || !row.storyDetails) return;
+        row.storyDetails.components = [{id:component.id,name:component.name}];
+        row.storyDetails.componentsKnown = true;
+      }); });
+      componentSyncDirty = true;
+    }}) : null;
+    state.componentSync = componentSync ? componentSync.getState() : null;
 
     function closeDueDateSyncForContextChange() {
+      if (state.componentSync && state.componentSync.running || state.dueDateSync && state.dueDateSync.running) return false;
+      if (componentSync && state.componentSync.open && componentSync.close() === false) return false;
       return !dueDateSync || !state.dueDateSync.open || dueDateSync.close() !== false;
     }
 
     function onOpenDueDateSync() {
-      if (!dueDateSync || state.dueDateSync.open || state.viewMode !== "excel" || !state.rows.length ||
+      if (!dueDateSync || state.dueDateSync.open || state.componentSync && state.componentSync.open || state.viewMode !== "excel" || !state.rows.length ||
           state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
       closeUserPicker();
       closeEpicPicker();
       dueDateSync.open(state.rows, {columnMap:copyColumnMap(state.mappingSettings.columnMap)});
+    }
+
+    function onOpenComponentSync() {
+      if (!componentSync || state.componentSync.open || state.dueDateSync && state.dueDateSync.open ||
+          state.viewMode !== "excel" || !state.rows.length || !state.projectKey || state.loading ||
+          state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
+      closeUserPicker(); closeEpicPicker();
+      componentSync.open(state.rows,{projectKey:state.projectKey,moduleComponentMap:state.mappingSettings.moduleComponentMap});
     }
 
     function invalidateActivityHistory() {
@@ -2668,6 +2703,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingPairAdd(block) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = mappingKey(block);
       var entries = mappingEntries(state.mappingSettings[key]);
       var base = "Новое значение";
@@ -2687,6 +2723,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingPairChange(block, index, field, value) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = mappingKey(block);
       var i = Number(index);
       var entries = mappingEntries(state.mappingSettings[key]);
@@ -2716,6 +2753,7 @@ define("_ujgESI_main", [
     }
 
     function onMappingPairRemove(block, index) {
+      if (!closeDueDateSyncForContextChange()) return;
       var key = mappingKey(block);
       var i = Number(index);
       var entries = mappingEntries(state.mappingSettings[key]);
@@ -3850,6 +3888,11 @@ define("_ujgESI_main", [
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
       onOpenDueDateSync: onOpenDueDateSync,
+      onOpenComponentSync: onOpenComponentSync,
+      onCloseComponentSync: function() { if (componentSync) componentSync.close(); },
+      onSelectComponentSyncRow: function(id, selected) { if (componentSync) componentSync.select(id,selected); },
+      onSelectAllComponentSync: function(selected) { if (componentSync) componentSync.selectAll(selected); },
+      onConfirmComponentSync: function() { if (componentSync) componentSync.confirm(); },
       onCloseDueDateSync: function() { if (dueDateSync) dueDateSync.close(); },
       onSelectDueDateSyncRow: function(id, selected) { if (dueDateSync) dueDateSync.select(id, selected); },
       onSelectAllDueDateSync: function(selected) { if (dueDateSync) dueDateSync.selectAll(selected); },

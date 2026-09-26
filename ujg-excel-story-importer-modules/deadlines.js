@@ -107,5 +107,5 @@ define("_ujgESI_deadlines", [], function() {
     return result(values(importedColumns(details.description), options.columnMap, "jira-description"));
   }
 
-  return {resolve:resolve,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
+  return {resolve:resolve,importedColumns:importedColumns,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
 });

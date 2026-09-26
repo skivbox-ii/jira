@@ -7,7 +7,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var epicSearchTimer = null;
   var grid;
   var activityView;
-  var dueDateView, $dueHost;
+  var dueDateView, $dueHost, componentView, $componentHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
@@ -95,12 +95,16 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (activityView && activityView.destroy) activityView.destroy();
     if (dueDateView) dueDateView.destroy();
     if ($dueHost) $dueHost.remove();
+    if (componentView) componentView.destroy();
+    if ($componentHost) $componentHost.remove();
     $root = container;
     services = svc || {};
     grid = gridModule.create();
     activityView = activityUi ? activityUi.create() : null;
     dueDateView = dueDateSyncUi ? dueDateSyncUi.create() : null;
     $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
+    componentView = dueDateSyncUi ? dueDateSyncUi.create({kind:"component"}) : null;
+    $componentHost = $("<div/>").addClass("ujg-esi-component-sync-mount");
     $(document).off("keydown.ujgEsiFullscreen").on("keydown.ujgEsiFullscreen", function(event) {
       if (event.key !== "Escape" || event.isPropagationStopped()) return;
       if (grid.dismissPopover()) { event.stopPropagation(); return; }
@@ -530,7 +534,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     var $due = $("<button/>").attr({type:"button",title:"Обновить сроки Jira из Excel","aria-label":"Обновить сроки Jira из Excel","aria-haspopup":"dialog"})
       .addClass("ujg-esi-icon-button ujg-esi-sync-due-date").append(icon("ArrowDownUp"))
       .on("click", function() { if (services && services.onOpenDueDateSync) services.onOpenDueDateSync(); });
-    $actions.append($sync, $due, $download);
+    var $component = $("<button/>").attr({type:"button",title:"Обновить компоненты Jira из Excel","aria-label":"Обновить компоненты Jira из Excel","aria-haspopup":"dialog"})
+      .addClass("ujg-esi-icon-button ujg-esi-sync-component").append(icon("ListTree"))
+      .on("click",function() { if (services && services.onOpenComponentSync) services.onOpenComponentSync(); });
+    $actions.append($sync, $due, $component, $download);
   }
 
   function appendExcelActions($toolbar, state) {
@@ -1901,11 +1908,18 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   function renderDueDateSync(state) {
     if (!$root || !$root.length) return;
     var s = state || {}, sync = s.dueDateSync || {};
-    $root.find(".ujg-esi-sync-due-date").prop("disabled", !s.rows || !s.rows.length || !!(s.loading || s.syncLoading || sync.open))
+    var components=s.componentSync || {};
+    $root.find(".ujg-esi-sync-due-date").prop("disabled", !s.rows || !s.rows.length || !!(s.loading || s.syncLoading || sync.open || components.open))
       .attr("aria-expanded", String(!!sync.open));
+    $root.find(".ujg-esi-sync-component").prop("disabled", !s.rows || !s.rows.length || !s.projectKey || !!(s.loading || s.syncLoading || components.open || sync.open))
+      .attr("aria-expanded",String(!!components.open));
     if (!dueDateView) return;
     if (!$dueHost.parent().length) $root.append($dueHost);
     dueDateView.render($dueHost, s, services);
+    if (componentView) {
+      if (!$componentHost.parent().length) $root.append($componentHost);
+      componentView.render($componentHost,s,services);
+    }
   }
 
   function clearMappingError() {

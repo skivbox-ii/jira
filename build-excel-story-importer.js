@@ -14,6 +14,7 @@ var MODULE_ORDER = [
   "description.js",
   "deadlines.js",
   "due-date-sync.js",
+  "component-sync.js",
   "parser.js",
   "remark-id.js",
   "creator.js",

@@ -2,6 +2,61 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
   "use strict";
   function str(value) { return value == null ? "" : String(value).trim(); }
   function key(value) { return str(value).toUpperCase(); }
+  function rowComponents(row) {
+    var details = row && (row.storyDetails || row.activityDetails), values = details && details.components;
+    if (!details || details.componentsKnown === false || !Array.isArray(values) || values.some(function(value) { return !value || !str(value.name); })) return [{id:"unknown",name:"Компоненты неизвестны"}];
+    if (!values.length) return [{id:"none",name:"Без компонента"}];
+    return values.map(function(value) { return {id:str(value.id) ? "component:" + str(value.id) : "name:" + str(value.name),name:str(value.name)}; })
+      .filter(function(value,index,all) { return all.findIndex(function(item) { return item.id === value.id; }) === index; });
+  }
+  function componentRows(rows, selection) {
+    if (!Array.isArray(selection)) return rows || [];
+    var selected = Object.create(null);
+    (rows || []).forEach(function(row,index) {
+      if (row && rowComponents(row).some(function(component) { return selection.indexOf(component.id) >= 0; })) selected[groupId(row,index)] = true;
+    });
+    return (rows || []).filter(function(row,index) { return row && selected[groupId(row,index)]; });
+  }
+  function groupComponents(rows) {
+    var seen = Object.create(null), result = [];
+    rows.forEach(function(row) { rowComponents(row).forEach(function(component) {
+      if (seen[component.id]) return;
+      seen[component.id] = true; result.push(component);
+    }); });
+    return result;
+  }
+  function componentFacets(report) {
+    var facets = Object.create(null);
+    (report.groups || []).forEach(function(group) {
+      (group.components || [{id:"unknown",name:"Компоненты неизвестны"}]).forEach(function(component) {
+        var facet = facets[component.id] || (facets[component.id] = {id:component.id,name:component.name,total:0,open:0,unknown:0});
+        facet.total++;
+        if (group.openAtEnd === true) facet.open++;
+        if (group.openAtEnd == null) facet.unknown++;
+      });
+    });
+    return Object.keys(facets).map(function(id) { return facets[id]; }).sort(function(a,b) { return a.name.localeCompare(b.name,"ru",{numeric:true}); });
+  }
+  function screenForms(rows, options) {
+    var forms = [];
+    function read(columns) {
+      var entries = Array.isArray(columns) ? columns : Object.keys(columns || {}).map(function(name) { return {name:name,value:columns[name]}; });
+      var found = false;
+      entries.forEach(function(entry) {
+        if (/^(экранная форма|привязка к экранной форме)$/i.test(str(entry.name)) && str(entry.value)) {
+          found = true;
+          if (forms.indexOf(str(entry.value)) < 0) forms.push(str(entry.value));
+        }
+      });
+      return found;
+    }
+    rows.forEach(function(row) {
+      var matches = (options.journalRows || []).filter(function(source) { return key(source.createdKey || source.jiraKey) && key(source.createdKey || source.jiraKey) === key(row.createdKey || row.jiraKey); });
+      if (matches.length) { matches.forEach(function(source) { read(source.sourceColumns); }); return; }
+      if (!read(row.sourceColumns) && deadlines.importedColumns) read(deadlines.importedColumns((row.storyDetails || row.activityDetails || {}).description));
+    });
+    return forms;
+  }
   function timestamp(value) {
     var raw = str(value);
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)) return "";
@@ -186,6 +241,11 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     var window = day(options.date || today(options.now)), now = options.now == null ? Date.now() : new Date(options.now).getTime();
     if (!isFinite(now)) throw new Error("Invalid now");
     var endpoint = Math.min(window.end,now), teams = teamsModule.normalize(inputTeams), grouped = Object.create(null), order = [], issues = Object.create(null), conflicts = [];
+    if (options.cutoff != null) {
+      var cutoff = timestamp(options.cutoff);
+      if (!cutoff) throw new Error("Invalid cutoff");
+      endpoint = Math.min(endpoint,Date.parse(cutoff));
+    }
     function fingerprint(snapshot) {
       if (!snapshot) return "";
       return JSON.stringify([snapshot.complete,snapshot.created,snapshot.updated,snapshot.currentStatus,snapshot.currentAssignee,snapshot.histories,
@@ -318,6 +378,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
         if (before === "done" && after === "open") outcomes.reopened[event.issueKey] = true;
       });
       return {id:group.id,remarkId:group.remarkId,key:group.key,summary:group.summary,events:groupEvents,taskReturns:groupEvents.filter(function(event) { return !!event.returnKind; }),
+        components:groupComponents(group.sourceRows),screenForms:screenForms(group.sourceRows,options),
         currentStatus:parentStatus || null,currentStatusKind:parentStatus ? kind(parent && parent.snapshot && parent.snapshot.currentStatus || state("",parentStatus,parent && parent.task.statusCategory)) : "unknown",
         linkedTaskCount:group.tasks.filter(function(taskKey) { return taskKey !== group.key; }).length,
         dayActivityCount:Object.keys(active).length,dayNoopStatusCount:Object.keys(unchangedStatus).length,
@@ -550,6 +611,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     groups.forEach(function(group,index) {
       var source = order[index];
       group.confirmed = !source.uncreated && source.tasks.length > 0 && group.dayComplete;
+      group.openAtEnd = group.confirmed ? source.tasks.some(function(issueKey) { return states[issueKey] && kind(states[issueKey].end) === "open"; }) : null;
       if (!group.confirmed) {
         var reasons = warnings.filter(function(warning) {
           return source.tasks.concat([group.key]).some(function(issueKey) { return issueKey && warning.indexOf(issueKey + ":") === 0; });
@@ -573,7 +635,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       });
     });
     confirmed.metrics.taskReturns = Object.keys(confirmedReturns).length;
-    if (!confirmed.remarks) {
+    if (!confirmed.remarks && groups.length) {
       ["changed","newRemarks","completed","reopened","taskReturns"].forEach(function(name) { confirmed.metrics[name] = null; });
       confirmed.balance = {startOpen:null,endOpen:null};
     }
@@ -699,6 +761,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     html += '<h1>Активность за ' + escape(report.date) + ' МСК</h1><p>Проект: ' + escape(context.projectKey) + ' · Эпик: ' + escape(context.epicKey) + '</p>';
     html += '<p>Сформировано: ' + escape(msk(report.generatedAt)) + ' · Срез на: ' + escape(report.asOf ? msk(report.asOf) : '—') + ' · Покрытие: ' + escape(report.coverage && report.coverage.complete) + '/' + escape(report.coverage && report.coverage.total) + '</p>';
     html += '<p><small>Текущие связи задач и текущая локальная карта команд. Исторический состав связей и команд не восстанавливается.</small></p>';
+    if (Array.isArray(report.componentScope)) html += '<p>Компоненты: ' + escape(report.componentScope.map(function(item) { return item.name; }).join(', ') || 'не выбраны') + ' · текущие компоненты исходных историй</p>';
     html += '<p>Фильтры журнала: <code>' + escape(metadata(context.filters)) + '</code> · Сортировка: <code>' + escape(metadata(context.sort)) + '</code></p>';
     if (warnings.length) {
       html += '<details><summary>Предупреждения (' + warnings.length + ')</summary><ul>';
@@ -784,6 +847,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     (report.teams || []).forEach(function(team) { html += '<li>' + escape(team.name) + ' (' + escape(team.id) + '): ' + escape((team.members || []).map(function(member) { return member.label + ' [' + member.identifiers.join(', ') + ']'; }).join('; ')) + '</li>'; });
     html += '</ul><h2>Журнал</h2>';
     (report.groups || []).forEach(function(group) { html += '<h3>' + escape(group.remarkId) + ' ' + escape(group.key) + ' ' + escape(group.summary) + '</h3>';
+      if (group.components && group.components.length) html += '<p>Компоненты: ' + escape(group.components.map(function(item) { return item.name; }).join(', ')) + '</p>';
+      if (group.screenForms && group.screenForms.length) html += '<p>Форма: ' + escape(group.screenForms.join('; ')) + '</p>';
       if (group.deadline) html += '<p>' + escape(deadlineText(group.deadline)) + '</p>';
       if (group.dayHighlights) {
         var highlights = [];
@@ -805,5 +870,5 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }
-  return {capture:capture,day:day,today:today,summarize:summarize,exportHtml:exportHtml,statusLabel:statusLabel,statusTone:statusTone,returnKind:returnKind,eventText:eventText,eventCategory:eventCategory};
+  return {capture:capture,day:day,today:today,summarize:summarize,componentRows:componentRows,componentFacets:componentFacets,exportHtml:exportHtml,statusLabel:statusLabel,statusTone:statusTone,returnKind:returnKind,eventText:eventText,eventCategory:eventCategory};
 });

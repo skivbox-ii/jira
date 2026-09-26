@@ -4,6 +4,16 @@ const path = require("node:path");
 const load = require("./helpers/load-amd-module");
 const ai = () => load(path.join(__dirname, "../ujg-excel-story-importer-modules/activity-ai.js"), {});
 const scope = {projectKey:"P",epicKey:"P-1",baseUrl:"https://jira.test",preferencesStorageKey:"user:a",userScope:"alice",viewMode:"team"};
+test("LLM scope explicitly includes selected components and isolates conversations", () => {
+  const source=report(), normal=ai().prepare(source,scope);
+  source.componentScope=[{id:"component:10",name:"Экран"}];
+  const scoped=ai().prepare(source,scope);
+  assert.notEqual(scoped.scopeKey,normal.scopeKey);
+  assert.deepEqual(JSON.parse(scoped.parts[0].userPrompt).scope.components,source.componentScope);
+  assert.match(scoped.parts[0].systemPrompt,/scope.components.*текущим компонентам.*историй/);
+  source.componentScope=[];
+  assert.notEqual(ai().prepare(source,scope).scopeKey,normal.scopeKey);
+});
 test("LLM distinguishes task returns from whole remark reopening and keeps each event once", () => {
   const source=report();
   source.metrics.taskReturns=1;

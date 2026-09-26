@@ -90,6 +90,89 @@ function detail(api, jira, role = "") {
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
 
+test("component scope uses parent components, OR selection and distinct remark counts", () => {
+  const api=activity(), a=detail(api,issue("P-1","Done")), b=detail(api,issue("P-3","Done"));
+  const child=detail(api,issue("P-2","Open"));
+  a.components=[{id:"10",name:"Экран"},{id:"20",name:"Сервер"}];
+  b.components=[{id:"20",name:"Сервер"}]; child.components=[{id:"30",name:"Другое"}];
+  const rows=[row(a,[child]),row(b)], full=report(api,rows);
+  assert.equal(api.componentFacets(full).find(c=>c.id==="component:10").open,1);
+  assert.equal(api.componentFacets(full).find(c=>c.id==="component:20").open,1);
+  assert.equal(api.componentFacets(full).some(c=>c.id==="component:30"),false);
+  assert.equal(api.componentRows(rows,["component:10","component:20"]).length,2);
+  assert.equal(api.componentRows(rows,[]).length,0);
+  assert.equal(api.componentRows(rows,null).length,2);
+  const scoped=report(api,api.componentRows(rows,["component:10"]));
+  assert.equal(scoped.groups.length,1);
+  assert.equal(scoped.confirmed.balance.endOpen,1,"Ready parent with open child is not a ready remark");
+});
+
+test("component selection retains every source row of a matching parent", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Done")), child=detail(api,issue("P-2","Open"));
+  parent.components=[{id:"10",name:"Экран"}];
+  const rows=[row(parent),row({...parent,components:[]},[child])];
+  const full=report(api,rows), facets=api.componentFacets(full), selected=api.componentRows(rows,["component:10"]);
+  assert.equal(selected.length,2);
+  assert.deepEqual(Array.from(full.groups[0].components,item=>item.id),["component:10","none"]);
+  assert.equal(facets.find(item=>item.id==="component:10").total,1);
+  assert.equal(facets.find(item=>item.id==="none").open,1);
+  assert.equal(report(api,selected).confirmed.balance.endOpen,1);
+});
+
+test("scoped cutoff stays at the full snapshot while deadline day stays current", () => {
+  const api=activity(), early=detail(api,issue("P-1","Open"));
+  const later=detail(api,issue("P-2","Done",[history("close","2026-09-24T10:00:00Z","Closer",[item("status","1","2","Open","Done")])]));
+  early.components=[{id:"1",name:"A"}]; later.components=[{id:"2",name:"B"}];
+  early.activity.capturedAt="2026-09-24T09:00:00Z";
+  later.activity.capturedAt="2026-09-24T12:00:00Z";
+  const rows=[row(early),row(later)], full=report(api,rows);
+  const scoped=report(api,api.componentRows(rows,["component:2"]),{cutoff:full.asOf});
+  assert.equal(full.asOf,"2026-09-24T09:00:00.000Z");
+  assert.equal(api.componentFacets(full).find(item=>item.id==="component:2").open,1);
+  assert.equal(scoped.asOf,full.asOf);
+  assert.equal(scoped.confirmed.balance.endOpen,1);
+  assert.equal(scoped.deadlineReferenceDate,full.deadlineReferenceDate);
+});
+
+test("component facets distinguish absent fields, empty lists and unconfirmed histories", () => {
+  const api=activity(), a=detail(api,issue("P-1","Open")), b=detail(api,issue("P-2","Open")), c=detail(api,issue("P-3","Open"));
+  b.components=[]; c.components=[{id:"10",name:"Экран"}]; c.activity.complete=false;
+  const rows=[row(a),row(b),row(c)], facets=api.componentFacets(report(api,rows));
+  assert.equal(facets.find(c=>c.id==="unknown").total,1);
+  assert.equal(facets.find(c=>c.id==="none").open,1);
+  assert.equal(facets.find(c=>c.id==="component:10").unknown,1);
+  assert.equal(facets.find(c=>c.id==="component:10").open,0);
+  b.componentsKnown=false;
+  assert.equal(api.componentRows(rows,["none"]).length,0);
+});
+
+test("screen form is explicit source metadata, never inferred from summary", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  parent.description="Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Экранная форма|Тренды|";
+  let rows=[{...row(parent),summary:"Пульт 25"}];
+  assert.deepEqual(Array.from(report(api,rows).groups[0].screenForms),["Тренды"]);
+  const journalRows=[{jiraKey:"P-1",sourceColumns:{"Привязка к экранной форме":"Главная"}}];
+  assert.deepEqual(Array.from(report(api,rows,{journalRows}).groups[0].screenForms),["Главная"]);
+  parent.description="Проблема в форме отчёта";
+  assert.deepEqual(Array.from(report(api,rows).groups[0].screenForms),[]);
+});
+
+test("duplicate parent rows retain each row's explicit imported screen form", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open"));
+  const first={...parent,description:"Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Экранная форма|Тренды|"};
+  const second={...parent,description:"Импортировано из журнала замечаний.\n\n||Поле||Значение||\n|Экранная форма|Главная|"};
+  assert.deepEqual(Array.from(report(api,[row(first),row(second)]).groups[0].screenForms),["Тренды","Главная"]);
+});
+
+test("HTML names the global component scope and explicit screen form safely", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open")), result=report(api,[row(parent)]);
+  result.componentScope=[{id:"component:10",name:"<Экран>"}];
+  result.groups[0].screenForms=["<Главная>"];
+  const html=api.exportHtml(result,{});
+  assert.match(html,/Компоненты: &lt;Экран&gt;/);
+  assert.match(html,/Форма: &lt;Главная&gt;/);
+});
+
 test("confirmed summary keeps verified remark totals beside an unrelated incomplete history", () => {
   const api=activity(), done=detail(api,issue("P-1","Done",[
     history("close","2026-09-24T05:00:00Z","Closer",[item("status","1","2","Open","Done")])

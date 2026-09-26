@@ -78,6 +78,22 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: {fields:"duedate,summary"},
       });
     },
+    getIssueComponents: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
+        type:"GET",timeout:30000,dataType:"json",data:{fields:"components,summary,project,issuetype"}});
+    },
+    updateIssueComponents: function(key, ids) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey || !Array.isArray(ids) || ids.length !== 1 ||
+          !ids.every(function(id) { return typeof id === "string" && /^[1-9][0-9]*$/.test(id); })) {
+        return Promise.reject(new Error("Invalid Jira issue key or component IDs"));
+      }
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
+        type:"PUT",timeout:30000,contentType:"application/json",
+        data:JSON.stringify({fields:{components:ids.map(function(id) { return {id:id}; })}})});
+    },
     updateIssueDueDate: function(key, date) {
       var issueKey = dueDateKey(key);
       if (!issueKey || !calendarDate(date)) return Promise.reject(new Error("Invalid Jira issue key or due date"));

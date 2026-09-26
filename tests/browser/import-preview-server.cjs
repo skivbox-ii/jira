@@ -133,6 +133,13 @@ issues["EVOSCADA-24008"].fields.description=issues["EVOSCADA-24008"].fields.desc
   "|Срок|"+deadlineDay(0)+"|", "|Срок|"+deadlineDay(0)+"|\n|Срок|"+deadlineDay(2)+"|"
 );
 const workbook = XLSX.utils.book_new();
+rows[0].push("Экранная форма");
+rows.slice(1).forEach(row => row.push(row[5] === "EVOSCADA-16104" ? "МЭК: качество сигнала" : ""));
+Object.values(issues).forEach((target,index) => {
+  target.fields.project={key:"EVOSCADA"};
+  target.fields.components=index % 5 === 0 ? [] : [{id:index % 2 ? "1" : "2",name:index % 2 ? "АСУТП" : "Алармы"}];
+});
+issues["EVOSCADA-16104"].fields.description=issues["EVOSCADA-16104"].fields.description.replace("||Поле||Значение||","||Поле||Значение||\n|Экранная форма|МЭК: качество сигнала|");
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Лист1");
 const excel = XLSX.write(workbook, {type:"buffer",bookType:"xlsx"});
 const files = {

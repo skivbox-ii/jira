@@ -26,7 +26,8 @@ async function setup() {
     _ujgESI_creator:{}, _ujgESI_mappingStore:null, _ujgESI_xlsxPatcher:{},
     _ujgShared_llmClient:null, _ujgESI_teams:null, _ujgESI_activity:null,
     _ujgESI_rendering:{init:(_,callbacks)=>{app.callbacks=callbacks;},render:state=>{app.state=state;app.fullRenders++;},renderDueDateSync:state=>{app.state=state;app.modalRenders++;}},
-    _ujgESI_dueDateSync:{create:options=>{changed=options.onChange;return controller;}}
+    _ujgESI_dueDateSync:{create:options=>{changed=options.onChange;return controller;}},
+    _ujgESI_componentSync:null
   });
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}});
   await flush(); app.callbacks.onFileChange({name:"source.xlsx"}); await flush(); await flush();

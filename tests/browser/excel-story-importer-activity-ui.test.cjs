@@ -18,6 +18,8 @@ function setup(report, configureWindow) {
   if (configureWindow) configureWindow(dom.window);
   const $ = jquery(dom.window), calls = {summarize:[], exports:[], refresh:0, aiOpen:0, aiUpdates:0}, modules = {jquery:$};
   modules._ujgESI_activity = {
+    componentFacets:activity.componentFacets,
+    componentRows:activity.componentRows,
     statusTone:activity.statusTone,
     returnKind:activity.returnKind,
     eventCategory:event => activity.eventCategory(event),
@@ -26,7 +28,7 @@ function setup(report, configureWindow) {
     statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово",Open:"Открыто"})[value] || value; },
     eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
-  modules._ujgESI_activityAiUi = {create:() => ({update(){calls.aiUpdates++;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
+  modules._ujgESI_activityAiUi = {create:() => ({update(report){calls.aiUpdates++;calls.aiReport=report;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
   for (const file of ["icons","activity-management-ui","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const state = {rows:[{id:"row"}],teams:[],projectKey:"P",epicKey:"P-EPIC",viewMode:"jira",registryWarning:"Scope warning"};
@@ -97,6 +99,92 @@ test("compact Dynamics toolbar exposes the LLM report command without sending on
   command.trigger("click");
   assert.equal(x.calls.aiOpen,1);
   assert.equal(x.calls.aiUpdates,1);
+});
+
+test("group toggles retain sibling DOM and scroll without recomputing the report", t => {
+  const report=fixture(); report.groups.push({...report.groups[0],id:"g2",key:"P-10",remarkId:"745"});
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const calls=x.calls.summarize.length, sibling=x.$(".ujg-esi-activity-event").last()[0];
+  const scroll=x.$(".ujg-esi-activity-scroll"); scroll.scrollTop(130); scroll.scrollLeft(25);
+  x.$(".ujg-esi-activity-group-toggle").first().trigger("click");
+  assert.equal(x.calls.summarize.length,calls);
+  assert.equal(x.$(".ujg-esi-activity-event").last()[0],sibling);
+  assert.equal(scroll.scrollTop(),130); assert.equal(scroll.scrollLeft(),25);
+  x.$(".ujg-esi-activity-group-toggle").first().trigger("click");
+  assert.equal(x.calls.summarize.length,calls);
+  assert.equal(x.$(".ujg-esi-activity-event").last()[0],sibling);
+});
+
+test("local redraw refreshes cached deadline figures after Moscow midnight", t => {
+  const report=fixture(); report.deadlineReferenceDate=new Date(Date.now()+10800000).toISOString().slice(0,10);
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const initial=x.calls.summarize.length, originalNow=x.dom.window.Date.now;
+  x.dom.window.Date.now=()=>originalNow()+86400000;
+  t.after(()=>{x.dom.window.Date.now=originalNow;});
+  x.$("[data-activity-sort='time']").trigger("click");
+  assert.equal(x.calls.summarize.length,initial+1);
+});
+
+test("minute groups show actual actions without disclosure and details name their author", t => {
+  const report=fixture();
+  report.events=[report.events[0],{...report.events[0],id:"e3",kind:"assignee",from:"Bob",to:"Ann",at:"2026-09-24T12:00:12.000Z"}];
+  report.groups[0].events=report.events;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const summary=x.$(".ujg-esi-activity-event-details summary");
+  assert.match(summary.text(),/Статус: Тестирование → Готово/);
+  assert.match(summary.text(),/Исполнитель: Bob → Ann/);
+  assert.match(x.$(".ujg-esi-activity-event-details [data-event-id='e3']").text(),/Ira/);
+});
+
+test("global components scope selects source rows before totals, AI and export; drafts cancel", t => {
+  const report=fixture(); report.groups[0].components=[{id:"component:10",name:"Экран"}]; report.groups[0].openAtEnd=true;
+  report.asOf="2026-09-24T09:00:00.000Z"; report.generatedAt="2026-09-24T12:00:00.000Z";
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.rows=[{jiraKey:"P-1",storyDetails:{components:[{id:"10",name:"Экран"}]}},{jiraKey:"P-9",storyDetails:{components:[]}}];
+  const base=x.modules._ujgESI_activity.summarize;
+  x.modules._ujgESI_activity.summarize=(rows,teams,options)=>{
+    const value=base(rows,teams,options), present=rows.some(row=>row.jiraKey==="P-1");
+    return {...value,groups:present ? report.groups : [],events:present ? report.events : [],metrics:{...report.metrics,events:present ? 2 : 0}};
+  };
+  x.render(); x.$(".ujg-esi-component-filter").trigger("click");
+  assert.match(x.$(".ujg-esi-component-filter-menu").text(),/Экран1 открытых/);
+  x.$("[data-component-id='component:10']").prop("checked",false).trigger("change");
+  x.$(".ujg-esi-component-filter-menu button").filter(function(){return x.$(this).text()==="Отмена";}).trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+  x.$(".ujg-esi-component-filter").trigger("click");
+  x.$("[data-component-id='component:10']").prop("checked",false).trigger("change");
+  x.$(".ujg-esi-component-filter-apply").trigger("click");
+  assert.equal(x.calls.summarize.at(-1).rows.length,0);
+  assert.equal(x.calls.summarize.at(-1).options.cutoff,report.asOf);
+  assert.equal(x.$("[data-metric='events'] strong").text(),"0");
+  assert.equal(x.calls.aiReport.groups.length,0);
+  assert.deepEqual(Array.from(x.calls.aiReport.componentScope),[]);
+  x.dom.window.URL.createObjectURL=()=>"blob:test"; x.dom.window.URL.revokeObjectURL=()=>{};
+  x.dom.window.HTMLAnchorElement.prototype.click=function(){};
+  x.$("[aria-label='Скачать HTML']").trigger("click");
+  assert.equal(x.calls.exports.at(-1).value.groups.length,0);
+  x.state.projectKey="OTHER"; x.render();
+  assert.equal(x.$("[data-metric='events'] strong").text(),"2","Scope is project-specific");
+  x.state.projectKey="P"; x.render();
+  assert.equal(x.$("[data-metric='events'] strong").text(),"0","Empty selection persists");
+});
+
+test("component checkbox search keeps draft selections stable and missing choices removable", t => {
+  const report=fixture(); report.groups[0].components=[{id:"component:10",name:"Экран"},{id:"component:20",name:"Сервер"}]; report.groups[0].openAtEnd=null;
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-component-filter").trigger("click");
+  const check=x.$("[data-component-id='component:10']")[0];
+  x.$(check).prop("checked",false).trigger("change");
+  assert.equal(x.$("[data-component-id='component:10']")[0],check);
+  x.$("[aria-label='Поиск компонентов']").val("Сервер").trigger("input");
+  assert.equal(x.$("[data-component-id='component:20']").prop("checked"),true);
+  x.$(".ujg-esi-component-filter-apply").trigger("click");
+  report.groups[0].components=[]; x.render();
+  x.$(".ujg-esi-component-filter").trigger("click");
+  assert.match(x.$(".ujg-esi-component-filter-menu").text(),/Сервер.*нет в срезе/);
+  x.$("[data-component-id='component:20']").prop("checked",false).trigger("change");
+  x.$(".ujg-esi-component-filter-apply").trigger("click");
+  assert.match(x.$(".ujg-esi-component-filter").text(),/: 0/);
 });
 function categoryFixture() {
   const report=fixture();
@@ -562,7 +650,7 @@ test("journal filter and sort leave totals intact, collapse survives render", t 
   assert.equal(x.$(".ujg-esi-activity-metric[data-metric='events'] strong").text(),"2");
   x.$("[data-activity-sort='time']").trigger("click");
   x.$(".ujg-esi-activity-group-toggle").trigger("click");
-  assert.equal(x.$(".ujg-esi-activity-event").length,0);
+  assert.equal(x.$(".ujg-esi-activity-event:not([hidden])").length,0);
   x.render(); assert.equal(x.$(".ujg-esi-activity-group-toggle").attr("aria-expanded"),"false");
 });
 test("journal combines one actor's changes on one issue in one Moscow minute and retains details", t => {
@@ -611,7 +699,7 @@ test("completed-task action stays green in a grouped journal row", t => {
   const second={...first,id:"field",kind:"field",field:"description",from:"old",to:"new"};
   report.groups[0].events=[first,second]; report.events=[first,second];
   const x=setup(report); t.after(()=>x.dom.window.close());
-  assert.match(x.$(".ujg-esi-activity-event-details summary").text(),/Задача выполнена.*2 изменения/);
+  assert.match(x.$(".ujg-esi-activity-event-details summary .is-done").text(),/Статус: Тестирование → Готово/);
   assert.equal(x.$(".ujg-esi-activity-event [data-event-id='e1'] .is-done").length,1);
   assert.equal(x.$(".ujg-esi-activity-event [data-event-id='field'] .is-done").length,0);
 });
@@ -623,7 +711,7 @@ test("unchanged Done status is neutral alone and in a grouped summary", t => {
   assert.equal(x.$(".ujg-esi-activity-event .is-done").length,0);
   const detail={...noop,id:"detail",kind:"field",field:"description",from:"old",to:"new"};
   report.groups[0].events=[noop,detail]; report.events=[noop,detail]; x.render();
-  assert.equal(x.$(".ujg-esi-activity-event-details summary").text(),"2 изменения");
+  assert.match(x.$(".ujg-esi-activity-event-details summary").text(),/Статус: Готово → Готово.*2 изменения/);
   assert.equal(x.$(".ujg-esi-activity-event .is-done").length,0);
 });
 test("status IDs distinguish a real Done-to-Done transition from a no-op", t => {

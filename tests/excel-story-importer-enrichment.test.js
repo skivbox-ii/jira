@@ -35,7 +35,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       render: state => { app.state = state; },
     },
     _ujgESI_teams: null,
-    _ujgESI_dueDateSync: null, _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
+    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });
@@ -296,11 +296,24 @@ test("daily activity retains history on parent and child and explicitly enriches
   assert.equal(app.state.rows[0].storyDetails.created, parent.fields.created);
   assert.deepEqual(plain(app.state.rows[0].storyDetails.components), [{ id: "1", name: "X" }]);
   assert.deepEqual(plain(app.state.rows[0].childStatuses[0].components), [{ id: "2", name: "Y" }]);
+  assert.equal(app.state.rows[0].storyDetails.componentsKnown,true);
+  assert.equal(app.state.rows[0].childStatuses[0].componentsKnown,true);
   assert.equal(calls.length, 0);
   app.callbacks.onLoadActivityHistory(); await flush(); await flush();
   assert.deepEqual(calls, ["TEST-1"]);
   assert.equal(app.state.rows[0].storyDetails.activity.complete, true);
   assert.equal(app.state.activityLoading, false);
+});
+
+test("missing or malformed component fields remain unknown on parent and child", async () => {
+  const child={key:"TEST-2",fields:{summary:"[QA] Child",components:[{id:"2"}]}};
+  const parent={key:"TEST-1",fields:{summary:"Parent",issuelinks:[{type:{name:"Child"},outwardIssue:child}]}};
+  const app=await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}],{
+    getIssuesByKeys:keys=>Promise.resolve({issues:keys.map(key=>key==="TEST-1"?parent:child)})
+  });
+  app.callbacks.onSyncJira();await flush();await flush();
+  assert.equal(app.state.rows[0].storyDetails.componentsKnown,false);
+  assert.equal(app.state.rows[0].childStatuses[0].componentsKnown,false);
 });
 
 test("activity enrichment ignores a response after switching project", async () => {
@@ -443,7 +456,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     key: "TEST-1", summary: "Existing Story", description: "Story detail", descriptionLoaded: true, status: "In Progress", assignee: "Иван",
     statusCategory: "", statusState: "progress", done: false,
     assigneeIdentifiers: ["JIRAUSER100", "ivan"],
-    priority: "High", components: [], issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
+    priority: "High", components: [], componentsKnown:false, issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
     created: issues[0].fields.created,
     activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
@@ -453,7 +466,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     role: "FE", key: "TEST-2", summary: "[FE] Existing child", description: "Child detail", descriptionLoaded: true, status: "Open", linkedToParent: true,
     statusCategory: "new", statusState: "todo", done: false, assignee: "developer", blocked: false,
     assigneeIdentifiers: ["developer"],
-    priority: "Low", components: [], issueType: "Task", updated: "2026-02-02T00:00:00Z",
+    priority: "Low", components: [], componentsKnown:false, issueType: "Task", updated: "2026-02-02T00:00:00Z",
     created: child.fields.created,
     activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[]},
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,

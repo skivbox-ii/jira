@@ -25,3 +25,14 @@ test("issue details request actual Jira components", async () => {
   await api.getIssueWithHistory("ABC-1");
   assert.ok(calls[0].data.fields.split(",").includes("components"));
 });
+
+test("component sync reads narrow fields and writes only validated component IDs", async () => {
+  const {api, calls} = client();
+  await api.getIssueComponents("ABC-1");
+  assert.equal(calls[0].data.fields, "components,summary,project,issuetype");
+  await api.updateIssueComponents("ABC-1", ["100"]);
+  assert.deepEqual(JSON.parse(calls[1].data), {fields:{components:[{id:"100"}]}});
+  assert.equal(calls[1].type, "PUT");
+  await assert.rejects(api.updateIssueComponents("ABC-1", ["bad id"]));
+  assert.equal(calls.length, 2);
+});

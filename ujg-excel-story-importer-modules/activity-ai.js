@@ -10,6 +10,7 @@ define("_ujgESI_activityAi", [], function() {
     "Причину возврата и результат тестирования не придумывай. Числа metrics вычислены кодом: не пересчитывай их. " +
     "metrics.taskReturns — уникальные задачи с возвратом, metrics.reopened — повторно открытые полностью готовые замечания. event.returnKind: reopened — после завершения, review — с проверки, testing — с тестирования. Не смешивай эти случаи. " +
     "Отмечай неполные данные и не утверждай, что часть охватывает весь день. " +
+    "scope.components ограничивает отчёт по текущим компонентам исходных историй, а не по компонентам в прошлом; не выходи за этот срез. " +
     "confirmed — итоги только по проверенным замечаниям, не полный итог при неполном покрытии. Используй эти числа без знаков сравнения; указывай remarks из totalRemarks и исключения. События и просрочка имеют отдельное покрытие. Глобальные metrics с null остаются неизвестными. " +
     "Сроки взяты из текущего журнала и сравнены с сегодняшней датой deadlineReferenceDate, независимо от дня событий. История переносов сроков не восстанавливается. " +
     "Просрочку бери из deadline.state и confirmed.metrics.overdue (при отсутствии confirmed — из metrics.overdue), учитывая отдельное deadlineCoverage; не вычисляй её по дате создания или готовности. " +
@@ -135,7 +136,7 @@ define("_ujgESI_activityAi", [], function() {
       includedFragments:batch.filter(function(record) { return record.type === "history"; }).length
     })};
     return JSON.stringify({stage:stage || (conversation ? "answer" : "report"),
-      scope:{projectKey:plan.scope.projectKey,epicKey:plan.scope.epicKey,baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode},
+      scope:{projectKey:plan.scope.projectKey,epicKey:plan.scope.epicKey,baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode,components:plan.scope.components || undefined},
       date:plan.date,asOf:plan.asOf,timezone:plan.timezone,
       metrics:plan.metrics,confirmed:plan.confirmed,totals:plan.totals,coverage:plan.coverage,deadlineCoverage:plan.deadlineCoverage,deadlineReferenceDate:plan.deadlineReferenceDate,balance:plan.balance,observed:plan.observed,
       transitions:plan.transitions,transfers:plan.transfers,teams:plan.teams,
@@ -226,7 +227,8 @@ define("_ujgESI_activityAi", [], function() {
       if (scope && scope[field] != null) currentScope[field] = clone(scope[field]);
     });
     delete signature.generatedAt;
-    var scopeKey = JSON.stringify([currentScope.projectKey || "",currentScope.epicKey || "",currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || ""]);
+    currentScope.components = Array.isArray(data.componentScope) ? data.componentScope : null;
+    var scopeKey = JSON.stringify([currentScope.projectKey || "",currentScope.epicKey || "",currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || "",currentScope.components && currentScope.components.map(function(item) { return item.id; }).sort()]);
     var plan = {scopeKey:scopeKey,fingerprint:fingerprint(signature),scope:currentScope,
       date:data.date,asOf:data.asOf,timezone:data.timezone || "МСК",metrics:data.metrics || {},confirmed:data.confirmed || null,coverage:data.coverage || {},deadlineCoverage:data.deadlineCoverage || {},deadlineReferenceDate:data.deadlineReferenceDate || null,
       eventCount:data.events.length,balance:data.balance || {},observed:data.observed || {},totals:totals(data),transitions:data.transitions || [],
