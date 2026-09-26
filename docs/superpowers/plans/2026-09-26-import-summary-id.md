@@ -10,9 +10,11 @@
 
 User approved the short design with “продолжай проверяй”.
 
-- [ ] Add registry regressions for `2650. Problem`, `№42. Problem`, `#42 Problem`, preserved `ID`, numeric zero, absent prefix, unrelated numbers and child titles.
-- [ ] Run `node --test tests/excel-story-importer-registry.test.js`; confirm new fallback assertions fail.
-- [ ] In `remark-id.js`, after existing ID resolution, inspect `row.storyDetails.summary` only for a linked Story. Match an anchored numeric prefix with optional `№`/`#`, followed by a dot not followed by a digit, whitespace, or end. Production also has `2795.Линия` without a space. Do not interpret a date/decimal prefix as the journal ID. In `activity.js`, do not retry the older permissive regex after the shared helper rejects a linked Story title; use its Jira key instead.
-- [ ] Run registry, parser, creator and activity tests, then the full existing suite.
-- [ ] Personally check Jira mode without Excel on the local preview. Request independent code review, build/publish importer assets, and confirm the same path in Citrix without writing tickets.
-- [ ] Record test counts, commit and actual Citrix evidence in the backlog. Do not close acceptance if Citrix is unavailable.
+- [x] Add registry regressions for `2650. Problem`, `№42. Problem`, `#42 Problem`, preserved `ID`, numeric zero, absent prefix, unrelated numbers and child titles.
+- [x] Run `node --test tests/excel-story-importer-registry.test.js`; confirm new fallback assertions fail.
+- [x] In `remark-id.js`, after existing ID resolution, inspect `row.storyDetails.summary` only for a linked Story. Match an anchored numeric prefix with optional `№`/`#`, followed by a dot not followed by a digit, whitespace, or end. Production also has `2795.Линия` without a space. Do not interpret a date/decimal prefix as the journal ID. In `activity.js`, do not retry the older permissive regex after the shared helper rejects a linked Story title; use its Jira key instead.
+- [x] Run registry, parser, creator and activity tests, then the full existing suite (1301/1301).
+- [x] Personally check Jira mode without Excel on the local preview. Request independent code review, build/publish importer assets, and confirm the same path in Citrix without writing tickets.
+- [x] Record test counts, commit and actual Citrix evidence in the backlog. Do not close acceptance if Citrix is unavailable.
+
+Published code: `8cb09d0`. Acceptance: `docs/import-summary-id-acceptance-2026-09-26.md`.
