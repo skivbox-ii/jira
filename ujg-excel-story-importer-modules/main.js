@@ -16,7 +16,9 @@ define("_ujgESI_main", [
   "_ujgESI_activityLoader",
   "_ujgESI_deadlines",
   "_ujgESI_remarkReportLoader",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader) {
+  "_ujgESI_sourceExport",
+  "_ujgESI_sourceExportApi",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi) {
   "use strict";
 
   function searchErrorText(err) {
@@ -3507,6 +3509,33 @@ define("_ujgESI_main", [
       return llmClient.writeStoredConfig(storage, prompted, config.LLM_CONFIG_STORAGE_KEY);
     }
 
+    function sourceExportScope() { return {projectKey:state.projectKey,epicKey:state.epicKey,baseUrl:state.baseUrl,sourceFileName:state.sourceFileName}; }
+    function onSourceExportPlan() { return sourceExportApi.create(sourceExportScope()).plan; }
+    function onLoadSourceExport(options) {
+      options=options || {};
+      var scope=sourceExportScope(), rows=state.rows, source=excelRows, view=state.viewMode, user=state.preferencesStorageKey;
+      return sourceExport.collect(sourceExportApi.create(scope),{
+        scope:scope,teams:state.teams,
+        journalRows:(state.sourceFileName ? source : []).map(function(row){return {jiraKey:issueKeyFromRow(row),rowNumber:row.rowNumber,remarkId:row.remarkId,summary:row.summary,sourceColumns:row.sourceColumns};}),
+        children:function(issue){
+          var f=issue.fields;
+          if(!Array.isArray(f.issuelinks))throw new Error("Список связей недоступен");
+          f.issuelinks.forEach(function(link){
+            if(!link||!link.type)throw new Error("Неизвестный тип связи");
+            ["inward","outward"].forEach(function(direction){
+              if(!pointsToChild(link.type,link.type[direction]))return;
+              if(!link.inwardIssue&&!link.outwardIssue)throw new Error("Недоступная дочерняя связь");
+              if(Object.prototype.hasOwnProperty.call(link,direction+"Issue")&&!normalizeIssueKey(link[direction+"Issue"]&&link[direction+"Issue"].key))throw new Error("Не прочитан ключ дочерней задачи");
+            });
+          });
+          if(!Array.isArray(f.subtasks))throw new Error("Список подзадач недоступен");
+          return childIssueKeysFromIssues([issue]).concat(f.subtasks.map(function(child){return child&&child.key;}));
+        },
+        isCancelled:function(){return state.rows!==rows||excelRows!==source||state.viewMode!==view||state.preferencesStorageKey!==user||JSON.stringify(sourceExportScope())!==JSON.stringify(scope)||!!(options.isCancelled&&options.isCancelled());},
+        onProgress:options.onProgress
+      });
+    }
+
     function onLoadRemarkReport(key, options) {
       options = options || {};
       var rows = state.rows, row = (rows || []).filter(function(value) { return issueKeyFromRow(value) === key; })[0];
@@ -4118,6 +4147,8 @@ define("_ujgESI_main", [
       },
       onActivityLlmRequest: onActivityLlmRequest,
       onLoadRemarkReport: onLoadRemarkReport,
+      onLoadSourceExport: onLoadSourceExport,
+      onSourceExportPlan: onSourceExportPlan,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
         if (state.reportView !== view && !closeDueDateSyncForContextChange()) return;

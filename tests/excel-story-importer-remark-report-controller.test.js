@@ -20,7 +20,7 @@ async function setup() {
     "_ujgESI_excel-loader":{},_ujgESI_parser:{},_ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:null,
     _ujgESI_teams:teams,_ujgESI_activity:activity,_ujgESI_deadlines:deadlines,_ujgESI_dueDateSync:null,_ujgESI_componentSync:null,
     _ujgESI_activityLoader:require("./helpers/import-activity-loader"),
-    _ujgESI_remarkReportLoader:load(path.join(dir,"remark-report-loader.js"),{}),_ujgShared_llmClient:null,
+    _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:load(path.join(dir,"remark-report-loader.js"),{}),_ujgShared_llmClient:null,
     _ujgESI_rendering:{init:(_,cb)=>app.cb=cb,render:s=>app.state=s}
   });
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}});

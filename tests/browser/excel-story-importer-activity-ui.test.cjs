@@ -29,6 +29,7 @@ function setup(report, configureWindow) {
     eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
   modules._ujgESI_activityAiUi = {create:() => ({update(report){calls.aiUpdates++;calls.aiReport=report;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
+  modules._ujgESI_sourceExportUi = {create:()=>({open(){},dismiss(){},updateScope(){},destroy(){}})};
   modules._ujgESI_remarkReportUi = {create:()=>({open(...args){calls.remarkOpen=args;},dismiss(){},updateScope(){},rebindAnchor(){},destroy(){}})};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
   for (const file of ["icons","activity-brief","activity-management-ui","activity-store","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));

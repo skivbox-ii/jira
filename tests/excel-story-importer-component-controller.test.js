@@ -20,7 +20,7 @@ test("Excel component command freezes project mapping and blocks context changes
     "_ujgESI_excel-loader":{readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:["Sheet1"]})},
     _ujgESI_parser:{parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Модуль":"A"}}]})},
     _ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:{},_ujgShared_llmClient:null,
-    _ujgESI_teams:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,
+    _ujgESI_teams:null,_ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,
     _ujgESI_rendering:{init:(_,callbacks)=>{app.callbacks=callbacks;},render:state=>{app.state=state;app.fullRenders=(app.fullRenders||0)+1;},renderDueDateSync:state=>{app.state=state;}},
     _ujgESI_dueDateSync:null,_ujgESI_componentSync:{create:options=>{changed=options.onChange;app.updated=options.onUpdated;return controller;}}
   });

@@ -7257,6 +7257,327 @@ define("_ujgESI_remarkReportLoader", [], function() {
   return {create:create};
 });
 
+/* === Module: source-export.js === */
+define("_ujgESI_sourceExport", [], function() {
+  "use strict";
+  function clone(value) { return JSON.parse(JSON.stringify(value)); }
+  function unique(values) { return Array.from(new Set(values)); }
+  function validKey(value) { return typeof value === "string" && /^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/i.test(value); }
+  function day(value) {
+    var ms = typeof value === "string" ? Date.parse(value) : NaN;
+    return isFinite(ms) ? new Date(ms + 10800000).toISOString().slice(0, 10) : "unknown";
+  }
+  function stamp(value) {
+    var ms = typeof value === "string" ? Date.parse(value) : NaN;
+    return isFinite(ms) ? new Date(ms + 10800000).toISOString().replace("T", " ").replace("Z", " МСК") : "БЕЗ ДАТЫ: " + String(value);
+  }
+  function person(value) { return value ? [value.displayName, value.key || value.name || value.accountId].filter(Boolean).join(" / ") : "не указан"; }
+  function valueText(value) { return typeof value === "string" ? value : JSON.stringify(value == null ? null : value); }
+  function duration(seconds) {
+    return isFinite(seconds) && seconds >= 0 ? Math.floor(seconds / 3600) + " ч " + Math.floor(seconds % 3600 / 60) + " мин" + (seconds % 60 ? " " + seconds % 60 + " с" : "") : "неизвестно";
+  }
+  function events(data) {
+    var out = [];
+    function add(issue, kind, at, record, actor) { out.push({key:issue.key,kind:kind,at:at,day:day(at),record:record,actor:actor}); }
+    data.issues.forEach(function(issue) {
+      var f = issue.raw.fields || {};
+      add(issue,"ISSUE_CREATED",f.created,{summary:f.summary,creator:f.creator},f.creator);
+      issue.collections.histories.entries.forEach(function(h) { add(issue,"CHANGELOG",h&&h.created,h,h&&h.author); });
+      issue.collections.comments.entries.forEach(function(c) {
+        if(!c||typeof c!=="object"){add(issue,"INVALID_COMMENT",null,c,null);return;}
+        add(issue,"COMMENT_CREATED",c.created,c,c.author);
+        if (c.updated && c.updated !== c.created) add(issue,"COMMENT_UPDATED",c.updated,c,c.updateAuthor);
+      });
+      issue.collections.worklogs.entries.forEach(function(w) {
+        if(!w||typeof w!=="object"){add(issue,"INVALID_WORKLOG",null,w,null);return;}
+        add(issue,"WORKLOG_STARTED",w.started,w,w.author);
+        add(issue,"WORKLOG_CREATED",w.created,w,w.author);
+        if (w.updated && w.updated !== w.created) add(issue,"WORKLOG_UPDATED",w.updated,w,w.updateAuthor);
+      });
+    });
+    return out.sort(function(a,b) { return (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0) || a.key.localeCompare(b.key) || a.kind.localeCompare(b.kind); });
+  }
+  async function collect(reader, options) {
+    options = options || {};
+    var data = {schemaVersion:1,startedAt:new Date().toISOString(),finishedAt:null,scope:clone(options.scope || {}),
+      queryPlan:clone(reader.plan || []),requests:[],searchPages:[],parentKeys:[],parents:[],relationships:[],issues:[],errors:[],
+      journalRows:clone(options.journalRows || []),teams:clone(options.teams || []),
+      limitations:["Чтение не атомарно: записи получены в разное время в указанном интервале.",
+        "Полнота означает доступные этому пользователю записи Jira; удалённые и скрытые записи не восстановлены.",
+        "Связи задач и состав команд отражают текущий снимок, не историческую принадлежность.",
+        "WORKLOG_STARTED — дата работы; CREATED/UPDATED — действия с записью. Не суммировать часы повторно.",
+        "Комментарий содержит последнюю доступную редакцию; прежние редакции Jira не предоставлены.",
+        "Строки Excel — отдельное импортированное представление, включая локальные правки; не копия исходного файла и не подтверждение принадлежности текущему проекту/эпику.",
+        "Проверка total и ID не доказывает неизменность Jira: замена записей без изменения total во время чтения может остаться незамеченной."],coverage:{}};
+    function cancel() { if (options.isCancelled && options.isCancelled()) throw new Error("Выгрузка отменена"); }
+    function progress(phase,key) { cancel(); if (options.onProgress) options.onProgress({phase:phase,key:key || "",completed:data.issues.length,total:queue.length}); }
+    function error(key,kind,message,status) { data.errors.push({key:key,kind:kind,message:message,status:status || null}); }
+    function message(e) { return e && e.status ? "HTTP " + e.status : String(e && e.message || "Чтение не удалось"); }
+    // Never trust a short embedded collection as a complete history. Restart paging at zero.
+    async function collection(key,kind,embedded) {
+      var entries = [], pages = [], expected = embedded && embedded.total, seen = new Set(), start = 0, complete = false;
+      var member = kind === "histories" ? "histories" : kind;
+      var initial = embedded && embedded[member];
+      var usable = Number.isInteger(expected) && expected >= 0;
+      if (usable && Array.isArray(initial) && initial.length === expected && (!embedded.startAt || embedded.startAt === 0)) {
+        pages.push(clone(embedded)); entries = clone(initial); complete = true;
+        if(embedded.isLast === false){complete=false;error(key,kind,"Jira сообщает, что коллекция не закончена (isLast=false)");}
+      } else {
+        while (true) {
+          cancel(); progress(kind,key);
+          var page;
+          try { page = await reader.readPage(key,kind,start); cancel(); }
+          catch (e) { cancel(); error(key,kind,message(e),e.status); break; }
+          pages.push(clone(page));
+          var batch = page && (page[member] || (kind === "histories" && page.values));
+          if (Array.isArray(batch)) entries = entries.concat(clone(batch));
+          if (!page || !Number.isInteger(page.total) || page.total < 0 || page.startAt !== start || !Array.isArray(batch)) {
+            error(key,kind,"Некорректная страница или неизвестен total"); break;
+          }
+          if (usable && expected !== page.total) { error(key,kind,"Количество записей изменилось во время чтения: " + expected + " → " + page.total); break; }
+          expected = page.total; usable = true;
+          var duplicate = batch.some(function(item) {
+            if (!item || item.id == null || seen.has(String(item.id))) return true;
+            seen.add(String(item.id)); return false;
+          });
+          if (duplicate) { error(key,kind,"Повторный или отсутствующий ID записи"); break; }
+          start += batch.length;
+          if (start === expected) {
+            complete = page.isLast !== false;
+            if(!complete)error(key,kind,"Jira сообщает, что коллекция не закончена (isLast=false)");
+            break;
+          }
+          if (!batch.length || start > expected) { error(key,kind,"Пустая или избыточная страница до конца коллекции"); break; }
+        }
+      }
+      if(Array.isArray(initial))initial.forEach(function(item){
+        var found=item&&item.id!=null&&entries.find(function(e){return e&&String(e.id)===String(item.id);});
+        if(!found){entries.push(clone(item));complete=false;error(key,kind,"Встроенная запись отсутствует в прочитанных страницах");}
+        else if(JSON.stringify(item)!==JSON.stringify(found)){complete=false;error(key,kind,"Версия встроенной записи отличается от отдельной страницы; обе версии сохранены в raw/pages");}
+      });
+      var ids = entries.map(function(e) { return e && e.id != null ? String(e.id) : null; });
+      if (ids.indexOf(null) >= 0 || unique(ids).length !== ids.length) { complete = false; error(key,kind,"Повторный или отсутствующий ID записи"); }
+      return {expected:usable ? expected : null,entries:entries,pages:pages,complete:complete};
+    }
+    var queue = [], searched = new Set(), start = 0, total = null;
+    while (true) {
+      cancel(); progress("search");
+      var page;
+      try { page = await reader.readStories(start); cancel(); }
+      catch (e) { cancel(); error("","search",message(e),e.status); break; }
+      data.searchPages.push(clone(page));
+      var batch = page && page.issues;
+      var valid = page && Number.isInteger(page.total) && page.total >= 0 && page.startAt === start && Array.isArray(batch);
+      var drift = total !== null && total !== page.total;
+      if (Array.isArray(batch)) batch.forEach(function(issue) {
+        if (!issue || !validKey(issue.key)) { valid = false; return; }
+        if (searched.has(issue.key)) { valid = false; return; }
+        searched.add(issue.key);data.parentKeys.push(issue.key);queue.push(issue.key);
+      });
+      if (!valid || drift) { error("","search","Изменился total, нарушена пагинация или ключ истории"); break; }
+      total = page.total;start += batch.length;
+      if (start === total) break;
+      if (!batch.length || start > total) { error("","search","Список историй неполон"); break; }
+    }
+    var discovered = new Set(queue);
+    for (var i = 0; i < queue.length; i++) {
+      cancel(); var key = queue[i]; progress("issue",key);
+      var raw;
+      try { raw = await reader.readIssue(key); cancel(); }
+      catch (e) { cancel(); error(key,"issue",message(e),e.status); continue; }
+      if (!raw || raw.key !== key || !raw.fields) { error(key,"issue","Ответ не содержит запрошенную задачу"); continue; }
+      var issue = {key:key,readAt:new Date().toISOString(),consistency:"not-verified",raw:clone(raw),collections:{}};
+      data.issues.push(issue);
+      {
+        try {
+          var children = options.children(raw);
+          if (!Array.isArray(children) || children.some(function(k) { return !validKey(k); })) throw new Error("Некорректные связи дочерних задач");
+          children = unique(children);
+          data.relationships.push({key:key,children:children});
+          if(searched.has(key))data.parents.push({key:key,children:children});
+          children.forEach(function(child) { if (!discovered.has(child)) { discovered.add(child);queue.push(child); } });
+        } catch (e) { error(key,"links",message(e)); }
+      }
+      issue.collections.histories = await collection(key,"histories",raw.changelog);
+      issue.collections.comments = await collection(key,"comments",raw.fields.comment);
+      issue.collections.worklogs = await collection(key,"worklogs",raw.fields.worklog);
+    }
+    cancel();
+    events(data).forEach(function(event) { if (event.day === "unknown") error(event.key,event.kind,"Не распознана дата: " + String(event.at)); });
+    data.finishedAt = new Date().toISOString(); data.requests = clone(reader.requests || []);
+    data.journalAssociation={verified:false,matchedParentKeys:unique(data.journalRows.map(function(r){return r.jiraKey;}).filter(function(k){return searched.has(k);}))};
+    data.coverage = {scope:"available-page-counts",complete:data.errors.length === 0 && data.issues.every(function(i) {return Object.keys(i.collections).every(function(k) {return i.collections[k].complete;});}),
+      expectedParents:total,loadedParents:data.issues.filter(function(i) {return searched.has(i.key);}).length,
+      expectedIssues:queue.length,loadedIssues:data.issues.length,journalLoaded:data.journalRows.length > 0};
+    return data;
+  }
+  function days(data) { return unique(events(data).map(function(e) {return e.day;})).sort(); }
+  function text(data, selectedDay, options) {
+    var audit = !options || options.audit !== false;
+    var out = ["ИСХОДНЫЕ ДАННЫЕ JIRA. НЕ LLM-ОТЧЁТ.","Область: " + JSON.stringify(data.scope),
+      "Чтение: " + stamp(data.startedAt) + " — " + stamp(data.finishedAt),
+      "Проверка количества доступных записей: " + (data.coverage.complete ? "пройдена" : "НЕПОЛНЫЕ ДАННЫЕ"),
+      "Историй: " + data.coverage.loadedParents + " / " + data.coverage.expectedParents + "; задач: " + data.coverage.loadedIssues + " / " + data.coverage.expectedIssues,
+      "Excel: " + (data.journalRows.length ? data.journalRows.length + " строк отдельного загруженного файла; принадлежность срезу не подтверждена" : "не загружен; Jira не заменяет исходный журнал"),
+      data.limitations.join("\n")];
+    if(audit) out.push("\nПЛАН ЗАПРОСОВ",JSON.stringify(data.queryPlan,null,2),"\nЖУРНАЛ ЗАПРОСОВ",JSON.stringify(data.requests,null,2),
+      "\nОШИБКИ",JSON.stringify(data.errors,null,2),"\nТЕКУЩИЕ КОМАНДЫ",JSON.stringify(data.teams,null,2),
+      "\nСВЯЗИ ИСТОРИЙ И ЗАДАЧ",JSON.stringify(data.relationships,null,2),"\nИСХОДНЫЕ СТРОКИ EXCEL",JSON.stringify(data.journalRows,null,2));
+    var list = events(data).filter(function(e) {return !selectedDay || e.day === selectedDay;});
+    var keys = new Set(list.map(function(e) {return e.key;}));
+    out.push("\nЗАДАЧИ (ТЕКУЩИЕ ПОЛЯ)");
+    data.issues.filter(function(i) {return !selectedDay || keys.has(i.key);}).forEach(function(i) {
+      var f=i.raw.fields;
+      out.push("\n=== " + i.key + " ===",f.summary || "Тема не указана",
+        "Родительские истории: " + data.parents.filter(function(p){return p.key===i.key||p.children.indexOf(i.key)>=0;}).map(function(p){return p.key;}).join(", "),
+        "Статус: " + valueText(f.status) + "; решение: " + valueText(f.resolution),
+        "Исполнитель сейчас: " + person(f.assignee) + "; создатель: " + person(f.creator),
+        "Создана: " + f.created + "; обновлена: " + f.updated + "; срок: " + valueText(f.duedate),
+        "Компоненты: " + valueText(f.components) + "; приоритет: " + valueText(f.priority),
+        "Описание:\n" + valueText(f.description),
+        "Коллекции: " + Object.keys(i.collections).map(function(k) {var c=i.collections[k];return k + " " + c.entries.length + "/" + c.expected + (c.complete ? " OK" : " НЕПОЛНО");}).join("; "));
+      if(audit && !selectedDay)out.push("ВСЕ ПОЛЯ " + JSON.stringify(f));
+    });
+    out.push("\nСОБЫТИЯ " + (selectedDay || "ЗА ВСЕ ДНИ") + "; МСК; " + list.length + " записей представления");
+    var currentDay;
+    list.forEach(function(e) {
+      if(currentDay!==e.day){currentDay=e.day;out.push("\n######## ДЕНЬ " + currentDay + " (МСК) ########");}
+      var r=e.record||{};
+      out.push("\n[" + stamp(e.at) + "] " + e.kind + " " + e.key + " ID=" + (r.id || e.key) + " | " + person(e.actor));
+      if (e.kind === "CHANGELOG" && Array.isArray(r.items)) r.items.forEach(function(item) {if(item)out.push("  " + (item.field || item.fieldId) + ": " + valueText(item.fromString) + " → " + valueText(item.toString),"  ID значений: " + valueText(item.from) + " → " + valueText(item.to));});
+      if (/^COMMENT/.test(e.kind)) out.push(valueText(r.body),"Создан: " + r.created + "; изменён: " + r.updated + "; автор изменения: " + person(r.updateAuthor));
+      if (/^WORKLOG/.test(e.kind)) out.push("Трудозатраты: " + r.timeSpentSeconds + " с = " + duration(r.timeSpentSeconds),valueText(r.comment),
+        "Дата работы: " + r.started + "; запись создана: " + r.created + "; изменена: " + r.updated + "; автор изменения: " + person(r.updateAuthor));
+      if(e.kind==="ISSUE_CREATED")out.push(r.summary);
+      if(audit || e.day==="unknown")out.push("RAW " + JSON.stringify(e.record));
+    });
+    return out.join("\n");
+  }
+  return {collect:collect,text:text,days:days,events:events};
+});
+
+/* === Module: source-export-api.js === */
+define("_ujgESI_sourceExportApi", ["jquery","_ujgESI_config"], function($,config) {
+  "use strict";
+  function quote(value) { return '"' + String(value).replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"'; }
+  function create(scope) {
+    if (!scope || !scope.projectKey) throw new Error("Не выбран проект Jira");
+    var field = String(config.EPIC_LINK_FIELD || ""), match = /^customfield_(\d+)$/.exec(field);
+    if (scope.epicKey && !field) throw new Error("Не настроено поле связи с эпиком");
+    var jql = "project = " + quote(scope.projectKey) + " AND issuetype = Story";
+    if (scope.epicKey) jql += " AND " + (match ? "cf[" + match[1] + "]" : quote(field)) + " = " + quote(scope.epicKey);
+    jql += " ORDER BY key ASC";
+    var base = String(config.baseUrl || "").replace(/\/$/,""), requests = [];
+    function read(path,params) {
+      var started = Date.now(), entry = {method:"GET",url:base+path,params:params,startedAt:new Date(started).toISOString()};
+      requests.push(entry);
+      return new Promise(function(resolve,reject) {
+        function finish(status) {entry.status=status;entry.finishedAt=new Date().toISOString();entry.durationMs=Date.now()-started;}
+        $.ajax({url:entry.url,type:"GET",dataType:"json",timeout:30000,data:params}).then(function(data,status,xhr) {
+          finish(xhr && xhr.status || 200);entry.total=data && data.total != null ? data.total : null;resolve(data);
+        },function(xhr) {
+          var status=xhr && xhr.status || 0;finish(status);
+          var e=new Error(status ? "HTTP " + status : "Не получен ответ Jira (сеть, тайм-аут или ограничение браузера)");e.status=status;reject(e);
+        });
+      });
+    }
+    function issuePath(key) {
+      if (!/^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/i.test(String(key))) throw new Error("Некорректный ключ Jira");
+      return "/rest/api/2/issue/" + encodeURIComponent(key);
+    }
+    return {requests:requests,plan:[
+      {method:"GET",url:base+"/rest/api/2/search",params:{jql:jql,fields:"key",maxResults:100,startAt:"0, 100, … до total"}},
+      {method:"GET",url:base+"/rest/api/2/issue/{key}",params:{fields:"*all",expand:"changelog,names"},keys:"Все исходные истории и их связанные дочерние задачи; без фильтров таблицы"},
+      {method:"GET",url:base+"/rest/api/2/issue/{key}/{comment|worklog|changelog}",params:{startAt:"0, … до total",maxResults:100},when:"Встроенная коллекция неполна или её total неизвестен. Недоступный changelog endpoint отмечается ошибкой, не заменяется догадкой."}
+    ],readStories:function(start) {return read("/rest/api/2/search",{jql:jql,fields:"key",maxResults:100,startAt:start});},
+    readIssue:function(key) {return read(issuePath(key),{fields:"*all",expand:"changelog,names"});},
+    readPage:function(key,kind,start) {
+      var routes={comments:"comment",worklogs:"worklog",histories:"changelog"};
+      if (!Object.prototype.hasOwnProperty.call(routes,kind)) throw new Error("Неизвестная коллекция");
+      return read(issuePath(key)+"/"+routes[kind],{startAt:start,maxResults:100});
+    }};
+  }
+  return {create:create};
+});
+
+/* === Module: source-export-ui.js === */
+define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons"], function($,engine,icon) {
+  "use strict";
+  function scope(state) {return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.viewMode,state.sourceFileName]);}
+  function download(name,text,type) {
+    var url=URL.createObjectURL(new Blob([text],{type:type+";charset=utf-8"})),a=document.createElement("a");
+    a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},30000);
+  }
+  function create() {
+    var $dialog,$status,$text,$date,$load,$downloads,$previous,$next,$unknown,$audit,serial=0,data,busy=false,planError=false,days=[],selected,state,services,oldScope,rows,anchor,overflow,destroyed=false;
+    function button(name,label,cls,action) {return $("<button/>").attr({type:"button",title:label,"aria-label":label}).addClass(cls).append(icon(name)).on("click",action);}
+    function dismiss() {
+      serial++;data=null;busy=false;
+      if (!$dialog) return;
+      $dialog.remove();$dialog=null;document.body.style.overflow=overflow;
+      if(anchor&&document.contains(anchor)){anchor.focus();$(anchor).attr("aria-expanded","false");}anchor=null;
+    }
+    function show(day) {
+      if(!data)return;
+      selected=day;$date.val(day==="unknown"?"":day);
+      $text.text(engine.text(data,day,{audit:false}));
+      $previous.prop("disabled",days.indexOf(day)<=0);$next.prop("disabled",days.indexOf(day)<0||days.indexOf(day)>=days.length-1);
+      $dialog.find(".ujg-esi-ai-content").scrollTop(0);
+    }
+    function controls() {$load.prop("disabled",busy||planError);$downloads.prop("disabled",busy||!data);$date.prop("disabled",busy||!data);$dialog.attr("aria-busy",String(busy));}
+    function read() {
+      if(busy||planError)return;var active=++serial;busy=true;data=null;controls();$text.empty();$audit.empty();$status.text("Чтение списка историй");
+      $previous.prop("disabled",true);$next.prop("disabled",true);$unknown.prop("hidden",true);
+      function cancelled(){return active!==serial||!$dialog||destroyed;}
+      Promise.resolve().then(function(){
+        if(cancelled())return;
+        return services.onLoadSourceExport({isCancelled:cancelled,onProgress:function(p){if(!cancelled())$status.text((p.phase==="search"?"Список историй":"Чтение "+p.phase)+" · "+p.key+" · задач "+p.completed+" / "+p.total);}});
+      }).then(function(result){
+        if(cancelled())return;data=result;busy=false;controls();
+        var c=data.coverage;days=engine.days(data);$status.text((c.complete?"Доступные записи прочитаны":"НЕПОЛНЫЕ ДАННЫЕ")+" · задач "+c.loadedIssues+" / "+c.expectedIssues+" · ошибок "+data.errors.length);
+        $audit.text(JSON.stringify({coverage:c,errors:data.errors,requests:data.requests},null,2));
+        $dialog.find("details").prop("open",false);
+        $unknown.prop("hidden",days.indexOf("unknown")<0);days=days.filter(function(d){return d!=="unknown";});
+        show(days[days.length-1]||"unknown");
+      }).catch(function(e){if(cancelled())return;busy=false;controls();$status.text(String(e&&e.message||"Чтение не удалось"));});
+    }
+    function open(nextState,nextServices,control) {
+      if(destroyed)return;dismiss();planError=false;state=nextState;services=nextServices;oldScope=scope(state);rows=state.rows;anchor=control||document.activeElement;
+      overflow=document.body.style.overflow;document.body.style.overflow="hidden";
+      if(anchor)$(anchor).attr("aria-expanded","true");
+      $dialog=$("<section/>").addClass("ujg-esi-activity-ai-dialog ujg-esi-source-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"Исходные данные Jira",tabindex:"-1"}).appendTo(document.body);
+      var $close=button("X","Закрыть исходные данные","ujg-esi-source-close",dismiss);
+      $dialog.append($("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("Исходные данные Jira"),$close));
+      $status=$("<p/>").addClass("ujg-esi-source-status").attr({role:"status","aria-live":"polite"}).text(state.projectKey+" · "+(state.epicKey||"Все истории проекта"));
+      $load=button("RefreshCw","Загрузить исходные данные","ujg-esi-source-load",read).append($("<span/>").text("Загрузить"));
+      var $json=button("Download","Скачать полный JSON","ujg-esi-source-json",function(){if(data)download("jira-source-"+state.projectKey+"-"+data.finishedAt.replace(/[:.]/g,"-")+".json",JSON.stringify(data,null,2),"application/json");}).append($("<span/>").text("JSON"));
+      var $all=button("Download","Скачать текст за все дни","ujg-esi-source-all",function(){if(data)download("jira-source-all.txt",engine.text(data),"text/plain");}).append($("<span/>").text("Все дни · TXT"));
+      var $day=button("Download","Скачать текст за выбранный день","ujg-esi-source-day",function(){if(data)download("jira-source-"+selected+".txt",engine.text(data,selected),"text/plain");}).append($("<span/>").text("День · TXT"));
+      $downloads=$json.add($all).add($day);
+      $date=$("<input/>").attr({type:"date","aria-label":"День исходных событий"}).addClass("ujg-esi-source-date").on("change",function(){if(/^\d{4}-\d{2}-\d{2}$/.test(this.value))show(this.value);});
+      $previous=button("ChevronLeft","Предыдущий день с записями","ujg-esi-source-prev",function(){show(days[days.indexOf(selected)-1]);}).prop("disabled",true);
+      $next=button("ChevronRight","Следующий день с записями","ujg-esi-source-next",function(){show(days[days.indexOf(selected)+1]);}).prop("disabled",true);
+      $unknown=button("Calendar","Записи без даты","ujg-esi-source-unknown",function(){show("unknown");}).append($("<span/>").text("Без даты")).prop("hidden",true);
+      var $plan=$("<pre/>").addClass("ujg-esi-source-plan");
+      try{$plan.text(JSON.stringify(services.onSourceExportPlan(),null,2));}catch(e){planError=true;$status.text(e.message);}
+      $audit=$("<pre/>").addClass("ujg-esi-source-audit");$text=$("<pre/>").addClass("ujg-esi-source-text").attr({tabindex:"0","aria-label":"Полный текст исходных записей за день"});
+      $dialog.append($("<div/>").addClass("ujg-esi-ai-actions").append($load,$json,$all,$day),$status,
+        $("<div/>").addClass("ujg-esi-ai-actions").append($previous,$date,$next,$unknown),
+        $("<div/>").addClass("ujg-esi-ai-content").append($("<details open/>").append($("<summary/>").text("План чтения"),$plan),$("<details/>").append($("<summary/>").text("Запросы, полнота и ошибки"),$audit),$text));
+      controls();$close.trigger("focus");
+      $dialog.on("keydown",function(e){
+        if(e.key==="Escape"){e.preventDefault();e.stopPropagation();dismiss();return;}
+        if(e.key!=="Tab")return;
+        var items=$dialog.find('button:not(:disabled):not([hidden]),input:not(:disabled),summary,pre[tabindex]'),first=items[0],last=items[items.length-1];
+        if(e.shiftKey&&(document.activeElement===first||document.activeElement===$dialog[0])){e.preventDefault();last.focus();}
+        else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+      });
+    }
+    return {open:open,dismiss:dismiss,updateScope:function(s){if($dialog&&(scope(s)!==oldScope||s.rows!==rows))dismiss();},destroy:function(){dismiss();destroyed=true;}};
+  }
+  return {create:create};
+});
+
 /* === Module: marked-16.4.2.umd.js === */
 define("_ujgESI_marked", [], function() {
 var module = {exports:{}}, exports = module.exports;
@@ -7911,7 +8232,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
 });
 
 /* === Module: activity-ui.js === */
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi", "_ujgESI_sourceExportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi, sourceExportUi) {
   "use strict";
   var sequence = 0;
 
@@ -7993,6 +8314,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
   function create() {
     var aiUi = activityAiUi.create();
     var remarkUi = remarkReportUi.create();
+    var sourceUi = sourceExportUi.create();
     var reportStore = activityStore.create(), cacheDay = moscowToday();
     var drawVersion = 0;
     var namespace = ".ujgActivity" + (++sequence);
@@ -8601,6 +8923,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text(report.asOf ? "00:00–" + cutoff(report) + " · МСК" : "Время среза неизвестно · МСК"));
       $controls.append(button("Funnel","Компоненты замечаний",function() { componentMenu(this,facets); }).addClass("ujg-esi-component-filter").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).toggleClass("is-active",componentSelection!==null).append($("<span/>").text("Компоненты" + (componentSelection === null ? "" : ": " + componentSelection.length))));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
+      $controls.append(button("FileText","Исходные данные",function(){closePopover();closeManagement();aiUi.dismiss();remarkUi.dismiss();sourceUi.open(currentState,currentServices,this);})
+        .addClass("ujg-esi-source-command").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!state.registryLoading).append($("<span/>").text("Исходные данные")));
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
@@ -8860,13 +9184,14 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $old.replaceWith($next);
       $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
       return true;
-    },suspend:function() { remarkUi.dismiss(); aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
-      remarkUi.destroy(); aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+    },suspend:function() { sourceUi.dismiss(); remarkUi.dismiss(); aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+      sourceUi.destroy(); remarkUi.destroy(); aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
       remarkUi.updateScope(currentState);
+      sourceUi.updateScope(currentState);
       // A main render publishes a new dataset. Never cache across that boundary.
       reportStore.clear();
       fullReport=null; scopedReport=null;
@@ -11462,7 +11787,9 @@ define("_ujgESI_main", [
   "_ujgESI_activityLoader",
   "_ujgESI_deadlines",
   "_ujgESI_remarkReportLoader",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader) {
+  "_ujgESI_sourceExport",
+  "_ujgESI_sourceExportApi",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi) {
   "use strict";
 
   function searchErrorText(err) {
@@ -14953,6 +15280,33 @@ define("_ujgESI_main", [
       return llmClient.writeStoredConfig(storage, prompted, config.LLM_CONFIG_STORAGE_KEY);
     }
 
+    function sourceExportScope() { return {projectKey:state.projectKey,epicKey:state.epicKey,baseUrl:state.baseUrl,sourceFileName:state.sourceFileName}; }
+    function onSourceExportPlan() { return sourceExportApi.create(sourceExportScope()).plan; }
+    function onLoadSourceExport(options) {
+      options=options || {};
+      var scope=sourceExportScope(), rows=state.rows, source=excelRows, view=state.viewMode, user=state.preferencesStorageKey;
+      return sourceExport.collect(sourceExportApi.create(scope),{
+        scope:scope,teams:state.teams,
+        journalRows:(state.sourceFileName ? source : []).map(function(row){return {jiraKey:issueKeyFromRow(row),rowNumber:row.rowNumber,remarkId:row.remarkId,summary:row.summary,sourceColumns:row.sourceColumns};}),
+        children:function(issue){
+          var f=issue.fields;
+          if(!Array.isArray(f.issuelinks))throw new Error("Список связей недоступен");
+          f.issuelinks.forEach(function(link){
+            if(!link||!link.type)throw new Error("Неизвестный тип связи");
+            ["inward","outward"].forEach(function(direction){
+              if(!pointsToChild(link.type,link.type[direction]))return;
+              if(!link.inwardIssue&&!link.outwardIssue)throw new Error("Недоступная дочерняя связь");
+              if(Object.prototype.hasOwnProperty.call(link,direction+"Issue")&&!normalizeIssueKey(link[direction+"Issue"]&&link[direction+"Issue"].key))throw new Error("Не прочитан ключ дочерней задачи");
+            });
+          });
+          if(!Array.isArray(f.subtasks))throw new Error("Список подзадач недоступен");
+          return childIssueKeysFromIssues([issue]).concat(f.subtasks.map(function(child){return child&&child.key;}));
+        },
+        isCancelled:function(){return state.rows!==rows||excelRows!==source||state.viewMode!==view||state.preferencesStorageKey!==user||JSON.stringify(sourceExportScope())!==JSON.stringify(scope)||!!(options.isCancelled&&options.isCancelled());},
+        onProgress:options.onProgress
+      });
+    }
+
     function onLoadRemarkReport(key, options) {
       options = options || {};
       var rows = state.rows, row = (rows || []).filter(function(value) { return issueKeyFromRow(value) === key; })[0];
@@ -15564,6 +15918,8 @@ define("_ujgESI_main", [
       },
       onActivityLlmRequest: onActivityLlmRequest,
       onLoadRemarkReport: onLoadRemarkReport,
+      onLoadSourceExport: onLoadSourceExport,
+      onSourceExportPlan: onSourceExportPlan,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
         if (state.reportView !== view && !closeDueDateSyncForContextChange()) return;

@@ -25,7 +25,7 @@ async function setup() {
     "_ujgESI_excel-loader": {readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:["Sheet1"]})},
     _ujgESI_parser:{parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Срок":"2026-09-30"}}]})},
     _ujgESI_creator:{}, _ujgESI_mappingStore:null, _ujgESI_xlsxPatcher:{},
-    _ujgShared_llmClient:null, _ujgESI_teams:null, _ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,
+    _ujgShared_llmClient:null, _ujgESI_teams:null, _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,
     _ujgESI_rendering:{init:(_,callbacks)=>{app.callbacks=callbacks;},render:state=>{app.state=state;app.fullRenders++;},renderDueDateSync:state=>{app.state=state;app.modalRenders++;}},
     _ujgESI_dueDateSync:{create:options=>{changed=options.onChange;return controller;}},
     _ujgESI_componentSync:null

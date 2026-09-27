@@ -346,7 +346,7 @@ test("Escape after a Dynamics redraw returns focus to the newly mounted report c
   const dom=new JSDOM('<div id="root"></div>',{runScripts:"outside-only",url:"http://localhost"});
   const $=jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")};
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","remark-report","activity-markdown","llm-diagnostics-ui","activity-ai-ui","remark-report-ui","activity-store","activity-ui"])
+  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","remark-report","activity-markdown","llm-diagnostics-ui","activity-ai-ui","remark-report-ui","source-export","source-export-ui","activity-store","activity-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   const state={rows:[],teams:[],projectKey:"P",epicKey:"P-1",viewMode:"jira"};

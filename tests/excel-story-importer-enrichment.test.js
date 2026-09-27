@@ -38,7 +38,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       renderActivityProgress: state => { app.state = state; app.progressRenders = (app.progressRenders || 0) + 1; return true; },
     },
     _ujgESI_teams: null,
-    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
+    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });

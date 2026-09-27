@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi", "_ujgESI_sourceExportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi, sourceExportUi) {
   "use strict";
   var sequence = 0;
 
@@ -80,6 +80,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
   function create() {
     var aiUi = activityAiUi.create();
     var remarkUi = remarkReportUi.create();
+    var sourceUi = sourceExportUi.create();
     var reportStore = activityStore.create(), cacheDay = moscowToday();
     var drawVersion = 0;
     var namespace = ".ujgActivity" + (++sequence);
@@ -688,6 +689,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $controls.append($("<span/>").addClass("ujg-esi-activity-zone").text(report.asOf ? "00:00–" + cutoff(report) + " · МСК" : "Время среза неизвестно · МСК"));
       $controls.append(button("Funnel","Компоненты замечаний",function() { componentMenu(this,facets); }).addClass("ujg-esi-component-filter").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).toggleClass("is-active",componentSelection!==null).append($("<span/>").text("Компоненты" + (componentSelection === null ? "" : ": " + componentSelection.length))));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
+      $controls.append(button("FileText","Исходные данные",function(){closePopover();closeManagement();aiUi.dismiss();remarkUi.dismiss();sourceUi.open(currentState,currentServices,this);})
+        .addClass("ujg-esi-source-command").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!state.registryLoading).append($("<span/>").text("Исходные данные")));
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
@@ -947,13 +950,14 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $old.replaceWith($next);
       $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
       return true;
-    },suspend:function() { remarkUi.dismiss(); aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
-      remarkUi.destroy(); aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+    },suspend:function() { sourceUi.dismiss(); remarkUi.dismiss(); aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+      sourceUi.destroy(); remarkUi.destroy(); aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
       remarkUi.updateScope(currentState);
+      sourceUi.updateScope(currentState);
       // A main render publishes a new dataset. Never cache across that boundary.
       reportStore.clear();
       fullReport=null; scopedReport=null;
