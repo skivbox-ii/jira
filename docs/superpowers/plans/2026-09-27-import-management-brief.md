@@ -21,11 +21,11 @@
 
 ## Tasks
 
-- [ ] Add `activity-brief.js` and `tests/excel-story-importer-activity-brief.test.js`; observe failures before implementation. API: `prepare(rows, teams, options)` with date, days (1 or 7), now, cutoff, columnMap, journalRows, scopeWarning, scope. Return immutable plan with date/fromDate/asOf/coverage/eventCount/scopeKey/fingerprint/request/meta. `run(plan, requestText, options)` returns markdown and completedParts=totalParts=1; no retry, cancellation checked before and after transport.
-- [ ] Extend existing dialog and activity UI adapter; register module in build and test loaders. Display period mode, data coverage, request budget and expandable context before generation. Preserve cancellation, drafts, safe Markdown, stale state and focus.
-- [ ] Test real integrated compact engine: large fixture, component scope, seven-day boundaries, quiet remarks, partial histories, unknown deadlines, duplicate worklogs, Unicode budget, long questions, failure/cancel, one call and no auto-calls on open.
-- [ ] Independently review scope/data correctness and UI. Run full suite, build only importer/runtime. Personally inspect desktop/mobile mock generation, errors, period switch, dates and scroll to end.
-- [ ] Publish verified importer scope by existing process. Citrix read-only: open compact report and inspect preparation/budget; never press live Generate or mutate Jira. Record actual checks and leave unavailable acceptance open.
+- [x] Add `activity-brief.js` and `tests/excel-story-importer-activity-brief.test.js`; observe failures before implementation. API: `prepare(rows, teams, options)` with date, days (1 or 7), now, cutoff, columnMap, journalRows, scopeWarning, scope. Return immutable plan with date/fromDate/asOf/coverage/eventCount/scopeKey/fingerprint/request/meta. `run(plan, requestText, options)` returns markdown and completedParts=totalParts=1; no retry, cancellation checked before and after transport.
+- [x] Extend existing dialog and activity UI adapter; register module in build and test loaders. Display period mode, data coverage, request budget and expandable context before generation. Preserve cancellation, drafts, safe Markdown, stale state and focus.
+- [x] Test real integrated compact engine: large fixture, component scope, seven-day boundaries, quiet remarks, partial histories, unknown deadlines, duplicate worklogs, Unicode budget, long questions, failure/cancel, one call and no auto-calls on open.
+- [x] Independently review scope/data correctness and UI. Run full suite, build only importer/runtime. Personally inspect desktop/mobile mock generation, errors, period switch, dates and scroll to end.
+- [x] Publish verified importer scope by existing process. Citrix read-only: open compact report and inspect preparation/budget; never press live Generate or mutate Jira. Record actual checks and leave unavailable acceptance open.
 
 ## Test Commands
 
