@@ -1,6 +1,19 @@
 define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons"], function($,engine,icon) {
   "use strict";
   function scope(state) {return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.viewMode,state.sourceFileName]);}
+  function requestLines(requests) {
+    return (requests||[]).map(function(r,index){
+      if(typeof r==="string")return (index+1)+". "+r;
+      var line=(index+1)+". "+r.method+" "+r.url;
+      if(r.status!=null)line+=" | HTTP "+r.status;
+      if(r.durationMs!=null)line+=" | "+r.durationMs+" мс";
+      if(r.startedAt)line+=" | "+r.startedAt;
+      Object.keys(r.params||{}).forEach(function(key){line+="\n   "+key+": "+String(r.params[key]);});
+      if(r.keys)line+="\n   "+r.keys;
+      if(r.when)line+="\n   "+r.when;
+      return line;
+    }).join("\n\n");
+  }
   function download(name,text,type) {
     var url=URL.createObjectURL(new Blob([text],{type:type+";charset=utf-8"})),a=document.createElement("a");
     a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},30000);
@@ -14,11 +27,16 @@ define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons
       $dialog.remove();$dialog=null;document.body.style.overflow=overflow;
       if(anchor&&document.contains(anchor)){anchor.focus();$(anchor).attr("aria-expanded","false");}anchor=null;
     }
+    function adjacent(day,forward) {
+      if(day==="unknown")return null;
+      var candidates=days.filter(function(d){return forward?d>day:d<day;});
+      return candidates[forward?0:candidates.length-1]||null;
+    }
     function show(day) {
-      if(!data)return;
+      if(!data||!day)return;
       selected=day;$date.val(day==="unknown"?"":day);
-      $text.text(engine.text(data,day,{audit:false}));
-      $previous.prop("disabled",days.indexOf(day)<=0);$next.prop("disabled",days.indexOf(day)<0||days.indexOf(day)>=days.length-1);
+      $text.text(engine.screen(data,day));
+      $previous.prop("disabled",!adjacent(day,false));$next.prop("disabled",!adjacent(day,true));
       $dialog.find(".ujg-esi-ai-content").scrollTop(0);
     }
     function controls() {$load.prop("disabled",busy||planError);$downloads.prop("disabled",busy||!data);$date.prop("disabled",busy||!data);$dialog.attr("aria-busy",String(busy));}
@@ -32,7 +50,7 @@ define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons
       }).then(function(result){
         if(cancelled())return;data=result;busy=false;controls();
         var c=data.coverage;days=engine.days(data);$status.text((c.complete?"Доступные записи прочитаны":"НЕПОЛНЫЕ ДАННЫЕ")+" · задач "+c.loadedIssues+" / "+c.expectedIssues+" · ошибок "+data.errors.length);
-        $audit.text(JSON.stringify({coverage:c,errors:data.errors,requests:data.requests},null,2));
+        $audit.text("Ошибки: "+data.errors.length+"\n"+data.errors.map(function(e){return [e.key,e.kind,e.message].filter(Boolean).join(" · ");}).join("\n")+"\n\n"+requestLines(data.requests));
         $dialog.find("details").prop("open",false);
         $unknown.prop("hidden",days.indexOf("unknown")<0);days=days.filter(function(d){return d!=="unknown";});
         show(days[days.length-1]||"unknown");
@@ -52,20 +70,21 @@ define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons
       var $day=button("Download","Скачать текст за выбранный день","ujg-esi-source-day",function(){if(data)download("jira-source-"+selected+".txt",engine.text(data,selected),"text/plain");}).append($("<span/>").text("День · TXT"));
       $downloads=$json.add($all).add($day);
       $date=$("<input/>").attr({type:"date","aria-label":"День исходных событий"}).addClass("ujg-esi-source-date").on("change",function(){if(/^\d{4}-\d{2}-\d{2}$/.test(this.value))show(this.value);});
-      $previous=button("ChevronLeft","Предыдущий день с записями","ujg-esi-source-prev",function(){show(days[days.indexOf(selected)-1]);}).prop("disabled",true);
-      $next=button("ChevronRight","Следующий день с записями","ujg-esi-source-next",function(){show(days[days.indexOf(selected)+1]);}).prop("disabled",true);
+      $previous=button("ChevronLeft","Предыдущий день с записями","ujg-esi-source-prev",function(){show(adjacent(selected,false));}).prop("disabled",true);
+      $next=button("ChevronRight","Следующий день с записями","ujg-esi-source-next",function(){show(adjacent(selected,true));}).prop("disabled",true);
       $unknown=button("Calendar","Записи без даты","ujg-esi-source-unknown",function(){show("unknown");}).append($("<span/>").text("Без даты")).prop("hidden",true);
       var $plan=$("<pre/>").addClass("ujg-esi-source-plan");
-      try{$plan.text(JSON.stringify(services.onSourceExportPlan(),null,2));}catch(e){planError=true;$status.text(e.message);}
+      try{$plan.text(requestLines(services.onSourceExportPlan()));}catch(e){planError=true;$status.text(e.message);}
       $audit=$("<pre/>").addClass("ujg-esi-source-audit");$text=$("<pre/>").addClass("ujg-esi-source-text").attr({tabindex:"0","aria-label":"Полный текст исходных записей за день"});
-      $dialog.append($("<div/>").addClass("ujg-esi-ai-actions").append($load,$json,$all,$day),$status,
+      $dialog.append($("<div/>").addClass("ujg-esi-ai-actions").append($load),$status,
         $("<div/>").addClass("ujg-esi-ai-actions").append($previous,$date,$next,$unknown),
-        $("<div/>").addClass("ujg-esi-ai-content").append($("<details open/>").append($("<summary/>").text("План чтения"),$plan),$("<details/>").append($("<summary/>").text("Запросы, полнота и ошибки"),$audit),$text));
+        $("<div/>").addClass("ujg-esi-ai-content").append($("<details open/>").append($("<summary/>").text("План чтения"),$plan),$("<details/>").append($("<summary/>").text("Запросы, полнота и ошибки"),$audit),$text,
+          $("<details/>").addClass("ujg-esi-source-downloads").append($("<summary/>").text("Скачать файлы"),$("<div/>").addClass("ujg-esi-ai-actions").append($json,$all,$day))));
       controls();$close.trigger("focus");
       $dialog.on("keydown",function(e){
         if(e.key==="Escape"){e.preventDefault();e.stopPropagation();dismiss();return;}
         if(e.key!=="Tab")return;
-        var items=$dialog.find('button:not(:disabled):not([hidden]),input:not(:disabled),summary,pre[tabindex]'),first=items[0],last=items[items.length-1];
+        var items=$dialog.find('button:not(:disabled):not([hidden]),input:not(:disabled),summary,pre[tabindex]').filter(function(){return !$(this).parents("details:not([open])").length||this.tagName==="SUMMARY";}),first=items[0],last=items[items.length-1];
         if(e.shiftKey&&(document.activeElement===first||document.activeElement===$dialog[0])){e.preventDefault();last.focus();}
         else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
       });

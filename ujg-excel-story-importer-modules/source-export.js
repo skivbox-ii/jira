@@ -151,7 +151,22 @@ define("_ujgESI_sourceExport", [], function() {
       expectedIssues:queue.length,loadedIssues:data.issues.length,journalLoaded:data.journalRows.length > 0};
     return data;
   }
-  function days(data) { return unique(events(data).map(function(e) {return e.day;})).sort(); }
+  function newerWorklog(candidate, current) {
+    return (Date.parse(candidate.updated) || Date.parse(candidate.created) || 0) >
+      (Date.parse(current.updated) || Date.parse(current.created) || 0);
+  }
+  function days(data) {
+    var list = events(data), latest = Object.create(null);
+    list.forEach(function(e) {
+      if (e.kind !== "WORKLOG_STARTED" || !e.record || e.record.id == null) return;
+      var id = e.key + "\u0000" + String(e.record.id);
+      if (!latest[id] || newerWorklog(e.record,latest[id])) latest[id] = e.record;
+    });
+    return unique(list.filter(function(e) {
+      return e.kind !== "WORKLOG_STARTED" || !e.record || e.record.id == null ||
+        e.record === latest[e.key + "\u0000" + String(e.record.id)];
+    }).map(function(e) {return e.day;})).sort();
+  }
   function text(data, selectedDay, options) {
     var audit = !options || options.audit !== false;
     var out = ["ИСХОДНЫЕ ДАННЫЕ JIRA. НЕ LLM-ОТЧЁТ.","Область: " + JSON.stringify(data.scope),
@@ -193,5 +208,226 @@ define("_ujgESI_sourceExport", [], function() {
     });
     return out.join("\n");
   }
-  return {collect:collect,text:text,days:days,events:events};
+  function screenValue(value) {
+    if (value == null || value === "") return "неизвестно";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map(screenValue).join(", ") || "неизвестно";
+    if (value.displayName || value.name || value.text || value.value) return String(value.displayName || value.name || value.text || value.value);
+    if (value.type === "doc" || Array.isArray(value.content)) return structuredText(value) || "структурированный текст недоступен";
+    return "значение недоступно в читаемом виде";
+  }
+  function structuredText(node) {
+    if (node == null) return "";
+    if (typeof node === "string") return node;
+    if (Array.isArray(node)) return node.map(structuredText).filter(Boolean).join("\n");
+    if (typeof node !== "object") return String(node);
+    if (node.type === "hardBreak") return "\n";
+    if (node.type === "text") return String(node.text || "");
+    if (node.type === "mention") return screenValue(node.attrs && (node.attrs.text || node.attrs.displayName || node.attrs.id));
+    if (node.type === "inlineCard") return screenValue(node.attrs && node.attrs.data && node.attrs.data.name);
+    if (Array.isArray(node.content)) {
+      var content = node.content.map(structuredText).filter(Boolean);
+      if (node.type === "paragraph" || node.type === "heading") return content.join("");
+      if (node.type === "listItem") return "• " + content.join("\n");
+      return content.join("\n");
+    }
+    return typeof node.text === "string" ? node.text : "";
+  }
+  function screenName(value) { return value && (value.displayName || value.name) || "не указан"; }
+  var screenStatuses = {open:"Открыто",new:"Новое","to do":"К выполнению",backlog:"В очереди",
+    "in progress":"В работе",review:"На проверке","in review":"На проверке",reopened:"Возвращено в работу",
+    blocked:"Заблокировано",testing:"На тестировании",done:"Выполнено",completed:"Выполнено",
+    resolved:"Решено",closed:"Закрыто",cancelled:"Отменено",rejected:"Отклонено"};
+  function screenStatus(value) {
+    var name = screenValue(value);
+    return screenStatuses[name.toLowerCase()] || name;
+  }
+  var screenFields = {status:"Статус",assignee:"Исполнитель",description:"Описание",summary:"Тема",
+    resolution:"Результат",priority:"Приоритет",duedate:"Срок",components:"Компоненты",component:"Компонент",
+    timespent:"Трудозатраты",worklog:"Запись трудозатрат",comment:"Комментарий",labels:"Метки",
+    issuetype:"Тип задачи",attachment:"Вложение",reporter:"Автор",creator:"Создатель",sprint:"Спринт"};
+  function screenField(item) {
+    var name = item && (item.field || item.fieldId) || "поле неизвестно";
+    return screenFields[String(name).toLowerCase()] || String(name);
+  }
+  function screenStamp(value) {
+    var parsed = typeof value === "string" ? Date.parse(value) : NaN;
+    return isFinite(parsed) ? stamp(value).replace(".000 МСК", " МСК") : "дата неизвестна";
+  }
+  function screenSeconds(value) {
+    if (value == null || value === "" || typeof value === "object") return null;
+    var number = Number(value);
+    return isFinite(number) && number >= 0 ? number : null;
+  }
+  function screenDuration(value) {
+    var seconds = screenSeconds(value);
+    return seconds == null ? "неизвестно" : duration(seconds);
+  }
+  function screenChangeDuration(raw, display) {
+    if (screenSeconds(raw) != null) return screenDuration(raw);
+    if (screenSeconds(display) != null) return screenDuration(display);
+    return screenValue(display != null ? display : raw);
+  }
+  function screen(data, selectedDay) {
+    data = data || {};
+    var issues = Array.isArray(data.issues) ? data.issues.filter(function(i) {return i && i.key;}) : [];
+    var byKey = Object.create(null), links = Object.create(null), roots = unique(Array.isArray(data.parentKeys) ? data.parentKeys : []);
+    issues.forEach(function(i) {byKey[i.key] = i;});
+    (Array.isArray(data.relationships) ? data.relationships : []).forEach(function(r) {
+      if (r && r.key) links[r.key] = unique(Array.isArray(r.children) ? r.children : []).sort();
+    });
+    var owner = Object.create(null), affiliations = Object.create(null);
+    roots.forEach(function(root) {
+      var queue = [root], seen = Object.create(null);
+      while (queue.length) {
+        var key = queue.shift();
+        if (seen[key]) continue;
+        seen[key] = true;
+        if (!affiliations[key]) affiliations[key] = [];
+        affiliations[key].push(root);
+        if (!owner[key] || key === root) owner[key] = root;
+        (links[key] || []).forEach(function(child) {if (!seen[child] && roots.indexOf(child) < 0) queue.push(child);});
+      }
+    });
+    issues.forEach(function(i) {if (!owner[i.key]) owner[i.key] = i.key;});
+    var daily = [], seenEvents = Object.create(null), allWorklogs = Object.create(null), worklogs = Object.create(null), worklogMissing = 0, worklogVariants = 0, missingSerial = 0;
+    function add(i, kind, at, record, actor) {
+      if (day(at) !== selectedDay) return;
+      var id = record && record.id != null ? String(record.id) : "?";
+      var identity = id === "?" ? "missing-" + missingSerial++ : [i.key,kind,id,String(at)].join("\u0000");
+      if (seenEvents[identity]) return;
+      seenEvents[identity] = true;
+      daily.push({key:i.key,kind:kind,at:at,record:record,actor:actor,id:id});
+    }
+    issues.forEach(function(i) {
+      var f = i.raw && i.raw.fields || {}, c = i.collections || {};
+      add(i,"ISSUE_CREATED",f.created,{summary:f.summary},f.creator);
+      function entries(kind) {return c[kind] && Array.isArray(c[kind].entries) ? c[kind].entries : [];}
+      entries("histories").forEach(function(h) {add(i,"CHANGELOG",h && h.created,h,h && h.author);});
+      entries("comments").forEach(function(comment) {
+        add(i,"COMMENT_CREATED",comment && comment.created,comment,comment && comment.author);
+        if (comment && comment.updated && comment.updated !== comment.created)
+          add(i,"COMMENT_UPDATED",comment.updated,comment,comment.updateAuthor);
+      });
+      entries("worklogs").forEach(function(w) {
+        if (w && w.id == null) add(i,"WORKLOG_STARTED",w.started,w,w.author);
+        if (w) add(i,"WORKLOG_CREATED",w.created,w,w.author);
+        if (w && w.updated && w.updated !== w.created) add(i,"WORKLOG_UPDATED",w.updated,w,w.updateAuthor);
+        if (w) {
+          if (w.id == null) {if (day(w.started) === selectedDay) worklogMissing++;return;}
+          var id = i.key + "\u0000" + String(w.id);
+          if (allWorklogs[id]) {
+            if (allWorklogs[id].timeSpentSeconds !== w.timeSpentSeconds || allWorklogs[id].started !== w.started) worklogVariants++;
+            if (newerWorklog(w,allWorklogs[id])) allWorklogs[id] = w;
+          } else allWorklogs[id] = w;
+        }
+      });
+    });
+    Object.keys(allWorklogs).forEach(function(id) {
+      var w = allWorklogs[id], key = id.split("\u0000")[0];
+      add({key:key},"WORKLOG_STARTED",w.started,w,w.author);
+      if (day(w.started) === selectedDay) worklogs[id] = w;
+    });
+    daily.sort(function(a,b) {
+      return (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0) || a.key.localeCompare(b.key) ||
+        a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id);
+    });
+    var touched = unique(daily.map(function(e) {return e.key;}));
+    var touchedRoots = unique(touched.reduce(function(all,key) {return all.concat(affiliations[key] || []);}, []));
+    var seconds = 0, unknownHours = 0;
+    Object.keys(worklogs).forEach(function(id) {
+      var value = screenSeconds(worklogs[id].timeSpentSeconds);
+      if (value != null) seconds += value;
+      else unknownHours++;
+    });
+    function statusDistribution(parent) {
+      var counts = Object.create(null);
+      issues.filter(function(i) {return (roots.indexOf(i.key) >= 0) === parent;}).forEach(function(i) {
+        var label = screenStatus(i.raw && i.raw.fields && i.raw.fields.status && i.raw.fields.status.name);
+        counts[label] = (counts[label] || 0) + 1;
+      });
+      return Object.keys(counts).sort().map(function(label) {return label + " " + counts[label];}).join("; ") || "нет";
+    }
+    var people = Object.create(null);
+    function personRow(name) {
+      if (!people[name]) people[name] = {actions:0,tickets:Object.create(null),seconds:0};
+      return people[name];
+    }
+    daily.forEach(function(e) {
+      var row = personRow(screenName(e.actor));
+      row.tickets[e.key] = true;
+      if (e.kind !== "WORKLOG_STARTED") row.actions++;
+    });
+    Object.keys(worklogs).forEach(function(id) {
+      var w = worklogs[id], value = screenSeconds(w.timeSpentSeconds), row = personRow(screenName(w.author));
+      if (value != null) row.seconds += value;
+      row.tickets[id.split("\u0000")[0]] = true;
+    });
+    var coverage = data.coverage || {}, complete = coverage.complete === true && !(data.errors || []).length && issues.every(function(i) {
+      return Object.keys(i.collections || {}).every(function(kind) {return i.collections[kind] && i.collections[kind].complete === true;});
+    });
+    var out = ["ИСХОДНЫЕ СОБЫТИЯ JIRA · " + (selectedDay === "unknown" ? "дата неизвестна" : selectedDay || "день не выбран") + " · МСК",
+      "Чтение: " + screenStamp(data.startedAt) + " — " + screenStamp(data.finishedAt) + ". Данные " + (complete ? "по доступным записям полные" : "неполные") + ".",
+      "Исходных замечаний: " + screenValue(coverage.loadedParents) + " / " + screenValue(coverage.expectedParents) + "; задач: " + screenValue(coverage.loadedIssues) + " / " + screenValue(coverage.expectedIssues) + ".",
+      "Статусы исходных историй СЕЙЧАС: " + statusDistribution(true) + ".",
+      "Статусы дочерних задач СЕЙЧАС: " + statusDistribution(false) + ".",
+      "За день: событий: " + daily.length + "; затронуто задач: " + touched.length + "; исходных замечаний: " + touchedRoots.length + ". Записи хронологии не равны рабочему времени.",
+      "Списано по дате работы: " + duration(seconds) + "; записей: " + Object.keys(worklogs).length + ". Создание и изменение записи не добавляют часы.",
+      "Ограничения: текущий снимок связей и статусов; комментарии в последней доступной редакции; скрытые и удалённые записи недоступны; чтение не атомарно."];
+    if (unknownHours || worklogMissing) out.push("Не включены в часы: " + unknownHours + " записей без длительности, " + worklogMissing + " без ID.");
+    if (worklogVariants) out.push("Есть различающиеся версии записей трудозатрат; в итогах взята версия с позднейшим изменением.");
+    out.push("", "Активность по людям · действия в Jira и списанное время:");
+    Object.keys(people).sort().forEach(function(name) {
+      var row = people[name];
+      out.push(name + " · действий: " + row.actions + "; задач: " + Object.keys(row.tickets).length +
+        "; списано по дате работы: " + duration(row.seconds));
+    });
+    if (!Object.keys(people).length) out.push("Нет событий и записей работы за день.");
+    if (!daily.length) return out.concat(["", "За этот день событий не найдено."]).join("\n");
+    var groups = unique(daily.map(function(e) {return owner[e.key];})).sort();
+    groups.forEach(function(root) {
+      var parent = byKey[root], parentFields = parent && parent.raw && parent.raw.fields || {};
+      out.push("", (roots.indexOf(root) >= 0 ? "ЗАМЕЧАНИЕ " : "ЗАДАЧА БЕЗ ИСХОДНОГО ЗАМЕЧАНИЯ ") + root + " · " + screenValue(parentFields.summary),
+        "СЕЙЧАС: " + screenStatus(parentFields.status && parentFields.status.name) + "; исполнитель: " + screenName(parentFields.assignee) +
+        "; срок: " + (parentFields.duedate || "не указан") + "; компоненты: " +
+        (Array.isArray(parentFields.components) && parentFields.components.length ? parentFields.components.map(screenValue).join(", ") : "не указаны"));
+      var keys = unique(daily.filter(function(e) {return owner[e.key] === root;}).map(function(e) {return e.key;}));
+      keys.sort(function(a,b) {return a === root ? -1 : b === root ? 1 : a.localeCompare(b);});
+      keys.forEach(function(key) {
+        var issue = byKey[key], f = issue && issue.raw && issue.raw.fields || {};
+        var role = (/^\s*\[(FE|BE|QA|SE|SA)\]/i.exec(f.summary || "") || [])[1] || f.issuetype && f.issuetype.name || "роль не указана";
+        if (/^(Task|Sub-task|Subtask|Подзадача|Задача)$/i.test(role)) role = "роль не указана";
+        var others = (affiliations[key] || []).filter(function(p) {return p !== root;});
+        if (key !== root) out.push("", "Дочерняя задача " + key + " · " + role + " · " + screenValue(f.summary) +
+          (others.length ? " · связана также с " + others.join(", ") : ""),
+          "СЕЙЧАС: " + screenStatus(f.status && f.status.name) + "; исполнитель: " + screenName(f.assignee) +
+          "; срок: " + (f.duedate || "не указан") + "; компоненты: " + (Array.isArray(f.components) && f.components.length ? f.components.map(screenValue).join(", ") : "не указаны"));
+        daily.filter(function(e) {return e.key === key;}).forEach(function(e) {
+          var r = e.record || {}, labels = {ISSUE_CREATED:"Создана задача",CHANGELOG:"Изменены поля",
+            COMMENT_CREATED:"Добавлен комментарий",COMMENT_UPDATED:"Изменён комментарий",
+            WORKLOG_STARTED:"Дата работы по записи трудозатрат",WORKLOG_CREATED:"Создана запись трудозатрат",
+            WORKLOG_UPDATED:"Изменена запись трудозатрат"};
+          out.push("  " + screenStamp(e.at) + " · " + (labels[e.kind] || e.kind) + " · " + screenName(e.actor) +
+            " · ID " + (e.id === "?" ? "неизвестен" : e.id));
+          if (e.kind === "CHANGELOG") {
+            (Array.isArray(r.items) ? r.items : []).forEach(function(item) {
+              if (!item) return;
+              var status = String(item.field || item.fieldId).toLowerCase() === "status";
+              var timeField = String(item.field || item.fieldId).toLowerCase();
+              var timeLabel = {timespent:"Трудозатраты",timeestimate:"Оставшаяся оценка",timeoriginalestimate:"Исходная оценка"}[timeField];
+              var from = item.fromString != null ? item.fromString : item.from;
+              var to = item.toString != null ? item.toString : item.to;
+              out.push("    " + (timeLabel || screenField(item)) + ": " + (timeLabel ? screenChangeDuration(item.from,item.fromString) : status ? screenStatus(from) : screenValue(from)) + " → " +
+                (timeLabel ? screenChangeDuration(item.to,item.toString) : status ? screenStatus(to) : screenValue(to)));
+            });
+          }
+          if (/^COMMENT/.test(e.kind)) out.push("    " + screenValue(r.body));
+          if (/^WORKLOG/.test(e.kind)) out.push("    Дата работы: " + screenStamp(r.started) + "; длительность записи: " +
+            screenDuration(r.timeSpentSeconds) + "; описание: " + screenValue(r.comment));
+        });
+      });
+    });
+    return out.join("\n");
+  }
+  return {collect:collect,text:text,screen:screen,days:days,events:events};
 });

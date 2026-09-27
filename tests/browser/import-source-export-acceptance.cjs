@@ -37,6 +37,12 @@ async function main(){
   await dialog.locator('.ujg-esi-source-load').click();
   await page.waitForFunction(()=>document.querySelector('.ujg-esi-source-json')?.disabled===false);
   assert.match(await dialog.locator('.ujg-esi-source-status').textContent(),/Доступные записи прочитаны/);
+  assert.equal(await dialog.locator('.ujg-esi-source-json').isVisible(),false);
+  const listing=await dialog.locator('.ujg-esi-source-text').textContent();
+  assert.ok(listing.includes(await dialog.locator('.ujg-esi-source-date').inputValue()));
+  assert.doesNotMatch(listing,/"statusCategory"|"avatarUrls"|"self":|RAW \{/);
+  await page.screenshot({path:path.join(dir,'screen-'+width+'.png')});
+  await dialog.locator('.ujg-esi-source-downloads summary').click();
   const download=await Promise.all([page.waitForEvent('download'),dialog.locator('.ujg-esi-source-json').click()]);
   const jsonPath=path.join(dir,'fixture-'+width+'.json');await download[0].saveAs(jsonPath);
   const data=JSON.parse(fs.readFileSync(jsonPath,'utf8'));assert.equal(data.coverage.complete,true);
@@ -52,7 +58,7 @@ async function main(){
   await dialog.locator('.ujg-esi-ai-content').evaluate(el=>{el.scrollTop=el.scrollHeight;});
   await page.screenshot({path:path.join(dir,'bottom-'+width+'.png')});
   assert.equal(await dialog.locator('.ujg-esi-ai-content').evaluate(el=>el.scrollHeight-el.scrollTop-el.clientHeight<2),true);
-  await dialog.locator('.ujg-esi-source-prev').click();assert.match(await dialog.locator('.ujg-esi-source-text').textContent(),/######## ДЕНЬ/);
+  await dialog.locator('.ujg-esi-source-prev').click();assert.ok((await dialog.locator('.ujg-esi-source-text').textContent()).includes(await dialog.locator('.ujg-esi-source-date').inputValue()));
   await dialog.locator('.ujg-esi-source-close').click();assert.equal(await page.evaluate(()=>mutationCalls),0);assert.deepEqual(errors,[]);
   console.log(JSON.stringify({width,issues:data.issues.length,parents:data.parentKeys.length,requests:data.requests.length,days:new Set(data.issues.flatMap(i=>i.collections.histories.entries.map(h=>h.created.slice(0,10)))).size}));
   await context.close();

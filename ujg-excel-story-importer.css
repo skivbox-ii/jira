@@ -1983,6 +1983,7 @@
 .ujg-esi-ai-progress { margin: 0; color: #526174; }
 .ujg-esi-ai-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 16px 18px; overflow-wrap: anywhere; }
 .ujg-esi-source-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; margin: 12px 0; font: 12px/1.6 ui-monospace, monospace; }
+.ujg-esi-source-dialog .ujg-esi-source-text { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; letter-spacing: 0; color: #172b4d; }
 .ujg-esi-source-dialog .ujg-esi-source-status { margin: 4px 16px; }
 .ujg-esi-source-dialog .ujg-esi-ai-actions { flex-wrap: wrap; }
 .ujg-esi-source-date { min-height: 30px; max-width: 160px; }
