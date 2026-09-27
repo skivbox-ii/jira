@@ -3518,7 +3518,7 @@ define("_ujgESI_main", [
         if (!llmConfig) throw new Error("LLM не настроен: укажите API Base URL, модель и ключ.");
         // Provider error bodies may echo credentials or source data; keep them out of the report.
         return Promise.resolve().then(function() {
-          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2});
+          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2,allowProtocolFallback:request.allowProtocolFallback});
         }).then(function(result) {
           return {text:String(result && result.text || "")};
         }, function() {

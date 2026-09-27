@@ -34,6 +34,7 @@ var MODULE_ORDER = [
   "activity-store.js",
   "activity-management-ui.js",
   "activity-ai.js",
+  "activity-brief.js",
   { dir: path.join(__dirname, "vendor"), file: "marked-16.4.2.umd.js", amd: "_ujgESI_marked" },
   "activity-markdown.js",
   "activity-ai-ui.js",

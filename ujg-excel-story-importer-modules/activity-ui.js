@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore"], function($, activity, icon, managementUi, activityAiUi, activityStore) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief) {
   "use strict";
   var sequence = 0;
 
@@ -649,7 +649,24 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         });
       }
       var report = scopedReport;
-      if (lastAiReport !== report) { aiUi.update(report,state,services); lastAiReport = report; }
+      if (lastAiReport !== report) {
+        aiUi.update(report,state,Object.assign({},services,{
+          onPrepareActivityBrief:function(slice, snapshot, days) {
+            var settings = Object.assign({},snapshot.mappingSettings || {},snapshot.sourceColumnSettings || {});
+            return activityBrief.prepare(snapshot.rows || [],snapshot.teams || [],{
+              date:slice.date,days:days,now:slice.generatedAt,cutoff:slice.asOf,
+              scopeWarning:snapshot.viewMode === "jira" ? snapshot.registryWarning : undefined,
+              columnMap:settings.columnMap,journalRows:snapshot.deadlineJournalRows,
+              scope:{projectKey:snapshot.projectKey,epicKey:snapshot.epicKey,baseUrl:snapshot.baseUrl,
+                preferencesStorageKey:snapshot.preferencesStorageKey,userScope:snapshot.userScope,
+                viewMode:snapshot.viewMode,components:slice.componentScope || null}
+            });
+          },
+          onPreviewActivityBrief:activityBrief.preview,
+          onRunActivityBrief:activityBrief.run
+        }));
+        lastAiReport = report;
+      }
       var coverage = report.coverage || {}, confirmed = report.confirmed, metrics = confirmed ? confirmed.metrics || {} : report.metrics || {}, observed = report.observed || {}, balance = confirmed ? confirmed.balance || {} : report.balance || {};
       var journal = filtered(report), $root = $("<div/>").addClass("ujg-esi-activity");
       var $toolbar = $("<div/>").addClass("ujg-esi-activity-toolbar");

@@ -11,7 +11,7 @@ function setup(options = {}) {
   const client = load(path.join(root,"ujg-shared-modules/llm-client.js"),{}, {
     fetch(url,request) {
       requests.push({url,request});
-      return Promise.resolve({ok:options.ok !== false,status:options.ok === false ? 500 : 200,text:() => Promise.resolve(options.ok === false ? "private-key echoed by provider" : JSON.stringify({choices:[{message:{content:"# Отчёт\nГотово"}}]}))});
+      return Promise.resolve({ok:options.ok !== false,status:options.status || (options.ok === false ? 500 : 200),text:() => Promise.resolve(options.ok === false ? "private-key echoed by provider" : JSON.stringify({choices:[{message:{content:"# Отчёт\nГотово"}}]}))});
     }
   });
   let callbacks;
@@ -76,4 +76,12 @@ test("blank requests fail without prompting for settings", async () => {
   await assert.rejects(() => x.callbacks.onActivityLlmRequest({systemPrompt:" ",userPrompt:"Facts"}),/пуст/i);
   assert.equal(x.prompts.length,0);
   assert.equal(x.requests.length,0);
+});
+
+test("compact report transport preserves the no-fallback policy",async()=>{
+  for (const status of [404,405]) {
+    const x=setup({ok:false,status});
+    await assert.rejects(x.callbacks.onActivityLlmRequest({systemPrompt:"Rules",userPrompt:"Facts",allowProtocolFallback:false}),/LLM/);
+    assert.equal(x.requests.length,1);
+  }
 });

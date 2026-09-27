@@ -8,6 +8,17 @@ function loadLlmClient(extraGlobals) {
   return loadAmdModule(path.join(__dirname, "..", "ujg-shared-modules", "llm-client.js"), {}, extraGlobals || {});
 }
 
+test("single-request callers disable protocol fallback on 404 and 405", async () => {
+  for (const status of [404,405]) {
+    let calls=0;
+    await assert.rejects(loadLlmClient().requestText({apiBase:"https://llm.example/v1",model:"m",apiKey:"test"},
+      {systemPrompt:"Rules",userPrompt:"Facts",allowProtocolFallback:false},async()=>{
+        calls++;return {ok:false,status,text:async()=>"unavailable"};
+      }),/AI API/);
+    assert.equal(calls,1);
+  }
+});
+
 test("shared llm client calls chat completions and extracts text", async function () {
   const llm = loadLlmClient();
   const calls = [];

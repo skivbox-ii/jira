@@ -1965,6 +1965,15 @@
 .ujg-esi-ai-header { justify-content: space-between; border-bottom: 1px solid #dce3eb; }
 .ujg-esi-ai-header h2 { margin: 0; font-size: 17px; }
 .ujg-esi-ai-meta { padding: 9px 16px; color: #526174; border-bottom: 1px solid #dce3eb; overflow-wrap: anywhere; }
+.ujg-esi-ai-modes { display: flex; flex-wrap: wrap; gap: 0; padding: 8px 16px 0; }
+.ujg-esi-ai-modes:empty { display: none; }
+.ujg-esi-ai-modes button[aria-pressed="true"] { background: #eaf3fc; color: #172b4d; border-color: #075fc4; font-weight: 600; }
+.ujg-esi-ai-budget { margin: 0 0 8px; color: #526174; line-height: 1.5; overflow-wrap: anywhere; }
+.ujg-esi-ai-disclosure { margin: 0 0 12px; }
+.ujg-esi-ai-disclosure summary { cursor: pointer; color: #075fc4; }
+.ujg-esi-ai-context { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; padding: 8px; background: #f5f7fa; font-size: 12px; }
+.ujg-esi-ai-facts { max-width: 1000px; line-height: 1.5; }
+.ujg-esi-ai-facts h3 { font-size: 15px; margin: 12px 0 8px; }
 .ujg-esi-activity-ai-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 4px 9px; border: 1px solid #aebdca; border-radius: 3px; background: #fff; color: #075fc4; font: inherit; cursor: pointer; }
 .ujg-esi-activity-ai-dialog button svg { width: 15px; height: 15px; flex: 0 0 15px; }
 .ujg-esi-activity-ai-dialog button:hover:not(:disabled), .ujg-esi-activity-ai-dialog button:focus-visible { background: #eaf3fc; }

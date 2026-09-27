@@ -1073,7 +1073,7 @@ define("_ujgShared_llmClient", [], function() {
       });
     }
 
-    return performRequest(!!normalized.useLegacyCompletionsEndpoint, !normalized.useLegacyCompletionsEndpoint);
+    return performRequest(!!normalized.useLegacyCompletionsEndpoint, !normalized.useLegacyCompletionsEndpoint && !(request && request.allowProtocolFallback === false));
   }
 
   return {

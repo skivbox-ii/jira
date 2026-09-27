@@ -612,6 +612,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var source = order[index];
       group.confirmed = !source.uncreated && source.tasks.length > 0 && group.dayComplete;
       group.openAtEnd = group.confirmed ? source.tasks.some(function(issueKey) { return states[issueKey] && kind(states[issueKey].end) === "open"; }) : null;
+      group.readyAtEnd = group.confirmed ? source.tasks.every(function(issueKey) { return states[issueKey] && kind(states[issueKey].end) === "done"; }) : null;
       if (!group.confirmed) {
         var reasons = warnings.filter(function(warning) {
           return source.tasks.concat([group.key]).some(function(issueKey) { return issueKey && warning.indexOf(issueKey + ":") === 0; });

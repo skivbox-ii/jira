@@ -40,6 +40,77 @@ test("ordinary date browsing defers AI preparation until opening the latest slic
   assert.match(x.$(".ujg-esi-ai-meta").text(),/22\.09\.2026/);
   assert.equal(x.requests.length,0);
 });
+
+function compactServices(x) {
+  const prepared=[], runs=[], previews=[];
+  const services={...x.services,
+    onPrepareActivityBrief(report,state,days) {
+      prepared.push(days);
+      return {scopeKey:`compact:${state.projectKey}:${report.date}:${days}`,fingerprint:report.fingerprint,
+        date:report.date,fromDate:days===7 ? "2026-09-18" : report.date,asOf:report.asOf,
+        coverage:report.coverage,eventCount:3000,request:{systemPrompt:"Rules",userPrompt:'{"facts":"compressed"}'},
+        meta:{totalRemarks:250,detailedRemarks:10,omittedRemarks:240,truncatedFields:2,userBytes:12000,systemBytes:900,userLimit:18000,systemLimit:4000,requestCount:1}};
+    },
+    onPreviewActivityBrief(plan,options) {
+      previews.push(options);
+      if ((options.question || "").length>100) throw new Error("Вопрос превышает бюджет контекста");
+      return {request:plan.request,meta:{...plan.meta,conversationOmitted:options.question ? 2 : 0,conversationClipped:0}};
+    },
+    onRunActivityBrief(plan,request,options) {
+      runs.push({plan,options});
+      return new Promise((resolve,reject)=>x.pending.push({resolve,reject,options}));
+    }
+  };
+  x.ui.update(x.report(),x.state(),services);
+  return {services,prepared,runs,previews};
+}
+
+test("compact report defaults to seven days, discloses budget and uses only bounded engine",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const c=compactServices(x);
+  assert.equal(c.prepared.length,0);
+  x.ui.open(x.$("#anchor")[0]);
+  assert.deepEqual(c.prepared,[7]);
+  assert.match(x.$(".ujg-esi-ai-budget").text(),/1 запрос/);
+  assert.match(x.$(".ujg-esi-ai-budget").text(),/10.*250/);
+  assert.match(x.$(".ujg-esi-ai-budget").text(),/240/);
+  assert.match(x.$(".ujg-esi-ai-context").text(),/compressed/);
+  assert.equal(c.runs.length,0);assert.equal(x.calls.length,0);
+  x.$(".ujg-esi-ai-generate").trigger("click");x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  assert.equal(c.runs.length,1);assert.equal(x.calls.length,0);
+  x.pending[0].resolve({markdown:"Общий отчёт",completedParts:1,totalParts:1});await x.flush();
+  x.$('[data-ai-days="1"]').trigger("click");
+  assert.equal(c.prepared.at(-1),1);
+  assert.equal(x.$(".ujg-esi-ai-report").text(),"");
+  assert.equal(x.$(".ujg-esi-ai-question").prop("disabled"),true);
+});
+
+test("compact question budget preflight is visible and rejects before transport",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const c=compactServices(x);
+  x.ui.open(x.$("#anchor")[0]);x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  x.pending[0].resolve({markdown:"Отчёт",completedParts:1,totalParts:1});await x.flush();
+  x.$(".ujg-esi-ai-question").val("Что требует вмешательства?").trigger("input");
+  assert.match(x.$(".ujg-esi-ai-budget").text(),/истории.*2/);
+  x.$(".ujg-esi-ai-question").val("я".repeat(101)).trigger("input");
+  assert.equal(x.$(".ujg-esi-ai-ask").prop("disabled"),true);
+  assert.match(x.$(".ujg-esi-ai-error").text(),/бюджет/);
+  x.$(".ujg-esi-ai-ask").trigger("click");await x.flush();assert.equal(c.runs.length,1);
+  x.$(".ujg-esi-ai-question").val("Что дальше?").trigger("input");
+  x.$(".ujg-esi-ai-ask").trigger("click");await x.flush();assert.equal(c.runs.length,2);
+  x.pending[1].reject(new Error("Провайдер недоступен"));await x.flush();
+  assert.equal(c.runs.length,2);assert.equal(x.$(".ujg-esi-ai-question").val(),"Что дальше?");
+  assert.match(x.$(".ujg-esi-ai-report").text(),/Отчёт/);
+});
+
+test("failed preparation clears the prior scope request preview and budget",t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const c=compactServices(x);
+  x.ui.open(x.$("#anchor")[0]);
+  assert.match(x.$(".ujg-esi-ai-context").text(),/compressed/);
+  x.ui.update(x.report("b"),x.state("OTHER"),{...c.services,onPrepareActivityBrief(){throw new Error("Контекст превышает лимит");}});
+  assert.equal(x.$(".ujg-esi-ai-context").text(),"");
+  assert.equal(x.$(".ujg-esi-ai-budget").text(),"");
+  assert.equal(x.$(".ujg-esi-ai-generate").prop("disabled"),true);
+  assert.match(x.$(".ujg-esi-ai-error").text(),/Контекст превышает лимит/);
+});
 test("AI cutoff distinguishes end of selected day from its beginning and a partial day", t=>{
   const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});
   for(const [asOf,label] of [["2026-09-24T21:00:00Z","24:00 МСК"],["2026-09-23T21:00:00Z","00:00 МСК"],["2026-09-24T09:00:00Z","12:00 МСК"]]) {
@@ -220,7 +291,7 @@ test("Escape after a Dynamics redraw returns focus to the newly mounted report c
   const dom=new JSDOM('<div id="root"></div>',{runScripts:"outside-only",url:"http://localhost"});
   const $=jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")};
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-markdown","activity-ai-ui","activity-store","activity-ui"])
+  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","activity-markdown","activity-ai-ui","activity-store","activity-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   const state={rows:[],teams:[],projectKey:"P",epicKey:"P-1",viewMode:"jira"};

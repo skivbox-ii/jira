@@ -24,11 +24,12 @@ test("build-excel-story-importer exports { build }", function () {
 
 test("LLM report dependencies are bundled before the Dynamics entry point", function () {
   const order = require(BUILD_SCRIPT).build.MODULE_ORDER;
-  for (const name of ["activity-ai.js", "activity-markdown.js", "activity-ai-ui.js"]) {
+  for (const name of ["activity-ai.js", "activity-brief.js", "activity-markdown.js", "activity-ai-ui.js"]) {
     assert.ok(order.includes(name), name + " must ship in the importer");
     assert.ok(order.indexOf(name) < order.indexOf("activity-ui.js"));
   }
   assert.ok(order.indexOf("activity-ai.js") < order.indexOf("activity-ai-ui.js"));
+  assert.ok(order.indexOf("activity-brief.js") < order.indexOf("activity-ui.js"));
   assert.ok(order.indexOf("activity-markdown.js") < order.indexOf("activity-ai-ui.js"));
   assert.ok(order.includes("marked-16.4.2.umd.js"));
   assert.ok(order.indexOf("marked-16.4.2.umd.js") < order.indexOf("activity-markdown.js"));
