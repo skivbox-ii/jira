@@ -50,9 +50,11 @@ Files: new `remark-report-ui.js`, `activity-ui.js`, `icons.js` if icon absent, C
 - [x] Independent Sol6 medium review: first approved criteria, then defects/security/regressions. Fix and rerun findings.
 - [x] Local Playwright: synthetic long history/comments, single report call, error/oversize/incomplete/close, 1440/390 widths, scroll response/context to bottom; no external network.
 - [x] Scoped commit/publish through existing `origin/main` process; verify commit-pinned CDN runtime/CSS bytes. Code `2b05aac`, exact match.
-- [ ] Fresh Citrix screenshot, read-only preview of real group, confirm linked tasks/comments/coverage, inspect to bottom. No generation and no Jira mutation.
-- [ ] Record evidence and residual limits in backlog/acceptance doc. Completion only with actual checks, no claim of provider answer quality without user-run live answer.
+- [x] Fresh Citrix screenshot, read-only preview of real group, confirm linked tasks/comments/coverage, inspect to bottom. No generation and no Jira mutation.
+- [x] Record evidence and residual limits in backlog/acceptance doc. Completion only with actual checks, no claim of provider answer quality without user-run live answer.
 
 Local evidence: `docs/import-remark-report-acceptance-2026-09-27.md`,
-1517/1517 tests, independent review, desktop/mobile acceptance. Production
-preview pending: Citrix window disappeared at 18:23 MSK; no blind retries.
+1522/1522 tests after feedback, independent review, desktop/mobile acceptance.
+Production preview completed 18:36–18:40 MSK after restoring Citrix:
+#2655 null description regression fixed, #2378 with five comments,
+both contexts scrolled to end. Fix `60ef063`; no live LLM or Jira writes.
