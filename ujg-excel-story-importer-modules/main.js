@@ -14,7 +14,8 @@ define("_ujgESI_main", [
   "_ujgESI_dueDateSync",
   "_ujgESI_componentSync",
   "_ujgESI_activityLoader",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule) {
+  "_ujgESI_deadlines",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines) {
   "use strict";
 
   function searchErrorText(err) {
@@ -1017,6 +1018,7 @@ define("_ujgESI_main", [
       activityLoading: false,
       activityProgress: null,
       activityError: "",
+      activityPreviousFailures: null,
       createSubtasks: true,
       loading: false,
       error: "",
@@ -1125,6 +1127,7 @@ define("_ujgESI_main", [
       onComplete:function(progress) {
         clearActivityProgressPaint();
         state.activityLoading = false;
+        state.activityPreviousFailures = null;
         state.activityError = progress.failures.length ? "Не удалось загрузить историю: " + progress.failures.map(function(item) { return item.key + ": " + item.message; }).join("; ") : "";
         render();
       }
@@ -1183,6 +1186,7 @@ define("_ujgESI_main", [
       state.activityLoading = false;
       state.activityError = "";
       state.activityProgress = null;
+      state.activityPreviousFailures = null;
     }
 
     function onLoadActivityHistory(options) {
@@ -1219,7 +1223,7 @@ define("_ujgESI_main", [
         return;
       }
       state.activityLoading = true;
-      state.activityError = "";
+      state.activityPreviousFailures = state.activityError ? state.activityPreviousFailures || (state.activityProgress && (state.activityProgress.failures || []).slice()) : null;
       activityTargets = targets;
       activityLoader.select(keys);
     }
@@ -2113,6 +2117,8 @@ define("_ujgESI_main", [
 
     function buildCreateDialog(row, index) {
       var settings = normalizeMappingSettings(state.mappingSettings);
+      var columnMap = copyColumnMap(sourceImportSettings().columnMap);
+      var dueSource = deadlines ? deadlines.resolve(row, {columnMap:columnMap}) : {date:null,raw:"",problem:"missing",reasonLabel:"Срок не указан",candidates:[]};
       var roles = copyRoles(settings.roles);
       var summary = numberedSummary(row, row && row.summary != null ? row.summary : "");
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
@@ -2133,6 +2139,13 @@ define("_ujgESI_main", [
         assignee: row && row.ownerAssignee ? copyAssignee(row.ownerAssignee) : assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
         originalEstimate: estimate,
         remainingEstimate: estimate,
+        columnMap: columnMap,
+        dueSource: dueSource,
+        dueDate: dueSource.date || "",
+        dueDateEdited: false,
+        dueOriginalHasSource: !!(dueSource.candidates || []).length,
+        omitDueDate: false,
+        dueError: "",
         createSubtasks: state.createSubtasks !== false,
         childTasks: state.createSubtasks !== false ? roles.map(function(role) {
           return {
@@ -3188,6 +3201,25 @@ define("_ujgESI_main", [
     function createConfirmedRow(dialog) {
       var row = dialog ? state.rows[dialog.rowIndex] : null;
       if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "story" || dialog.scopeProjectKey !== state.projectKey || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      var dueDate = dialog.dueDate != null ? String(dialog.dueDate).trim() : "";
+      var currentDueSource = deadlines ? deadlines.resolve(row,{columnMap:dialog.columnMap}) : dialog.dueSource;
+      if (!dialog.omitDueDate && !dialog.dueDateEdited && JSON.stringify(currentDueSource) !== JSON.stringify(dialog.dueSource)) {
+        dialog.dueSource = currentDueSource;
+        dialog.dueDate = currentDueSource.date || "";
+        dialog.dueError = currentDueSource.problem && currentDueSource.problem !== "missing"
+          ? "Срок Excel изменился: " + currentDueSource.reasonLabel + ". Исправьте дату или выберите «Не указывать срок»."
+          : "Срок Excel изменился. Проверьте дату и подтвердите создание ещё раз.";
+        render();
+        return;
+      }
+      var parsedDue = dueDate && deadlines ? deadlines.parseDate(dueDate,{strict:true}) : null;
+      if (!dialog.omitDueDate && (!parsedDue && (dueDate || dialog.dueOriginalHasSource || currentDueSource && currentDueSource.problem !== "missing"))) {
+        dialog.dueSource = currentDueSource;
+        dialog.dueError = dueDate ? "Укажите корректную календарную дату срока." : "Укажите срок или выберите «Не указывать срок».";
+        render();
+        return;
+      }
+      dialog.dueError = "";
       createInFlight = true;
       row.status = "creating";
       row.errors = [];
@@ -3206,6 +3238,9 @@ define("_ujgESI_main", [
           assignee: dialog.assignee,
           originalEstimate: dialog.originalEstimate,
           remainingEstimate: dialog.remainingEstimate,
+          dueDate: parsedDue || undefined,
+          omitDueDate: !!dialog.omitDueDate || !parsedDue,
+          columnMap: dialog.columnMap,
           sourceRows: dialog.sourceRows,
           createSubtasks: dialog.createSubtasks,
           childTasks: dialog.childTasks,
@@ -3392,6 +3427,14 @@ define("_ujgESI_main", [
         dialog.originalEstimate = value != null ? String(value) : "";
       } else if (key === "remainingEstimate") {
         dialog.remainingEstimate = value != null ? String(value) : "";
+      } else if (key === "dueDate") {
+        dialog.dueDate = value != null ? String(value) : "";
+        dialog.dueDateEdited = true;
+        dialog.dueError = "";
+      } else if (key === "omitDueDate") {
+        dialog.omitDueDate = !!value;
+        dialog.dueError = "";
+        shouldRender = true;
       }
       if (shouldRender) render();
     }

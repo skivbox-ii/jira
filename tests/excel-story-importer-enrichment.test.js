@@ -12,11 +12,13 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
   const creator = loadAmdModule(path.join(MODULE_DIR, "creator.js"), {
     _ujgESI_config: config, _ujgESI_description: description,
     _ujgESI_remarkId: loadAmdModule(path.join(MODULE_DIR, "remark-id.js"), {}),
+    _ujgESI_deadlines: loadAmdModule(path.join(MODULE_DIR, "deadlines.js"), {}),
   });
   const app = {};
   const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
     jquery: () => ({ length: 0 }),
     _ujgESI_config: config,
+    _ujgESI_deadlines: loadAmdModule(path.join(MODULE_DIR,"deadlines.js"),{}),
     _ujgESI_api: Object.assign({
       getProjects: () => Promise.resolve([{ key: "TEST", name: "Test" }]),
       getProjectEpics: () => Promise.resolve({ issues: [] }),

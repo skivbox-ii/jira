@@ -881,6 +881,21 @@ test("confirmation shows a selected Epic absent from fetched options", t => {
   assert.equal($(".ujg-esi-confirm-epic").val(),"P-999");
   assert.match($(".ujg-esi-confirm-epic option:selected").text(),/P-999/);
 });
+test("Story confirmation exposes mapped Due source, correction and explicit omit controls only for a new Story", t => {
+  const {dom,$,state,render}=setup(); t.after(()=>dom.window.close());
+  state.createDialog={mode:"story",projectKey:"P",summary:"New Story",issueType:"Story",dueDate:"",omitDueDate:false,
+    dueSource:{raw:"31.02.2026",field:"Мой срок",problem:"invalid",reasonLabel:"Несуществующая календарная дата"},dueError:"Укажите корректный срок"};
+  render();
+  const input=$("[aria-label='Срок исполнения (Due date)']"), omit=$("input[type='checkbox'][aria-label='Не указывать срок']");
+  assert.equal(input.length,1);assert.equal(omit.length,1);
+  assert.match($(".ujg-esi-confirm-modal").text(),/Мой срок.*31\.02\.2026.*Несуществующая календарная дата/s);
+  assert.match($(".ujg-esi-confirm-modal").text(),/Укажите корректный срок/);
+  input.val("2026-10-02").trigger("input");
+  assert.equal($(".ujg-esi-confirm-due-error").length,0);
+  state.createDialog.mode="children";render();
+  assert.equal($("[aria-label='Срок исполнения (Due date)']").length,0);
+  assert.equal($("[aria-label='Не указывать срок']").length,0);
+});
 
 test("restored layouts validate IDs and widths and remain scoped to the active user", t => {
   const {dom,$,state,render} = setup(); t.after(() => dom.window.close());

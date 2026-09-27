@@ -18,6 +18,7 @@ function setup(options = {}) {
   const Gadget = load(path.join(root,"ujg-excel-story-importer-modules/main.js"), {
     jquery:() => ({length:0}),
     _ujgESI_config:{STORY_ISSUE_TYPE:"Story",CREATE_TEMPLATE_ROLES:[],LLM_CONFIG_STORAGE_KEY:"test-llm"},
+    _ujgESI_deadlines:load(path.join(root,"ujg-excel-story-importer-modules/deadlines.js"),{}),
     _ujgESI_api:{baseUrl:"https://jira.example.test",getProjects:() => Promise.resolve([])},
     "_ujgESI_excel-loader":{},_ujgESI_parser:{},_ujgESI_creator:{},
     _ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:null,_ujgESI_teams:null,_ujgESI_dueDateSync: null, _ujgESI_componentSync:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,

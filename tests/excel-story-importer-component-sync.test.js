@@ -37,6 +37,21 @@ test("invalid mapping, duplicate conflict, wrong project, missing field, and chi
   assert.equal(api.writes.length,0);
 });
 
+test("component plan distinguishes missing, malformed, and foreign-project Jira keys", async () => {
+  const api = client(), sync = engine(api);
+  let catalogReads = 0;
+  api.getProjectComponents = async () => { catalogReads++; return [{id:"100",name:"New"}]; };
+  const rows = [row(1,"","A"),row(2,"not-a-key","A"),row(3,"OTHER-1","A")];
+  await sync.open(rows,{projectKey:"P",moduleComponentMap:{A:"New"}});
+  const messages = sync.getState().rows.map(item => item.message);
+  assert.match(messages[0], /не указан|отсутств/i);
+  assert.match(messages[1], /неверн|некоррект|формат/i);
+  assert.match(messages[2], /не относится к выбранному проекту/i);
+  assert.equal(api.reads.length,0);
+  assert.equal(api.writes.length,0);
+  assert.equal(catalogReads,0);
+});
+
 test("preflight conflict prevents PUT and uncertain response is not retried automatically", async () => {
   const api = client(), sync = engine(api);
   await sync.open([row(1,"P-1","A")],{projectKey:"P",moduleComponentMap:{A:"New"}});

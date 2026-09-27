@@ -78,6 +78,92 @@ test("history progress preserves table, filter draft, focus and report calculati
   assert.match(x.$(".ujg-esi-activity-coverage").text(),/P-3.*Unavailable/);
   assert.equal(x.calls.summarize.length,calls);
 });
+test("final success keeps a same-scope filter draft, search selection, focus and scroll", t => {
+  const report=fixture(), x=setup(report); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-filter='role']").trigger("click");
+  const search=x.$(".ujg-esi-activity-filter-search")[0];
+  search.value="QA"; x.$(search).trigger("input"); search.focus(); search.setSelectionRange(1,2);
+  x.$(".ujg-esi-activity-filter-menu").scrollTop(37);
+  x.$(".ujg-esi-filter-values").scrollTop(21);
+  x.$(".ujg-esi-activity-filter-clear").trigger("click");
+  x.$(".ujg-esi-filter-value-row:not([hidden]) input").prop("checked",true).trigger("change");
+  x.state.activityLoading=true; x.state.activityProgress={completed:1,total:2}; x.ui.updateProgress(x.state);
+  x.state.activityLoading=false; x.state.activityError=""; x.render();
+  const restored=x.$(".ujg-esi-activity-filter-search")[0];
+  assert.equal(restored.value,"QA");
+  assert.equal(x.dom.window.document.activeElement,restored);
+  assert.deepEqual([restored.selectionStart,restored.selectionEnd],[1,2]);
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").scrollTop(),37);
+  assert.equal(x.$(".ujg-esi-filter-values").scrollTop(),21);
+  assert.equal(x.$(".ujg-esi-activity-filter-option input:checked").length,1);
+  assert.equal(x.$(".ujg-esi-activity-event").length,2,"draft is not applied");
+  x.$(".ujg-esi-activity-filter-apply").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0);
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+});
+test("outer rendering keeps the activity filter draft through root replacement", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const {$,modules,dom,state}=x;
+  dom.window.scrollTo=()=>{};
+  modules._ujgESI_grid={create:()=>({dismissPopover(){return false;}}),button:(name,title,handler)=>$("<button type='button'/>").attr("aria-label",title).on("click",handler)};
+  modules._ujgESI_teamsUi=null; modules._ujgESI_statisticsUi=null;
+  modules._ujgESI_dueDateSyncUi=null; modules._ujgESI_columnPreflightUi=null;
+  dom.window.eval(fs.readFileSync(path.join(activityDir,"rendering.js"),"utf8"));
+  const rendering=modules._ujgESI_rendering;
+  state.reportView="activity";
+  rendering.init($("#root"),x.services); rendering.render(state);
+  $("[data-activity-filter='role']").trigger("click");
+  const search=$(".ujg-esi-activity-filter-search")[0];
+  search.value="QA"; $(search).trigger("input"); search.focus(); search.setSelectionRange(1,2);
+  $(".ujg-esi-activity-filter-clear").trigger("click");
+  $(".ujg-esi-filter-value-row:not([hidden]) input").prop("checked",true).trigger("change");
+  rendering.render(state);
+  const restored=$(".ujg-esi-activity-filter-search")[0];
+  assert.ok(restored);
+  assert.equal(restored.value,"QA");
+  assert.equal(dom.window.document.activeElement,restored);
+  assert.deepEqual([restored.selectionStart,restored.selectionEnd],[1,2]);
+  assert.equal($(".ujg-esi-activity-filter-option input:checked").length,1);
+});
+test("final failure keeps an unfinished person filter and offers new candidates unselected", t => {
+  const report=fixture(), x=setup(report); t.after(()=>x.dom.window.close());
+  selectFilter(x,"author",["Ira"]);
+  x.$("[data-activity-filter='author']").trigger("click");
+  x.$(".ujg-esi-activity-filter-search").val("Ann").trigger("input").trigger("focus");
+  report.groups[0].events[1].author={label:"Ann"};
+  x.state.activityLoading=false; x.state.activityError="Не удалось загрузить историю: P-3: ошибка"; x.render();
+  assert.equal(x.$(".ujg-esi-activity-filter-search").val(),"Ann");
+  assert.equal(x.$(".ujg-esi-activity-selected-chip").text(),"Ira");
+  assert.equal(x.$(".ujg-esi-filter-value-row:not([hidden])").text().trim(),"Ann");
+  assert.equal(x.$(".ujg-esi-filter-value-row:not([hidden]) input").prop("checked"),false);
+  assert.equal(x.dom.window.document.activeElement,x.$(".ujg-esi-activity-filter-search")[0]);
+});
+test("same-scope redraw restores focus to the chosen checkbox", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  x.$("[data-activity-filter='role']").trigger("click");
+  const check=x.$(".ujg-esi-activity-filter-option").filter(function() { return x.$(this).text()==="QA"; }).find("input")[0];
+  check.focus(); check.checked=false; x.$(check).trigger("change");
+  x.render();
+  const restored=x.$(".ujg-esi-activity-filter-option").filter(function() { return x.$(this).text()==="QA"; }).find("input")[0];
+  assert.equal(x.dom.window.document.activeElement,restored);
+  assert.equal(restored.checked,false);
+  assert.equal(x.$(".ujg-esi-activity-event").length,2);
+});
+test("explicit closes and date or scope changes discard a filter draft", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  for (const close of ["apply","escape","outside","date","project","epic","user"]) {
+    x.$("[data-activity-filter='role']").trigger("click");
+    x.$(".ujg-esi-activity-filter-search").val("unfinished").trigger("input");
+    if (close==="apply") x.$(".ujg-esi-activity-filter-apply").trigger("click");
+    else if (close==="escape") x.$(".ujg-esi-activity-filter-menu").trigger(x.$.Event("keydown",{key:"Escape"}));
+    else if (close==="outside") x.$(x.dom.window.document.body).trigger("click");
+    else if (close==="date") x.$(".ujg-esi-activity-date").val("2026-09-23").trigger("change");
+    else { x.state[close==="user"?"preferencesStorageKey":close+"Key"]="changed-"+close; x.render(); }
+    assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0,close);
+    x.render();
+    assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0,close+" after render");
+  }
+});
 test("warm date round trip reuses a report but a new published dataset invalidates it", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const change=date=>x.$(".ujg-esi-activity-date").val(date).trigger("change");
@@ -975,6 +1061,84 @@ test("refresh, loading and errors remain visible for available history", t => {
   x.state.activityLoading=false; x.state.activityError="Network error"; x.render();
   assert.match(x.$("#root").text(),/Network error/);
 });
+test("refresh failure identifies retained history and its report cutoff without changing coverage", t => {
+  const report=fixture(); report.asOf="2026-09-24T06:15:00.000Z"; report.end=Date.parse("2026-09-24T21:00:00.000Z");
+  report.coverage={complete:2,total:2,incomplete:0,warnings:[],isComplete:true};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.rows[0].childStatuses=[{key:"P-3",activity:{complete:true,capturedAt:"2026-09-25T10:45:00.000Z"}}];
+  x.state.activityLoading=true; x.render();
+  x.state.activityLoading=false;
+  x.state.activityProgress={completed:2,total:2,failures:[{key:"P-3",message:"Unavailable"}]};
+  x.state.activityError="Не удалось загрузить историю: P-3: Unavailable"; x.render();
+  const text=x.$(".ujg-esi-activity-coverage").text();
+  assert.match(text,/предыдущий срез/i);
+  assert.match(text,/09:15.*МСК/);
+  assert.match(text,/P-3.*25\.09\.2026 13:45 МСК/);
+  assert.match(text,/часть сохранённых данных не обновлена/i);
+  assert.match(text,/P-3.*Unavailable/);
+  assert.match(text,/2 из 2/);
+  assert.doesNotMatch(text,/обновлена.*2 из 2/i);
+  x.state.activityError=""; x.state.activityProgress=null; x.render();
+  assert.doesNotMatch(x.$(".ujg-esi-activity-coverage").text(),/предыдущий срез/i);
+});
+test("historical report boundary does not masquerade as failed issue capture time", t => {
+  const report=fixture(); report.asOf="2026-09-24T21:00:00.000Z"; report.end=Date.parse(report.asOf);
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.rows[0].childStatuses=[{key:"P-2",activity:{complete:true,capturedAt:"2026-09-25T06:30:00.000Z"}}];
+  x.state.activityError="Не удалось загрузить историю: P-2: Unavailable";
+  x.state.activityProgress={completed:1,total:1,failures:[{key:"P-2",message:"Unavailable"}]}; x.render();
+  const text=x.$(".ujg-esi-activity-coverage").text();
+  assert.match(text,/граница.*24:00 МСК/i);
+  assert.match(text,/P-2.*25\.09\.2026 09:30 МСК/);
+  assert.doesNotMatch(text,/P-2.*24:00 МСК/);
+});
+test("partial first read reports failed keys without inventing previous captures", t => {
+  const report=fixture(); report.asOf=null; report.coverage={complete:1,total:2,incomplete:1,warnings:[],isComplete:false};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.rows[0].childStatuses=[{key:"P-2",activity:{complete:true,capturedAt:"2026-09-25T06:30:00.000Z"}},{key:"P-3"}];
+  x.state.activityError="Не удалось загрузить историю: P-3: Unavailable";
+  x.state.activityProgress={completed:2,total:2,failures:[{key:"P-3",message:"Unavailable"}]}; x.render();
+  const text=x.$(".ujg-esi-activity-coverage").text();
+  assert.match(text,/история загружена частично/i);
+  assert.match(text,/P-3.*снимка нет/i);
+  assert.doesNotMatch(text,/предыдущий срез/i);
+});
+test("first history read failure does not claim a retained snapshot or confirmed cutoff", t => {
+  const report=fixture(); report.events=[]; report.groups=[]; report.asOf=null;
+  report.coverage={complete:0,total:2,incomplete:2,warnings:[],isComplete:false};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.activityError="Не удалось загрузить историю: P-2: Unavailable";
+  x.state.activityProgress={completed:0,total:2,failures:[{key:"P-2",message:"Unavailable"}]}; x.render();
+  const text=x.$(".ujg-esi-activity-coverage").text();
+  assert.match(text,/история.*не загружена/i);
+  assert.match(text,/P-2.*Unavailable/);
+  assert.doesNotMatch(text,/предыдущий срез|24:00/);
+  assert.match(text,/0 из 2/);
+});
+test("failed refresh recognizes retained incomplete history even with zero certified tasks", t => {
+  const report=fixture(); report.events=[]; report.groups=[]; report.asOf=null;
+  report.coverage={complete:0,total:2,incomplete:2,warnings:[],isComplete:false};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  x.state.rows[0].childStatuses=[{key:"P-2",activity:{complete:false,capturedAt:"2026-09-24T05:00:00.000Z"}}];
+  x.state.activityError="Не удалось загрузить историю: P-2: Unavailable"; x.render();
+  const text=x.$(".ujg-esi-activity-coverage").text();
+  assert.match(text,/предыдущий срез/i);
+  assert.match(text,/время среза не подтверждено/i);
+  assert.match(text,/0 из 2/);
+});
+test("retry loading keeps the previous failed key and saved read time visible", t => {
+  const report=fixture(), x=setup(report);t.after(()=>x.dom.window.close());
+  x.state.rows[0].childStatuses=[{key:"P-3",activity:{complete:true,capturedAt:"2026-09-25T06:30:00.000Z"}}];
+  x.state.activityError="Не удалось загрузить историю: P-3: previous failure";
+  x.state.activityPreviousFailures=[{key:"P-3",message:"previous failure"}];
+  x.state.activityLoading=true;
+  x.state.activityProgress={completed:0,total:1,failures:[]};x.render();
+  const text=x.$(".ujg-esi-activity-coverage").text();
+  assert.match(text,/предыдущий срез/i);
+  assert.match(text,/P-3.*25\.09\.2026 09:30 МСК/);
+  assert.match(text,/previous failure/);
+  assert.match(text,/Загрузка истории: 0 из 1/);
+});
 test("a complete current-day snapshot still offers explicit refresh", t => {
   const report=fixture(); report.coverage={isComplete:true,total:3,complete:3,incomplete:0,warnings:[]};
   const x=setup(report); t.after(()=>x.dom.window.close());
@@ -1293,14 +1457,18 @@ test("filter menu can remove an applied filter directly", t => {
   assert.equal(x.$(".ujg-esi-activity-event").length,2);
   assert.equal(x.$("[data-activity-filter='role']").hasClass("is-active"),false);
 });
-test("redraw closes stale popovers and preserves journal horizontal scroll", t => {
+test("redraw keeps filter draft and horizontal scroll while closing metric popovers", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   x.$(".ujg-esi-activity-scroll").scrollLeft(120);
   x.$("[data-activity-filter='role']").trigger("click");
   assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
   x.render();
-  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,0);
+  assert.equal(x.$(".ujg-esi-activity-filter-menu").length,1);
   assert.equal(x.$(".ujg-esi-activity-scroll").scrollLeft(),120);
+  x.$(".ujg-esi-activity-metric").first().trigger("focus");
+  assert.equal(x.$(".ujg-esi-activity-metric-preview").length,1);
+  x.render();
+  assert.equal(x.$(".ujg-esi-activity-metric-preview").length,0);
   x.$("[data-activity-sort='author']").trigger("click");
   assert.equal(x.$(".ujg-esi-activity-scroll").scrollLeft(),120);
 });

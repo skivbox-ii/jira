@@ -13,6 +13,7 @@ async function setup(options = {}) {
   const teams = load(path.join(dir, "teams.js"), {});
   const Gadget = load(path.join(dir, "main.js"), {
     jquery: () => ({ length: 0 }), _ujgESI_config: config,
+    _ujgESI_deadlines: load(path.join(dir,"deadlines.js"),{}),
     _ujgESI_api: { getProjects: () => Promise.resolve([{key:"P"},{key:"Q"}]), getProjectEpics: () => Promise.resolve([]), getProjectCreateMeta: () => Promise.resolve({projects:[]}), searchUsers: options.searchUsers || (() => Promise.resolve([])) },
     "_ujgESI_excel-loader": {}, _ujgESI_parser: {}, _ujgESI_creator: {}, _ujgESI_mappingStore: null, _ujgESI_xlsxPatcher: null,
     _ujgESI_teams: teams,

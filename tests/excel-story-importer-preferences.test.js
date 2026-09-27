@@ -29,6 +29,7 @@ async function loadImporter(options = {}) {
   const Gadget = loadAmdModule(path.join(MODULE_DIR, "main.js"), {
     jquery: () => ({ length: 0 }),
     _ujgESI_config: config,
+    _ujgESI_deadlines: loadAmdModule(path.join(MODULE_DIR,"deadlines.js"),{}),
     _ujgESI_api: {
       getProjects: options.getProjects || (() => Promise.resolve([{ key: "P1" }, { key: "P2" }])),
       getProjectEpics: options.getProjectEpics || (() => Promise.resolve({ issues: [], total: 200 })),

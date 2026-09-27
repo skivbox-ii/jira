@@ -171,6 +171,7 @@
 .ujg-esi-registry-actions .ujg-esi-create-row svg { width: 13px; height: 13px; }
 .ujg-esi-registry-actions .ujg-esi-create-row:disabled { background: #e7eaef; color: #7d8792; cursor: default; }
 .ujg-esi-error-details { position: relative; margin-top: 4px; color: #ad5725; }
+.ujg-esi-registry-actions:has(.ujg-esi-error-details[open]) { z-index: 7; }
 .ujg-esi-error-details summary { cursor: pointer; list-style: none; }
 .ujg-esi-error-details > div { position: absolute; z-index: 8; right: 0; min-width: 230px; padding: 8px; background: white; border: 1px solid #e0b89a; box-shadow: 0 2px 8px #0002; }
 .ujg-esi-grid-menu { position: absolute; width: 268px; max-width: calc(100vw - 24px); max-height: min(610px, calc(100vh - 90px)); overflow-y: auto; z-index: 50; border: 1px solid #cdd4dd; border-radius: 4px; background: #fff; padding: 6px; color: #293441; box-shadow: 0 4px 18px #10213826; font-size: 12px; }
@@ -1531,6 +1532,34 @@
   font-size: 12px;
 }
 
+.ujg-esi-confirm-due-omit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ujg-esi-confirm-due-omit input[type="checkbox"] {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+}
+
+.ujg-esi-confirm-due-source,
+.ujg-esi-confirm-due-warning,
+.ujg-esi-confirm-due-error {
+  margin-top: 4px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ujg-esi-confirm-due-source { color: #5e6c84; }
+.ujg-esi-confirm-due-warning { color: #974f0c; }
+.ujg-esi-confirm-due-error { color: #bf2600; }
+
 .ujg-esi-confirm-child-description {
   display: inline-flex;
   align-items: center;
@@ -1885,10 +1914,6 @@
     flex-direction: column;
   }
 
-  .ujg-esi-confirm-overlay {
-    padding: 20px 10px;
-  }
-
   .ujg-esi-confirm-fields {
     grid-template-columns: 1fr;
   }
@@ -2023,7 +2048,9 @@
 .ujg-esi-activity-group-badge.is-reopened button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .ujg-esi-activity-group-badge.is-reopened button::before { content: "Возвраты "; }
 .ujg-esi-activity-event-popover { position: fixed; z-index: 180; overflow-y: auto; padding: 10px 12px; border: 1px solid #cbd4df; border-radius: 4px; background: #fff; color: #293441; box-shadow: 0 6px 24px #182b4930; }
-.ujg-esi-activity-popover-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 7px; border-bottom: 1px solid #dce3eb; }
+.ujg-esi-activity-popover-head { position: sticky; top: -10px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -10px 0 0; padding: 10px 0 7px; border-bottom: 1px solid #dce3eb; background: #fff; }
+.ujg-esi-activity-popover-head strong { min-width: 0; overflow-wrap: anywhere; }
+.ujg-esi-activity-popover-head button { flex-shrink: 0; }
 .ujg-esi-activity-popover-event { padding: 9px 0; border-bottom: 1px solid #e6ebf0; overflow-wrap: anywhere; }
 .ujg-esi-activity-popover-event-head { display: flex; gap: 8px; font-weight: 600; }
 .ujg-esi-activity-popover-event-head a { color: #075fc4; }

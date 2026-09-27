@@ -6,6 +6,15 @@ const dir = path.join(__dirname, "..", "ujg-excel-story-importer-modules");
 
 function deadlines() { return load(path.join(dir, "deadlines.js"), {}); }
 
+test("exported strict parser accepts only complete calendar dates for explicit input", () => {
+  const parse = deadlines().parseDate;
+  assert.equal(parse("27.09.2026", {strict:true}), "2026-09-27");
+  assert.equal(parse("2026-09-27", {strict:true}), "2026-09-27");
+  for (const value of ["27.9.2026", "9.09.2026", "2026-9-27", "31.02.2026", "09/10/2026", "", new Date("2026-09-27")]) {
+    assert.equal(parse(value, {strict:true}), null);
+  }
+});
+
 test("strict date parsing and missing values", () => {
   const resolve = deadlines().resolve;
   assert.deepEqual(JSON.parse(JSON.stringify(resolve({sourceColumns:{"Срок исполнения":"25.09.2026"}}))).date,"2026-09-25");

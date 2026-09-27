@@ -84,6 +84,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
+    var filterDraftCapture, pendingFilterDraft, renderedScope;
     var resizeObserver, observedViewportWidth;
     var $managementDialog, managementAnchor, bodyOverflow, previewTimer, previewCloseTimer;
     var componentSelection = null, componentKey, componentNames = Object.create(null), fullReport, scopedReport, lastAiReport;
@@ -215,6 +216,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function closePopover(focus) {
       clearTimeout(previewTimer); clearTimeout(previewCloseTimer);
       if ($popover) $popover.remove(); $popover = null;
+      filterDraftCapture = null;
       if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; popoverAnchor.focus(); suppressPopoverFocus = false; } }
       popoverAnchor = null;
     }
@@ -394,11 +396,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         return comparison * (sort.descending ? -1 : 1);
       });
     }
-    function filterMenu(anchor, field, report) {
+    function filterMenu(anchor, field, report, draft) {
       var values = Object.create(null), options;
       (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { [].concat((field.filterValue || field.value)(event,group)).forEach(function(value) { values[value] = true; }); }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
-      var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
+      var selected = draft ? draft.selected.slice() : Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
       var isPerson = field.key === "assignee" || field.key === "author";
       var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",options.length > 8 ? 440 : 360);
       [[false,"ArrowDownAZ","Сортировка по возрастанию"],[true,"ArrowUpAZ","Сортировка по убыванию"]].forEach(function(item) {
@@ -458,7 +460,33 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         filters[field.key] = selected.slice();
         saveLayout(); draw();
       }));
-      $box.append($actions); update(); placePopover(anchor); $search.trigger("focus");
+      $box.append($actions);
+      if (draft) $search.val(draft.search);
+      update(); placePopover(anchor);
+      filterDraftCapture = function() {
+        var active = document.activeElement, focus = null;
+        if ($.contains($box[0],active)) {
+          if (active === $search[0]) focus = {kind:"search"};
+          else if (active === $all[0]) focus = {kind:"all"};
+          else {
+            var candidate = candidates.filter(function(item) { return item.check[0] === active || item.row.find("button")[0] === active; })[0];
+            if (candidate) focus = {kind:candidate.check[0] === active ? "check" : "only",value:candidate.value};
+          }
+        }
+        return {key:field.key,selected:selected.slice(),search:String($search.val() || ""),focus:focus,
+          start:$search[0].selectionStart,end:$search[0].selectionEnd,scroll:$box.scrollTop(),listScroll:$list.scrollTop()};
+      };
+      if (draft) {
+        var target = draft.focus && (draft.focus.kind === "search" ? $search[0] : draft.focus.kind === "all" ? $all[0] :
+          (candidates.filter(function(item) { return item.value === draft.focus.value; })[0] || {})[draft.focus.kind === "check" ? "check" : "row"]);
+        if (target && target.jquery) target = draft.focus.kind === "only" ? target.find("button")[0] : target[0];
+        if (target && $(target).closest("[hidden]").length) target = $search[0];
+        if (target) {
+          target.focus();
+          if (target === $search[0] && draft.start != null) target.setSelectionRange(draft.start,draft.end);
+        }
+        $box.scrollTop(draft.scroll); $list.scrollTop(draft.listScroll);
+      } else $search.trigger("focus");
     }
     function eventPopover(anchor, title, events, state) {
       var $box = popup(anchor,title,"ujg-esi-activity-event-popover",520);
@@ -537,10 +565,33 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var coverage = report.coverage || {};
       var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
       var progress = state.activityProgress || {};
+      var failures = state.activityLoading && state.activityError && state.activityPreviousFailures || progress.failures || [], saved = Object.create(null);
+      (state.rows || []).forEach(function(row) {
+        [row.storyDetails,row.activityDetails].concat(row.childStatuses || []).forEach(function(detail) {
+          if (detail && detail.key && detail.activity) saved[String(detail.key).toUpperCase()] = detail.activity;
+        });
+      });
+      var retained = (coverage.complete || 0) > 0 || !!(report.events || []).length || (state.rows || []).some(function(row) {
+        return [row.storyDetails,row.activityDetails].concat(row.childStatuses || []).some(function(detail) { return !!(detail && detail.activity); });
+      });
+      var failedRetained = failures.length ? failures.some(function(item) { return !!saved[String(item.key).toUpperCase()]; }) : retained;
+      var someFresh = Number(progress.completed) > failures.length;
       var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
         (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
-        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
+        state.activityError && !retained ? "История не загружена · проверено " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач" :
+        (state.activityError && !failedRetained ? "История загружена частично · проверено " : state.activityError && !someFresh ? "Ранее проверена история " : "Проверена история ") + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
       $coverage.append($("<span/>").text(coverageText));
+      if (state.activityError) {
+        $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text(
+          (failedRetained ? someFresh ? "Часть сохранённых данных не обновлена; показан предыдущий срез для задач с ошибкой. " : "Показан предыдущий срез; обновление не удалось. " : "") +
+          (retained ? report.asOf ? "Граница отображаемого отчёта: " + cutoff(report) + " МСК." : "Время среза не подтверждено." : "")));
+        failures.forEach(function(item) {
+          var snapshot = saved[String(item.key).toUpperCase()], at = snapshot && timestamp(snapshot.capturedAt);
+          var captured = isFinite(at) ? new Date(at + 3 * 3600000).toISOString() : "";
+          var readTime = captured ? captured.slice(8,10) + "." + captured.slice(5,7) + "." + captured.slice(0,4) + " " + captured.slice(11,16) + " МСК" : "время чтения неизвестно";
+          $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text(String(item.key) + ": " + (snapshot ? "сохранённый снимок Jira от " + readTime : "снимка нет")));
+        });
+      }
       if (state.activityLoading) {
         $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text("Показан предыдущий срез; итоги обновятся после загрузки."));
         var $loading = $("<details/>").addClass("ujg-esi-activity-loading-details");
@@ -576,9 +627,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }
       return $coverage;
     }
-    function draw() {
+    function draw(preserveFilter) {
       drawVersion++;
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
+      var draft = preserveFilter ? pendingFilterDraft || filterDraftCapture && filterDraftCapture() : null;
+      pendingFilterDraft = null;
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
@@ -852,8 +905,17 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         resizeObserver.observe($scroll[0]);
       }
       $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
+      if (draft) {
+        var field = fields.filter(function(item) { return item.key === draft.key; })[0];
+        var anchor = $host.find("[data-activity-filter='" + draft.key + "'],[data-activity-hidden-filter='" + draft.key + "']")[0];
+        if (field && anchor) filterMenu(anchor,field,report,draft);
+      }
     }
-    return {resize:resize,dismissPopover:dismissPopover,updateProgress:function(state) {
+    return {resize:resize,dismissPopover:dismissPopover,prepareRender:function() {
+      pendingFilterDraft = filterDraftCapture ? filterDraftCapture() : null;
+      if (!pendingFilterDraft) closePopover();
+      closeManagement();
+    },updateProgress:function(state) {
       if (!$host || !$host[0] || !$.contains(document,$host[0]) || !scopedReport) return false;
       currentState=state;
       var $old=$host.find(".ujg-esi-activity-coverage"), open=$old.find(".ujg-esi-activity-loading-details").prop("open");
@@ -862,7 +924,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $old.replaceWith($next);
       $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
       return true;
-    },suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+    },suspend:function() { aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
       aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
@@ -894,7 +956,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           order.splice(from,1); order.splice(order.indexOf($target.attr("data-column"))+(from < to ? 1 : 0),0,action.id);
           saveLayout(); draw();
         }).on("pointercancel"+namespace,function() { drag = null; });
-      draw();
+      var scope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
+      var preserveFilter = renderedScope === scope;
+      renderedScope = scope;
+      draw(preserveFilter);
     }};
   }
   return {create:create};

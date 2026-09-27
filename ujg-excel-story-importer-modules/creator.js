@@ -1,4 +1,4 @@
-define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_remarkId"], function(config, description, remarkId) {
+define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_remarkId", "_ujgESI_deadlines"], function(config, description, remarkId, deadlines) {
   "use strict";
 
   function ajaxErrorText(err) {
@@ -87,6 +87,40 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (component) fields.components = [{ name: component }];
   }
 
+  function componentRequest(row, options) {
+    var raw = sourceValue(row, "Модуль");
+    var map = mappingMap(options, "moduleComponentMap", config.MODULE_COMPONENT_MAP);
+    var matches = Object.keys(map).filter(function(name) { return normalizedKey(name) === normalizedKey(raw); });
+    if (!raw || !matches.length) return { requested: false };
+    var values = matches.map(function(name) { return String(map[name] == null ? "" : map[name]).trim(); });
+    if (values.some(function(value) { return normalizedKey(value) !== normalizedKey(values[0]); })) {
+      return { error: "Неоднозначное сопоставление модуля: " + raw };
+    }
+    if (!values[0]) return { error: "Компонент не указан для модуля: " + raw };
+    return { requested: true, value: values[0] };
+  }
+
+  function resolveComponent(api, projectKey, request) {
+    if (!request.requested) return Promise.resolve(null);
+    if (!api || typeof api.getProjectComponents !== "function") {
+      return Promise.reject(new Error("Справочник компонентов Jira недоступен"));
+    }
+    return Promise.resolve().then(function() { return api.getProjectComponents(projectKey); }).catch(function(err) {
+      throw new Error("Справочник компонентов Jira недоступен: " + ajaxErrorText(err));
+    }).then(function(data) {
+      if (!Array.isArray(data)) throw new Error("Справочник компонентов Jira недоступен");
+      var target = normalizedKey(request.value);
+      var matches = data.filter(function(component) {
+        return component && /^[1-9][0-9]*$/.test(String(component.id || "").trim()) &&
+          String(component.name || "").trim() &&
+          (String(component.id).trim() === request.value || normalizedKey(component.name) === target);
+      });
+      if (!matches.length) throw new Error("Компонент недоступен в проекте " + projectKey + ": " + request.value);
+      if (matches.length !== 1) throw new Error("Неоднозначный компонент в проекте " + projectKey + ": " + request.value);
+      return { id: String(matches[0].id).trim() };
+    });
+  }
+
   function appendPriority(fields, row, options) {
     var priority = lookupMappedValue(mappingMap(options, "priorityMap", config.PRIORITY_MAP), sourceValue(row, "Приоритет"), false);
     if (priority) fields.priority = { name: priority };
@@ -94,6 +128,25 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   function priorityName(value) {
     return String(value && typeof value === "object" ? value.name || "" : value || "").trim();
+  }
+
+  function dueDateValue(row, options) {
+    var opts = options || {};
+    if (opts.omitDueDate === true) return null;
+    var source = deadlines.resolve(row, { columnMap: opts.columnMap });
+    if (Object.prototype.hasOwnProperty.call(opts, "dueDate")) {
+      var raw = opts.dueDate == null ? "" : String(opts.dueDate).trim();
+      if (!raw) {
+        if (source.candidates.length) throw new Error("Срок Excel не может быть пропущен без явного выбора «Не указывать срок»");
+        return null;
+      }
+      var explicit = deadlines.parseDate(opts.dueDate, { strict: true });
+      if (!explicit) throw new Error("Неверный срок: укажите дату DD.MM.YYYY или YYYY-MM-DD");
+      return explicit;
+    }
+    if (source.problem === "missing") return null;
+    if (source.problem) throw new Error("Срок Excel: " + (source.reasonLabel || source.problem) + (source.raw ? " (" + source.raw + ")" : ""));
+    return source.date;
   }
 
   function storyFields(row, options) {
@@ -111,6 +164,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     appendPriority(fields, row, opts);
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
+    var dueDate = dueDateValue(row, opts);
+    if (dueDate) fields.duedate = dueDate;
     return fields;
   }
 
@@ -118,15 +173,6 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     var field = config.EPIC_LINK_FIELD;
     var errors = err && err.responseJSON && err.responseJSON.errors ? err.responseJSON.errors : {};
     return !!(field && errors && Object.prototype.hasOwnProperty.call(errors, field));
-  }
-
-  function withoutEpicLinkOptions(opts) {
-    var out = {};
-    Object.keys(opts || {}).forEach(function(key) {
-      out[key] = opts[key];
-    });
-    out.omitEpicLink = true;
-    return out;
   }
 
   function epicSkippedWarning(epicKey) {
@@ -463,6 +509,13 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
     }
+    var request = componentRequest(row, opts);
+    if (request.error) return Promise.resolve({ ok: false, errors: [request.error] });
+    try {
+      initialFields = storyFields(row, opts);
+    } catch (err) {
+      return Promise.resolve({ ok: false, errors: [ajaxErrorText(err)] });
+    }
     function finishStory(res, warnings, epicLinkSkipped, submittedFields) {
       var key = createdKey(res);
       warnings = warnings || [];
@@ -515,14 +568,17 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
       });
     }
 
-    initialFields = storyFields(row, opts);
-    return Promise.resolve(api.createIssue({ fields: initialFields })).then(
+    return resolveComponent(api, opts.projectKey, request).then(function(component) {
+      if (component) initialFields.components = [component];
+      return api.createIssue({ fields: initialFields });
+    }).then(
       function(res) {
         return finishStory(res, [], false, initialFields);
       },
       function(err) {
         if (opts.epicKey && opts.omitEpicLink !== true && epicLinkRejected(err)) {
-          var retryFields = storyFields(row, withoutEpicLinkOptions(opts));
+          var retryFields = Object.assign({}, initialFields);
+          delete retryFields[config.EPIC_LINK_FIELD];
           return Promise.resolve(api.createIssue({ fields: retryFields })).then(
             function(res) {
               return finishStory(res, [epicSkippedWarning(opts.epicKey)], true, retryFields);

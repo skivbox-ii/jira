@@ -63,7 +63,9 @@ define("_ujgESI_componentSync", [], function() {
         var item={id:id,key:key,remarkId:source && source.remarkId || clean(columns["№"] || columns.ID),
           summary:clean(source && source.summary),sourceRaw:raw,sourceModule:normalized(raw),desiredName:desired,desiredId:"",oldIds:[],oldComponents:null,
           newComponents:desired?[desired]:[],eligible:false,selected:false,status:"skipped",message:""};
-        if (!keyOk(key) || key.split("-")[0] !== project) item.message="Ключ не относится к выбранному проекту";
+        if (!key) item.message="Ключ Jira не указан";
+        else if (!keyOk(key)) item.message="Неверный формат ключа Jira";
+        else if (key.split("-")[0] !== project) item.message="Ключ не относится к выбранному проекту";
         else if (!raw) item.message="Модуль Excel пуст";
         else if (mapping.ambiguous) {item.status="conflict";item.message="Неоднозначное сопоставление модуля";}
         else if (!desired) item.message="Модуль не сопоставлен с компонентом";
@@ -83,7 +85,9 @@ define("_ujgESI_componentSync", [], function() {
         plan.push(item);
       });
       state={open:true,loading:true,running:false,rows:plan,error:null,completed:0,total:plan.length};notify();
-      return Promise.resolve().then(function() { return api.getProjectComponents(project); }).then(function(data) {
+      return Promise.resolve().then(function() {
+        return plan.some(function(item) { return item.status === "loading"; }) ? api.getProjectComponents(project) : [];
+      }).then(function(data) {
         if (token !== generation) return;
         if (!Array.isArray(data)) throw new Error("catalog");
         data.forEach(function(c) { if (c && idOk(c.id) && clean(c.name)) {

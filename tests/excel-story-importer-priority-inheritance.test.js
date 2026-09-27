@@ -10,6 +10,7 @@ function creatorModule() {
     _ujgESI_config: loadAmdModule(path.join(moduleDir, "config.js"), {}),
     _ujgESI_description: loadAmdModule(path.join(moduleDir, "description.js"), {}),
     _ujgESI_remarkId: loadAmdModule(path.join(moduleDir, "remark-id.js"), {}),
+    _ujgESI_deadlines: loadAmdModule(path.join(moduleDir, "deadlines.js"), {}),
   });
 }
 

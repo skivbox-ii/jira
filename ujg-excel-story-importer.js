@@ -830,7 +830,8 @@ define("_ujgESI_deadlines", [], function() {
     var date = new Date(value + "T00:00:00Z");
     return isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : null;
   }
-  function parseDate(value) {
+  function parseDate(value, options) {
+    if (options && options.strict && (typeof value !== "string" || !/^(?:\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})$/.test(text(value)))) return null;
     if (value instanceof Date) return !isNaN(value.getTime()) ? iso(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()) : null;
     var raw = text(value), match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
     if (match) return iso(+match[1], +match[2], +match[3]);
@@ -925,7 +926,7 @@ define("_ujgESI_deadlines", [], function() {
     return result(values(importedColumns(details.description), options.columnMap, "jira-description"));
   }
 
-  return {resolve:resolve,importedColumns:importedColumns,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
+  return {resolve:resolve,parseDate:parseDate,importedColumns:importedColumns,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
 });
 
 /* === Module: due-date-sync.js === */
@@ -1180,7 +1181,9 @@ define("_ujgESI_componentSync", [], function() {
         var item={id:id,key:key,remarkId:source && source.remarkId || clean(columns["№"] || columns.ID),
           summary:clean(source && source.summary),sourceRaw:raw,sourceModule:normalized(raw),desiredName:desired,desiredId:"",oldIds:[],oldComponents:null,
           newComponents:desired?[desired]:[],eligible:false,selected:false,status:"skipped",message:""};
-        if (!keyOk(key) || key.split("-")[0] !== project) item.message="Ключ не относится к выбранному проекту";
+        if (!key) item.message="Ключ Jira не указан";
+        else if (!keyOk(key)) item.message="Неверный формат ключа Jira";
+        else if (key.split("-")[0] !== project) item.message="Ключ не относится к выбранному проекту";
         else if (!raw) item.message="Модуль Excel пуст";
         else if (mapping.ambiguous) {item.status="conflict";item.message="Неоднозначное сопоставление модуля";}
         else if (!desired) item.message="Модуль не сопоставлен с компонентом";
@@ -1200,7 +1203,9 @@ define("_ujgESI_componentSync", [], function() {
         plan.push(item);
       });
       state={open:true,loading:true,running:false,rows:plan,error:null,completed:0,total:plan.length};notify();
-      return Promise.resolve().then(function() { return api.getProjectComponents(project); }).then(function(data) {
+      return Promise.resolve().then(function() {
+        return plan.some(function(item) { return item.status === "loading"; }) ? api.getProjectComponents(project) : [];
+      }).then(function(data) {
         if (token !== generation) return;
         if (!Array.isArray(data)) throw new Error("catalog");
         data.forEach(function(c) { if (c && idOk(c.id) && clean(c.name)) {
@@ -1793,7 +1798,7 @@ define("_ujgESI_remarkId", [], function() {
 });
 
 /* === Module: creator.js === */
-define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_remarkId"], function(config, description, remarkId) {
+define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_remarkId", "_ujgESI_deadlines"], function(config, description, remarkId, deadlines) {
   "use strict";
 
   function ajaxErrorText(err) {
@@ -1882,6 +1887,40 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (component) fields.components = [{ name: component }];
   }
 
+  function componentRequest(row, options) {
+    var raw = sourceValue(row, "Модуль");
+    var map = mappingMap(options, "moduleComponentMap", config.MODULE_COMPONENT_MAP);
+    var matches = Object.keys(map).filter(function(name) { return normalizedKey(name) === normalizedKey(raw); });
+    if (!raw || !matches.length) return { requested: false };
+    var values = matches.map(function(name) { return String(map[name] == null ? "" : map[name]).trim(); });
+    if (values.some(function(value) { return normalizedKey(value) !== normalizedKey(values[0]); })) {
+      return { error: "Неоднозначное сопоставление модуля: " + raw };
+    }
+    if (!values[0]) return { error: "Компонент не указан для модуля: " + raw };
+    return { requested: true, value: values[0] };
+  }
+
+  function resolveComponent(api, projectKey, request) {
+    if (!request.requested) return Promise.resolve(null);
+    if (!api || typeof api.getProjectComponents !== "function") {
+      return Promise.reject(new Error("Справочник компонентов Jira недоступен"));
+    }
+    return Promise.resolve().then(function() { return api.getProjectComponents(projectKey); }).catch(function(err) {
+      throw new Error("Справочник компонентов Jira недоступен: " + ajaxErrorText(err));
+    }).then(function(data) {
+      if (!Array.isArray(data)) throw new Error("Справочник компонентов Jira недоступен");
+      var target = normalizedKey(request.value);
+      var matches = data.filter(function(component) {
+        return component && /^[1-9][0-9]*$/.test(String(component.id || "").trim()) &&
+          String(component.name || "").trim() &&
+          (String(component.id).trim() === request.value || normalizedKey(component.name) === target);
+      });
+      if (!matches.length) throw new Error("Компонент недоступен в проекте " + projectKey + ": " + request.value);
+      if (matches.length !== 1) throw new Error("Неоднозначный компонент в проекте " + projectKey + ": " + request.value);
+      return { id: String(matches[0].id).trim() };
+    });
+  }
+
   function appendPriority(fields, row, options) {
     var priority = lookupMappedValue(mappingMap(options, "priorityMap", config.PRIORITY_MAP), sourceValue(row, "Приоритет"), false);
     if (priority) fields.priority = { name: priority };
@@ -1889,6 +1928,25 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 
   function priorityName(value) {
     return String(value && typeof value === "object" ? value.name || "" : value || "").trim();
+  }
+
+  function dueDateValue(row, options) {
+    var opts = options || {};
+    if (opts.omitDueDate === true) return null;
+    var source = deadlines.resolve(row, { columnMap: opts.columnMap });
+    if (Object.prototype.hasOwnProperty.call(opts, "dueDate")) {
+      var raw = opts.dueDate == null ? "" : String(opts.dueDate).trim();
+      if (!raw) {
+        if (source.candidates.length) throw new Error("Срок Excel не может быть пропущен без явного выбора «Не указывать срок»");
+        return null;
+      }
+      var explicit = deadlines.parseDate(opts.dueDate, { strict: true });
+      if (!explicit) throw new Error("Неверный срок: укажите дату DD.MM.YYYY или YYYY-MM-DD");
+      return explicit;
+    }
+    if (source.problem === "missing") return null;
+    if (source.problem) throw new Error("Срок Excel: " + (source.reasonLabel || source.problem) + (source.raw ? " (" + source.raw + ")" : ""));
+    return source.date;
   }
 
   function storyFields(row, options) {
@@ -1906,6 +1964,8 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     appendPriority(fields, row, opts);
     appendAssignee(fields, opts.assignee);
     appendTimetracking(fields, opts.originalEstimate, opts.remainingEstimate);
+    var dueDate = dueDateValue(row, opts);
+    if (dueDate) fields.duedate = dueDate;
     return fields;
   }
 
@@ -1913,15 +1973,6 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     var field = config.EPIC_LINK_FIELD;
     var errors = err && err.responseJSON && err.responseJSON.errors ? err.responseJSON.errors : {};
     return !!(field && errors && Object.prototype.hasOwnProperty.call(errors, field));
-  }
-
-  function withoutEpicLinkOptions(opts) {
-    var out = {};
-    Object.keys(opts || {}).forEach(function(key) {
-      out[key] = opts[key];
-    });
-    out.omitEpicLink = true;
-    return out;
   }
 
   function epicSkippedWarning(epicKey) {
@@ -2258,6 +2309,13 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
     if (!api || typeof api.createIssue !== "function") {
       return Promise.resolve({ ok: false, errors: ["Jira API is not available"] });
     }
+    var request = componentRequest(row, opts);
+    if (request.error) return Promise.resolve({ ok: false, errors: [request.error] });
+    try {
+      initialFields = storyFields(row, opts);
+    } catch (err) {
+      return Promise.resolve({ ok: false, errors: [ajaxErrorText(err)] });
+    }
     function finishStory(res, warnings, epicLinkSkipped, submittedFields) {
       var key = createdKey(res);
       warnings = warnings || [];
@@ -2310,14 +2368,17 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
       });
     }
 
-    initialFields = storyFields(row, opts);
-    return Promise.resolve(api.createIssue({ fields: initialFields })).then(
+    return resolveComponent(api, opts.projectKey, request).then(function(component) {
+      if (component) initialFields.components = [component];
+      return api.createIssue({ fields: initialFields });
+    }).then(
       function(res) {
         return finishStory(res, [], false, initialFields);
       },
       function(err) {
         if (opts.epicKey && opts.omitEpicLink !== true && epicLinkRejected(err)) {
-          var retryFields = storyFields(row, withoutEpicLinkOptions(opts));
+          var retryFields = Object.assign({}, initialFields);
+          delete retryFields[config.EPIC_LINK_FIELD];
           return Promise.resolve(api.createIssue({ fields: retryFields })).then(
             function(res) {
               return finishStory(res, [epicSkippedWarning(opts.epicKey)], true, retryFields);
@@ -6863,6 +6924,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
+    var filterDraftCapture, pendingFilterDraft, renderedScope;
     var resizeObserver, observedViewportWidth;
     var $managementDialog, managementAnchor, bodyOverflow, previewTimer, previewCloseTimer;
     var componentSelection = null, componentKey, componentNames = Object.create(null), fullReport, scopedReport, lastAiReport;
@@ -6994,6 +7056,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function closePopover(focus) {
       clearTimeout(previewTimer); clearTimeout(previewCloseTimer);
       if ($popover) $popover.remove(); $popover = null;
+      filterDraftCapture = null;
       if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; popoverAnchor.focus(); suppressPopoverFocus = false; } }
       popoverAnchor = null;
     }
@@ -7173,11 +7236,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         return comparison * (sort.descending ? -1 : 1);
       });
     }
-    function filterMenu(anchor, field, report) {
+    function filterMenu(anchor, field, report, draft) {
       var values = Object.create(null), options;
       (report.groups || []).forEach(function(group) { (group.events || []).forEach(function(event) { [].concat((field.filterValue || field.value)(event,group)).forEach(function(value) { values[value] = true; }); }); });
       options = Object.keys(values).sort(function(a,b) { return a.localeCompare(b,"ru"); });
-      var selected = Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
+      var selected = draft ? draft.selected.slice() : Array.isArray(filters[field.key]) ? filters[field.key].slice() : options.slice();
       var isPerson = field.key === "assignee" || field.key === "author";
       var $box = popup(anchor,"Фильтр: " + field.title,"ujg-esi-grid-menu ujg-esi-activity-filter-menu",options.length > 8 ? 440 : 360);
       [[false,"ArrowDownAZ","Сортировка по возрастанию"],[true,"ArrowUpAZ","Сортировка по убыванию"]].forEach(function(item) {
@@ -7237,7 +7300,33 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         filters[field.key] = selected.slice();
         saveLayout(); draw();
       }));
-      $box.append($actions); update(); placePopover(anchor); $search.trigger("focus");
+      $box.append($actions);
+      if (draft) $search.val(draft.search);
+      update(); placePopover(anchor);
+      filterDraftCapture = function() {
+        var active = document.activeElement, focus = null;
+        if ($.contains($box[0],active)) {
+          if (active === $search[0]) focus = {kind:"search"};
+          else if (active === $all[0]) focus = {kind:"all"};
+          else {
+            var candidate = candidates.filter(function(item) { return item.check[0] === active || item.row.find("button")[0] === active; })[0];
+            if (candidate) focus = {kind:candidate.check[0] === active ? "check" : "only",value:candidate.value};
+          }
+        }
+        return {key:field.key,selected:selected.slice(),search:String($search.val() || ""),focus:focus,
+          start:$search[0].selectionStart,end:$search[0].selectionEnd,scroll:$box.scrollTop(),listScroll:$list.scrollTop()};
+      };
+      if (draft) {
+        var target = draft.focus && (draft.focus.kind === "search" ? $search[0] : draft.focus.kind === "all" ? $all[0] :
+          (candidates.filter(function(item) { return item.value === draft.focus.value; })[0] || {})[draft.focus.kind === "check" ? "check" : "row"]);
+        if (target && target.jquery) target = draft.focus.kind === "only" ? target.find("button")[0] : target[0];
+        if (target && $(target).closest("[hidden]").length) target = $search[0];
+        if (target) {
+          target.focus();
+          if (target === $search[0] && draft.start != null) target.setSelectionRange(draft.start,draft.end);
+        }
+        $box.scrollTop(draft.scroll); $list.scrollTop(draft.listScroll);
+      } else $search.trigger("focus");
     }
     function eventPopover(anchor, title, events, state) {
       var $box = popup(anchor,title,"ujg-esi-activity-event-popover",520);
@@ -7316,10 +7405,33 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var coverage = report.coverage || {};
       var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
       var progress = state.activityProgress || {};
+      var failures = state.activityLoading && state.activityError && state.activityPreviousFailures || progress.failures || [], saved = Object.create(null);
+      (state.rows || []).forEach(function(row) {
+        [row.storyDetails,row.activityDetails].concat(row.childStatuses || []).forEach(function(detail) {
+          if (detail && detail.key && detail.activity) saved[String(detail.key).toUpperCase()] = detail.activity;
+        });
+      });
+      var retained = (coverage.complete || 0) > 0 || !!(report.events || []).length || (state.rows || []).some(function(row) {
+        return [row.storyDetails,row.activityDetails].concat(row.childStatuses || []).some(function(detail) { return !!(detail && detail.activity); });
+      });
+      var failedRetained = failures.length ? failures.some(function(item) { return !!saved[String(item.key).toUpperCase()]; }) : retained;
+      var someFresh = Number(progress.completed) > failures.length;
       var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
         (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
-        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
+        state.activityError && !retained ? "История не загружена · проверено " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач" :
+        (state.activityError && !failedRetained ? "История загружена частично · проверено " : state.activityError && !someFresh ? "Ранее проверена история " : "Проверена история ") + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
       $coverage.append($("<span/>").text(coverageText));
+      if (state.activityError) {
+        $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text(
+          (failedRetained ? someFresh ? "Часть сохранённых данных не обновлена; показан предыдущий срез для задач с ошибкой. " : "Показан предыдущий срез; обновление не удалось. " : "") +
+          (retained ? report.asOf ? "Граница отображаемого отчёта: " + cutoff(report) + " МСК." : "Время среза не подтверждено." : "")));
+        failures.forEach(function(item) {
+          var snapshot = saved[String(item.key).toUpperCase()], at = snapshot && timestamp(snapshot.capturedAt);
+          var captured = isFinite(at) ? new Date(at + 3 * 3600000).toISOString() : "";
+          var readTime = captured ? captured.slice(8,10) + "." + captured.slice(5,7) + "." + captured.slice(0,4) + " " + captured.slice(11,16) + " МСК" : "время чтения неизвестно";
+          $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text(String(item.key) + ": " + (snapshot ? "сохранённый снимок Jira от " + readTime : "снимка нет")));
+        });
+      }
       if (state.activityLoading) {
         $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text("Показан предыдущий срез; итоги обновятся после загрузки."));
         var $loading = $("<details/>").addClass("ujg-esi-activity-loading-details");
@@ -7355,9 +7467,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }
       return $coverage;
     }
-    function draw() {
+    function draw(preserveFilter) {
       drawVersion++;
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
+      var draft = preserveFilter ? pendingFilterDraft || filterDraftCapture && filterDraftCapture() : null;
+      pendingFilterDraft = null;
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
@@ -7631,8 +7745,17 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         resizeObserver.observe($scroll[0]);
       }
       $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
+      if (draft) {
+        var field = fields.filter(function(item) { return item.key === draft.key; })[0];
+        var anchor = $host.find("[data-activity-filter='" + draft.key + "'],[data-activity-hidden-filter='" + draft.key + "']")[0];
+        if (field && anchor) filterMenu(anchor,field,report,draft);
+      }
     }
-    return {resize:resize,dismissPopover:dismissPopover,updateProgress:function(state) {
+    return {resize:resize,dismissPopover:dismissPopover,prepareRender:function() {
+      pendingFilterDraft = filterDraftCapture ? filterDraftCapture() : null;
+      if (!pendingFilterDraft) closePopover();
+      closeManagement();
+    },updateProgress:function(state) {
       if (!$host || !$host[0] || !$.contains(document,$host[0]) || !scopedReport) return false;
       currentState=state;
       var $old=$host.find(".ujg-esi-activity-coverage"), open=$old.find(".ujg-esi-activity-loading-details").prop("open");
@@ -7641,7 +7764,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $old.replaceWith($next);
       $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
       return true;
-    },suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+    },suspend:function() { aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
       aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
@@ -7673,7 +7796,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           order.splice(from,1); order.splice(order.indexOf($target.attr("data-column"))+(from < to ? 1 : 0),0,action.id);
           saveLayout(); draw();
         }).on("pointercancel"+namespace,function() { drag = null; });
-      draw();
+      var scope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
+      var preserveFilter = renderedScope === scope;
+      renderedScope = scope;
+      draw(preserveFilter);
     }};
   }
   return {create:create};
@@ -9717,6 +9843,22 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendConfirmControl($fields, "Оставшееся время", appendTextInput("ujg-esi-confirm-remaining", dialog.remainingEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("remainingEstimate", value);
     }));
+    var dueSource = dialog.dueSource || {}, $due = $("<div/>");
+    $due.append($("<input/>").attr({type:"date","aria-label":"Срок исполнения (Due date)"}).addClass("ujg-esi-confirm-due-date")
+      .val(dialog.dueDate || "").prop("disabled",!!dialog.omitDueDate).on("input change",function() {
+        $due.find(".ujg-esi-confirm-due-error").remove();
+        if (services && services.onDialogFieldChange) services.onDialogFieldChange("dueDate",this.value);
+      }));
+    var candidates = dueSource.candidates && dueSource.candidates.length ? dueSource.candidates : dueSource.raw ? [dueSource] : [];
+    $due.append($("<div/>").addClass("ujg-esi-confirm-due-source").text(candidates.length ?
+      "Источник Excel: " + candidates.map(function(item) { return (item.field || "Срок") + ": " + item.raw; }).join("; ") : "Источник Excel: срок не указан"));
+    if (dueSource.problem && dueSource.problem !== "missing") $due.append($("<div/>").addClass("ujg-esi-confirm-due-warning").text(dueSource.reasonLabel || "Не удалось распознать срок"));
+    $due.append($("<label/>").addClass("ujg-esi-confirm-due-omit").append($("<input/>").attr({type:"checkbox","aria-label":"Не указывать срок"})
+      .prop("checked",!!dialog.omitDueDate).on("change",function() {
+        if (services && services.onDialogFieldChange) services.onDialogFieldChange("omitDueDate",this.checked);
+      }),$("<span/>").text("Не указывать срок")));
+    if (dialog.dueError) $due.append($("<div/>").addClass("ujg-esi-confirm-due-error").attr("role","alert").text(dialog.dueError));
+    appendConfirmControl($fields, "Срок исполнения (Due date)", $due);
     if (dialog.childTasks && dialog.childTasks.length) appendConfirmControl($fields, "Связь", $("<span/>").text("child of Story"));
     } else {
       $fields.addClass("ujg-esi-confirm-parent");
@@ -10086,6 +10228,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $(document).off("click.ujgEsiOwner");
     $(document).off("click.ujgEsiSummary");
     if (activityView && (state || {}).reportView !== "activity" && activityView.suspend) activityView.suspend();
+    else if (activityView && activityView.prepareRender) activityView.prepareRender();
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     if ($dueHost) $dueHost.detach();
@@ -10220,7 +10363,8 @@ define("_ujgESI_main", [
   "_ujgESI_dueDateSync",
   "_ujgESI_componentSync",
   "_ujgESI_activityLoader",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule) {
+  "_ujgESI_deadlines",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines) {
   "use strict";
 
   function searchErrorText(err) {
@@ -11223,6 +11367,7 @@ define("_ujgESI_main", [
       activityLoading: false,
       activityProgress: null,
       activityError: "",
+      activityPreviousFailures: null,
       createSubtasks: true,
       loading: false,
       error: "",
@@ -11331,6 +11476,7 @@ define("_ujgESI_main", [
       onComplete:function(progress) {
         clearActivityProgressPaint();
         state.activityLoading = false;
+        state.activityPreviousFailures = null;
         state.activityError = progress.failures.length ? "Не удалось загрузить историю: " + progress.failures.map(function(item) { return item.key + ": " + item.message; }).join("; ") : "";
         render();
       }
@@ -11389,6 +11535,7 @@ define("_ujgESI_main", [
       state.activityLoading = false;
       state.activityError = "";
       state.activityProgress = null;
+      state.activityPreviousFailures = null;
     }
 
     function onLoadActivityHistory(options) {
@@ -11425,7 +11572,7 @@ define("_ujgESI_main", [
         return;
       }
       state.activityLoading = true;
-      state.activityError = "";
+      state.activityPreviousFailures = state.activityError ? state.activityPreviousFailures || (state.activityProgress && (state.activityProgress.failures || []).slice()) : null;
       activityTargets = targets;
       activityLoader.select(keys);
     }
@@ -12319,6 +12466,8 @@ define("_ujgESI_main", [
 
     function buildCreateDialog(row, index) {
       var settings = normalizeMappingSettings(state.mappingSettings);
+      var columnMap = copyColumnMap(sourceImportSettings().columnMap);
+      var dueSource = deadlines ? deadlines.resolve(row, {columnMap:columnMap}) : {date:null,raw:"",problem:"missing",reasonLabel:"Срок не указан",candidates:[]};
       var roles = copyRoles(settings.roles);
       var summary = numberedSummary(row, row && row.summary != null ? row.summary : "");
       var estimate = state.createSubtasks !== false ? storyEstimate(roles) : "1h";
@@ -12339,6 +12488,13 @@ define("_ujgESI_main", [
         assignee: row && row.ownerAssignee ? copyAssignee(row.ownerAssignee) : assigneeFromSettings(settings.storyAssigneeId, settings.storyAssignee),
         originalEstimate: estimate,
         remainingEstimate: estimate,
+        columnMap: columnMap,
+        dueSource: dueSource,
+        dueDate: dueSource.date || "",
+        dueDateEdited: false,
+        dueOriginalHasSource: !!(dueSource.candidates || []).length,
+        omitDueDate: false,
+        dueError: "",
         createSubtasks: state.createSubtasks !== false,
         childTasks: state.createSubtasks !== false ? roles.map(function(role) {
           return {
@@ -13394,6 +13550,25 @@ define("_ujgESI_main", [
     function createConfirmedRow(dialog) {
       var row = dialog ? state.rows[dialog.rowIndex] : null;
       if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "story" || dialog.scopeProjectKey !== state.projectKey || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      var dueDate = dialog.dueDate != null ? String(dialog.dueDate).trim() : "";
+      var currentDueSource = deadlines ? deadlines.resolve(row,{columnMap:dialog.columnMap}) : dialog.dueSource;
+      if (!dialog.omitDueDate && !dialog.dueDateEdited && JSON.stringify(currentDueSource) !== JSON.stringify(dialog.dueSource)) {
+        dialog.dueSource = currentDueSource;
+        dialog.dueDate = currentDueSource.date || "";
+        dialog.dueError = currentDueSource.problem && currentDueSource.problem !== "missing"
+          ? "Срок Excel изменился: " + currentDueSource.reasonLabel + ". Исправьте дату или выберите «Не указывать срок»."
+          : "Срок Excel изменился. Проверьте дату и подтвердите создание ещё раз.";
+        render();
+        return;
+      }
+      var parsedDue = dueDate && deadlines ? deadlines.parseDate(dueDate,{strict:true}) : null;
+      if (!dialog.omitDueDate && (!parsedDue && (dueDate || dialog.dueOriginalHasSource || currentDueSource && currentDueSource.problem !== "missing"))) {
+        dialog.dueSource = currentDueSource;
+        dialog.dueError = dueDate ? "Укажите корректную календарную дату срока." : "Укажите срок или выберите «Не указывать срок».";
+        render();
+        return;
+      }
+      dialog.dueError = "";
       createInFlight = true;
       row.status = "creating";
       row.errors = [];
@@ -13412,6 +13587,9 @@ define("_ujgESI_main", [
           assignee: dialog.assignee,
           originalEstimate: dialog.originalEstimate,
           remainingEstimate: dialog.remainingEstimate,
+          dueDate: parsedDue || undefined,
+          omitDueDate: !!dialog.omitDueDate || !parsedDue,
+          columnMap: dialog.columnMap,
           sourceRows: dialog.sourceRows,
           createSubtasks: dialog.createSubtasks,
           childTasks: dialog.childTasks,
@@ -13598,6 +13776,14 @@ define("_ujgESI_main", [
         dialog.originalEstimate = value != null ? String(value) : "";
       } else if (key === "remainingEstimate") {
         dialog.remainingEstimate = value != null ? String(value) : "";
+      } else if (key === "dueDate") {
+        dialog.dueDate = value != null ? String(value) : "";
+        dialog.dueDateEdited = true;
+        dialog.dueError = "";
+      } else if (key === "omitDueDate") {
+        dialog.omitDueDate = !!value;
+        dialog.dueError = "";
+        shouldRender = true;
       }
       if (shouldRender) render();
     }

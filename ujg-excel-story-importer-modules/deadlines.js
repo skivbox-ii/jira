@@ -12,7 +12,8 @@ define("_ujgESI_deadlines", [], function() {
     var date = new Date(value + "T00:00:00Z");
     return isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : null;
   }
-  function parseDate(value) {
+  function parseDate(value, options) {
+    if (options && options.strict && (typeof value !== "string" || !/^(?:\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})$/.test(text(value)))) return null;
     if (value instanceof Date) return !isNaN(value.getTime()) ? iso(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()) : null;
     var raw = text(value), match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
     if (match) return iso(+match[1], +match[2], +match[3]);
@@ -107,5 +108,5 @@ define("_ujgESI_deadlines", [], function() {
     return result(values(importedColumns(details.description), options.columnMap, "jira-description"));
   }
 
-  return {resolve:resolve,importedColumns:importedColumns,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
+  return {resolve:resolve,parseDate:parseDate,importedColumns:importedColumns,reasonLabel:function(code) { return reasonLabels[code] || "Причина не определена"; }};
 });

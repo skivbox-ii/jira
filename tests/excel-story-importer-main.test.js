@@ -2,9 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-const loadAmdModule = require("./helpers/load-amd-module");
+const loadRawAmdModule = require("./helpers/load-amd-module");
 
 const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules");
+const DEADLINES = loadRawAmdModule(path.join(MODULE_DIR,"deadlines.js"),{});
+const loadAmdModule = (file,deps,globals) => loadRawAmdModule(file,file === path.join(MODULE_DIR,"main.js")
+  ? Object.assign({_ujgESI_deadlines:DEADLINES},deps) : deps,globals);
 const CONFIG = {
   STORY_ISSUE_TYPE: "Story",
   LLM_CONFIG_STORAGE_KEY: "ujg-test-llm",
@@ -55,6 +58,166 @@ function createLocalStorage() {
     },
   };
 }
+
+function dueDialogHarness(sourceColumns, createResult) {
+  let callbacks, state;
+  const calls=[];
+  const rendering={init(_container,services){callbacks=services;},render(value){state=value;}};
+  const creator={createRow(_api,row,options){calls.push({row,options});return Promise.resolve(createResult || {ok:true,createdKey:"P-50",errors:[]});}};
+  const deadlines=loadAmdModule(path.join(MODULE_DIR,"deadlines.js"),{});
+  const Gadget=loadAmdModule(path.join(MODULE_DIR,"main.js"),{
+    jquery:()=>({length:1}),_ujgESI_config:CONFIG,_ujgESI_api:{getProjects:()=>Promise.resolve([]),getProjectEpics:()=>Promise.resolve([])},
+    "_ujgESI_excel-loader":{},_ujgESI_parser:{},_ujgESI_creator:creator,_ujgESI_mappingStore:null,
+    _ujgESI_xlsxPatcher:null,_ujgESI_rendering:rendering,_ujgShared_llmClient:null,_ujgESI_teams:null,
+    _ujgESI_activity:null,_ujgESI_dueDateSync:null,_ujgESI_componentSync:null,
+    _ujgESI_activityLoader:require("./helpers/import-activity-loader"),_ujgESI_deadlines:deadlines,
+  });
+  new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})})});
+  state.projectKey="P";state.viewMode="excel";state.sourceColumnSettings={columnMap:{deadline:"Мой срок"}};
+  state.rows=[{id:"row",summary:"Story",status:"ready",sourceColumns:Object.assign({},sourceColumns)}];
+  return {get callbacks(){return callbacks;},get state(){return state;},calls};
+}
+
+test("new Story Due draft resolves mapped Excel source and passes explicit date", async () => {
+  const x=dueDialogHarness({"Мой срок":"29.09.2026"});
+  x.callbacks.onCreateRow(0);
+  assert.equal(x.state.createDialog.dueDate,"2026-09-29");
+  assert.equal(x.state.createDialog.dueSource.raw,"29.09.2026");
+  x.callbacks.onDialogFieldChange("dueDate","2026-10-01");
+  x.callbacks.onConfirmCreate(); await flush(); await flush();
+  assert.equal(x.calls[0].options.dueDate,"2026-10-01");
+  assert.equal(x.calls[0].options.omitDueDate,false);
+  assert.equal(x.calls[0].options.columnMap.deadline,"Мой срок");
+  assert.equal(x.state.rows[0].sourceColumns["Мой срок"],"29.09.2026");
+});
+
+test("invalid and conflicting nonempty source require correction or explicit omission", async () => {
+  for (const source of [{"Мой срок":"31.02.2026"},{"Мой срок":"29.09.2026","Мой срок (колонка 2)":"30.09.2026"}]) {
+    const x=dueDialogHarness(source);
+    x.callbacks.onCreateRow(0);
+    assert.ok(x.state.createDialog.dueSource.problem);
+    x.callbacks.onConfirmCreate();
+    assert.equal(x.calls.length,0);
+    assert.ok(x.state.createDialog.dueError);
+    x.callbacks.onDialogFieldChange("dueDate","2026-10-02");
+    x.callbacks.onConfirmCreate(); await flush(); await flush();
+    assert.equal(x.calls[0].options.dueDate,"2026-10-02");
+  }
+  const x=dueDialogHarness({"Мой срок":"31.02.2026"});
+  x.callbacks.onCreateRow(0);x.callbacks.onDialogFieldChange("omitDueDate",true);
+  x.callbacks.onConfirmCreate(); await flush(); await flush();
+  assert.equal(x.calls[0].options.omitDueDate,true);
+});
+
+test("clearing a nonempty source date is not omission and cancel leaves Excel untouched", () => {
+  const x=dueDialogHarness({"Мой срок":"29.09.2026"});
+  x.callbacks.onCreateRow(0);x.callbacks.onDialogFieldChange("dueDate","");
+  x.callbacks.onConfirmCreate();
+  assert.equal(x.calls.length,0);
+  assert.ok(x.state.createDialog.dueError);
+  x.callbacks.onCancelCreate();
+  assert.equal(x.state.rows[0].sourceColumns["Мой срок"],"29.09.2026");
+});
+test("editing an empty Excel deadline during confirmation cannot silently omit it", () => {
+  const x=dueDialogHarness({"Мой срок":""});
+  x.callbacks.onCreateRow(0);
+  x.state.rows[0].sourceColumns["Мой срок"]="31.02.2026";
+  x.callbacks.onConfirmCreate();
+  assert.equal(x.calls.length,0);
+  assert.ok(x.state.createDialog.dueError);
+});
+test("changed valid Excel deadline replaces untouched autofill and requires reconfirmation", async () => {
+  const x=dueDialogHarness({"Мой срок":"29.09.2026"});
+  x.callbacks.onCreateRow(0);
+  x.callbacks.onDialogSourceChange(x.state.createDialog.sourceRows.findIndex(item=>item.name==="Мой срок"),"30.09.2026");
+  assert.equal(x.state.createDialog.dueDateEdited,false);
+  x.callbacks.onConfirmCreate();
+  assert.equal(x.calls.length,0);
+  assert.equal(x.state.createDialog.dueDate,"2026-09-30");
+  assert.equal(x.state.createDialog.dueSource.raw,"30.09.2026");
+  assert.match(x.state.createDialog.dueError,/изменился/i);
+  x.callbacks.onConfirmCreate();await flush();await flush();
+  assert.equal(x.calls[0].options.dueDate,"2026-09-30");
+});
+test("changed invalid or conflicting Excel deadline cannot use stale autofill", () => {
+  for (const changed of [{"Мой срок":"31.02.2026"},{"Мой срок":"29.09.2026","Мой срок (колонка 2)":"30.09.2026"}]) {
+    const x=dueDialogHarness({"Мой срок":"29.09.2026"});
+    x.callbacks.onCreateRow(0);
+    x.callbacks.onDialogSourceChange(x.state.createDialog.sourceRows.findIndex(item=>item.name==="Мой срок"),changed["Мой срок"]);
+    if (changed["Мой срок (колонка 2)"]) x.state.rows[0].sourceColumns["Мой срок (колонка 2)"]=changed["Мой срок (колонка 2)"];
+    x.callbacks.onConfirmCreate();
+    assert.equal(x.calls.length,0);
+    assert.equal(x.state.createDialog.dueDate,"");
+    assert.ok(x.state.createDialog.dueSource.problem);
+    assert.ok(x.state.createDialog.dueError);
+    x.callbacks.onConfirmCreate();
+    assert.equal(x.calls.length,0);
+  }
+});
+test("manual Due override remains explicit after Excel source changes", async () => {
+  const x=dueDialogHarness({"Мой срок":"29.09.2026"});
+  x.callbacks.onCreateRow(0);
+  x.callbacks.onDialogFieldChange("dueDate","2026-10-02");
+  x.state.rows[0].sourceColumns["Мой срок"]="31.02.2026";
+  x.callbacks.onConfirmCreate();await flush();await flush();
+  assert.equal(x.calls[0].options.dueDate,"2026-10-02");
+});
+test("clearing an originally populated Excel deadline still requires explicit omission", () => {
+  const x=dueDialogHarness({"Мой срок":"29.09.2026"});
+  x.callbacks.onCreateRow(0);
+  x.state.rows[0].sourceColumns["Мой срок"]="";
+  x.callbacks.onConfirmCreate();
+  assert.equal(x.calls.length,0);
+  assert.equal(x.state.createDialog.dueDate,"");
+  x.callbacks.onConfirmCreate();
+  assert.equal(x.calls.length,0);
+  x.callbacks.onDialogFieldChange("omitDueDate",true);
+  x.callbacks.onConfirmCreate();
+  assert.equal(x.state.createDialog,null);
+});
+
+test("empty source may omit Due and Jira rejection remains visible", async () => {
+  const empty=dueDialogHarness({});empty.callbacks.onCreateRow(0);
+  empty.callbacks.onConfirmCreate();await flush();await flush();
+  assert.equal(empty.calls[0].options.omitDueDate,true);
+  const failed=dueDialogHarness({"Мой срок":"29.09.2026"},{ok:false,errors:["duedate rejected"]});
+  failed.callbacks.onCreateRow(0);failed.callbacks.onConfirmCreate();await flush();await flush();
+  assert.equal(failed.calls[0].options.dueDate,"2026-09-29");
+  assert.deepEqual(failed.state.rows[0].errors,["duedate rejected"]);
+  assert.equal(failed.state.rows[0].status,"failed");
+});
+
+test("history retry retains previous failure until a successful final read", async () => {
+  let callbacks,state,resolveRead;
+  const api={getProjects:()=>Promise.resolve([]),getIssueWithHistory:()=>new Promise(resolve=>{resolveRead=resolve;})};
+  const rendering={init(_container,services){callbacks=services;},render(value){state=value;},renderActivityProgress(){return true;}};
+  const Gadget=loadAmdModule(path.join(MODULE_DIR,"main.js"),{
+    jquery:()=>({length:1}),_ujgESI_config:CONFIG,_ujgESI_api:api,"_ujgESI_excel-loader":{},
+    _ujgESI_parser:{},_ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:null,
+    _ujgESI_rendering:rendering,_ujgShared_llmClient:null,_ujgESI_teams:null,
+    _ujgESI_activity:{capture:()=>({complete:true,capturedAt:"2026-09-27T08:00:00Z"})},
+    _ujgESI_dueDateSync:null,_ujgESI_componentSync:null,
+    _ujgESI_activityLoader:require("./helpers/import-activity-loader"),
+  });
+  new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})})});
+  await flush();
+  state.rows=[{id:"row",jiraKey:"P-1",storyDetails:{key:"P-1",activity:{complete:true,capturedAt:"2026-09-27T07:00:00Z"}}}];
+  state.activityError="Не удалось загрузить историю: P-1: previous failure";
+  state.activityProgress={completed:1,total:1,failures:[{key:"P-1",message:"previous failure"}]};
+  callbacks.onLoadActivityHistory();
+  assert.equal(state.activityLoading,true);
+  assert.match(state.activityError,/previous failure/);
+  assert.equal(state.activityPreviousFailures[0].key,"P-1");
+  await flush();
+  assert.equal(state.activityPreviousFailures[0].key,"P-1");
+  assert.equal(state.activityProgress.failures.length,0,"new attempt progress stays separate");
+  callbacks.onLoadActivityHistory();
+  assert.equal(state.activityPreviousFailures[0].key,"P-1","reselecting during retry keeps the earlier failure");
+  resolveRead({key:"P-1",fields:{created:"2026-09-01"}});
+  await flush();await flush();
+  assert.equal(state.activityLoading,false);
+  assert.equal(state.activityError,"");
+});
 
 test("row owner selection uses the source index after Jira page two", async function () {
   let callbacks, state;

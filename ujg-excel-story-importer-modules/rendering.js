@@ -1460,6 +1460,22 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendConfirmControl($fields, "Оставшееся время", appendTextInput("ujg-esi-confirm-remaining", dialog.remainingEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("remainingEstimate", value);
     }));
+    var dueSource = dialog.dueSource || {}, $due = $("<div/>");
+    $due.append($("<input/>").attr({type:"date","aria-label":"Срок исполнения (Due date)"}).addClass("ujg-esi-confirm-due-date")
+      .val(dialog.dueDate || "").prop("disabled",!!dialog.omitDueDate).on("input change",function() {
+        $due.find(".ujg-esi-confirm-due-error").remove();
+        if (services && services.onDialogFieldChange) services.onDialogFieldChange("dueDate",this.value);
+      }));
+    var candidates = dueSource.candidates && dueSource.candidates.length ? dueSource.candidates : dueSource.raw ? [dueSource] : [];
+    $due.append($("<div/>").addClass("ujg-esi-confirm-due-source").text(candidates.length ?
+      "Источник Excel: " + candidates.map(function(item) { return (item.field || "Срок") + ": " + item.raw; }).join("; ") : "Источник Excel: срок не указан"));
+    if (dueSource.problem && dueSource.problem !== "missing") $due.append($("<div/>").addClass("ujg-esi-confirm-due-warning").text(dueSource.reasonLabel || "Не удалось распознать срок"));
+    $due.append($("<label/>").addClass("ujg-esi-confirm-due-omit").append($("<input/>").attr({type:"checkbox","aria-label":"Не указывать срок"})
+      .prop("checked",!!dialog.omitDueDate).on("change",function() {
+        if (services && services.onDialogFieldChange) services.onDialogFieldChange("omitDueDate",this.checked);
+      }),$("<span/>").text("Не указывать срок")));
+    if (dialog.dueError) $due.append($("<div/>").addClass("ujg-esi-confirm-due-error").attr("role","alert").text(dialog.dueError));
+    appendConfirmControl($fields, "Срок исполнения (Due date)", $due);
     if (dialog.childTasks && dialog.childTasks.length) appendConfirmControl($fields, "Связь", $("<span/>").text("child of Story"));
     } else {
       $fields.addClass("ujg-esi-confirm-parent");
@@ -1829,6 +1845,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $(document).off("click.ujgEsiOwner");
     $(document).off("click.ujgEsiSummary");
     if (activityView && (state || {}).reportView !== "activity" && activityView.suspend) activityView.suspend();
+    else if (activityView && activityView.prepareRender) activityView.prepareRender();
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     if ($dueHost) $dueHost.detach();

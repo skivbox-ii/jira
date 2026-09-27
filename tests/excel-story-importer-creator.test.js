@@ -17,8 +17,97 @@ function loadCreator() {
     "_ujgESI_config": config,
     "_ujgESI_description": description,
     "_ujgESI_remarkId": loadAmdModule(path.join(MODULE_DIR, "remark-id.js"), {}),
+    "_ujgESI_deadlines": loadAmdModule(path.join(MODULE_DIR, "deadlines.js"), {}),
   });
 }
+
+test("storyFields resolves an Excel deadline using columnMap and an explicit date override", function () {
+  const creator = loadCreator();
+  const row = {summary:"Story",sourceColumns:{"Мой срок":"27.09.2026","Срок":"28.09.2026"}};
+  const source = creator.storyFields(row,{projectKey:"P",columnMap:{deadline:"Мой срок"}});
+  const explicit = creator.storyFields(row,{projectKey:"P",columnMap:{deadline:"Мой срок"},dueDate:"2026-10-01"});
+  assert.equal(source.duedate,"2026-09-27");
+  assert.equal(explicit.duedate,"2026-10-01");
+  assert.equal(creator.storyFields(row,{projectKey:"P",omitDueDate:true}).duedate,undefined);
+  assert.equal(row.sourceColumns["Мой срок"],"27.09.2026");
+});
+
+test("storyFields rejects invalid and conflicting source deadlines unless corrected or omitted", function () {
+  const creator = loadCreator();
+  for (const columns of [{"Срок":"31.02.2026"},{"Срок исполнения":"27.09.2026","Срок устранения":"28.09.2026"}]) {
+    const row = {summary:"Story",sourceColumns:columns};
+    assert.throws(() => creator.storyFields(row,{projectKey:"P"}),/срок/i);
+    assert.throws(() => creator.storyFields(row,{projectKey:"P",dueDate:""}),/срок/i);
+    assert.equal(creator.storyFields(row,{projectKey:"P",dueDate:"29.09.2026"}).duedate,"2026-09-29");
+    assert.equal(creator.storyFields(row,{projectKey:"P",omitDueDate:true}).duedate,undefined);
+  }
+  assert.equal(creator.storyFields({summary:"Story",sourceColumns:{}},{projectKey:"P",dueDate:""}).duedate,undefined);
+});
+
+test("createRow blocks invalid dates before catalogue reads or writes", async function () {
+  const creator = loadCreator();
+  for (const dueDate of [undefined,"31.02.2026","27.9.2026",""]) {
+    let reads=0,writes=0;
+    const options={projectKey:"P",mappings:{moduleComponentMap:{Source:"Known"}}};
+    if (dueDate !== undefined) options.dueDate=dueDate;
+    const result=await creator.createRow({
+      getProjectComponents:async()=>{reads++;return [{id:"100",name:"Known"}];},
+      createIssue:async()=>{writes++;return {key:"P-1"};},
+    },{summary:"Story",sourceColumns:{"Срок":"bad date","Модуль":"Source"}},options);
+    assert.equal(result.ok,false);
+    assert.match(result.errors.join(" "),/срок/i);
+    assert.equal(reads,0);
+    assert.equal(writes,0);
+  }
+});
+
+test("createRow requires a decision for conflicting source dates and preserves source cells", async function () {
+  const creator=loadCreator();
+  const row={summary:"Story",sourceColumns:{"Срок исполнения":"27.09.2026","Срок устранения":"28.09.2026"}};
+  const original=JSON.stringify(row);
+  const writes=[];
+  const api={createIssue:async payload=>{writes.push(payload.fields);return {key:"P-1"};}};
+  const blocked=await creator.createRow(api,row,{projectKey:"P"});
+  assert.equal(blocked.ok,false);
+  assert.match(blocked.errors.join(" "),/противореч|срок/i);
+  assert.equal(writes.length,0);
+  const corrected=await creator.createRow(api,row,{projectKey:"P",dueDate:"29.09.2026"});
+  assert.equal(corrected.ok,true);
+  assert.equal(writes[0].duedate,"2026-09-29");
+  const omitted=await creator.createRow(api,row,{projectKey:"P",omitDueDate:true});
+  assert.equal(omitted.ok,true);
+  assert.equal(writes[1].duedate,undefined);
+  assert.equal(JSON.stringify(row),original);
+});
+
+test("createRow submits ISO due date only on the new Story, including Epic retry", async function () {
+  const creator=loadCreator(),writes=[];
+  const result=await creator.createRow({
+    createIssue:async payload=>{
+      writes.push(payload.fields);
+      if (writes.length===1) throw {responseJSON:{errors:{customfield_10109:"Epic unavailable"}}};
+      return {key:"P-"+writes.length};
+    },
+    createIssueLink:async()=>({}),
+  },{summary:"Story",sourceColumns:{"Срок":"27.09.2026"}},
+  {projectKey:"P",epicKey:"P-9",createSubtasks:true,childTasks:[{role:"FE",issueType:"Task"}]});
+  assert.equal(result.ok,true);
+  assert.equal(writes[0].duedate,"2026-09-27");
+  assert.equal(writes[1].duedate,"2026-09-27");
+  assert.equal(writes[2].duedate,undefined);
+});
+
+test("createRow keeps a Jira due date rejection visible and does not retry without it", async function () {
+  const creator=loadCreator();
+  let writes=0;
+  const result=await creator.createRow({createIssue:async()=>{
+    writes++;
+    throw {responseJSON:{errors:{duedate:"Due date rejected"}}};
+  }},{summary:"Story",sourceColumns:{"Срок":"27.09.2026"}},{projectKey:"P",epicKey:"P-9"});
+  assert.equal(result.ok,false);
+  assert.match(result.errors.join(" "),/Due date rejected/);
+  assert.equal(writes,1);
+});
 
 test("storyFields prefixes only the source remark ID and keeps existing prefixes", function () {
   const creator = loadCreator();
@@ -122,6 +211,97 @@ test("createRow skips rows that already have a Jira key", async function () {
   assert.equal(calls.length, 0);
 });
 
+test("createRow checks the project catalogue before writing a mapped component", async function () {
+  const creator = loadCreator();
+  const calls = [];
+  const api = {
+    getProjectComponents: async key => { calls.push(["catalog", key]); return [{ id: "100", name: "Known" }]; },
+    createIssue: async payload => { calls.push(["create", payload]); return { key: "P-1" }; },
+  };
+  const row = { summary: "Story", sourceColumns: { "Модуль": "Source" } };
+  const opts = { projectKey: "P", createSubtasks: true, mappings: { moduleComponentMap: { Source: "Unknown" } } };
+  const result = await creator.createRow(api, row, opts);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join(" "), /Unknown|компонент/i);
+  assert.deepEqual(calls, [["catalog", "P"]]);
+});
+
+test("createRow resolves component IDs and normalized names from the catalogue", async function () {
+  const creator = loadCreator();
+  for (const target of ["100", " known "]) {
+    const calls = [];
+    const result = await creator.createRow({
+      getProjectComponents: async () => { calls.push("catalog"); return [{ id: "100", name: "Known" }]; },
+      createIssue: async payload => { calls.push(payload.fields); return { key: "P-1" }; },
+    }, { summary: "Story", sourceColumns: { "Модуль": "Source" } },
+    { projectKey: "P", mappings: { moduleComponentMap: { Source: target } } });
+    assert.equal(result.ok, true);
+    assert.equal(calls[0], "catalog");
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[1].components)), [{ id: "100" }]);
+  }
+});
+
+test("createRow blocks ambiguous and unavailable components without writes", async function () {
+  const creator = loadCreator();
+  const row = { summary: "Story", sourceColumns: { "Модуль": "Source" } };
+  const cases = [
+    { map: { Source: "Known", source: "Other" }, catalog: [{ id: "100", name: "Known" }], reason: /неоднознач|ambiguous/i },
+    { map: { Source: "Known" }, catalog: [{ id: "100", name: "Known" }, { id: "101", name: " known " }], reason: /неоднознач|ambiguous/i },
+    { map: { Source: "Known" }, catalog: null, reason: /справочник|catalog/i },
+  ];
+  for (const scenario of cases) {
+    let writes = 0;
+    const result = await creator.createRow({
+      getProjectComponents: async () => scenario.catalog,
+      createIssue: async () => { writes++; return { key: "P-1" }; },
+    }, row, { projectKey: "P", mappings: { moduleComponentMap: scenario.map } });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join(" "), scenario.reason);
+    assert.equal(writes, 0);
+  }
+});
+
+test("createRow reports catalogue read failure before any creation", async function () {
+  const creator = loadCreator();
+  let writes = 0;
+  const result = await creator.createRow({
+    getProjectComponents: async () => { throw new Error("offline"); },
+    createIssue: async () => { writes++; return { key: "P-1" }; },
+  }, { summary: "Story", sourceColumns: { "Модуль": "Source" } },
+  { projectKey: "P", mappings: { moduleComponentMap: { Source: "Known" } } });
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join(" "), /справочник|catalog/i);
+  assert.equal(writes, 0);
+});
+
+test("createRow Epic retry retains the resolved component ID", async function () {
+  const creator = loadCreator();
+  const fields = [];
+  const result = await creator.createRow({
+    getProjectComponents: async () => [{ id: "100", name: "Known" }],
+    createIssue: async payload => {
+      fields.push(payload.fields);
+      if (fields.length === 1) throw { responseJSON: { errors: { customfield_10109: "Not allowed" } } };
+      return { key: "P-1" };
+    },
+  }, { summary: "Story", sourceColumns: { "Модуль": "Source" } },
+  { projectKey: "P", epicKey: "P-2", mappings: { moduleComponentMap: { Source: "Known" } } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(fields[1].components)), [{ id: "100" }]);
+  assert.equal(fields[1].customfield_10109, undefined);
+});
+
+test("createRow needs no catalogue when no component is requested", async function () {
+  const creator = loadCreator();
+  let reads = 0;
+  const result = await creator.createRow({
+    getProjectComponents: async () => { reads++; throw new Error("unexpected"); },
+    createIssue: async payload => { assert.equal(payload.fields.components, undefined); return { key: "P-1" }; },
+  }, { summary: "Story", sourceColumns: { "Модуль": "Unmapped" } }, { projectKey: "P", mappings: { moduleComponentMap: {} } });
+  assert.equal(result.ok, true);
+  assert.equal(reads, 0);
+});
+
 test("createRow creates Story with selected Epic Link and then template subtasks", async function () {
   const creator = loadCreator();
   const calls = [];
@@ -135,6 +315,7 @@ test("createRow creates Story with selected Epic Link and then template subtasks
     "EVOSCADA-2005",
   ];
   const api = {
+    getProjectComponents: async () => [{ id: "100", name: "Алармы" }],
     createIssue: function (payload) {
       calls.push(payload);
       return Promise.resolve({ key: keys[calls.length - 1] });
@@ -166,7 +347,7 @@ test("createRow creates Story with selected Epic Link and then template subtasks
   assert.equal(calls[0].fields.summary, "Нет настроек полей сообщений");
   assert.equal(calls[0].fields.customfield_10109, "EVOSCADA-100");
   assert.equal(calls[0].fields.components.length, 1);
-  assert.equal(calls[0].fields.components[0].name, "Алармы");
+  assert.equal(calls[0].fields.components[0].id, "100");
   assert.equal(calls[0].fields.priority.name, "High");
   assert.equal(calls[1].fields.issuetype.name, "Задача разработки");
   assert.equal(calls[1].fields.summary, "[SE] Нет настроек полей сообщений");

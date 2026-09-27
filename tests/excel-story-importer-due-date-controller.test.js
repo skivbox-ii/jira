@@ -20,6 +20,7 @@ async function setup() {
   };
   const Gadget = load(path.join(dir,"main.js"), {
     jquery: () => ({length:0}), _ujgESI_config:config,
+    _ujgESI_deadlines:load(path.join(dir,"deadlines.js"),{}),
     _ujgESI_api:{getProjects:()=>Promise.resolve([]),getProjectEpics:()=>Promise.resolve({issues:[]}),getProjectCreateMeta:()=>Promise.resolve({projects:[]})},
     "_ujgESI_excel-loader": {readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:["Sheet1"]})},
     _ujgESI_parser:{parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Срок":"2026-09-30"}}]})},
