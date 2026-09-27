@@ -238,31 +238,202 @@ define("_ujgShared_llmClient", [], function() {
     return "";
   }
 
-  function requestText(config, request, fetchImpl) {
+  var traceSerial = 0;
+  var TRACE_BODY_LIMIT = 65536;
+  var SECRET_FIELD = /^(?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|(?:access|refresh|id)[-_]?token|token|password|passwd|pwd|(?:client[-_]?)?secret|private[-_]?key|secret[-_]?key|signature|sig|credentials|session(?:id)?)$/i;
+
+  function createRequestTrace(config, options) {
+    if (!options || typeof options.onTrace !== "function") return null;
+    var started = now(), requestUrl = "", clockStart = started;
+    var secrets = [config.apiKey, encodeURIComponent(config.apiKey), JSON.stringify(config.apiKey).slice(1,-1)].filter(Boolean);
+    var encodedKeyPattern=config.apiKey ? new RegExp(Array.from(config.apiKey).map(function(ch) {
+      var literal=ch.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+      var encoded=encodeURIComponent(ch);
+      if (encoded===ch) encoded="%"+ch.charCodeAt(0).toString(16).padStart(2,"0");
+      return "(?:"+literal+"|"+encoded.replace(/%/g,"%(?:25){0,2}")+")";
+    }).join(""),"gi") : null;
+    var trace = {
+      schemaVersion:1, id:"llm-" + Date.now().toString(36) + "-" + (++traceSerial),
+      startedAt:new Date().toISOString(), endedAt:null, durationMs:null, outcome:"running", phase:"prepare", summary:"Подготовка запроса LLM",
+      request:{url:"",method:"POST",model:"",headers:{"Content-Type":"application/json",Authorization:"Bearer [скрыто]"},credentials:"same-origin",body:"",bodyBytes:0,systemBytes:0,userBytes:0,bodyTruncated:false,sent:false},
+      response:{status:null,statusText:"",url:"",type:"",redirected:null,headers:{},body:"",bodyBytes:null,bodyTruncated:false,format:"неизвестно",jsonShape:"",finishReason:null,usage:{inputTokens:null,outputTokens:null,totalTokens:null,source:"unavailable"}},
+      stages:[], network:{available:false,reason:"Браузер не предоставил однозначные сетевые тайминги."},
+      limitations:[
+        "Cookie и Set-Cookie не читаются. Режим credentials не доказывает, какие cookies отправил браузер.",
+        "Fetch не раскрывает причину закрытия сокета. Сбой до HTTP-ответа не различает CORS, DNS, TLS и обрыв связи.",
+        "Токены известны только из usage провайдера; размер запроса в байтах не является числом токенов.",
+        "Представление очищено от распознанных секретов, но может содержать тексты замечаний и персональные данные."
+      ]
+    };
+    function now() { return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now(); }
+    function elapsed() { return Math.max(0, Math.round((now()-clockStart)*100)/100); }
+    function cleanText(value) {
+      var text = String(value == null ? "" : value);
+      secrets.forEach(function(secret) { text = text.split(secret).join("[скрыто]"); });
+      if (encodedKeyPattern && text.indexOf("%")!==-1) text=text.replace(encodedKeyPattern,"[скрыто]");
+      return text
+        .replace(/https?:\/\/[^\s"'<>]+/gi,function(url) {return stripUrlSecrets(url);})
+        .replace(/\b(Bearer|Basic)\s+[^\s"'<>;,]+/gi,"$1 [скрыто]")
+        .replace(/((?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|(?:access|refresh|id)[-_]?token|token|password|passwd|pwd|(?:client[-_]?)?secret|private[-_]?key|secret[-_]?key|signature|sessionid)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s,;}<]+)/gi,"$1[скрыто]");
+    }
+    function stripUrlSecrets(url) {
+      var hideNext=false;
+      return String(url || "").replace(/[?#].*$/, "").replace(/^(https?:\/\/)[^/@]+@/i,"$1").split("/").map(function(part) {
+        var decoded=part;
+        for(var i=0;i<3;i++) {try {var next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;} catch(ignored) {break;}}
+        var hide=hideNext || secrets.some(function(secret){return decoded.indexOf(secret)!==-1;});
+        hideNext=SECRET_FIELD.test(decoded);
+        return hide ? "[скрыто]" : part;
+      }).join("/");
+    }
+    function cleanValue(value, depth) {
+      if (depth > 12) return "[вложенные данные скрыты]";
+      if (typeof value === "string") {
+        if (/^\s*[\[{]/.test(value)) {
+          try { return JSON.stringify(cleanValue(JSON.parse(value),depth+1)); } catch (ignored) { /* Plain source text is valid input. */ }
+        }
+        return cleanText(value);
+      }
+      if (Array.isArray(value)) return value.map(function(item) {return cleanValue(item,depth+1);});
+      if (value && typeof value === "object") {
+        var copy=Object.create(null);
+        Object.keys(value).forEach(function(key) {copy[cleanText(key)]=SECRET_FIELD.test(key) ? "[скрыто]" : cleanValue(value[key],depth+1);});
+        return copy;
+      }
+      return value;
+    }
+    function cleanBody(value) {
+      try { return JSON.stringify(cleanValue(JSON.parse(value),0)); }
+      catch (ignored) { return cleanText(value); }
+    }
+    function safeUrl(url) {
+      return cleanText(stripUrlSecrets(url));
+    }
+    function bodyPreview(target, body) {
+      var cleaned=cleanBody(String(body || ""));
+      target.bodyBytes=utf8ByteLength(body);
+      target.bodyTruncated=utf8ByteLength(cleaned)>TRACE_BODY_LIMIT;
+      target.body=truncateByBytes(cleaned,TRACE_BODY_LIMIT,"\n[диагностическое представление сокращено]");
+    }
+    function publish() {
+      // Only detached, sanitized data crosses the transport/UI boundary.
+      try { options.onTrace(JSON.parse(JSON.stringify(trace))); } catch (ignored) { /* Diagnostics must not affect the request. */ }
+    }
+    function finishStage(status) {
+      var stage=trace.stages[trace.stages.length-1];
+      if (stage && stage.status==="running") { stage.durationMs=Math.max(0,Math.round((elapsed()-stage.startedMs)*100)/100);stage.status=status; }
+    }
+    function stage(name) {
+      finishStage("ok");trace.phase=name;
+      if (name==="headers") trace.request.sent=null;
+      trace.stages.push({name:name,startedMs:elapsed(),durationMs:null,status:"running"});publish();
+    }
+    function token(value) { return typeof value==="number" && isFinite(value) && value>=0 && Math.floor(value)===value ? value : null; }
+    function parsed(payload) {
+      var usage=payload && payload.usage || {}, choice=payload && payload.choices && payload.choices[0];
+      var input=token(usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens);
+      var output=token(usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens);
+      var total=token(usage.total_tokens);
+      trace.response.usage={inputTokens:input,outputTokens:output,totalTokens:total,source:input!==null || output!==null || total!==null ? "provider" : "unavailable"};
+      trace.response.finishReason=choice && typeof choice.finish_reason==="string" ? cleanText(choice.finish_reason).slice(0,200) : null;
+      trace.response.jsonShape=Array.isArray(payload) ? "array ("+payload.length+")" : payload && typeof payload==="object" ? "object: "+Object.keys(payload).slice(0,40).map(cleanText).join(", ") : typeof payload;
+    }
+    function network() {
+      if (typeof performance==="undefined" || typeof performance.getEntriesByName!=="function") return;
+      try {
+        var entries=performance.getEntriesByName(requestUrl,"resource").filter(function(entry) {return entry.initiatorType==="fetch" && entry.startTime>=started && entry.startTime<=now();});
+        if (entries.length!==1 || !(entries[0].requestStart>0) || !(entries[0].responseStart>0)) return;
+        var e=entries[0];
+        function span(a,b) {return a>0 && b>=a ? Math.round((b-a)*100)/100 : null;}
+        trace.network={available:true,source:"PerformanceResourceTiming",dnsMs:span(e.domainLookupStart,e.domainLookupEnd),connectMs:span(e.connectStart,e.connectEnd),tlsMs:span(e.secureConnectionStart,e.connectEnd),ttfbMs:span(e.requestStart,e.responseStart),downloadMs:span(e.responseStart,e.responseEnd),protocol:cleanText(e.nextHopProtocol || "")};
+      } catch (ignored) { /* Timing access is optional and origin-dependent. */ }
+    }
+    function fail(phase, error) {
+      if (trace.outcome!=="running") return;
+      trace.phase=phase || trace.phase;finishStage("error");trace.outcome="error";
+      var messages={prepare:"Не удалось подготовить запрос LLM.",headers:"LLM: браузер не предоставил HTTP-ответ. Причина сетевого сбоя не раскрыта.",body:"LLM: не удалось прочитать тело ответа.",http:"LLM: сервер вернул HTTP " + trace.response.status + ".",json:"LLM: ответ получен, но не удалось разобрать JSON.",extract:"LLM: ответ получен, но текст результата пуст или формат не поддерживается."};
+      trace.summary=messages[trace.phase] || "Не удалось обработать ответ LLM.";
+      trace.error={name:cleanText(error && error.name || "Error"),message:cleanText(error && error.message || "").slice(0,2000)};
+      trace.endedAt=new Date().toISOString();trace.durationMs=elapsed();network();publish();
+    }
+    stage("prepare");
+    return {
+      stage:stage,
+      prepared:function(url,body,request) {
+        requestUrl=url;trace.request.url=safeUrl(url);trace.request.model=cleanText(config.model);bodyPreview(trace.request,body);
+        trace.request.systemBytes=utf8ByteLength(sanitizePrompt(request && request.systemPrompt,MAX_BASE_PROMPT_BYTES));
+        trace.request.userBytes=utf8ByteLength(sanitizePrompt(request && request.userPrompt,MAX_USER_PROMPT_BYTES));
+      },
+      notSent:function(request) {
+        trace.request.headers={};trace.request.credentials=null;
+        trace.request.systemBytes=utf8ByteLength(request && request.systemPrompt || "");
+        trace.request.userBytes=utf8ByteLength(request && request.userPrompt || "");
+        trace.limitations.unshift("Сетевая отправка не начиналась. Тело запроса не сохранялось.");
+      },
+      headers:function(resp) {
+        trace.request.sent=resp ? true : null;
+        trace.response.status=resp && typeof resp.status==="number" ? resp.status : null;
+        trace.response.statusText=cleanText(resp && resp.statusText);trace.response.url=safeUrl(resp && resp.url);
+        trace.response.type=cleanText(resp && resp.type);trace.response.redirected=resp && typeof resp.redirected==="boolean" ? resp.redirected : null;
+        if (resp && resp.headers && typeof resp.headers.forEach==="function") resp.headers.forEach(function(value,name) {
+          var key=String(name).toLowerCase();
+          trace.response.headers[cleanText(key)]=/^(content-type|content-length|date|retry-after|x-request-id|request-id|x-correlation-id|traceparent|server-timing|timing-allow-origin|x-ratelimit-(limit|remaining|reset)(-requests|-tokens)?)$/.test(key) ? cleanText(value).slice(0,2000) : "[скрыто]";
+        });
+      },
+      body:function(text) {
+        bodyPreview(trace.response,text);
+        trace.response.format=!trimString(text) ? "empty" : /^\s*</.test(text) ? "html/xml" : "text";
+        try {var value=JSON.parse(text);trace.response.format="json";parsed(value);} catch(ignored) { /* The main parser will report non-JSON errors. */ }
+      },
+      fail:fail,
+      success:function() {finishStage("ok");trace.outcome="success";trace.summary="Ответ LLM получен и разобран.";trace.endedAt=new Date().toISOString();trace.durationMs=elapsed();network();publish();},
+      summary:function() {return trace.summary;}
+    };
+  }
+
+  function tracePreparationFailure(message, request, options) {
+    var diagnostic=createRequestTrace({apiKey:"",model:""},options);
+    if (diagnostic) {diagnostic.notSent(request);diagnostic.fail("prepare",new Error(message));}
+  }
+
+  function requestText(config, request, fetchImpl, diagnosticOptions) {
     var normalized = normalizeConfig(config);
     var callFetch = typeof fetchImpl === "function" ? fetchImpl : (typeof fetch === "function" ? fetch : null);
     if (!normalized) return Promise.reject(new Error("AI config is invalid"));
     if (!callFetch) return Promise.reject(new Error("fetch is unavailable"));
 
     function performRequest(forceLegacy, allowFallback) {
-      var requestUrl = buildRequestUrl(normalized, forceLegacy);
-      return Promise.resolve(callFetch(requestUrl, {
+      var diagnostic = createRequestTrace(normalized,diagnosticOptions), requestUrl;
+      return Promise.resolve().then(function() {
+        requestUrl=buildRequestUrl(normalized,forceLegacy);
+        var body=JSON.stringify(buildRequestBody(normalized,request,forceLegacy));
+        if (diagnostic) {diagnostic.prepared(requestUrl,body,request);diagnostic.stage("headers");}
+        return callFetch(requestUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: "Bearer " + normalized.apiKey,
         },
-        body: JSON.stringify(buildRequestBody(normalized, request, forceLegacy)),
-      })).then(function(resp) {
-        return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
+        body: body,
+      });}).then(function(resp) {
+        if (diagnostic) {diagnostic.headers(resp);diagnostic.stage("body");}
+        return Promise.resolve().then(function() {return resp && typeof resp.text === "function" ? resp.text() : "";}).then(function(text) {
           var payload = {};
           var out;
           if ((!resp || !resp.ok) && allowFallback && !forceLegacy && resp && (resp.status === 404 || resp.status === 405)) {
+            if (diagnostic) {diagnostic.stage("http");diagnostic.body(text);diagnostic.fail("http",new Error("HTTP " + resp.status + "; переход к legacy endpoint разрешён вызывающим кодом."));}
             return performRequest(true, false);
           }
           if (!resp || !resp.ok) {
+            if (diagnostic) {
+              diagnostic.stage("http");
+              diagnostic.body(text);
+              diagnostic.fail("http",new Error("HTTP " + (resp && resp.status != null ? resp.status : "неизвестно")));
+              throw new Error(diagnostic.summary());
+            }
             throw new Error("AI API " + (resp && resp.status != null ? resp.status : "error") + " (" + requestUrl + "): " + trimString(text));
           }
+          if (diagnostic) {diagnostic.stage("json");diagnostic.body(text);}
           if (trimString(text)) {
             try {
               payload = JSON.parse(text);
@@ -270,10 +441,16 @@ define("_ujgShared_llmClient", [], function() {
               throw new Error("AI API вернул не-JSON ответ");
             }
           }
+          if (diagnostic) diagnostic.stage("extract");
           out = extractResponseText(payload);
           if (!out) throw new Error("AI API вернул пустой ответ");
+          if (diagnostic) diagnostic.success();
           return { text: out, payload: payload, url: requestUrl };
         });
+      }).catch(function(error) {
+        if (!diagnostic) throw error;
+        diagnostic.fail(null,error);
+        throw new Error(diagnostic.summary());
       });
     }
 
@@ -296,6 +473,7 @@ define("_ujgShared_llmClient", [], function() {
     buildRequestBody: buildRequestBody,
     extractResponseText: extractResponseText,
     requestText: requestText,
+    tracePreparationFailure: tracePreparationFailure,
   };
 });
 
@@ -7248,12 +7426,125 @@ define("_ujgESI_activityMarkdown", ["jquery", "_ujgESI_marked"], function($, mar
   return {render:render};
 });
 
+/* === Module: llm-diagnostics-ui.js === */
+define("_ujgESI_llmDiagnosticsUi", ["jquery", "_ujgESI_icons"], function($, icon) {
+  "use strict";
+  var unknown = "неизвестно";
+  var names = {prepare:"Подготовка",headers:"Заголовки",body:"Тело ответа",json:"JSON",extract:"Извлечение текста",http:"HTTP"};
+  var statuses = {running:"выполняется",ok:"готово",error:"ошибка",success:"успех"};
+  function value(item) {
+    if (item === null || item === undefined || item === "") return unknown;
+    if (item === true) return "Да";
+    if (item === false) return "Нет";
+    return String(item);
+  }
+  function msk(item) {
+    var ms=Date.parse(item);
+    if (!isFinite(ms)) return unknown;
+    var text=new Date(ms+10800000).toISOString();
+    return text.slice(8,10)+"."+text.slice(5,7)+"."+text.slice(0,4)+" "+text.slice(11,19)+" МСК";
+  }
+  function body(item,bytes) { return bytes===0 && (item==="" || item===null || item===undefined) ? "(пустое тело)" : value(item); }
+  function sendState(sent) {
+    if (sent===false) return "не начиналась";
+    if (sent===null) return "вызван fetch; приём сервером неизвестен";
+    if (sent===true) return "получен HTTP-ответ";
+    return unknown;
+  }
+  function displayBody(item,bytes) {
+    if (typeof item!=="string" || !item.trim()) return body(item,bytes);
+    try { return JSON.stringify(JSON.parse(item),null,2); }
+    catch (error) { return item; }
+  }
+  function field($list,label,item) {
+    $list.append($("<dt/>").text(label),$("<dd/>").text(value(item)));
+  }
+  function section(title,body) {
+    return $("<details/>").addClass("ujg-esi-llm-diagnostic-disclosure").append($("<summary/>").text(title),$("<pre/>").text(value(body)));
+  }
+  function create($parent) {
+    var traces=[],omitted=0,$panel=null,$host=$parent;
+    var $button=$("<button/>").attr({type:"button",title:"Диагностика LLM","aria-label":"Диагностика LLM",hidden:true}).addClass("ujg-esi-llm-diagnostic-open").append(icon("Activity"),$("<span/>").text("Диагностика")).on("click",open);
+    function exportJson() { return JSON.stringify({warning:"Экспорт может содержать исходные данные Jira. Проверьте файл перед передачей.",omitted:omitted,traces:traces},null,2); }
+    function download() {
+      var blob=new Blob([exportJson()],{type:"application/json;charset=utf-8"});
+      var url=URL.createObjectURL(blob),link=document.createElement("a");
+      link.href=url;link.download="llm-diagnostics.json";document.body.appendChild(link);link.click();link.remove();
+      setTimeout(function(){URL.revokeObjectURL(url);},0);
+    }
+    function close() { if (!$panel) return; $panel.remove();$panel=null;$button.trigger("focus"); }
+    function render() {
+      if (!$panel) return;
+      var $body=$panel.find(".ujg-esi-llm-diagnostic-body"),bodyScroll=$body[0].scrollTop;
+      var expanded=$body.find(".ujg-esi-llm-diagnostic-disclosure").map(function(){return {open:this.open,scroll:this.querySelector("pre").scrollTop};}).get();
+      $body.empty();
+      if (omitted) $body.append($("<p/>").text("Ранние попытки пропущены: " + omitted));
+      traces.forEach(function(trace,index) {
+        var request=trace.request || {},response=trace.response || {},usage=response.usage || {},error=trace.error || {},network=trace.network || {};
+        var $item=$("<section/>").addClass("ujg-esi-llm-diagnostic-attempt");
+        $item.append($("<h3/>").text("Попытка " + (omitted+index+1) + " · ID " + value(trace.id) + " · " + value(statuses[trace.outcome] || trace.outcome) + " · " + value(trace.summary)));
+        var $meta=$("<dl/>").addClass("ujg-esi-llm-diagnostic-meta");
+        [["Начало",msk(trace.startedAt)],["Окончание",msk(trace.endedAt)],["Длительность, мс",trace.durationMs],["Фаза",names[trace.phase] || trace.phase],
+          ["URL запроса",request.url],["Метод",request.method],["Модель",request.model],["Отправка",sendState(request.sent)],["Учётные данные",request.credentials],
+          ["Тело запроса, байт",request.bodyBytes],["Система, байт",request.systemBytes],["Пользователь, байт",request.userBytes],["Запрос сокращён",request.bodyTruncated],
+          ["HTTP статус",response.status],["Статус",response.statusText],["URL ответа",response.url],["Тип",response.type],["Перенаправление",response.redirected],
+          ["Формат",response.format],["Структура JSON",response.jsonShape],["Причина завершения",response.finishReason],
+          ["Тело ответа, байт",response.bodyBytes],["Ответ сокращён",response.bodyTruncated],
+          ["Входные токены",usage.inputTokens],["Выходные токены",usage.outputTokens],["Всего токенов",usage.totalTokens],["Источник токенов",{provider:"Данные провайдера",unavailable:"Провайдер не сообщил"}[usage.source] || usage.source],
+          ["Ошибка",error.name],["Сообщение ошибки",error.message],
+          ["Сетевые замеры доступны",network.available],["Причина отсутствия замеров",network.reason],["Источник замеров",network.source],
+          ["DNS, мс",network.dnsMs],["Соединение, мс",network.connectMs],["TLS, мс",network.tlsMs],
+          ["До первого байта, мс",network.ttfbMs],["Загрузка, мс",network.downloadMs],["Протокол",network.protocol]].forEach(function(pair){field($meta,pair[0],pair[1]);});
+        $item.append($meta);
+        var $stages=$("<ol/>").addClass("ujg-esi-llm-diagnostic-stages");
+        (trace.stages || []).forEach(function(stage){$stages.append($("<li/>").text(value(names[stage.name] || stage.name)+" · "+value(statuses[stage.status] || stage.status)+" · начало +"+value(stage.startedMs)+" мс; длительность "+value(stage.durationMs)+" мс"));});
+        $item.append($("<h4/>").text("Этапы"),$stages);
+        $item.append(section("Заголовки запроса",JSON.stringify(request.headers || {},null,2)),section("Отправленное тело",displayBody(request.body,request.bodyBytes)),section("Заголовки ответа",JSON.stringify(response.headers || {},null,2)),section("Тело ответа",displayBody(response.body,response.bodyBytes)));
+        (trace.limitations || []).forEach(function(limit){$item.append($("<p/>").text(limit));});
+        $body.append($item);
+      });
+      $body.find(".ujg-esi-llm-diagnostic-disclosure").each(function(index){
+        if (!expanded[index]) return;
+        this.open=expanded[index].open;
+        this.querySelector("pre").scrollTop=expanded[index].scroll;
+      });
+      $body[0].scrollTop=bodyScroll;
+    }
+    function open() {
+      if (!traces.length || $panel) return;
+      $panel=$("<section/>").addClass("ujg-esi-llm-diagnostic-panel").attr({role:"dialog","aria-modal":"true","aria-label":"Диагностика LLM",tabindex:"-1"});
+      var $close=$("<button/>").attr({type:"button",title:"Закрыть диагностику","aria-label":"Закрыть диагностику"}).append(icon("X")).on("click",close);
+      var $save=$("<button/>").attr({type:"button",title:"Скачать JSON","aria-label":"Скачать JSON"}).append(icon("Download")).on("click",download);
+      $panel.append($("<header/>").append($("<h2/>").text("Диагностика LLM"),$save,$close),$("<p/>").addClass("ujg-esi-llm-diagnostic-warning").text("Экспорт может содержать исходные данные Jira. Проверьте файл перед передачей."),$("<div/>").addClass("ujg-esi-llm-diagnostic-body"));
+      $panel.on("keydown",function(event){
+        if(event.key==="Escape") {event.preventDefault();event.stopPropagation();close();return;}
+        if(event.key!=="Tab") return;
+        event.stopPropagation();
+        var items=$panel.find("button,summary").filter(function(){return !$(this).parents("details:not([open])").length || this.tagName==="SUMMARY";});
+        if(event.shiftKey && document.activeElement===items[0]) {event.preventDefault();items[items.length-1].focus();}
+        else if(!event.shiftKey && document.activeElement===items[items.length-1]) {event.preventDefault();items[0].focus();}
+      });
+      $host.append($panel);render();$close.trigger("focus");
+    }
+    function record(trace) {
+      if (!trace || typeof trace!=="object") return;
+      var index=traces.findIndex(function(item){return item.id===trace.id;});
+      if (index>=0) traces[index]=trace;
+      else {traces.push(trace);if(traces.length>10){traces.shift();omitted++;}}
+      $button.prop("hidden",false);render();
+    }
+    function clear() {traces=[];omitted=0;close();$button.prop("hidden",true);}
+    return {button:function(){return $button;},record:record,clear:clear,open:open,close:close,exportJson:exportJson,mount:function($parent){$host=$parent;}};
+  }
+  return {create:create};
+});
+
 /* === Module: activity-ai-ui.js === */
-define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons"], function($, activityAi, markdown, icon) {
+define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons", "_ujgESI_llmDiagnosticsUi"], function($, activityAi, markdown, icon, diagnosticsUi) {
   "use strict";
   function create() {
     var $dialog, $report, $partial, $history, $question, $ask, $generate, $stop, $progress, $error, $stale, $meta;
-    var anchor, previousOverflow, currentPlan, currentState, services, session, serial = 0, destroyed = false;
+    var anchor, previousOverflow, currentPlan, currentState, services, session, serial = 0, destroyed = false, diagnostics;
     var scopeKey = "", fingerprint = "", preparationError = "", renderContextKey, renderedReport, renderedPartial, renderedHistory;
     var pendingReport, selectionKey = "", days = 7, $budget, $context, $modes, $facts;
     function compact() { return services && typeof services.onPrepareActivityBrief === "function"; }
@@ -7329,6 +7620,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       var plan = question ? session.plan : currentPlan;
       var requestText = services.onActivityLlmRequest;
       var active = ++serial;
+      if (diagnostics) diagnostics.clear();
       if (!question) session = {plan:session && session.plan || plan,fingerprint:session && session.fingerprint || "",markdown:session && session.markdown || "",history:session && session.history || [],draft:session && session.draft || "",error:"",busy:true,progress:"",partial:""};
       else { session.busy = true; session.error = ""; session.progress = ""; session.partial = ""; }
       refresh();
@@ -7343,7 +7635,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
         isCancelled:function() { return destroyed || active !== serial; }
       };
       var run = compact() ? services.onRunActivityBrief : activityAi.run;
-      Promise.resolve().then(function() { return run(plan,function(part) { return requestText(part); },options); }).then(function(result) {
+      Promise.resolve().then(function() { return run(plan,function(part) { return requestText(part,{onTrace:function(trace) {if (active===serial && diagnostics) diagnostics.record(trace);}}); },options); }).then(function(result) {
         if (active !== serial || !session) return;
         var answered = false;
         session.busy = false;
@@ -7377,6 +7669,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     }
     function dismiss() {
       if (!$dialog) return false;
+      if (diagnostics) {diagnostics.close();diagnostics.button().detach();}
       if (session) session.draft = String($question.val() || "");
       $dialog.remove(); $dialog = null;
       document.body.style.overflow = previousOverflow;
@@ -7399,6 +7692,8 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       previousOverflow = document.body.style.overflow;
       document.body.style.overflow = "hidden";
       $dialog = $("<section/>").addClass("ujg-esi-ai-dialog ujg-esi-activity-ai-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"LLM-отчёт",tabindex:"-1"}).appendTo(document.body);
+      if (diagnostics) diagnostics.mount($dialog);
+      else diagnostics=diagnosticsUi.create($dialog);
       renderedReport = renderedPartial = renderedHistory = undefined;
       var $head = $("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("LLM-отчёт"),button("ujg-esi-ai-close","Закрыть","X",dismiss).attr("aria-label","Закрыть LLM-отчёт"));
       $meta = $("<div/>").addClass("ujg-esi-ai-meta");
@@ -7429,7 +7724,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       $ask = button("ujg-esi-ai-ask","Отправить вопрос","ArrowUp",function() { var question = String($question.val() || "").trim(); if (question) request(question); });
       $question.on("input",function() { if (session) session.draft = this.value; refresh(); });
       var $content = $("<div/>").addClass("ujg-esi-ai-content").append($budget,compact() ? $contextDisclosure : [],$stale,$error,$facts,$report,$partial,$history);
-      $dialog.append($head,$meta,$modes,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$stop,$progress),$content,$("<div/>").addClass("ujg-esi-ai-compose").append($question,$ask));
+      $dialog.append($head,$meta,$modes,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$stop,diagnostics.button(),$progress),$content,$("<div/>").addClass("ujg-esi-ai-compose").append($question,$ask));
       $dialog.on("keydown",function(event) {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
         if (event.key !== "Tab") return;
@@ -7451,6 +7746,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
         report && report.componentScope ? report.componentScope.map(function(item) { return item.id; }).sort() : null]);
       if (selectionKey !== nextSelection) {
         selectionKey = nextSelection; serial++; session = null;
+        if (diagnostics) diagnostics.clear();
         if ($dialog) $question.val("");
       }
       var nextRenderContext = JSON.stringify([currentState.baseUrl || "",currentState.teams || []]);
@@ -7471,21 +7767,22 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       var nextFingerprint = plan && plan.fingerprint || "";
       if (nextScope !== scopeKey) {
         serial++; session = null; scopeKey = nextScope;
+        if (diagnostics) diagnostics.clear();
         if ($dialog) $question.val("");
       }
-      else if (nextFingerprint !== fingerprint) { serial++; if (session) session.busy = false; }
+      else if (nextFingerprint !== fingerprint) { serial++; if (session) session.busy = false; if (diagnostics) diagnostics.clear(); }
       fingerprint = nextFingerprint; currentPlan = plan;
       refresh();
     }
     function suspend() { serial++; if (session) session.busy = false; dismiss(); }
-    function destroy() { suspend(); destroyed = true; session = null; currentPlan = null; pendingReport = null; }
+    function destroy() { suspend(); destroyed = true; if (diagnostics) diagnostics.clear(); diagnostics=null; session = null; currentPlan = null; pendingReport = null; }
     return {update:update,open:open,dismiss:dismiss,rebindAnchor:rebindAnchor,suspend:suspend,destroy:destroy};
   }
   return {create:create};
 });
 
 /* === Module: remark-report-ui.js === */
-define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons"], function($, engine, markdown, icon) {
+define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons","_ujgESI_llmDiagnosticsUi"], function($, engine, markdown, icon, diagnosticsUi) {
   "use strict";
   function scope(state) {
     return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.userScope,state.viewMode]);
@@ -7498,12 +7795,13 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
   }
   function create() {
     var $dialog, $meta, $coverage, $budget, $context, $errors, $warnings, $progress, $answer, $generate, $refresh;
-    var serial = 0, plan = null, busy = false, anchor, previousOverflow, currentScope, sourceRows, state, services, group, destroyed = false;
+    var serial = 0, plan = null, busy = false, anchor, previousOverflow, currentScope, sourceRows, state, services, group, destroyed = false, diagnostics;
     function button(name,text,className,action) {
       return $("<button/>").attr({type:"button",title:text,"aria-label":text}).addClass(className).append(icon(name),$("<span/>").text(text)).on("click",action);
     }
     function dismiss() {
       serial++; busy=false; plan=null;
+      if (diagnostics) {diagnostics.clear();diagnostics=null;}
       if (!$dialog) return;
       $dialog.remove();$dialog=null;document.body.style.overflow=previousOverflow;
       if (anchor && document.contains(anchor)) { $(anchor).attr("aria-expanded","false");anchor.focus(); }
@@ -7516,6 +7814,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
     }
     function read() {
       var active=++serial;busy=true;plan=null;
+      if (diagnostics) diagnostics.clear();
       $errors.empty();$warnings.empty();$coverage.empty();$budget.empty();$context.empty();$answer.empty();
       $meta.text("Весь жизненный путь · чтение актуальных данных Jira");
       $progress.text("Чтение исходной истории");controls();
@@ -7548,11 +7847,12 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
     function generate() {
       if (busy || !plan || !plan.canGenerate || !services || typeof services.onActivityLlmRequest!=="function") return;
       busy=true;var active=++serial, snapshot=plan;
+      diagnostics.clear();
       $errors.empty();$progress.text("LLM анализирует замечание · 1 запрос");controls();
       function cancelled() { return active!==serial || !$dialog || destroyed; }
       Promise.resolve().then(function() {
         if (cancelled()) return;
-        return engine.run(snapshot,services.onActivityLlmRequest,{isCancelled:cancelled});
+        return engine.run(snapshot,function(part) {return services.onActivityLlmRequest(part,{onTrace:function(trace) {if (!cancelled()) diagnostics.record(trace);}});},{isCancelled:cancelled});
       }).then(function(result) {
         if (cancelled()) return;
         busy=false;$progress.empty();
@@ -7571,6 +7871,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
       anchor=control || document.activeElement;previousOverflow=document.body.style.overflow;document.body.style.overflow="hidden";
       if (anchor) $(anchor).attr("aria-expanded","true");
       $dialog=$("<section/>").addClass("ujg-esi-activity-ai-dialog ujg-esi-remark-report-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"AI-разбор замечания",tabindex:"-1"}).appendTo(document.body);
+      diagnostics=diagnosticsUi.create($dialog);
       var $header=$("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("AI-разбор замечания #" + (group.remarkId || group.key)),
         button("X","Закрыть разбор","ujg-esi-remark-close",dismiss));
       var $identity=$("<div/>").addClass("ujg-esi-remark-identity").append(markdown.render(group.key,{baseUrl:state.baseUrl,teams:state.teams}),$("<p/>").text(group.summary || ""));
@@ -7586,7 +7887,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
       $refresh=button("RefreshCw","Обновить данные","ujg-esi-remark-refresh",read);
       var $content=$("<div/>").addClass("ujg-esi-ai-content").append($identity,$coverage,$budget,$errors,$warnings,
         $("<details/>").addClass("ujg-esi-ai-disclosure").append($("<summary/>").text("Контекст запроса"),$context),$answer);
-      $dialog.append($header,$meta,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$refresh,$progress),$content);
+      $dialog.append($header,$meta,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$refresh,diagnostics.button(),$progress),$content);
       $dialog.on("keydown",function(event) {
         if (event.key==="Escape") {event.preventDefault();event.stopPropagation();dismiss();return;}
         if(event.key!=="Tab")return;
@@ -14699,24 +15000,34 @@ define("_ujgESI_main", [
       });
     }
 
-    function onActivityLlmRequest(request) {
+    function onActivityLlmRequest(request, diagnostics) {
+      var wantsTrace = diagnostics && typeof diagnostics.onTrace === "function";
+      function preflightError(message) {
+        if (wantsTrace && llmClient && typeof llmClient.tracePreparationFailure === "function") llmClient.tracePreparationFailure(message,request,diagnostics);
+        return new Error(message);
+      }
       return Promise.resolve().then(function() {
-        if (!llmClient || typeof llmClient.requestText !== "function") throw new Error("Клиент LLM недоступен.");
+        if (!llmClient || typeof llmClient.requestText !== "function") throw preflightError("Клиент LLM недоступен. Данные не отправлены.");
         var systemPrompt = String(request && request.systemPrompt || "");
         var userPrompt = String(request && request.userPrompt || "");
-        if (!systemPrompt.trim() || !userPrompt.trim()) throw new Error("Запрос LLM пуст.");
+        if (!systemPrompt.trim() || !userPrompt.trim()) throw preflightError("Запрос LLM пуст. Данные не отправлены.");
         if (llmClient.utf8ByteLength(systemPrompt) > llmClient.MAX_BASE_PROMPT_BYTES || llmClient.utf8ByteLength(userPrompt) > llmClient.MAX_USER_PROMPT_BYTES) {
-          throw new Error("Размер запроса превышает лимит LLM. Данные не отправлены и не обрезаны.");
+          throw preflightError("Размер запроса превышает лимит LLM. Данные не отправлены и не обрезаны.");
         }
         var llmConfig = ensureLlmConfig();
-        if (!llmConfig) throw new Error("LLM не настроен: укажите API Base URL, модель и ключ.");
-        // Provider error bodies may echo credentials or source data; keep them out of the report.
+        if (!llmConfig) throw preflightError("LLM не настроен: укажите API Base URL, модель и ключ.");
+        var lastTrace = null;
+        // The shared client strips secrets before exposing diagnostic snapshots.
+        function onTrace(trace) {
+          lastTrace = trace;
+          if (diagnostics && typeof diagnostics.onTrace === "function") diagnostics.onTrace(trace);
+        }
         return Promise.resolve().then(function() {
-          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2,allowProtocolFallback:request.allowProtocolFallback});
+          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2,allowProtocolFallback:request.allowProtocolFallback},undefined,wantsTrace ? {onTrace:onTrace} : undefined);
         }).then(function(result) {
           return {text:String(result && result.text || "")};
         }, function() {
-          throw new Error("Не удалось получить ответ LLM. Проверьте подключение и повторите запрос.");
+          throw new Error(lastTrace && lastTrace.outcome === "error" ? lastTrace.summary : "Не удалось получить ответ LLM. Диагностика транспорта недоступна.");
         });
       });
     }

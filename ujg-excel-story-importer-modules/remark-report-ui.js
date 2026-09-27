@@ -1,4 +1,4 @@
-define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons"], function($, engine, markdown, icon) {
+define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons","_ujgESI_llmDiagnosticsUi"], function($, engine, markdown, icon, diagnosticsUi) {
   "use strict";
   function scope(state) {
     return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.userScope,state.viewMode]);
@@ -11,12 +11,13 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
   }
   function create() {
     var $dialog, $meta, $coverage, $budget, $context, $errors, $warnings, $progress, $answer, $generate, $refresh;
-    var serial = 0, plan = null, busy = false, anchor, previousOverflow, currentScope, sourceRows, state, services, group, destroyed = false;
+    var serial = 0, plan = null, busy = false, anchor, previousOverflow, currentScope, sourceRows, state, services, group, destroyed = false, diagnostics;
     function button(name,text,className,action) {
       return $("<button/>").attr({type:"button",title:text,"aria-label":text}).addClass(className).append(icon(name),$("<span/>").text(text)).on("click",action);
     }
     function dismiss() {
       serial++; busy=false; plan=null;
+      if (diagnostics) {diagnostics.clear();diagnostics=null;}
       if (!$dialog) return;
       $dialog.remove();$dialog=null;document.body.style.overflow=previousOverflow;
       if (anchor && document.contains(anchor)) { $(anchor).attr("aria-expanded","false");anchor.focus(); }
@@ -29,6 +30,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
     }
     function read() {
       var active=++serial;busy=true;plan=null;
+      if (diagnostics) diagnostics.clear();
       $errors.empty();$warnings.empty();$coverage.empty();$budget.empty();$context.empty();$answer.empty();
       $meta.text("Весь жизненный путь · чтение актуальных данных Jira");
       $progress.text("Чтение исходной истории");controls();
@@ -61,11 +63,12 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
     function generate() {
       if (busy || !plan || !plan.canGenerate || !services || typeof services.onActivityLlmRequest!=="function") return;
       busy=true;var active=++serial, snapshot=plan;
+      diagnostics.clear();
       $errors.empty();$progress.text("LLM анализирует замечание · 1 запрос");controls();
       function cancelled() { return active!==serial || !$dialog || destroyed; }
       Promise.resolve().then(function() {
         if (cancelled()) return;
-        return engine.run(snapshot,services.onActivityLlmRequest,{isCancelled:cancelled});
+        return engine.run(snapshot,function(part) {return services.onActivityLlmRequest(part,{onTrace:function(trace) {if (!cancelled()) diagnostics.record(trace);}});},{isCancelled:cancelled});
       }).then(function(result) {
         if (cancelled()) return;
         busy=false;$progress.empty();
@@ -84,6 +87,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
       anchor=control || document.activeElement;previousOverflow=document.body.style.overflow;document.body.style.overflow="hidden";
       if (anchor) $(anchor).attr("aria-expanded","true");
       $dialog=$("<section/>").addClass("ujg-esi-activity-ai-dialog ujg-esi-remark-report-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"AI-разбор замечания",tabindex:"-1"}).appendTo(document.body);
+      diagnostics=diagnosticsUi.create($dialog);
       var $header=$("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("AI-разбор замечания #" + (group.remarkId || group.key)),
         button("X","Закрыть разбор","ujg-esi-remark-close",dismiss));
       var $identity=$("<div/>").addClass("ujg-esi-remark-identity").append(markdown.render(group.key,{baseUrl:state.baseUrl,teams:state.teams}),$("<p/>").text(group.summary || ""));
@@ -99,7 +103,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
       $refresh=button("RefreshCw","Обновить данные","ujg-esi-remark-refresh",read);
       var $content=$("<div/>").addClass("ujg-esi-ai-content").append($identity,$coverage,$budget,$errors,$warnings,
         $("<details/>").addClass("ujg-esi-ai-disclosure").append($("<summary/>").text("Контекст запроса"),$context),$answer);
-      $dialog.append($header,$meta,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$refresh,$progress),$content);
+      $dialog.append($header,$meta,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$refresh,diagnostics.button(),$progress),$content);
       $dialog.on("keydown",function(event) {
         if (event.key==="Escape") {event.preventDefault();event.stopPropagation();dismiss();return;}
         if(event.key!=="Tab")return;

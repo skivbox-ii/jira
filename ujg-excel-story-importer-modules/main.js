@@ -3554,24 +3554,34 @@ define("_ujgESI_main", [
       });
     }
 
-    function onActivityLlmRequest(request) {
+    function onActivityLlmRequest(request, diagnostics) {
+      var wantsTrace = diagnostics && typeof diagnostics.onTrace === "function";
+      function preflightError(message) {
+        if (wantsTrace && llmClient && typeof llmClient.tracePreparationFailure === "function") llmClient.tracePreparationFailure(message,request,diagnostics);
+        return new Error(message);
+      }
       return Promise.resolve().then(function() {
-        if (!llmClient || typeof llmClient.requestText !== "function") throw new Error("Клиент LLM недоступен.");
+        if (!llmClient || typeof llmClient.requestText !== "function") throw preflightError("Клиент LLM недоступен. Данные не отправлены.");
         var systemPrompt = String(request && request.systemPrompt || "");
         var userPrompt = String(request && request.userPrompt || "");
-        if (!systemPrompt.trim() || !userPrompt.trim()) throw new Error("Запрос LLM пуст.");
+        if (!systemPrompt.trim() || !userPrompt.trim()) throw preflightError("Запрос LLM пуст. Данные не отправлены.");
         if (llmClient.utf8ByteLength(systemPrompt) > llmClient.MAX_BASE_PROMPT_BYTES || llmClient.utf8ByteLength(userPrompt) > llmClient.MAX_USER_PROMPT_BYTES) {
-          throw new Error("Размер запроса превышает лимит LLM. Данные не отправлены и не обрезаны.");
+          throw preflightError("Размер запроса превышает лимит LLM. Данные не отправлены и не обрезаны.");
         }
         var llmConfig = ensureLlmConfig();
-        if (!llmConfig) throw new Error("LLM не настроен: укажите API Base URL, модель и ключ.");
-        // Provider error bodies may echo credentials or source data; keep them out of the report.
+        if (!llmConfig) throw preflightError("LLM не настроен: укажите API Base URL, модель и ключ.");
+        var lastTrace = null;
+        // The shared client strips secrets before exposing diagnostic snapshots.
+        function onTrace(trace) {
+          lastTrace = trace;
+          if (diagnostics && typeof diagnostics.onTrace === "function") diagnostics.onTrace(trace);
+        }
         return Promise.resolve().then(function() {
-          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2,allowProtocolFallback:request.allowProtocolFallback});
+          return llmClient.requestText(llmConfig, {systemPrompt:systemPrompt,userPrompt:userPrompt,temperature:0.2,allowProtocolFallback:request.allowProtocolFallback},undefined,wantsTrace ? {onTrace:onTrace} : undefined);
         }).then(function(result) {
           return {text:String(result && result.text || "")};
         }, function() {
-          throw new Error("Не удалось получить ответ LLM. Проверьте подключение и повторите запрос.");
+          throw new Error(lastTrace && lastTrace.outcome === "error" ? lastTrace.summary : "Не удалось получить ответ LLM. Диагностика транспорта недоступна.");
         });
       });
     }

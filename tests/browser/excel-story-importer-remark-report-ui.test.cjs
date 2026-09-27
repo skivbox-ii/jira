@@ -9,7 +9,7 @@ function setup() {
     meta:{userBytes:12000,userLimit:18000,systemBytes:1400,systemLimit:4000},request:{systemPrompt:"Rules",userPrompt:"Полные комментарии"}};
   modules._ujgESI_remarkReport={prepare:(row,teams,options)=>{calls.push({prepare:options,row});return row.blocked?{...plan,canGenerate:false,blockers:["Комментарии неполны"]}:plan;},run:async(p,request,options)=>{calls.push({run:p,options});const result=await request(p.request);return {markdown:result.text};}};
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for(const file of ["icons","activity-markdown","remark-report-ui"])dom.window.eval(fs.readFileSync(path.join(dir,file+".js"),"utf8"));
+  for(const file of ["icons","activity-markdown","llm-diagnostics-ui","remark-report-ui"])dom.window.eval(fs.readFileSync(path.join(dir,file+".js"),"utf8"));
   const ui=modules._ujgESI_remarkReportUi.create(),state={baseUrl:"https://jira.test",projectKey:"PR",epicKey:"PR-99",viewMode:"jira",teams:[]};
   const services={onLoadRemarkReport:(key,options)=>{loads.push({key,options});return new Promise((resolve,reject)=>pending.push({resolve,reject}));},onActivityLlmRequest:request=>{calls.push({request});return Promise.resolve({text:"# Итог\n[QA] PR-2 проверена. <script>bad()</script>\n[bad](javascript:alert(1))"});}};
   const open=()=>ui.open({key:"PR-1",remarkId:"52",summary:"Замечание"},state,services,$("#a")[0]);
@@ -77,4 +77,15 @@ test("background redraw returns focus to replacement group action",async t=>{
   assert.equal(typeof x.ui.rebindAnchor,"function");x.ui.rebindAnchor([fresh]);
   x.ui.dismiss();assert.equal(x.dom.window.document.activeElement,fresh);
   assert.equal(x.$(fresh).attr("aria-expanded"),"false");
+});
+test("failed LLM trace remains available and opening diagnostics sends no request",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});
+  x.services.onActivityLlmRequest=(part,options)=>{x.calls.push({request:part});options.onTrace({id:"remark",outcome:"error",phase:"headers",summary:"HTTP 502",request:{url:"https://llm.test",model:"m",body:"payload"},response:{status:502},stages:[{name:"headers",status:"error",durationMs:2}]});return Promise.reject(new Error("Ошибка заголовков"));};
+  x.open();await x.flush();x.pending[0].resolve({row:{},asOf:"2026-09-27T12:35:00Z"});await x.flush();
+  x.$(".ujg-esi-remark-generate").trigger("click");await x.flush();
+  assert.match(x.$(".ujg-esi-remark-errors").text(),/Ошибка заголовков/);
+  assert.equal(x.$(".ujg-esi-llm-diagnostic-open").prop("hidden"),false);
+  x.$(".ujg-esi-llm-diagnostic-open").trigger("click");
+  assert.match(x.$(".ujg-esi-llm-diagnostic-panel").text(),/502/);
+  assert.equal(x.calls.filter(c=>c.request).length,1);
 });

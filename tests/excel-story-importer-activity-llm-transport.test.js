@@ -71,6 +71,28 @@ test("provider errors do not disclose credentials or raw response bodies", async
   assert.equal(x.requests.length,1);
 });
 
+test("report errors expose a safe HTTP reason and forward detached diagnostic snapshots",async()=>{
+  const x=setup({ok:false,status:429}),traces=[];
+  await assert.rejects(x.callbacks.onActivityLlmRequest({systemPrompt:"Rules",userPrompt:"Facts",allowProtocolFallback:false},
+    {onTrace:trace=>traces.push(trace)}),error=>{
+      assert.match(error.message,/HTTP 429/);assert.doesNotMatch(error.message,/private-key|echoed/);return true;
+    });
+  assert.ok(traces.length);assert.equal(traces.at(-1).response.status,429);
+  assert.equal(traces.at(-1).request.model,"configured-model");assert.equal(traces.at(-1).request.bodyBytes,Buffer.byteLength(x.requests[0].request.body));
+  assert.doesNotMatch(JSON.stringify(traces),/private-key/);assert.equal(x.requests.length,1);
+});
+
+test("preflight diagnostic explains requests not sent without retaining a secret prompt",async()=>{
+  for(const missingConfig of [false,true]) {
+    const x=setup({config:!missingConfig}),traces=[];
+    await assert.rejects(x.callbacks.onActivityLlmRequest({systemPrompt:"Rules",userPrompt:missingConfig ? "confidential-input" : "Я".repeat(21001)},
+      {onTrace:trace=>traces.push(trace)}));
+    assert.equal(x.requests.length,0);assert.ok(traces.length);
+    assert.equal(traces.at(-1).request.sent,false);assert.equal(traces.at(-1).phase,"prepare");
+    assert.equal(traces.at(-1).response.status,null);assert.doesNotMatch(JSON.stringify(traces),/confidential-input/);
+  }
+});
+
 test("blank requests fail without prompting for settings", async () => {
   const x=setup({config:false});
   await assert.rejects(() => x.callbacks.onActivityLlmRequest({systemPrompt:" ",userPrompt:"Facts"}),/пуст/i);

@@ -15,6 +15,7 @@ function setup(realRenderer = false) {
   modules._ujgESI_activityMarkdown = {render(value) { return $("<p/>").text(value); }};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
   dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/icons.js"),"utf8"));
+  dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/llm-diagnostics-ui.js"),"utf8"));
   if (realRenderer) {
     modules._ujgESI_marked = require("../../vendor/marked-16.4.2.umd.js");
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/activity-markdown.js"),"utf8"));
@@ -160,6 +161,60 @@ test("opening report shows cutoff and coverage without requesting; explicit gene
   await x.flush();
   assert.match(x.$(".ujg-esi-ai-report").text(),/Отчёт/);
 });
+test("activity trace is available on failure and stale trace cannot enter new scope",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});
+  const c=compactServices(x);
+  x.services.onActivityLlmRequest=(part,options)=>{options.onTrace({id:"activity",outcome:"error",phase:"body",summary:"Body failed",request:{url:"https://llm.test"},response:{status:null},stages:[]});return Promise.reject(new Error("Ошибка тела"));};
+  x.ui.update(x.report(),x.state(),{...c.services,onActivityLlmRequest:x.services.onActivityLlmRequest,onRunActivityBrief:(plan,request)=>request({systemPrompt:"s",userPrompt:"u"})});
+  x.ui.open(x.$("#anchor")[0]);x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  assert.match(x.$(".ujg-esi-ai-error").text(),/Ошибка тела/);
+  x.$(".ujg-esi-llm-diagnostic-open").trigger("click");
+  assert.match(x.$(".ujg-esi-llm-diagnostic-panel").text(),/Body failed/);
+  x.ui.update(x.report("new"),x.state("OTHER"),x.services);
+  assert.equal(x.$(".ujg-esi-llm-diagnostic-open").prop("hidden"),true);
+});
+test("same-scope activity report keeps diagnostics when reopened",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const c=compactServices(x);
+  const services={...c.services,onActivityLlmRequest:(part,options)=>{options.onTrace({id:"one",outcome:"success",phase:"extract",summary:"Done",request:{model:"m"},response:{status:200},stages:[]});return Promise.resolve({text:"Done"});},onRunActivityBrief:(plan,request)=>request({systemPrompt:"s",userPrompt:"u"}).then(result=>({markdown:result.text,completedParts:1,totalParts:1}))};
+  x.ui.update(x.report(),x.state(),services);x.ui.open(x.$("#anchor")[0]);
+  x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();x.ui.dismiss();x.ui.open(x.$("#anchor")[0]);
+  assert.equal(x.$(".ujg-esi-llm-diagnostic-open").prop("hidden"),false);
+  x.$(".ujg-esi-llm-diagnostic-open").trigger("click");assert.match(x.$(".ujg-esi-llm-diagnostic-panel").text(),/Done/);
+});
+test("late trace after an activity scope change is discarded",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const c=compactServices(x);let onTrace;
+  const services={...c.services,onActivityLlmRequest:(part,options)=>{onTrace=options.onTrace;return new Promise(()=>{});},onRunActivityBrief:(plan,request)=>request({systemPrompt:"s",userPrompt:"u"})};
+  x.ui.update(x.report(),x.state(),services);x.ui.open(x.$("#anchor")[0]);
+  x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();x.ui.dismiss();x.ui.update(x.report("other"),x.state("OTHER"),services);x.ui.open(x.$("#anchor")[0]);
+  onTrace({id:"late",outcome:"error",summary:"Late",request:{},response:{},stages:[]});
+  assert.equal(x.$(".ujg-esi-llm-diagnostic-open").prop("hidden"),true);
+});
+test("closed general report retains terminal trace and error from its active request",async t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const c=compactServices(x);let onTrace,rejectRequest,requests=0;
+  const services={...c.services,onActivityLlmRequest:(part,options)=>{
+    requests++;onTrace=options.onTrace;
+    onTrace({id:"active",outcome:"running",phase:"headers",summary:"Ожидание",request:{sent:null},response:{status:null},stages:[]});
+    return new Promise((resolve,reject)=>{rejectRequest=reject;});
+  },onRunActivityBrief:(plan,request)=>request({systemPrompt:"s",userPrompt:"u"})};
+  x.ui.update(x.report(),x.state(),services);x.ui.open(x.$("#anchor")[0]);
+  x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  x.ui.dismiss();
+  x.ui.open(x.$("#anchor")[0]);
+  assert.equal(x.$(".ujg-esi-ai-generate").prop("disabled"),true);
+  x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  assert.equal(requests,1);
+  x.ui.dismiss();
+  onTrace({id:"active",outcome:"error",phase:"http",summary:"HTTP 429",request:{sent:true},response:{status:429},stages:[]});
+  rejectRequest(new Error("HTTP 429"));await x.flush();
+  x.ui.open(x.$("#anchor")[0]);
+  assert.match(x.$(".ujg-esi-ai-error").text(),/HTTP 429/);
+  assert.equal(x.$(".ujg-esi-ai-generate").prop("disabled"),false);
+  x.$(".ujg-esi-llm-diagnostic-open").trigger("click");
+  assert.match(x.$(".ujg-esi-llm-diagnostic-panel").text(),/HTTP 429/);
+  assert.match(x.$(".ujg-esi-llm-diagnostic-panel").text(),/получен HTTP-ответ/);
+  assert.doesNotMatch(x.$(".ujg-esi-llm-diagnostic-panel").text(),/Ожидание/);
+  assert.equal(requests,1);
+});
 
 test("question uses report snapshot and history; failure retains draft and prior answer", async t => {
   const x=setup(); t.after(() => { x.ui.destroy(); x.dom.window.close(); });
@@ -291,7 +346,7 @@ test("Escape after a Dynamics redraw returns focus to the newly mounted report c
   const dom=new JSDOM('<div id="root"></div>',{runScripts:"outside-only",url:"http://localhost"});
   const $=jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")};
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","remark-report","activity-markdown","activity-ai-ui","remark-report-ui","activity-store","activity-ui"])
+  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","remark-report","activity-markdown","llm-diagnostics-ui","activity-ai-ui","remark-report-ui","activity-store","activity-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   const state={rows:[],teams:[],projectKey:"P",epicKey:"P-1",viewMode:"jira"};
@@ -369,7 +424,7 @@ test("real engine and renderer send the prepared slice through the service", asy
   const dom = new JSDOM('<button id="anchor">Open</button>',{runScripts:"outside-only",url:"http://localhost"});
   const $ = jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")}, requests=[];
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["icons","activity-ai","activity-markdown","activity-ai-ui"])
+  for (const file of ["icons","activity-ai","activity-markdown","llm-diagnostics-ui","activity-ai-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityAiUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   ui.update({date:"2026-09-24",asOf:"2026-09-24T09:00:00Z",groups:[],events:[],metrics:{events:0},coverage:{complete:1,total:1}},

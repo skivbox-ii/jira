@@ -233,31 +233,202 @@ define("_ujgTimesheet_llmClient", [], function() {
     return "";
   }
 
-  function requestText(config, request, fetchImpl) {
+  var traceSerial = 0;
+  var TRACE_BODY_LIMIT = 65536;
+  var SECRET_FIELD = /^(?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|(?:access|refresh|id)[-_]?token|token|password|passwd|pwd|(?:client[-_]?)?secret|private[-_]?key|secret[-_]?key|signature|sig|credentials|session(?:id)?)$/i;
+
+  function createRequestTrace(config, options) {
+    if (!options || typeof options.onTrace !== "function") return null;
+    var started = now(), requestUrl = "", clockStart = started;
+    var secrets = [config.apiKey, encodeURIComponent(config.apiKey), JSON.stringify(config.apiKey).slice(1,-1)].filter(Boolean);
+    var encodedKeyPattern=config.apiKey ? new RegExp(Array.from(config.apiKey).map(function(ch) {
+      var literal=ch.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+      var encoded=encodeURIComponent(ch);
+      if (encoded===ch) encoded="%"+ch.charCodeAt(0).toString(16).padStart(2,"0");
+      return "(?:"+literal+"|"+encoded.replace(/%/g,"%(?:25){0,2}")+")";
+    }).join(""),"gi") : null;
+    var trace = {
+      schemaVersion:1, id:"llm-" + Date.now().toString(36) + "-" + (++traceSerial),
+      startedAt:new Date().toISOString(), endedAt:null, durationMs:null, outcome:"running", phase:"prepare", summary:"Подготовка запроса LLM",
+      request:{url:"",method:"POST",model:"",headers:{"Content-Type":"application/json",Authorization:"Bearer [скрыто]"},credentials:"same-origin",body:"",bodyBytes:0,systemBytes:0,userBytes:0,bodyTruncated:false,sent:false},
+      response:{status:null,statusText:"",url:"",type:"",redirected:null,headers:{},body:"",bodyBytes:null,bodyTruncated:false,format:"неизвестно",jsonShape:"",finishReason:null,usage:{inputTokens:null,outputTokens:null,totalTokens:null,source:"unavailable"}},
+      stages:[], network:{available:false,reason:"Браузер не предоставил однозначные сетевые тайминги."},
+      limitations:[
+        "Cookie и Set-Cookie не читаются. Режим credentials не доказывает, какие cookies отправил браузер.",
+        "Fetch не раскрывает причину закрытия сокета. Сбой до HTTP-ответа не различает CORS, DNS, TLS и обрыв связи.",
+        "Токены известны только из usage провайдера; размер запроса в байтах не является числом токенов.",
+        "Представление очищено от распознанных секретов, но может содержать тексты замечаний и персональные данные."
+      ]
+    };
+    function now() { return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now(); }
+    function elapsed() { return Math.max(0, Math.round((now()-clockStart)*100)/100); }
+    function cleanText(value) {
+      var text = String(value == null ? "" : value);
+      secrets.forEach(function(secret) { text = text.split(secret).join("[скрыто]"); });
+      if (encodedKeyPattern && text.indexOf("%")!==-1) text=text.replace(encodedKeyPattern,"[скрыто]");
+      return text
+        .replace(/https?:\/\/[^\s"'<>]+/gi,function(url) {return stripUrlSecrets(url);})
+        .replace(/\b(Bearer|Basic)\s+[^\s"'<>;,]+/gi,"$1 [скрыто]")
+        .replace(/((?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|(?:access|refresh|id)[-_]?token|token|password|passwd|pwd|(?:client[-_]?)?secret|private[-_]?key|secret[-_]?key|signature|sessionid)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s,;}<]+)/gi,"$1[скрыто]");
+    }
+    function stripUrlSecrets(url) {
+      var hideNext=false;
+      return String(url || "").replace(/[?#].*$/, "").replace(/^(https?:\/\/)[^/@]+@/i,"$1").split("/").map(function(part) {
+        var decoded=part;
+        for(var i=0;i<3;i++) {try {var next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;} catch(ignored) {break;}}
+        var hide=hideNext || secrets.some(function(secret){return decoded.indexOf(secret)!==-1;});
+        hideNext=SECRET_FIELD.test(decoded);
+        return hide ? "[скрыто]" : part;
+      }).join("/");
+    }
+    function cleanValue(value, depth) {
+      if (depth > 12) return "[вложенные данные скрыты]";
+      if (typeof value === "string") {
+        if (/^\s*[\[{]/.test(value)) {
+          try { return JSON.stringify(cleanValue(JSON.parse(value),depth+1)); } catch (ignored) { /* Plain source text is valid input. */ }
+        }
+        return cleanText(value);
+      }
+      if (Array.isArray(value)) return value.map(function(item) {return cleanValue(item,depth+1);});
+      if (value && typeof value === "object") {
+        var copy=Object.create(null);
+        Object.keys(value).forEach(function(key) {copy[cleanText(key)]=SECRET_FIELD.test(key) ? "[скрыто]" : cleanValue(value[key],depth+1);});
+        return copy;
+      }
+      return value;
+    }
+    function cleanBody(value) {
+      try { return JSON.stringify(cleanValue(JSON.parse(value),0)); }
+      catch (ignored) { return cleanText(value); }
+    }
+    function safeUrl(url) {
+      return cleanText(stripUrlSecrets(url));
+    }
+    function bodyPreview(target, body) {
+      var cleaned=cleanBody(String(body || ""));
+      target.bodyBytes=utf8ByteLength(body);
+      target.bodyTruncated=utf8ByteLength(cleaned)>TRACE_BODY_LIMIT;
+      target.body=truncateByBytes(cleaned,TRACE_BODY_LIMIT,"\n[диагностическое представление сокращено]");
+    }
+    function publish() {
+      // Only detached, sanitized data crosses the transport/UI boundary.
+      try { options.onTrace(JSON.parse(JSON.stringify(trace))); } catch (ignored) { /* Diagnostics must not affect the request. */ }
+    }
+    function finishStage(status) {
+      var stage=trace.stages[trace.stages.length-1];
+      if (stage && stage.status==="running") { stage.durationMs=Math.max(0,Math.round((elapsed()-stage.startedMs)*100)/100);stage.status=status; }
+    }
+    function stage(name) {
+      finishStage("ok");trace.phase=name;
+      if (name==="headers") trace.request.sent=null;
+      trace.stages.push({name:name,startedMs:elapsed(),durationMs:null,status:"running"});publish();
+    }
+    function token(value) { return typeof value==="number" && isFinite(value) && value>=0 && Math.floor(value)===value ? value : null; }
+    function parsed(payload) {
+      var usage=payload && payload.usage || {}, choice=payload && payload.choices && payload.choices[0];
+      var input=token(usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens);
+      var output=token(usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens);
+      var total=token(usage.total_tokens);
+      trace.response.usage={inputTokens:input,outputTokens:output,totalTokens:total,source:input!==null || output!==null || total!==null ? "provider" : "unavailable"};
+      trace.response.finishReason=choice && typeof choice.finish_reason==="string" ? cleanText(choice.finish_reason).slice(0,200) : null;
+      trace.response.jsonShape=Array.isArray(payload) ? "array ("+payload.length+")" : payload && typeof payload==="object" ? "object: "+Object.keys(payload).slice(0,40).map(cleanText).join(", ") : typeof payload;
+    }
+    function network() {
+      if (typeof performance==="undefined" || typeof performance.getEntriesByName!=="function") return;
+      try {
+        var entries=performance.getEntriesByName(requestUrl,"resource").filter(function(entry) {return entry.initiatorType==="fetch" && entry.startTime>=started && entry.startTime<=now();});
+        if (entries.length!==1 || !(entries[0].requestStart>0) || !(entries[0].responseStart>0)) return;
+        var e=entries[0];
+        function span(a,b) {return a>0 && b>=a ? Math.round((b-a)*100)/100 : null;}
+        trace.network={available:true,source:"PerformanceResourceTiming",dnsMs:span(e.domainLookupStart,e.domainLookupEnd),connectMs:span(e.connectStart,e.connectEnd),tlsMs:span(e.secureConnectionStart,e.connectEnd),ttfbMs:span(e.requestStart,e.responseStart),downloadMs:span(e.responseStart,e.responseEnd),protocol:cleanText(e.nextHopProtocol || "")};
+      } catch (ignored) { /* Timing access is optional and origin-dependent. */ }
+    }
+    function fail(phase, error) {
+      if (trace.outcome!=="running") return;
+      trace.phase=phase || trace.phase;finishStage("error");trace.outcome="error";
+      var messages={prepare:"Не удалось подготовить запрос LLM.",headers:"LLM: браузер не предоставил HTTP-ответ. Причина сетевого сбоя не раскрыта.",body:"LLM: не удалось прочитать тело ответа.",http:"LLM: сервер вернул HTTP " + trace.response.status + ".",json:"LLM: ответ получен, но не удалось разобрать JSON.",extract:"LLM: ответ получен, но текст результата пуст или формат не поддерживается."};
+      trace.summary=messages[trace.phase] || "Не удалось обработать ответ LLM.";
+      trace.error={name:cleanText(error && error.name || "Error"),message:cleanText(error && error.message || "").slice(0,2000)};
+      trace.endedAt=new Date().toISOString();trace.durationMs=elapsed();network();publish();
+    }
+    stage("prepare");
+    return {
+      stage:stage,
+      prepared:function(url,body,request) {
+        requestUrl=url;trace.request.url=safeUrl(url);trace.request.model=cleanText(config.model);bodyPreview(trace.request,body);
+        trace.request.systemBytes=utf8ByteLength(sanitizePrompt(request && request.systemPrompt,MAX_BASE_PROMPT_BYTES));
+        trace.request.userBytes=utf8ByteLength(sanitizePrompt(request && request.userPrompt,MAX_USER_PROMPT_BYTES));
+      },
+      notSent:function(request) {
+        trace.request.headers={};trace.request.credentials=null;
+        trace.request.systemBytes=utf8ByteLength(request && request.systemPrompt || "");
+        trace.request.userBytes=utf8ByteLength(request && request.userPrompt || "");
+        trace.limitations.unshift("Сетевая отправка не начиналась. Тело запроса не сохранялось.");
+      },
+      headers:function(resp) {
+        trace.request.sent=resp ? true : null;
+        trace.response.status=resp && typeof resp.status==="number" ? resp.status : null;
+        trace.response.statusText=cleanText(resp && resp.statusText);trace.response.url=safeUrl(resp && resp.url);
+        trace.response.type=cleanText(resp && resp.type);trace.response.redirected=resp && typeof resp.redirected==="boolean" ? resp.redirected : null;
+        if (resp && resp.headers && typeof resp.headers.forEach==="function") resp.headers.forEach(function(value,name) {
+          var key=String(name).toLowerCase();
+          trace.response.headers[cleanText(key)]=/^(content-type|content-length|date|retry-after|x-request-id|request-id|x-correlation-id|traceparent|server-timing|timing-allow-origin|x-ratelimit-(limit|remaining|reset)(-requests|-tokens)?)$/.test(key) ? cleanText(value).slice(0,2000) : "[скрыто]";
+        });
+      },
+      body:function(text) {
+        bodyPreview(trace.response,text);
+        trace.response.format=!trimString(text) ? "empty" : /^\s*</.test(text) ? "html/xml" : "text";
+        try {var value=JSON.parse(text);trace.response.format="json";parsed(value);} catch(ignored) { /* The main parser will report non-JSON errors. */ }
+      },
+      fail:fail,
+      success:function() {finishStage("ok");trace.outcome="success";trace.summary="Ответ LLM получен и разобран.";trace.endedAt=new Date().toISOString();trace.durationMs=elapsed();network();publish();},
+      summary:function() {return trace.summary;}
+    };
+  }
+
+  function tracePreparationFailure(message, request, options) {
+    var diagnostic=createRequestTrace({apiKey:"",model:""},options);
+    if (diagnostic) {diagnostic.notSent(request);diagnostic.fail("prepare",new Error(message));}
+  }
+
+  function requestText(config, request, fetchImpl, diagnosticOptions) {
     var normalized = normalizeConfig(config);
     var callFetch = typeof fetchImpl === "function" ? fetchImpl : (typeof fetch === "function" ? fetch : null);
     if (!normalized) return Promise.reject(new Error("AI config is invalid"));
     if (!callFetch) return Promise.reject(new Error("fetch is unavailable"));
 
     function performRequest(forceLegacy, allowFallback) {
-      var requestUrl = buildRequestUrl(normalized, forceLegacy);
-      return Promise.resolve(callFetch(requestUrl, {
+      var diagnostic = createRequestTrace(normalized,diagnosticOptions), requestUrl;
+      return Promise.resolve().then(function() {
+        requestUrl=buildRequestUrl(normalized,forceLegacy);
+        var body=JSON.stringify(buildRequestBody(normalized,request,forceLegacy));
+        if (diagnostic) {diagnostic.prepared(requestUrl,body,request);diagnostic.stage("headers");}
+        return callFetch(requestUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: "Bearer " + normalized.apiKey,
         },
-        body: JSON.stringify(buildRequestBody(normalized, request, forceLegacy)),
-      })).then(function(resp) {
-        return Promise.resolve(resp && typeof resp.text === "function" ? resp.text() : "").then(function(text) {
+        body: body,
+      });}).then(function(resp) {
+        if (diagnostic) {diagnostic.headers(resp);diagnostic.stage("body");}
+        return Promise.resolve().then(function() {return resp && typeof resp.text === "function" ? resp.text() : "";}).then(function(text) {
           var payload = {};
           var out;
           if ((!resp || !resp.ok) && allowFallback && !forceLegacy && resp && (resp.status === 404 || resp.status === 405)) {
+            if (diagnostic) {diagnostic.stage("http");diagnostic.body(text);diagnostic.fail("http",new Error("HTTP " + resp.status + "; переход к legacy endpoint разрешён вызывающим кодом."));}
             return performRequest(true, false);
           }
           if (!resp || !resp.ok) {
+            if (diagnostic) {
+              diagnostic.stage("http");
+              diagnostic.body(text);
+              diagnostic.fail("http",new Error("HTTP " + (resp && resp.status != null ? resp.status : "неизвестно")));
+              throw new Error(diagnostic.summary());
+            }
             throw new Error("AI API " + (resp && resp.status != null ? resp.status : "error") + " (" + requestUrl + "): " + trimString(text));
           }
+          if (diagnostic) {diagnostic.stage("json");diagnostic.body(text);}
           if (trimString(text)) {
             try {
               payload = JSON.parse(text);
@@ -265,10 +436,16 @@ define("_ujgTimesheet_llmClient", [], function() {
               throw new Error("AI API вернул не-JSON ответ");
             }
           }
+          if (diagnostic) diagnostic.stage("extract");
           out = extractResponseText(payload);
           if (!out) throw new Error("AI API вернул пустой ответ");
+          if (diagnostic) diagnostic.success();
           return { text: out, payload: payload, url: requestUrl };
         });
+      }).catch(function(error) {
+        if (!diagnostic) throw error;
+        diagnostic.fail(null,error);
+        throw new Error(diagnostic.summary());
       });
     }
 
@@ -291,6 +468,7 @@ define("_ujgTimesheet_llmClient", [], function() {
     buildRequestBody: buildRequestBody,
     extractResponseText: extractResponseText,
     requestText: requestText,
+    tracePreparationFailure: tracePreparationFailure,
   };
 });
 

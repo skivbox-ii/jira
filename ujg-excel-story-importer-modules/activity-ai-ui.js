@@ -1,8 +1,8 @@
-define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons"], function($, activityAi, markdown, icon) {
+define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons", "_ujgESI_llmDiagnosticsUi"], function($, activityAi, markdown, icon, diagnosticsUi) {
   "use strict";
   function create() {
     var $dialog, $report, $partial, $history, $question, $ask, $generate, $stop, $progress, $error, $stale, $meta;
-    var anchor, previousOverflow, currentPlan, currentState, services, session, serial = 0, destroyed = false;
+    var anchor, previousOverflow, currentPlan, currentState, services, session, serial = 0, destroyed = false, diagnostics;
     var scopeKey = "", fingerprint = "", preparationError = "", renderContextKey, renderedReport, renderedPartial, renderedHistory;
     var pendingReport, selectionKey = "", days = 7, $budget, $context, $modes, $facts;
     function compact() { return services && typeof services.onPrepareActivityBrief === "function"; }
@@ -78,6 +78,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       var plan = question ? session.plan : currentPlan;
       var requestText = services.onActivityLlmRequest;
       var active = ++serial;
+      if (diagnostics) diagnostics.clear();
       if (!question) session = {plan:session && session.plan || plan,fingerprint:session && session.fingerprint || "",markdown:session && session.markdown || "",history:session && session.history || [],draft:session && session.draft || "",error:"",busy:true,progress:"",partial:""};
       else { session.busy = true; session.error = ""; session.progress = ""; session.partial = ""; }
       refresh();
@@ -92,7 +93,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
         isCancelled:function() { return destroyed || active !== serial; }
       };
       var run = compact() ? services.onRunActivityBrief : activityAi.run;
-      Promise.resolve().then(function() { return run(plan,function(part) { return requestText(part); },options); }).then(function(result) {
+      Promise.resolve().then(function() { return run(plan,function(part) { return requestText(part,{onTrace:function(trace) {if (active===serial && diagnostics) diagnostics.record(trace);}}); },options); }).then(function(result) {
         if (active !== serial || !session) return;
         var answered = false;
         session.busy = false;
@@ -126,6 +127,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     }
     function dismiss() {
       if (!$dialog) return false;
+      if (diagnostics) {diagnostics.close();diagnostics.button().detach();}
       if (session) session.draft = String($question.val() || "");
       $dialog.remove(); $dialog = null;
       document.body.style.overflow = previousOverflow;
@@ -148,6 +150,8 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       previousOverflow = document.body.style.overflow;
       document.body.style.overflow = "hidden";
       $dialog = $("<section/>").addClass("ujg-esi-ai-dialog ujg-esi-activity-ai-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"LLM-отчёт",tabindex:"-1"}).appendTo(document.body);
+      if (diagnostics) diagnostics.mount($dialog);
+      else diagnostics=diagnosticsUi.create($dialog);
       renderedReport = renderedPartial = renderedHistory = undefined;
       var $head = $("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("LLM-отчёт"),button("ujg-esi-ai-close","Закрыть","X",dismiss).attr("aria-label","Закрыть LLM-отчёт"));
       $meta = $("<div/>").addClass("ujg-esi-ai-meta");
@@ -178,7 +182,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       $ask = button("ujg-esi-ai-ask","Отправить вопрос","ArrowUp",function() { var question = String($question.val() || "").trim(); if (question) request(question); });
       $question.on("input",function() { if (session) session.draft = this.value; refresh(); });
       var $content = $("<div/>").addClass("ujg-esi-ai-content").append($budget,compact() ? $contextDisclosure : [],$stale,$error,$facts,$report,$partial,$history);
-      $dialog.append($head,$meta,$modes,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$stop,$progress),$content,$("<div/>").addClass("ujg-esi-ai-compose").append($question,$ask));
+      $dialog.append($head,$meta,$modes,$("<div/>").addClass("ujg-esi-ai-actions").append($generate,$stop,diagnostics.button(),$progress),$content,$("<div/>").addClass("ujg-esi-ai-compose").append($question,$ask));
       $dialog.on("keydown",function(event) {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
         if (event.key !== "Tab") return;
@@ -200,6 +204,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
         report && report.componentScope ? report.componentScope.map(function(item) { return item.id; }).sort() : null]);
       if (selectionKey !== nextSelection) {
         selectionKey = nextSelection; serial++; session = null;
+        if (diagnostics) diagnostics.clear();
         if ($dialog) $question.val("");
       }
       var nextRenderContext = JSON.stringify([currentState.baseUrl || "",currentState.teams || []]);
@@ -220,14 +225,15 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       var nextFingerprint = plan && plan.fingerprint || "";
       if (nextScope !== scopeKey) {
         serial++; session = null; scopeKey = nextScope;
+        if (diagnostics) diagnostics.clear();
         if ($dialog) $question.val("");
       }
-      else if (nextFingerprint !== fingerprint) { serial++; if (session) session.busy = false; }
+      else if (nextFingerprint !== fingerprint) { serial++; if (session) session.busy = false; if (diagnostics) diagnostics.clear(); }
       fingerprint = nextFingerprint; currentPlan = plan;
       refresh();
     }
     function suspend() { serial++; if (session) session.busy = false; dismiss(); }
-    function destroy() { suspend(); destroyed = true; session = null; currentPlan = null; pendingReport = null; }
+    function destroy() { suspend(); destroyed = true; if (diagnostics) diagnostics.clear(); diagnostics=null; session = null; currentPlan = null; pendingReport = null; }
     return {update:update,open:open,dismiss:dismiss,rebindAnchor:rebindAnchor,suspend:suspend,destroy:destroy};
   }
   return {create:create};

@@ -39,6 +39,7 @@ var MODULE_ORDER = [
   "remark-report-loader.js",
   { dir: path.join(__dirname, "vendor"), file: "marked-16.4.2.umd.js", amd: "_ujgESI_marked" },
   "activity-markdown.js",
+  "llm-diagnostics-ui.js",
   "activity-ai-ui.js",
   "remark-report-ui.js",
   "activity-ui.js",
