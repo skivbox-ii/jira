@@ -29,6 +29,8 @@ async function main(){
   });
   await page.getByRole('tab',{name:'Динамика',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.ujg-esi-activity-coverage')?.textContent.includes('Проверена история'));
+  assert.equal((await page.locator('.ujg-esi-source-command').textContent()).trim(),'');
+  assert.equal(await page.locator('.ujg-esi-source-command').getAttribute('title'),'Исходные данные');
   await page.locator('.ujg-esi-source-command').click();
   const dialog=page.locator('.ujg-esi-source-dialog');assert.equal(await page.evaluate(()=>sourceReads.length),0);
   await page.screenshot({path:path.join(dir,'plan-'+width+'.png')});

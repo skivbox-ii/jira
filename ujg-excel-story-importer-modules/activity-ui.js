@@ -690,7 +690,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $controls.append(button("Funnel","Компоненты замечаний",function() { componentMenu(this,facets); }).addClass("ujg-esi-component-filter").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).toggleClass("is-active",componentSelection!==null).append($("<span/>").text("Компоненты" + (componentSelection === null ? "" : ": " + componentSelection.length))));
       $controls.append(button("Download","Скачать HTML",function() { download(report,state); }));
       $controls.append(button("FileText","Исходные данные",function(){closePopover();closeManagement();aiUi.dismiss();remarkUi.dismiss();sourceUi.open(currentState,currentServices,this);})
-        .addClass("ujg-esi-source-command").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!state.registryLoading).append($("<span/>").text("Исходные данные")));
+        .addClass("ujg-esi-source-command").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!state.registryLoading));
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
