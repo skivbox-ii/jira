@@ -13,7 +13,8 @@ define("_ujgESI_main", [
   "_ujgESI_activity",
   "_ujgESI_dueDateSync",
   "_ujgESI_componentSync",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule) {
+  "_ujgESI_activityLoader",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -1097,8 +1098,37 @@ define("_ujgESI_main", [
     var epicChoices = Object.create(null);
     var createInFlight = false;
     var teamSearchSeq = 0;
-    var activitySeq = 0;
     var activityDate = "";
+    var activityTargets = Object.create(null);
+    var activityProgressTimer = null, activityProgressPainted = false;
+    function clearActivityProgressPaint() {
+      clearTimeout(activityProgressTimer); activityProgressTimer = null; activityProgressPainted = false;
+    }
+    function paintActivityProgress() {
+      activityProgressTimer = null; activityProgressPainted = true;
+      if (!rendering.renderActivityProgress || !rendering.renderActivityProgress(state)) render();
+    }
+    var activityLoader = activityLoaderModule.create({
+      read:function(key) { return api.getIssueWithHistory(key); },
+      errorText:searchErrorText,
+      accept:function(key,issue) {
+        if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
+        var snapshot = activityModule.capture(issue);
+        snapshot.linkedKeys = childIssueKeysFromIssues([issue]);
+        (activityTargets[key] || []).forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
+      },
+      onProgress:function(progress) {
+        state.activityProgress = progress;
+        if (!activityProgressPainted) paintActivityProgress();
+        else if (activityProgressTimer === null) activityProgressTimer = setTimeout(paintActivityProgress,100);
+      },
+      onComplete:function(progress) {
+        clearActivityProgressPaint();
+        state.activityLoading = false;
+        state.activityError = progress.failures.length ? "Не удалось загрузить историю: " + progress.failures.map(function(item) { return item.key + ": " + item.message; }).join("; ") : "";
+        render();
+      }
+    });
     var dueDateSync = dueDateSyncModule ? dueDateSyncModule.create({api:api,onChange:function(snapshot) {
       state.dueDateSync = snapshot;
       if (rendering.renderDueDateSync) rendering.renderDueDateSync(state);
@@ -1147,22 +1177,23 @@ define("_ujgESI_main", [
     }
 
     function invalidateActivityHistory() {
-      activitySeq++;
+      activityLoader.cancel();
+      clearActivityProgressPaint();
+      activityTargets = Object.create(null);
       state.activityLoading = false;
       state.activityError = "";
       state.activityProgress = null;
     }
 
     function onLoadActivityHistory(options) {
-      if (state.activityLoading || state.loading || state.syncLoading || state.registryLoading) return;
+      if (state.loading || state.syncLoading || state.registryLoading) return;
       var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
       if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
         var start = Date.parse(requestedDate + "T00:00:00+03:00");
         if (isFinite(start) && start < Date.now()) requiredThrough = Math.min(Date.now(), start + 86400000);
       }
-      var seq = ++activitySeq, rows = state.rows, project = state.projectKey, epic = state.epicKey, mode = state.viewMode;
-      var targets = Object.create(null), pending = Object.create(null), failures = (opts.failures || []).slice();
-      rows.forEach(function(row) {
+      var targets = Object.create(null), pending = Object.create(null);
+      state.rows.forEach(function(row) {
         var details = (row.childStatuses || []).filter(function(child) { return child && child.linkedToParent !== false; });
         var key = String(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key || "").toUpperCase();
         if (key) {
@@ -1178,10 +1209,10 @@ define("_ujgESI_main", [
           else if (requiredThrough && (!isFinite(Date.parse(detail.activity.capturedAt)) || Date.parse(detail.activity.capturedAt) < requiredThrough)) pending[key] = true;
         });
       });
-      var keys = Object.keys(pending), offset = 0;
+      var keys = Object.keys(pending);
       if (!keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
       if (opts.excludeKeys) keys = keys.filter(function(key) { return opts.excludeKeys.indexOf(key) < 0; });
-      if (!keys.length) return;
+      if (!keys.length && !state.activityLoading) return;
       if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
         state.activityError = "Загрузка истории Jira недоступна.";
         render();
@@ -1189,41 +1220,8 @@ define("_ujgESI_main", [
       }
       state.activityLoading = true;
       state.activityError = "";
-      state.activityProgress = {completed:0,total:keys.length};
-      var lastProgressRender = Date.now();
-      render();
-      function current() { return seq === activitySeq && rows === state.rows && project === state.projectKey && epic === state.epicKey && mode === state.viewMode; }
-      function next() {
-        if (!current() || offset >= keys.length) return Promise.resolve();
-        var key = keys[offset++];
-        // At most three reads in flight; only the report snapshot is enriched.
-        return Promise.resolve().then(function() { return current() ? api.getIssueWithHistory(key) : null; }).then(function(issue) {
-          if (!current()) return;
-          if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
-          var snapshot = activityModule.capture(issue);
-          snapshot.linkedKeys = childIssueKeysFromIssues([issue]);
-          targets[key].forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
-        }).catch(function(err) {
-          if (current()) failures.push(key + ": " + searchErrorText(err));
-        }).then(function() {
-          if (!current()) return;
-          state.activityProgress.completed++;
-          if (Date.now() - lastProgressRender >= 500) {
-            lastProgressRender = Date.now();
-            render();
-          }
-          return next();
-        });
-      }
-      Promise.all([next(), next(), next()]).then(function() {
-        if (!current()) return;
-        state.activityLoading = false;
-        state.activityError = failures.length ? "Не удалось загрузить историю: " + failures.slice(0, 5).join("; ") + (failures.length > 5 ? " (и ещё " + (failures.length - 5) + ")" : "") : "";
-        render();
-        if (state.reportView === "activity" && activityDate && activityDate !== requestedDate) {
-          onLoadActivityHistory({onlyIncomplete:true,date:activityDate,excludeKeys:keys.concat(opts.excludeKeys || []),failures:failures});
-        }
-      });
+      activityTargets = targets;
+      activityLoader.select(keys);
     }
 
     function hasOwn(obj, key) {

@@ -7,9 +7,9 @@ const jquery = require("jquery");
 
 function setup(realRenderer = false) {
   const dom = new JSDOM('<button id="anchor">Open</button>', {runScripts:"outside-only",url:"http://localhost"});
-  const $ = jquery(dom.window), calls = [], pending = [], modules = {jquery:$};
+  const $ = jquery(dom.window), calls = [], pending = [], preparations = [], modules = {jquery:$};
   modules._ujgESI_activityAi = {
-    prepare(report,scope) { return {scopeKey:[scope.projectKey,scope.epicKey,scope.viewMode,report.date].join("/"),fingerprint:report.fingerprint,date:report.date,asOf:report.asOf,coverage:report.coverage,eventCount:report.eventCount,parts:[{}]}; },
+    prepare(report,scope) { preparations.push({report,scope}); return {scopeKey:[scope.projectKey,scope.epicKey,scope.viewMode,report.date].join("/"),fingerprint:report.fingerprint,date:report.date,asOf:report.asOf,coverage:report.coverage,eventCount:report.eventCount,parts:[{}]}; },
     run(plan,request,options) { calls.push({plan,options}); return new Promise((resolve,reject) => pending.push({resolve,reject,options})); }
   };
   modules._ujgESI_activityMarkdown = {render(value) { return $("<p/>").text(value); }};
@@ -26,8 +26,52 @@ function setup(realRenderer = false) {
   const report = (fingerprint="a",date="2026-09-24") => ({fingerprint,date,asOf:"2026-09-24T09:00:00Z",coverage:{complete:1,total:2,isComplete:false},eventCount:3});
   const state = (projectKey="P",viewMode="jira") => ({projectKey,epicKey:"P-1",viewMode,baseUrl:"https://jira.example",preferencesStorageKey:"user"});
   ui.update(report(),state(),services);
-  return {dom,$,ui,calls,pending,requests,report,state,services,flush:() => new Promise(resolve => setImmediate(resolve))};
+  return {dom,$,ui,calls,pending,preparations,requests,report,state,services,flush:() => new Promise(resolve => setImmediate(resolve))};
 }
+
+test("ordinary date browsing defers AI preparation until opening the latest slice", t => {
+  const x=setup(); t.after(()=>{x.ui.destroy();x.dom.window.close();});
+  x.ui.update(x.report("b","2026-09-23"),x.state(),x.services);
+  x.ui.update(x.report("c","2026-09-22"),x.state(),x.services);
+  assert.equal(x.preparations.length,0);
+  x.ui.open(x.$("#anchor")[0]);
+  assert.equal(x.preparations.length,1);
+  assert.equal(x.preparations[0].report.fingerprint,"c");
+  assert.match(x.$(".ujg-esi-ai-meta").text(),/22\.09\.2026/);
+  assert.equal(x.requests.length,0);
+});
+test("AI cutoff distinguishes end of selected day from its beginning and a partial day", t=>{
+  const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});
+  for(const [asOf,label] of [["2026-09-24T21:00:00Z","24:00 МСК"],["2026-09-23T21:00:00Z","00:00 МСК"],["2026-09-24T09:00:00Z","12:00 МСК"]]) {
+    x.ui.update({...x.report(),asOf},x.state(),x.services);x.ui.open(x.$("#anchor")[0]);
+    assert.ok(x.$(".ujg-esi-ai-meta").text().includes(label));x.ui.dismiss();
+  }
+});
+
+test("closed AI session defers preparation but detects stale data on reopening", async t => {
+  const x=setup(); t.after(()=>{x.ui.destroy();x.dom.window.close();});
+  x.ui.open(x.$("#anchor")[0]);
+  x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  x.pending[0].resolve({markdown:"Previous",completedParts:1,totalParts:1});await x.flush();
+  x.ui.dismiss();
+  const before=x.preparations.length;
+  x.ui.update(x.report("new"),x.state(),x.services);
+  assert.equal(x.preparations.length,before);
+  x.ui.open(x.$("#anchor")[0]);
+  assert.match(x.$(".ujg-esi-ai-stale").text(),/устарел/);
+  assert.equal(x.$(".ujg-esi-ai-report").text(),"Previous");
+});
+
+test("switching away and back while AI is closed cannot restore another scope conversation", async t => {
+  const x=setup(); t.after(()=>{x.ui.destroy();x.dom.window.close();});
+  x.ui.open(x.$("#anchor")[0]);x.$(".ujg-esi-ai-generate").trigger("click");await x.flush();
+  x.pending[0].resolve({markdown:"Previous",completedParts:1,totalParts:1});await x.flush();
+  x.ui.dismiss();
+  x.ui.update(x.report("other","2026-09-23"),x.state(),x.services);
+  x.ui.update(x.report(),x.state(),x.services);
+  x.ui.open(x.$("#anchor")[0]);
+  assert.equal(x.$(".ujg-esi-ai-report").text(),"");
+});
 
 test("opening report shows cutoff and coverage without requesting; explicit generation reports progress", async t => {
   const x=setup(); t.after(() => { x.ui.destroy(); x.dom.window.close(); });
@@ -176,7 +220,7 @@ test("Escape after a Dynamics redraw returns focus to the newly mounted report c
   const dom=new JSDOM('<div id="root"></div>',{runScripts:"outside-only",url:"http://localhost"});
   const $=jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")};
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-markdown","activity-ai-ui","activity-ui"])
+  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-markdown","activity-ai-ui","activity-store","activity-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   const state={rows:[],teams:[],projectKey:"P",epicKey:"P-1",viewMode:"jira"};

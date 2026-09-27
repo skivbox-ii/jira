@@ -5401,6 +5401,108 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
   return {capture:capture,day:day,today:today,summarize:summarize,componentRows:componentRows,componentFacets:componentFacets,exportHtml:exportHtml,statusLabel:statusLabel,statusTone:statusTone,returnKind:returnKind,eventText:eventText,eventCategory:eventCategory};
 });
 
+/* === Module: activity-loader.js === */
+define("_ujgESI_activityLoader", [], function() {
+  "use strict";
+  function create(options) {
+    var active = Object.create(null), wanted = [], queued = [], results = Object.create(null);
+    var epoch = 0, selection = 0, completedSelection = -1, enabled = false;
+    function snapshot() {
+      var failures = [], completed = 0;
+      wanted.forEach(function(key) {
+        if (!results[key]) return;
+        completed++;
+        if (results[key].error) failures.push({key:key,message:results[key].error});
+      });
+      return {total:wanted.length,completed:completed,failures:failures,
+        activeKeys:Object.keys(active).filter(function(key) { return wanted.indexOf(key) >= 0; }),queued:queued.length};
+    }
+    function notify() {
+      if (!enabled || completedSelection === selection) return;
+      var current = selection, progress = snapshot();
+      if (options.onProgress) options.onProgress(progress);
+      if (current === selection && progress.completed === progress.total && completedSelection !== current) {
+        completedSelection = current;
+        if (options.onComplete) options.onComplete(progress);
+      }
+    }
+    function pump(skipNotification) {
+      while (enabled && queued.length && Object.keys(active).length < 3) start(queued.shift());
+      if (!skipNotification) notify();
+    }
+    function start(key) {
+      var entry = {epoch:epoch,request:null};
+      active[key] = entry;
+      function current() { return enabled && entry.epoch === epoch && active[key] === entry; }
+      Promise.resolve().then(function() {
+        if (!current()) return null;
+        entry.request = options.read(key);
+        return entry.request;
+      }).then(function(value) {
+        if (!current() || wanted.indexOf(key) < 0) return;
+        options.accept(key,value);
+        if (wanted.indexOf(key) >= 0) results[key] = {};
+      }).catch(function(error) {
+        if (!current() || wanted.indexOf(key) < 0) return;
+        results[key] = {error:options.errorText ? options.errorText(error) : String(error && (error.message || error.statusText) || error)};
+      }).then(function() {
+        if (!current()) return;
+        delete active[key];
+        pump(wanted.indexOf(key) < 0 && !queued.length);
+      });
+    }
+    function abort(key) {
+      var entry = active[key];
+      delete active[key];
+      if (entry && entry.request && typeof entry.request.abort === "function") {
+        try { entry.request.abort(); } catch (ignore) { /* Late responses are isolated by identity. */ }
+      }
+    }
+    function select(keys) {
+      selection++; enabled = true; results = Object.create(null);
+      var seen = Object.create(null);
+      wanted = (keys || []).filter(function(key) {
+        if (typeof key !== "string" || !key || seen[key]) return false;
+        seen[key] = true; return true;
+      });
+      Object.keys(active).forEach(function(key) {
+        if (!seen[key] && (!active[key].request || typeof active[key].request.abort === "function")) abort(key);
+      });
+      queued = wanted.filter(function(key) { return !active[key]; });
+      pump();
+    }
+    function cancel() {
+      enabled = false; epoch++; selection++; queued = []; wanted = []; results = Object.create(null);
+      Object.keys(active).forEach(abort);
+    }
+    return {select:select,cancel:cancel};
+  }
+  return {create:create};
+});
+
+/* === Module: activity-store.js === */
+define("_ujgESI_activityStore", [], function() {
+  "use strict";
+  function create() {
+    var entries = new Map();
+    return {
+      clear:function() { entries.clear(); },
+      get:function(key, calculate) {
+        if (entries.has(key)) {
+          var value = entries.get(key);
+          entries.delete(key); entries.set(key,value);
+          return value;
+        }
+        var report = calculate();
+        entries.set(key,report);
+        if (entries.size > 6) entries.delete(entries.keys().next().value);
+        return report;
+      }
+    };
+  }
+  return {create:create};
+});
+
 /* === Module: activity-management-ui.js === */
 define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons"], function($, activity, icon) {
   "use strict";
@@ -6475,14 +6577,16 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     var $dialog, $report, $partial, $history, $question, $ask, $generate, $stop, $progress, $error, $stale, $meta;
     var anchor, previousOverflow, currentPlan, currentState, services, session, serial = 0, destroyed = false;
     var scopeKey = "", fingerprint = "", preparationError = "", renderContextKey, renderedReport, renderedPartial, renderedHistory;
+    var pendingReport, selectionKey = "";
     function button(className, label, iconName, action) {
       return $("<button/>").attr({type:"button","aria-label":label}).addClass(className).append(icon(iconName),$("<span/>").text(label)).on("click",action);
     }
     function formatDate(date) {
       return /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date.slice(8,10) + "." + date.slice(5,7) + "." + date.slice(0,4) : String(date || "");
     }
-    function cutoff(asOf) {
+    function cutoff(asOf,date) {
       var time = Date.parse(asOf || "");
+      if (isFinite(time) && time === Date.parse(date + "T00:00:00+03:00") + 86400000) return "24:00 МСК";
       return isFinite(time) ? new Date(time + 10800000).toISOString().slice(11,16) + " МСК" : "время среза неизвестно";
     }
     function textError(error) { return String(error && error.message || error || "Ошибка запроса"); }
@@ -6492,7 +6596,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function refresh() {
       if (!$dialog) return;
       var coverage = currentPlan && currentPlan.coverage || {};
-      $meta.text(currentPlan ? formatDate(currentPlan.date) + " · на " + cutoff(currentPlan.asOf) + " · история: " + (coverage.complete == null ? "?" : coverage.complete) + " / " + (coverage.total == null ? "?" : coverage.total) + (coverage.isComplete === false ? " · неполная" : "") + " · событий: " + (currentPlan.eventCount == null ? "?" : currentPlan.eventCount) : "Контекст недоступен");
+      $meta.text(currentPlan ? formatDate(currentPlan.date) + " · на " + cutoff(currentPlan.asOf,currentPlan.date) + " · история: " + (coverage.complete == null ? "?" : coverage.complete) + " / " + (coverage.total == null ? "?" : coverage.total) + (coverage.isComplete === false ? " · неполная" : "") + " · событий: " + (currentPlan.eventCount == null ? "?" : currentPlan.eventCount) : "Контекст недоступен");
       $stale.text(session && session.markdown && session.fingerprint !== fingerprint ? "Отчёт устарел: данные обновились. Сформируйте новый отчёт для этого среза." : "");
       var reportText = session && session.markdown || "", partialText = session && session.partial || "";
       var history = session && session.history || [], historyKey = JSON.stringify(history);
@@ -6592,6 +6696,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function open(control) {
       if (destroyed) return;
       if ($dialog) { $dialog.trigger("focus"); return; }
+      prepareCurrent();
       anchor = control || document.activeElement;
       if (anchor) $(anchor).attr("aria-expanded","true");
       previousOverflow = document.body.style.overflow;
@@ -6632,17 +6737,29 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function update(report,state,nextServices) {
       if (destroyed) return;
       currentState = state || {}; services = nextServices || {};
+      pendingReport = report;
+      var nextSelection = JSON.stringify([currentState.baseUrl,currentState.preferencesStorageKey,currentState.userScope,
+        currentState.projectKey,currentState.epicKey,currentState.viewMode,report && report.date,
+        report && report.componentScope ? report.componentScope.map(function(item) { return item.id; }).sort() : null]);
+      if (selectionKey !== nextSelection) {
+        selectionKey = nextSelection; serial++; session = null;
+        if ($dialog) $question.val("");
+      }
       var nextRenderContext = JSON.stringify([currentState.baseUrl || "",currentState.teams || []]);
       if (nextRenderContext !== renderContextKey) {
         renderedReport = renderedPartial = renderedHistory = undefined;
         renderContextKey = nextRenderContext;
       }
+      if (!$dialog && !(session && session.busy)) { currentPlan = null; return; }
+      prepareCurrent();
+    }
+    function prepareCurrent() {
       var plan = null;
       preparationError = "";
-      try { plan = activityAi.prepare(report,{projectKey:currentState.projectKey,epicKey:currentState.epicKey,
+      try { plan = activityAi.prepare(pendingReport,{projectKey:currentState.projectKey,epicKey:currentState.epicKey,
         baseUrl:currentState.baseUrl,preferencesStorageKey:currentState.preferencesStorageKey,userScope:currentState.userScope,viewMode:currentState.viewMode}); }
       catch (error) { preparationError = textError(error); }
-      var nextScope = plan ? plan.scopeKey : [currentState.projectKey,currentState.epicKey,currentState.viewMode,report && report.date].join("/");
+      var nextScope = plan ? plan.scopeKey : selectionKey;
       var nextFingerprint = plan && plan.fingerprint || "";
       if (nextScope !== scopeKey) {
         serial++; session = null; scopeKey = nextScope;
@@ -6653,14 +6770,14 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       refresh();
     }
     function suspend() { serial++; if (session) session.busy = false; dismiss(); }
-    function destroy() { suspend(); destroyed = true; session = null; currentPlan = null; }
+    function destroy() { suspend(); destroyed = true; session = null; currentPlan = null; pendingReport = null; }
     return {update:update,open:open,dismiss:dismiss,rebindAnchor:rebindAnchor,suspend:suspend,destroy:destroy};
   }
   return {create:create};
 });
 
 /* === Module: activity-ui.js === */
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi"], function($, activity, icon, managementUi, activityAiUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore"], function($, activity, icon, managementUi, activityAiUi, activityStore) {
   "use strict";
   var sequence = 0;
 
@@ -6741,6 +6858,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
   }
   function create() {
     var aiUi = activityAiUi.create();
+    var reportStore = activityStore.create(), cacheDay = moscowToday();
+    var drawVersion = 0;
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
@@ -7193,21 +7312,67 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       document.body.appendChild(anchor); anchor.click(); anchor.remove();
       setTimeout(function() { URL.revokeObjectURL(url); }, 0);
     }
+    function coverageNode(state,report,services) {
+      var coverage = report.coverage || {};
+      var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
+      var progress = state.activityProgress || {};
+      var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
+        (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
+        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
+      $coverage.append($("<span/>").text(coverageText));
+      if (state.activityLoading) {
+        $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text("Показан предыдущий срез; итоги обновятся после загрузки."));
+        var $loading = $("<details/>").addClass("ujg-esi-activity-loading-details");
+        $loading.append($("<summary/>").text("Читается: " + (progress.activeKeys || []).length + " · В очереди: " + (progress.queued || 0) + " · Ошибок: " + (progress.failures || []).length));
+        var $loads = $("<div/>").addClass("ujg-esi-activity-warning-list");
+        (progress.activeKeys || []).forEach(function(key) { $loads.append($("<div/>").text("Загрузка " + key)); });
+        (progress.failures || []).forEach(function(failure) { $loads.append($("<div/>").text(failure.key + ": " + failure.message)); });
+        $coverage.append($loading.append($loads));
+      }
+      var $details;
+      if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
+        var warnings = coverage.warnings;
+        $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
+        $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
+        var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
+        warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
+        $coverage.append($details.append($warningList));
+      }
+      if (!state.activityLoading && !state.registryLoading && (coverage.diagnostics || []).length) {
+        var $diagnostics = $("<details/>").addClass("ujg-esi-activity-diagnostic-details");
+        $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
+        var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
+        coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
+        if (!$details) {
+          $details = $("<details/>").addClass("ujg-esi-activity-warning-details").append($("<summary/>").text("Технические подробности"));
+          $coverage.append($details);
+        }
+        $details.append($diagnostics.append($diagnosticList));
+      }
+      if (coverage.total || state.activityError || state.activityLoading) {
+        if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));
+        if (state.activityError) $coverage.append($("<span/>").addClass("ujg-esi-activity-error").text(state.activityError));
+      }
+      return $coverage;
+    }
     function draw() {
+      drawVersion++;
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
       var sourceSettings = Object.assign({}, state.mappingSettings || {}, state.sourceColumnSettings || {});
       var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:sourceSettings.columnMap, journalRows:state.deadlineJournalRows};
-      if (fullReport && fullReport.deadlineReferenceDate && fullReport.deadlineReferenceDate !== moscowToday()) fullReport=scopedReport=null;
-      if (!fullReport) fullReport = activity.summarize(state.rows || [],state.teams || [],options);
+      if (cacheDay !== moscowToday()) { cacheDay=moscowToday(); reportStore.clear(); fullReport=scopedReport=null; }
+      if (!fullReport) fullReport = reportStore.get(JSON.stringify([date,null]),function() { return activity.summarize(state.rows || [],state.teams || [],options); });
       var facets = activity.componentFacets(fullReport);
       facets.forEach(function(item) { componentNames[item.id] = item.name; });
       if (!scopedReport) {
         var scopedCutoff = fullReport.asOf || (Number.isFinite(fullReport.start) ? new Date(fullReport.start-1).toISOString() : null);
-        scopedReport = componentSelection === null ? fullReport : activity.summarize(activity.componentRows(state.rows || [],componentSelection),state.teams || [],Object.assign({},options,{now:fullReport.generatedAt,cutoff:scopedCutoff}));
-        if (componentSelection !== null) scopedReport = Object.assign({},scopedReport,{componentScope:componentSelection.map(function(id) { return {id:id,name:componentNames[id] || id}; })});
+        scopedReport = componentSelection === null ? fullReport : reportStore.get(JSON.stringify([date,componentSelection.slice().sort()]),function() {
+          var scoped = activity.summarize(activity.componentRows(state.rows || [],componentSelection),state.teams || [],Object.assign({},options,{now:fullReport.generatedAt,cutoff:scopedCutoff}));
+          return Object.assign({},scoped,{componentScope:componentSelection.map(function(id) { return {id:id,name:componentNames[id] || id}; })});
+        });
       }
       var report = scopedReport;
       if (lastAiReport !== report) { aiUi.update(report,state,services); lastAiReport = report; }
@@ -7219,8 +7384,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       function changeDate(nextDate) {
         if (!validDate(nextDate) || nextDate === date) return;
         date = nextDate; filters = {}; fullReport=null; scopedReport=null; saveLayout();
+        var before = drawVersion;
         if (currentServices && currentServices.onActivityDateChange) currentServices.onActivityDateChange(date);
-        draw();
+        if (before === drawVersion) draw();
       }
       $controls.append(button("ChevronLeft","Предыдущий день",function() { changeDate(shiftDate(date,-1)); }));
       $controls.append($("<input/>").addClass("ujg-esi-activity-date").attr({type:"date", "aria-label":"Дата отчёта"}).val(date).on("change",function() {
@@ -7345,37 +7511,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       else $transferSection.append($("<p/>").addClass("ujg-esi-activity-flow-empty").text(coverage.isComplete ? "Нет передач за день" : "Не зафиксировано в загруженной истории"));
       $flows.append($transferSection);
       if ((state.rows || []).length) $root.append($flows);
-      var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
-      var progress = state.activityProgress || {};
-      var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
-        (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
-        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
-      $coverage.append($("<span/>").text(coverageText));
-      var $details;
-      if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
-        var warnings = coverage.warnings;
-        $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
-        $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
-        var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
-        warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
-        $coverage.append($details.append($warningList));
-      }
-      if (!state.activityLoading && !state.registryLoading && (coverage.diagnostics || []).length) {
-        var $diagnostics = $("<details/>").addClass("ujg-esi-activity-diagnostic-details");
-        $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
-        var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
-        coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
-        if (!$details) {
-          $details = $("<details/>").addClass("ujg-esi-activity-warning-details").append($("<summary/>").text("Технические подробности"));
-          $coverage.append($details);
-        }
-        $details.append($diagnostics.append($diagnosticList));
-      }
-      if (coverage.total || state.activityError || state.activityLoading) {
-        if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));
-        if (state.activityError) $coverage.append($("<span/>").addClass("ujg-esi-activity-error").text(state.activityError));
-      }
-      $coverage.insertAfter($root.children(".ujg-esi-activity-scope"));
+      coverageNode(state,report,services).insertAfter($root.children(".ujg-esi-activity-scope"));
       var $journal = $("<section/>").addClass("ujg-esi-activity-journal");
       var $journalTools = $("<div/>").addClass("ujg-esi-activity-journal-tools");
       fields.forEach(function(field) {
@@ -7496,12 +7632,23 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }
       $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
     }
-    return {resize:resize,dismissPopover:dismissPopover,suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); },destroy:function() {
-      aiUi.destroy(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+    return {resize:resize,dismissPopover:dismissPopover,updateProgress:function(state) {
+      if (!$host || !$host[0] || !$.contains(document,$host[0]) || !scopedReport) return false;
+      currentState=state;
+      var $old=$host.find(".ujg-esi-activity-coverage"), open=$old.find(".ujg-esi-activity-loading-details").prop("open");
+      var $next=coverageNode(state,scopedReport,currentServices);
+      $next.find(".ujg-esi-activity-loading-details").prop("open",!!open);
+      $old.replaceWith($next);
+      $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
+      return true;
+    },suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+      aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
+      // A main render publishes a new dataset. Never cache across that boundary.
+      reportStore.clear();
       fullReport=null; scopedReport=null;
       loadComponentScope(currentState);
       var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";
@@ -10050,6 +10197,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   return {
     init: init,
     render: render,
+    renderActivityProgress: function(state) { return !!(activityView && activityView.updateProgress(state)); },
     renderDueDateSync: renderDueDateSync,
     clearMappingError: clearMappingError,
   };
@@ -10071,7 +10219,8 @@ define("_ujgESI_main", [
   "_ujgESI_activity",
   "_ujgESI_dueDateSync",
   "_ujgESI_componentSync",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule) {
+  "_ujgESI_activityLoader",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -11155,8 +11304,37 @@ define("_ujgESI_main", [
     var epicChoices = Object.create(null);
     var createInFlight = false;
     var teamSearchSeq = 0;
-    var activitySeq = 0;
     var activityDate = "";
+    var activityTargets = Object.create(null);
+    var activityProgressTimer = null, activityProgressPainted = false;
+    function clearActivityProgressPaint() {
+      clearTimeout(activityProgressTimer); activityProgressTimer = null; activityProgressPainted = false;
+    }
+    function paintActivityProgress() {
+      activityProgressTimer = null; activityProgressPainted = true;
+      if (!rendering.renderActivityProgress || !rendering.renderActivityProgress(state)) render();
+    }
+    var activityLoader = activityLoaderModule.create({
+      read:function(key) { return api.getIssueWithHistory(key); },
+      errorText:searchErrorText,
+      accept:function(key,issue) {
+        if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
+        var snapshot = activityModule.capture(issue);
+        snapshot.linkedKeys = childIssueKeysFromIssues([issue]);
+        (activityTargets[key] || []).forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
+      },
+      onProgress:function(progress) {
+        state.activityProgress = progress;
+        if (!activityProgressPainted) paintActivityProgress();
+        else if (activityProgressTimer === null) activityProgressTimer = setTimeout(paintActivityProgress,100);
+      },
+      onComplete:function(progress) {
+        clearActivityProgressPaint();
+        state.activityLoading = false;
+        state.activityError = progress.failures.length ? "Не удалось загрузить историю: " + progress.failures.map(function(item) { return item.key + ": " + item.message; }).join("; ") : "";
+        render();
+      }
+    });
     var dueDateSync = dueDateSyncModule ? dueDateSyncModule.create({api:api,onChange:function(snapshot) {
       state.dueDateSync = snapshot;
       if (rendering.renderDueDateSync) rendering.renderDueDateSync(state);
@@ -11205,22 +11383,23 @@ define("_ujgESI_main", [
     }
 
     function invalidateActivityHistory() {
-      activitySeq++;
+      activityLoader.cancel();
+      clearActivityProgressPaint();
+      activityTargets = Object.create(null);
       state.activityLoading = false;
       state.activityError = "";
       state.activityProgress = null;
     }
 
     function onLoadActivityHistory(options) {
-      if (state.activityLoading || state.loading || state.syncLoading || state.registryLoading) return;
+      if (state.loading || state.syncLoading || state.registryLoading) return;
       var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
       if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
         var start = Date.parse(requestedDate + "T00:00:00+03:00");
         if (isFinite(start) && start < Date.now()) requiredThrough = Math.min(Date.now(), start + 86400000);
       }
-      var seq = ++activitySeq, rows = state.rows, project = state.projectKey, epic = state.epicKey, mode = state.viewMode;
-      var targets = Object.create(null), pending = Object.create(null), failures = (opts.failures || []).slice();
-      rows.forEach(function(row) {
+      var targets = Object.create(null), pending = Object.create(null);
+      state.rows.forEach(function(row) {
         var details = (row.childStatuses || []).filter(function(child) { return child && child.linkedToParent !== false; });
         var key = String(row.createdKey || row.jiraKey || row.storyDetails && row.storyDetails.key || "").toUpperCase();
         if (key) {
@@ -11236,10 +11415,10 @@ define("_ujgESI_main", [
           else if (requiredThrough && (!isFinite(Date.parse(detail.activity.capturedAt)) || Date.parse(detail.activity.capturedAt) < requiredThrough)) pending[key] = true;
         });
       });
-      var keys = Object.keys(pending), offset = 0;
+      var keys = Object.keys(pending);
       if (!keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
       if (opts.excludeKeys) keys = keys.filter(function(key) { return opts.excludeKeys.indexOf(key) < 0; });
-      if (!keys.length) return;
+      if (!keys.length && !state.activityLoading) return;
       if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
         state.activityError = "Загрузка истории Jira недоступна.";
         render();
@@ -11247,41 +11426,8 @@ define("_ujgESI_main", [
       }
       state.activityLoading = true;
       state.activityError = "";
-      state.activityProgress = {completed:0,total:keys.length};
-      var lastProgressRender = Date.now();
-      render();
-      function current() { return seq === activitySeq && rows === state.rows && project === state.projectKey && epic === state.epicKey && mode === state.viewMode; }
-      function next() {
-        if (!current() || offset >= keys.length) return Promise.resolve();
-        var key = keys[offset++];
-        // At most three reads in flight; only the report snapshot is enriched.
-        return Promise.resolve().then(function() { return current() ? api.getIssueWithHistory(key) : null; }).then(function(issue) {
-          if (!current()) return;
-          if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
-          var snapshot = activityModule.capture(issue);
-          snapshot.linkedKeys = childIssueKeysFromIssues([issue]);
-          targets[key].forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
-        }).catch(function(err) {
-          if (current()) failures.push(key + ": " + searchErrorText(err));
-        }).then(function() {
-          if (!current()) return;
-          state.activityProgress.completed++;
-          if (Date.now() - lastProgressRender >= 500) {
-            lastProgressRender = Date.now();
-            render();
-          }
-          return next();
-        });
-      }
-      Promise.all([next(), next(), next()]).then(function() {
-        if (!current()) return;
-        state.activityLoading = false;
-        state.activityError = failures.length ? "Не удалось загрузить историю: " + failures.slice(0, 5).join("; ") + (failures.length > 5 ? " (и ещё " + (failures.length - 5) + ")" : "") : "";
-        render();
-        if (state.reportView === "activity" && activityDate && activityDate !== requestedDate) {
-          onLoadActivityHistory({onlyIncomplete:true,date:activityDate,excludeKeys:keys.concat(opts.excludeKeys || []),failures:failures});
-        }
-      });
+      activityTargets = targets;
+      activityLoader.select(keys);
     }
 
     function hasOwn(obj, key) {

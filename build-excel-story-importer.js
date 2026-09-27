@@ -30,6 +30,8 @@ var MODULE_ORDER = [
   "statistics.js",
   "statistics-ui.js",
   "activity.js",
+  "activity-loader.js",
+  "activity-store.js",
   "activity-management-ui.js",
   "activity-ai.js",
   { dir: path.join(__dirname, "vendor"), file: "marked-16.4.2.umd.js", amd: "_ujgESI_marked" },

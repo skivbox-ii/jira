@@ -4,14 +4,16 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     var $dialog, $report, $partial, $history, $question, $ask, $generate, $stop, $progress, $error, $stale, $meta;
     var anchor, previousOverflow, currentPlan, currentState, services, session, serial = 0, destroyed = false;
     var scopeKey = "", fingerprint = "", preparationError = "", renderContextKey, renderedReport, renderedPartial, renderedHistory;
+    var pendingReport, selectionKey = "";
     function button(className, label, iconName, action) {
       return $("<button/>").attr({type:"button","aria-label":label}).addClass(className).append(icon(iconName),$("<span/>").text(label)).on("click",action);
     }
     function formatDate(date) {
       return /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date.slice(8,10) + "." + date.slice(5,7) + "." + date.slice(0,4) : String(date || "");
     }
-    function cutoff(asOf) {
+    function cutoff(asOf,date) {
       var time = Date.parse(asOf || "");
+      if (isFinite(time) && time === Date.parse(date + "T00:00:00+03:00") + 86400000) return "24:00 МСК";
       return isFinite(time) ? new Date(time + 10800000).toISOString().slice(11,16) + " МСК" : "время среза неизвестно";
     }
     function textError(error) { return String(error && error.message || error || "Ошибка запроса"); }
@@ -21,7 +23,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function refresh() {
       if (!$dialog) return;
       var coverage = currentPlan && currentPlan.coverage || {};
-      $meta.text(currentPlan ? formatDate(currentPlan.date) + " · на " + cutoff(currentPlan.asOf) + " · история: " + (coverage.complete == null ? "?" : coverage.complete) + " / " + (coverage.total == null ? "?" : coverage.total) + (coverage.isComplete === false ? " · неполная" : "") + " · событий: " + (currentPlan.eventCount == null ? "?" : currentPlan.eventCount) : "Контекст недоступен");
+      $meta.text(currentPlan ? formatDate(currentPlan.date) + " · на " + cutoff(currentPlan.asOf,currentPlan.date) + " · история: " + (coverage.complete == null ? "?" : coverage.complete) + " / " + (coverage.total == null ? "?" : coverage.total) + (coverage.isComplete === false ? " · неполная" : "") + " · событий: " + (currentPlan.eventCount == null ? "?" : currentPlan.eventCount) : "Контекст недоступен");
       $stale.text(session && session.markdown && session.fingerprint !== fingerprint ? "Отчёт устарел: данные обновились. Сформируйте новый отчёт для этого среза." : "");
       var reportText = session && session.markdown || "", partialText = session && session.partial || "";
       var history = session && session.history || [], historyKey = JSON.stringify(history);
@@ -121,6 +123,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function open(control) {
       if (destroyed) return;
       if ($dialog) { $dialog.trigger("focus"); return; }
+      prepareCurrent();
       anchor = control || document.activeElement;
       if (anchor) $(anchor).attr("aria-expanded","true");
       previousOverflow = document.body.style.overflow;
@@ -161,17 +164,29 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function update(report,state,nextServices) {
       if (destroyed) return;
       currentState = state || {}; services = nextServices || {};
+      pendingReport = report;
+      var nextSelection = JSON.stringify([currentState.baseUrl,currentState.preferencesStorageKey,currentState.userScope,
+        currentState.projectKey,currentState.epicKey,currentState.viewMode,report && report.date,
+        report && report.componentScope ? report.componentScope.map(function(item) { return item.id; }).sort() : null]);
+      if (selectionKey !== nextSelection) {
+        selectionKey = nextSelection; serial++; session = null;
+        if ($dialog) $question.val("");
+      }
       var nextRenderContext = JSON.stringify([currentState.baseUrl || "",currentState.teams || []]);
       if (nextRenderContext !== renderContextKey) {
         renderedReport = renderedPartial = renderedHistory = undefined;
         renderContextKey = nextRenderContext;
       }
+      if (!$dialog && !(session && session.busy)) { currentPlan = null; return; }
+      prepareCurrent();
+    }
+    function prepareCurrent() {
       var plan = null;
       preparationError = "";
-      try { plan = activityAi.prepare(report,{projectKey:currentState.projectKey,epicKey:currentState.epicKey,
+      try { plan = activityAi.prepare(pendingReport,{projectKey:currentState.projectKey,epicKey:currentState.epicKey,
         baseUrl:currentState.baseUrl,preferencesStorageKey:currentState.preferencesStorageKey,userScope:currentState.userScope,viewMode:currentState.viewMode}); }
       catch (error) { preparationError = textError(error); }
-      var nextScope = plan ? plan.scopeKey : [currentState.projectKey,currentState.epicKey,currentState.viewMode,report && report.date].join("/");
+      var nextScope = plan ? plan.scopeKey : selectionKey;
       var nextFingerprint = plan && plan.fingerprint || "";
       if (nextScope !== scopeKey) {
         serial++; session = null; scopeKey = nextScope;
@@ -182,7 +197,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       refresh();
     }
     function suspend() { serial++; if (session) session.busy = false; dismiss(); }
-    function destroy() { suspend(); destroyed = true; session = null; currentPlan = null; }
+    function destroy() { suspend(); destroyed = true; session = null; currentPlan = null; pendingReport = null; }
     return {update:update,open:open,dismiss:dismiss,rebindAnchor:rebindAnchor,suspend:suspend,destroy:destroy};
   }
   return {create:create};

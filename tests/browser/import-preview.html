@@ -28,7 +28,7 @@ window.offlineApi = {
   getProjectCreateMeta: function(){return Promise.resolve({projects:[]});},
   getProjectComponents: function(){return Promise.resolve([{id:"1",name:"АСУТП"},{id:"2",name:"Алармы"},{id:"3",name:"PARA"}]);},
   getIssuesByKeys: function(keys){window.issueReadCalls++;return Promise.resolve({issues:keys.map(function(key){return fixtureIssues[key];}).filter(Boolean)});},
-  getIssueWithHistory: function(key){window.issueReadCalls++;window.historyReadCalls.push(key);return new Promise(function(resolve){setTimeout(function(){resolve(fixtureIssues[key]);},250);});},
+  getIssueWithHistory: function(key){window.issueReadCalls++;window.historyReadCalls.push(key);if(window.fixtureExpected)return Promise.resolve(fixtureIssues[key]);return new Promise(function(resolve){setTimeout(function(){resolve(fixtureIssues[key]);},250);});},
   getIssueDueDate: function(key){return new Promise(function(resolve,reject){setTimeout(function(){
     var issue=fixtureIssues[key];
     if(!issue){reject(new Error("Fixture not found"));return;}
@@ -41,7 +41,7 @@ window.offlineApi = {
       project:issue.fields.project,issuetype:issue.fields.issuetype,
       components:Array.isArray(issue.fields.components) ? issue.fields.components.map(function(component){return {id:component.id,name:component.name};}) : undefined}});
   },15);});},
-  updateIssueComponents: function(key,ids){return new Promise(function(resolve,reject){setTimeout(function(){
+  updateIssueComponents: function(key,ids){if(window.fixtureExpected){window.mutationCalls++;throw new Error("Ticket writes are blocked in performance preview");}return new Promise(function(resolve,reject){setTimeout(function(){
     var issue=fixtureIssues[key], catalog=[{id:"1",name:"АСУТП"},{id:"2",name:"Алармы"},{id:"3",name:"PARA"}];
     var selected=Array.isArray(ids)&&ids.length===1&&catalog.find(function(component){return component.id===ids[0];});
     if(!issue || !selected || !issue.fields.project || issue.fields.project.key!=="EVOSCADA" ||
@@ -51,12 +51,13 @@ window.offlineApi = {
     issue.fields.components=[{id:selected.id,name:selected.name}];
     window.mutationCalls++;window.componentWriteCalls.push({key:key,ids:ids.slice()});resolve();
   },100);});},
-  updateIssueDueDate: function(key,date){return new Promise(function(resolve,reject){setTimeout(function(){
+  updateIssueDueDate: function(key,date){if(window.fixtureExpected){window.mutationCalls++;throw new Error("Ticket writes are blocked in performance preview");}return new Promise(function(resolve,reject){setTimeout(function(){
     var issue=fixtureIssues[key];
     if(!issue || !/^\d{4}-\d{2}-\d{2}$/.test(date)){reject(new Error("Invalid fixture update"));return;}
     window.mutationCalls++;window.dueDateWriteCalls.push({key:key,date:date});issue.fields.duedate=date;resolve();
   },100);});},
   getProjectIssues: function(){window.issueReadCalls++;return Promise.resolve({issues:Object.values(fixtureIssues).filter(function(issue){return issue.fields.issuetype.name === "История";}).map(function(issue){
+    if (window.fixtureExpected) return issue;
     if (issue.key !== "EVOSCADA-16104") return issue;
     var partial = Object.assign({},issue); delete partial.changelog; return partial;
   })});},

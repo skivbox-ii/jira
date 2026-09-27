@@ -32,10 +32,11 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
     _ujgESI_xlsxPatcher: patcherOverride || { patchWorkbook: () => Promise.resolve(new ArrayBuffer(1)) },
     _ujgESI_rendering: {
       init: (_container, callbacks) => { app.callbacks = callbacks; },
-      render: state => { app.state = state; },
+      render: state => { app.state = state; app.renders = (app.renders || 0) + 1; },
+      renderActivityProgress: state => { app.state = state; app.progressRenders = (app.progressRenders || 0) + 1; return true; },
     },
     _ujgESI_teams: null,
-    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
+    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });
@@ -131,7 +132,7 @@ test("Dynamics automatically enriches missing history after registry load with p
   await flush(); await flush();
   assert.deepEqual(reads,["TEST-1"]);
   assert.equal(app.state.activityLoading,true);
-  assert.deepEqual(plain(app.state.activityProgress),{completed:0,total:1});
+  assert.deepEqual(plain(app.state.activityProgress),{completed:0,total:1,activeKeys:["TEST-1"],queued:0,failures:[]});
   app.callbacks.onReportViewChange("activity");
   app.callbacks.onActivityDateChange("2026-09-24");
   await flush();
@@ -140,7 +141,7 @@ test("Dynamics automatically enriches missing history after registry load with p
   await flush(); await flush();
   assert.equal(app.state.rows[0].storyDetails.activity.complete,true);
   assert.equal(app.state.activityLoading,false);
-  assert.deepEqual(plain(app.state.activityProgress),{completed:1,total:1});
+  assert.deepEqual(plain(app.state.activityProgress),{completed:1,total:1,activeKeys:[],queued:0,failures:[]});
   app.state.rows[0].storyDetails.activity.capturedAt="2026-09-25T08:00:00Z";
   app.state.rows[0].childStatuses[0].activity.capturedAt="2026-09-25T08:00:00Z";
   app.callbacks.onActivityDateChange("2026-09-23");
@@ -197,7 +198,7 @@ test("changing day renews a complete history captured before that day's end", as
   assert.equal(reads,1);
 });
 
-test("a day change during enrichment queues newly stale history without retrying the same failed issue", async () => {
+test("a day change immediately loads newly stale history while sharing an in-flight read", async () => {
   const reads=[];
   let rejectPending;
   const parents=[
@@ -213,11 +214,32 @@ test("a day change during enrichment queues newly stale history without retrying
   app.callbacks.onReportViewChange("activity");await flush();await flush();
   app.state.rows[0].storyDetails.activity.capturedAt="2026-09-23T10:00:00Z";
   app.callbacks.onActivityDateChange("2026-09-24");
-  assert.deepEqual(reads,["TEST-2"]);
+  await flush();
+  assert.deepEqual(reads,["TEST-2","TEST-1"]);
   rejectPending(new Error("offline"));await flush();await flush();await flush();
   assert.deepEqual(reads,["TEST-2","TEST-1"]);
   assert.match(app.state.activityError,/TEST-2.*offline/);
   assert.equal(app.state.activityLoading,false);
+});
+
+test("history progress updates do not rerender the report after each accepted snapshot",async()=>{
+  const requests=[];
+  const parents=Array.from({length:4},(_,i)=>({key:"TEST-"+(i+1),fields:{issuetype:{name:"Story"}}}));
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:parents}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:key=>new Promise(resolve=>requests.push({key,resolve}))
+  });
+  app.callbacks.onProjectChange("TEST");app.callbacks.onReportViewChange("activity");await flush();await flush();
+  const renders=app.renders, progress=app.progressRenders || 0;
+  requests[0].resolve({key:requests[0].key,fields:{},changelog:{startAt:0,total:0,histories:[]}});
+  await flush();await flush();
+  assert.equal(app.renders,renders);
+  assert.equal(app.progressRenders,progress,"Fast responses coalesce before the next progress paint");
+  await new Promise(resolve=>setTimeout(resolve,120));
+  assert.equal(app.progressRenders,progress+1);
+  assert.equal(app.state.activityProgress.completed,1);
+  app.callbacks.onReportViewChange("registry");
+  requests.slice(1).forEach(r=>r.resolve({key:r.key,fields:{}}));await flush();
 });
 
 test("status-since retains the real transition time for same-second Jira timestamp skew only", async () => {

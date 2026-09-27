@@ -1940,6 +1940,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   return {
     init: init,
     render: render,
+    renderActivityProgress: function(state) { return !!(activityView && activityView.updateProgress(state)); },
     renderDueDateSync: renderDueDateSync,
     clearMappingError: clearMappingError,
   };

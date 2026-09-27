@@ -17,7 +17,7 @@ function setup(activityReport) {
   const files=["remark-id", "deadlines", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
   if (activityReport) {
     modules._ujgESI_marked = require("../../vendor/marked-16.4.2.umd.js");
-    files.push("activity-ai","activity-markdown","activity-ai-ui","activity-management-ui","activity-ui");
+    files.push("activity-ai","activity-markdown","activity-ai-ui","activity-management-ui","activity-store","activity-ui");
   }
   files.push("rendering");
   for (const file of files) w.eval(fs.readFileSync(path.join(root, "ujg-excel-story-importer-modules/" + file + ".js"), "utf8"));

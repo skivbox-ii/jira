@@ -2,6 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const XLSX = require("xlsx");
+const {createPerformanceFixture} = require("./import-performance-fixture.cjs");
 const root = path.join(__dirname, "../..");
 const issues = {};
 const rows = [["№", "Замечание", "Модуль", "Приоритет", "Ответственный от\nТНТ", "Jira", "Статус в Jira", "Исполнитель в Jira"]];
@@ -153,6 +154,11 @@ Object.values(issues).forEach((target,index) => {
 issues["EVOSCADA-16104"].fields.description=issues["EVOSCADA-16104"].fields.description.replace("||Поле||Значение||","||Поле||Значение||\n|Экранная форма|МЭК: качество сигнала|");
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Лист1");
 const excel = XLSX.write(workbook, {type:"buffer",bookType:"xlsx"});
+let performanceFixture;
+function stressFixture() {
+  if (!performanceFixture) performanceFixture=createPerformanceFixture({latestDate:process.env.IMPORT_PERFORMANCE_DATE});
+  return performanceFixture;
+}
 const files = {
   "/": [path.join(__dirname,"import-preview.html"),"text/html; charset=utf-8"],
   "/test/preview-bootstrap.js": [path.join(__dirname,"import-preview-bootstrap.js"),"text/javascript"],
@@ -164,8 +170,24 @@ const files = {
   "/ujg-excel-story-importer.css": [path.join(root,"ujg-excel-story-importer.css"),"text/css"]
 };
 const server = http.createServer((req,res) => {
-  const pathname = new URL(req.url,"http://localhost").pathname;
+  const requestUrl = new URL(req.url,"http://localhost"), pathname = requestUrl.pathname;
   res.setHeader("Cache-Control","no-store");
+  if (pathname === "/" && requestUrl.searchParams.has("performance")) {
+    const html=fs.readFileSync(files["/"][0],"utf8")
+      .replace('src="/test/fixture.js"','src="/test/performance-fixture.js"')
+      .replace('src="/test/preview-bootstrap.js"','src="/test/performance-bootstrap.js"');
+    res.setHeader("Content-Type","text/html; charset=utf-8");return res.end(html);
+  }
+  if (pathname === "/test/performance-fixture.js") {
+    const fixture=stressFixture();
+    res.setHeader("Content-Type","text/javascript");
+    return res.end("window.fixtureIssues="+JSON.stringify(fixture.issues)+";window.fixtureNow="+JSON.stringify(fixture.now)+
+      ";window.fixtureDates="+JSON.stringify(fixture.dates)+";window.fixtureExpected="+JSON.stringify(fixture.expected)+
+      ";window.fixtureTeams="+JSON.stringify(fixture.teams)+";");
+  }
+  if (pathname === "/test/performance-bootstrap.js") {
+    res.setHeader("Content-Type","text/javascript");return fs.createReadStream(path.join(__dirname,"import-performance-bootstrap.js")).pipe(res);
+  }
   if (pathname === "/fixture.xlsx") {res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");return res.end(excel);}
   if (pathname === "/test/fixture.js") {res.setHeader("Content-Type","text/javascript");return res.end("window.fixtureIssues=" + JSON.stringify(issues) + ";window.fixtureNow=" + JSON.stringify(activityDate+"T18:00:00+03:00") + ";");}
   if (files[pathname]) {res.setHeader("Content-Type",files[pathname][1]);return fs.createReadStream(files[pathname][0]).pipe(res);}

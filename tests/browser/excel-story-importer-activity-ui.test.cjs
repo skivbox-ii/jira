@@ -30,7 +30,7 @@ function setup(report, configureWindow) {
   };
   modules._ujgESI_activityAiUi = {create:() => ({update(report){calls.aiUpdates++;calls.aiReport=report;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
-  for (const file of ["icons","activity-management-ui","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
+  for (const file of ["icons","activity-management-ui","activity-store","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const state = {rows:[{id:"row"}],teams:[],projectKey:"P",epicKey:"P-EPIC",viewMode:"jira",registryWarning:"Scope warning"};
   const services = {onLoadActivityHistory() { calls.refresh++; }};
   const ui = modules._ujgESI_activityUi.create();
@@ -53,6 +53,50 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+test("history progress preserves table, filter draft, focus and report calculations", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const table=x.$(".ujg-esi-activity-table")[0], calls=x.calls.summarize.length, ai=x.calls.aiUpdates;
+  x.$("[data-activity-filter='role']").trigger("click");
+  const search=x.$(".ujg-esi-activity-filter-menu input[type='search']")[0];
+  assert.ok(search); search.value="QA"; search.focus();
+  const popup=x.$(".ujg-esi-activity-filter-menu")[0];
+  x.state.activityLoading=true;
+  x.state.activityProgress={completed:2,total:5,activeKeys:["P-2","P-3"],queued:1,failures:[]};
+  assert.equal(x.ui.updateProgress(x.state),true);
+  assert.equal(x.$(".ujg-esi-activity-table")[0],table);
+  assert.equal(x.$(".ujg-esi-activity-filter-menu")[0],popup);
+  assert.equal(x.dom.window.document.activeElement,search);
+  assert.equal(search.value,"QA");
+  assert.equal(x.calls.summarize.length,calls);
+  assert.equal(x.calls.aiUpdates,ai);
+  assert.match(x.$(".ujg-esi-activity-coverage").text(),/2 из 5/);
+  assert.match(x.$(".ujg-esi-activity-coverage").text(),/P-2/);
+  assert.match(x.$(".ujg-esi-activity-coverage").text(),/предыдущий срез/i);
+  assert.equal(x.$(".ujg-esi-activity-ai-command").prop("disabled"),true);
+  x.state.activityProgress={completed:3,total:5,activeKeys:["P-4"],queued:1,failures:[{key:"P-3",message:"Unavailable"}]};
+  x.ui.updateProgress(x.state);
+  assert.match(x.$(".ujg-esi-activity-coverage").text(),/P-3.*Unavailable/);
+  assert.equal(x.calls.summarize.length,calls);
+});
+test("warm date round trip reuses a report but a new published dataset invalidates it", t => {
+  const x=setup(fixture()); t.after(()=>x.dom.window.close());
+  const change=date=>x.$(".ujg-esi-activity-date").val(date).trigger("change");
+  change("2026-09-21"); change("2026-09-22");
+  const calls=x.calls.summarize.length;
+  change("2026-09-21");
+  assert.equal(x.calls.summarize.length,calls);
+  assert.equal(x.calls.aiReport.date,"2026-09-21");
+  x.state.rows=[{id:"new-dataset"}]; x.render();
+  assert.equal(x.calls.summarize.length,calls+1);
+  assert.equal(x.calls.summarize.at(-1).rows,x.state.rows);
+});
+test("synchronous queue completion during date selection publishes the table only once", t => {
+  const x=setup(fixture());t.after(()=>x.dom.window.close());let published;
+  x.services.onActivityDateChange=()=>{x.render();published=x.$(".ujg-esi-activity-table")[0];};
+  x.$(".ujg-esi-activity-date").val("2026-09-21").trigger("change");
+  assert.equal(x.$(".ujg-esi-activity-table")[0],published);
+  assert.equal(x.calls.aiReport.date,"2026-09-21");
+});
 test("module column is visible and uses every parent component with safe text", t => {
   const report=fixture();
   report.groups[0].components=[{id:"component:1",name:"Сервер"},{id:"component:2",name:"<img src=x>"}];

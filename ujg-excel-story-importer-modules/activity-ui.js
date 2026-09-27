@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi"], function($, activity, icon, managementUi, activityAiUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore"], function($, activity, icon, managementUi, activityAiUi, activityStore) {
   "use strict";
   var sequence = 0;
 
@@ -79,6 +79,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
   }
   function create() {
     var aiUi = activityAiUi.create();
+    var reportStore = activityStore.create(), cacheDay = moscowToday();
+    var drawVersion = 0;
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
     var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
@@ -531,21 +533,67 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       document.body.appendChild(anchor); anchor.click(); anchor.remove();
       setTimeout(function() { URL.revokeObjectURL(url); }, 0);
     }
+    function coverageNode(state,report,services) {
+      var coverage = report.coverage || {};
+      var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
+      var progress = state.activityProgress || {};
+      var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
+        (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
+        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
+      $coverage.append($("<span/>").text(coverageText));
+      if (state.activityLoading) {
+        $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text("Показан предыдущий срез; итоги обновятся после загрузки."));
+        var $loading = $("<details/>").addClass("ujg-esi-activity-loading-details");
+        $loading.append($("<summary/>").text("Читается: " + (progress.activeKeys || []).length + " · В очереди: " + (progress.queued || 0) + " · Ошибок: " + (progress.failures || []).length));
+        var $loads = $("<div/>").addClass("ujg-esi-activity-warning-list");
+        (progress.activeKeys || []).forEach(function(key) { $loads.append($("<div/>").text("Загрузка " + key)); });
+        (progress.failures || []).forEach(function(failure) { $loads.append($("<div/>").text(failure.key + ": " + failure.message)); });
+        $coverage.append($loading.append($loads));
+      }
+      var $details;
+      if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
+        var warnings = coverage.warnings;
+        $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
+        $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
+        var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
+        warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
+        $coverage.append($details.append($warningList));
+      }
+      if (!state.activityLoading && !state.registryLoading && (coverage.diagnostics || []).length) {
+        var $diagnostics = $("<details/>").addClass("ujg-esi-activity-diagnostic-details");
+        $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
+        var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
+        coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
+        if (!$details) {
+          $details = $("<details/>").addClass("ujg-esi-activity-warning-details").append($("<summary/>").text("Технические подробности"));
+          $coverage.append($details);
+        }
+        $details.append($diagnostics.append($diagnosticList));
+      }
+      if (coverage.total || state.activityError || state.activityLoading) {
+        if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));
+        if (state.activityError) $coverage.append($("<span/>").addClass("ujg-esi-activity-error").text(state.activityError));
+      }
+      return $coverage;
+    }
     function draw() {
+      drawVersion++;
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
       var sourceSettings = Object.assign({}, state.mappingSettings || {}, state.sourceColumnSettings || {});
       var options = {date:date, scopeWarning:state.viewMode === "jira" ? state.registryWarning : undefined, columnMap:sourceSettings.columnMap, journalRows:state.deadlineJournalRows};
-      if (fullReport && fullReport.deadlineReferenceDate && fullReport.deadlineReferenceDate !== moscowToday()) fullReport=scopedReport=null;
-      if (!fullReport) fullReport = activity.summarize(state.rows || [],state.teams || [],options);
+      if (cacheDay !== moscowToday()) { cacheDay=moscowToday(); reportStore.clear(); fullReport=scopedReport=null; }
+      if (!fullReport) fullReport = reportStore.get(JSON.stringify([date,null]),function() { return activity.summarize(state.rows || [],state.teams || [],options); });
       var facets = activity.componentFacets(fullReport);
       facets.forEach(function(item) { componentNames[item.id] = item.name; });
       if (!scopedReport) {
         var scopedCutoff = fullReport.asOf || (Number.isFinite(fullReport.start) ? new Date(fullReport.start-1).toISOString() : null);
-        scopedReport = componentSelection === null ? fullReport : activity.summarize(activity.componentRows(state.rows || [],componentSelection),state.teams || [],Object.assign({},options,{now:fullReport.generatedAt,cutoff:scopedCutoff}));
-        if (componentSelection !== null) scopedReport = Object.assign({},scopedReport,{componentScope:componentSelection.map(function(id) { return {id:id,name:componentNames[id] || id}; })});
+        scopedReport = componentSelection === null ? fullReport : reportStore.get(JSON.stringify([date,componentSelection.slice().sort()]),function() {
+          var scoped = activity.summarize(activity.componentRows(state.rows || [],componentSelection),state.teams || [],Object.assign({},options,{now:fullReport.generatedAt,cutoff:scopedCutoff}));
+          return Object.assign({},scoped,{componentScope:componentSelection.map(function(id) { return {id:id,name:componentNames[id] || id}; })});
+        });
       }
       var report = scopedReport;
       if (lastAiReport !== report) { aiUi.update(report,state,services); lastAiReport = report; }
@@ -557,8 +605,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       function changeDate(nextDate) {
         if (!validDate(nextDate) || nextDate === date) return;
         date = nextDate; filters = {}; fullReport=null; scopedReport=null; saveLayout();
+        var before = drawVersion;
         if (currentServices && currentServices.onActivityDateChange) currentServices.onActivityDateChange(date);
-        draw();
+        if (before === drawVersion) draw();
       }
       $controls.append(button("ChevronLeft","Предыдущий день",function() { changeDate(shiftDate(date,-1)); }));
       $controls.append($("<input/>").addClass("ujg-esi-activity-date").attr({type:"date", "aria-label":"Дата отчёта"}).val(date).on("change",function() {
@@ -683,37 +732,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       else $transferSection.append($("<p/>").addClass("ujg-esi-activity-flow-empty").text(coverage.isComplete ? "Нет передач за день" : "Не зафиксировано в загруженной истории"));
       $flows.append($transferSection);
       if ((state.rows || []).length) $root.append($flows);
-      var $coverage = $("<div/>").addClass("ujg-esi-activity-coverage");
-      var progress = state.activityProgress || {};
-      var coverageText = state.registryLoading ? "Загрузка реестра Jira…" : state.activityLoading ?
-        (Number.isFinite(progress.completed) && Number.isFinite(progress.total) ? "Загрузка истории: " + progress.completed + " из " + progress.total + " задач" : "Загрузка истории…") :
-        "Проверена история " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
-      $coverage.append($("<span/>").text(coverageText));
-      var $details;
-      if (!state.activityLoading && !state.registryLoading && (coverage.warnings || []).length) {
-        var warnings = coverage.warnings;
-        $details = $("<details/>").addClass("ujg-esi-activity-warning-details");
-        $details.append($("<summary/>").text("Остались проблемы с историей (" + warnings.length + "). Технические подробности"));
-        var $warningList = $("<div/>").addClass("ujg-esi-activity-warning-list");
-        warnings.forEach(function(warning) { $warningList.append($("<div/>").text(warning)); });
-        $coverage.append($details.append($warningList));
-      }
-      if (!state.activityLoading && !state.registryLoading && (coverage.diagnostics || []).length) {
-        var $diagnostics = $("<details/>").addClass("ujg-esi-activity-diagnostic-details");
-        $diagnostics.append($("<summary/>").text("Неблокирующие расхождения времени (" + coverage.diagnostics.length + ")"));
-        var $diagnosticList = $("<div/>").addClass("ujg-esi-activity-diagnostic-list");
-        coverage.diagnostics.forEach(function(message) { $diagnosticList.append($("<div/>").text(message)); });
-        if (!$details) {
-          $details = $("<details/>").addClass("ujg-esi-activity-warning-details").append($("<summary/>").text("Технические подробности"));
-          $coverage.append($details);
-        }
-        $details.append($diagnostics.append($diagnosticList));
-      }
-      if (coverage.total || state.activityError || state.activityLoading) {
-        if (services.onLoadActivityHistory) $coverage.append(button("RefreshCw","Обновить историю",function() { services.onLoadActivityHistory(); }).prop("disabled",!!(state.activityLoading || state.loading || state.syncLoading || state.registryLoading)));
-        if (state.activityError) $coverage.append($("<span/>").addClass("ujg-esi-activity-error").text(state.activityError));
-      }
-      $coverage.insertAfter($root.children(".ujg-esi-activity-scope"));
+      coverageNode(state,report,services).insertAfter($root.children(".ujg-esi-activity-scope"));
       var $journal = $("<section/>").addClass("ujg-esi-activity-journal");
       var $journalTools = $("<div/>").addClass("ujg-esi-activity-journal-tools");
       fields.forEach(function(field) {
@@ -834,12 +853,23 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }
       $host.find(".ujg-esi-activity-scroll").scrollLeft(scrollLeft);
     }
-    return {resize:resize,dismissPopover:dismissPopover,suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); },destroy:function() {
-      aiUi.destroy(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+    return {resize:resize,dismissPopover:dismissPopover,updateProgress:function(state) {
+      if (!$host || !$host[0] || !$.contains(document,$host[0]) || !scopedReport) return false;
+      currentState=state;
+      var $old=$host.find(".ujg-esi-activity-coverage"), open=$old.find(".ujg-esi-activity-loading-details").prop("open");
+      var $next=coverageNode(state,scopedReport,currentServices);
+      $next.find(".ujg-esi-activity-loading-details").prop("open",!!open);
+      $old.replaceWith($next);
+      $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
+      return true;
+    },suspend:function() { aiUi.suspend(); closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+      aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
+      // A main render publishes a new dataset. Never cache across that boundary.
+      reportStore.clear();
       fullReport=null; scopedReport=null;
       loadComponentScope(currentState);
       var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";

@@ -21,7 +21,7 @@ const report={date:"2026-09-26",coverage:{complete:100,total:100,isComplete:true
 let summarizeCalls=0;
 const modules={jquery:$,_ujgESI_activity:{...activity,summarize(){summarizeCalls++;return report;}},_ujgESI_activityAiUi:{create:()=>({update(){},rebindAnchor(){},destroy(){}})}};
 dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-for(const file of ["icons.js","activity-management-ui.js","activity-ui.js"]){
+for(const file of ["icons.js","activity-management-ui.js","activity-store.js","activity-ui.js"]){
   const source=process.argv[2] && file==="activity-ui.js" ? execFileSync("git",["show",process.argv[2]+":ujg-excel-story-importer-modules/"+file],{cwd:root,encoding:"utf8"}) : fs.readFileSync(path.join(dir,file),"utf8");
   dom.window.eval(source);
 }
