@@ -871,7 +871,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         $group.children("th").append(button("WandSparkles","AI-разбор замечания #" + (group.remarkId || group.key),function(event) {
           event.stopPropagation();aiUi.dismiss();remarkUi.open(group,currentState,currentServices,this);
         }).addClass("ujg-esi-remark-ai-command").attr({"data-remark-key":group.key,"aria-haspopup":"dialog","aria-expanded":"false"})
-          .prop("disabled",!group.key || !!state.registryLoading).append($("<span/>").text("AI")));
+          .prop("disabled",!group.key || !!state.registryLoading));
         $body.append($group);
         journalRows(group.events,group).forEach(function(rowEvents) {
           var event = rowEvents[0];

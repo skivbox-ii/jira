@@ -32,6 +32,7 @@ async function main() {
             window.remarkReadKeys.push(key);
             return Promise.resolve(baseRead(key)).then(function(issue){
               issue=JSON.parse(JSON.stringify(issue));
+              if(key==="EVOSCADA-50001")issue.fields.description=null;
               issue.fields.comment={startAt:0,total:2,comments:[remarkComment(key,0)]};
               return issue;
             });
@@ -57,6 +58,17 @@ async function main() {
       await page.waitForFunction(()=>document.querySelector(".ujg-esi-activity-coverage")?.textContent.includes("1000 из 1000"));
       await page.evaluate(()=>{window.remarkReadKeys=[];});
       const action=page.locator('.ujg-esi-remark-ai-command[data-remark-key="EVOSCADA-50000"]');
+      await action.scrollIntoViewIfNeeded();
+      assert.equal((await action.textContent()).trim(),"");
+      const appearance=await action.evaluate(el=>{
+        const style=getComputedStyle(el),box=el.getBoundingClientRect(),head=el.closest("th").getBoundingClientRect();
+        return {border:style.borderTopWidth,background:style.backgroundColor,rightGap:head.right-box.right,bottomGap:head.bottom-box.bottom};
+      });
+      assert.equal(appearance.border,"0px");
+      assert.equal(appearance.background,"rgba(0, 0, 0, 0)");
+      assert.ok(appearance.rightGap>=0 && appearance.rightGap<16,JSON.stringify(appearance));
+      assert.ok(appearance.bottomGap>=0,JSON.stringify(appearance));
+      await page.screenshot({path:path.join(artifacts,"wand-"+width+".png")});
       const started=Date.now();await action.click();
       const dialog=page.getByRole("dialog",{name:"AI-разбор замечания",exact:true});
       await page.waitForFunction(()=>document.querySelector(".ujg-esi-remark-coverage")?.textContent.includes("4 / 4"));
@@ -77,6 +89,8 @@ async function main() {
       assert.equal(await page.evaluate(()=>window.remarkRequests.length),1);
       const sent=await page.evaluate(()=>window.remarkRequests[0]);
       assert.ok(Buffer.byteLength(sent.userPrompt)<=18000);assert.equal(sent.allowProtocolFallback,false);
+      const evidence=JSON.parse(sent.userPrompt),emptyTask=evidence.tasks.find(task=>task.key==="EVOSCADA-50001");
+      assert.equal(evidence.descriptions[emptyTask.descriptionRef],"");
       assert.equal(await dialog.locator(".ujg-esi-remark-answer script").count(),0);
       assert.ok(await dialog.locator('.ujg-esi-remark-answer a[href*="EVOSCADA-50002"]').count());
       await page.screenshot({path:path.join(artifacts,"answer-"+width+".png")});

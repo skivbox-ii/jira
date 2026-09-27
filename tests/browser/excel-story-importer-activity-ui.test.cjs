@@ -62,6 +62,28 @@ test("group header ends with its own AI action independent of daily event filter
   $action.trigger("click");assert.equal(x.calls.remarkOpen[0].key,"P-1");
   assert.equal(x.calls.aiOpen,0);
 });
+test("group remark wand is icon-only at the right edge with an accessible hit target",t=>{
+  const x=setup(fixture());t.after(()=>x.dom.window.close());
+  const css=fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer.css"),"utf8");
+  x.$("<style/>").text(css).appendTo(x.dom.window.document.head);
+  const action=x.$(".ujg-esi-remark-ai-command")[0], header=action.closest("th");
+  const style=x.dom.window.getComputedStyle(action), headerStyle=x.dom.window.getComputedStyle(header);
+  assert.equal(action.textContent.trim(),"");
+  assert.equal(action.querySelectorAll("svg").length,1);
+  assert.match(action.getAttribute("aria-label"),/AI-разбор замечания/);
+  assert.equal(action.getAttribute("title"),action.getAttribute("aria-label"));
+  assert.equal(header.lastElementChild,action);
+  assert.equal(headerStyle.position,"relative");
+  assert.equal(headerStyle.height,"40px");
+  assert.ok(parseFloat(headerStyle.paddingRight)>=40);
+  assert.equal(style.position,"absolute");
+  assert.equal(style.right,"6px");
+  assert.ok(parseFloat(style.width)>=32 && parseFloat(style.height)>=32);
+  const wandRule=Array.from(x.dom.window.document.styleSheets[0].cssRules).find(rule=>rule.selectorText===".ujg-esi-activity-icon-button.ujg-esi-remark-ai-command");
+  assert.equal(wandRule.style.getPropertyValue("border"),"0");
+  assert.equal(style.backgroundColor,"rgba(0, 0, 0, 0)");
+  assert.match(css,/\.ujg-esi-remark-ai-command:focus-visible\s*\{[^}]*outline:/);
+});
 test("history progress preserves table, filter draft, focus and report calculations", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const table=x.$(".ujg-esi-activity-table")[0], calls=x.calls.summarize.length, ai=x.calls.aiUpdates;

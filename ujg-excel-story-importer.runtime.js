@@ -8483,7 +8483,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         $group.children("th").append(button("WandSparkles","AI-разбор замечания #" + (group.remarkId || group.key),function(event) {
           event.stopPropagation();aiUi.dismiss();remarkUi.open(group,currentState,currentServices,this);
         }).addClass("ujg-esi-remark-ai-command").attr({"data-remark-key":group.key,"aria-haspopup":"dialog","aria-expanded":"false"})
-          .prop("disabled",!group.key || !!state.registryLoading).append($("<span/>").text("AI")));
+          .prop("disabled",!group.key || !!state.registryLoading));
         $body.append($group);
         journalRows(group.events,group).forEach(function(rowEvents) {
           var event = rowEvents[0];
@@ -11742,7 +11742,8 @@ define("_ujgESI_main", [
       fields[field] = issue.fields[field];
     });
     Object.keys(resolved.fields || {}).forEach(function(field) {
-      if (resolved.fields[field] != null) fields[field] = resolved.fields[field];
+      // Jira null is a loaded empty description, not an absent field.
+      if (resolved.fields[field] != null || field === "description") fields[field] = resolved.fields[field];
     });
     if (Object.keys(fields).length) out.fields = fields;
     return out;
@@ -14687,6 +14688,12 @@ define("_ujgESI_main", [
         var fresh = Object.assign({},row,{
           storyDetails:issueDetails(result.parent),childStatuses:issueChildStatusRows(result.parent,childMap),
           createdKey:key,jiraKey:key
+        });
+        // Link metadata cannot prove that a description was read in this report.
+        fresh.childStatuses.forEach(function(child) {
+          var fields = childMap[child.key] && childMap[child.key].fields || {};
+          child.descriptionLoaded = Object.prototype.hasOwnProperty.call(fields,"description");
+          child.description = child.descriptionLoaded && fields.description != null ? String(fields.description) : "";
         });
         return {row:fresh,asOf:new Date().toISOString(),startedAt:result.startedAt,sourceWarnings:result.warnings};
       });

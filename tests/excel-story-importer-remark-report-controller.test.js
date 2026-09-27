@@ -25,7 +25,7 @@ async function setup() {
   });
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}});
   await flush();app.state.projectKey="P";app.state.rows=[{id:"row",jiraKey:"PR-1",remarkId:"52",summary:"52. Исправить экран",sourceColumns:{"№":"52"}}];
-  return {app,calls,api};
+  return {app,calls,api,engine:load(path.join(dir,"remark-report.js"),{_ujgESI_activity:activity,_ujgESI_remarkId:remarkId})};
 }
 test("single-remark service reads fresh details and keeps existing registry untouched",async()=>{
   const x=await setup();assert.equal(typeof x.app.cb.onLoadRemarkReport,"function");
@@ -61,4 +61,31 @@ test("a link to the story's own parent is not mistaken for an inaccessible child
   assert.equal(result.sourceWarnings.length,0);
   assert.equal(result.row.childStatuses.length,1);
   assert.ok(!x.calls.includes("PR-99"));
+});
+for(const staleLink of [false,true]) test("explicitly empty Jira child description remains loaded"+(staleLink?" and replaces stale link description":""),async()=>{
+  const x=await setup(),read=x.api.getIssueWithHistory;
+  x.api.getIssueWithHistory=async key=>{
+    const value=await read(key);
+    if(key==="PR-2")value.fields.description=null;
+    if(key==="PR-1" && staleLink)value.fields.issuelinks[0].outwardIssue.fields.description="Устаревший текст";
+    return value;
+  };
+  const result=await x.app.cb.onLoadRemarkReport("PR-1",{});
+  assert.equal(result.row.childStatuses[0].descriptionLoaded,true);
+  assert.equal(result.row.childStatuses[0].description,"");
+  const plan=x.engine.prepare(result.row,[],{asOf:result.asOf,sourceWarnings:result.sourceWarnings});
+  assert.equal(plan.canGenerate,true,plan.blockers.join("; "));
+});
+for(const staleLink of [false,true]) test("omitted Jira child description is blocked even with stale link metadata: "+staleLink,async()=>{
+  const x=await setup(),read=x.api.getIssueWithHistory;
+  x.api.getIssueWithHistory=async key=>{
+    const value=await read(key);
+    if(key==="PR-2")delete value.fields.description;
+    if(key==="PR-1" && staleLink)value.fields.issuelinks[0].outwardIssue.fields.description="Устаревший текст";
+    return value;
+  };
+  const result=await x.app.cb.onLoadRemarkReport("PR-1",{});
+  const plan=x.engine.prepare(result.row,[],{asOf:result.asOf,sourceWarnings:result.sourceWarnings});
+  assert.equal(plan.canGenerate,false);
+  assert.match(plan.blockers.join(),/PR-2.*описание/);
 });
