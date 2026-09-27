@@ -204,6 +204,14 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         data: { fields: issueFields().join(","), expand: "changelog" },
       });
     },
+    getIssueComments: function(key, startAt) {
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()) + "/comment",
+        type:"GET",dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
+    },
+    getIssueWorklogs: function(key, startAt) {
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()) + "/worklog",
+        type:"GET",dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
+    },
     getProjectIssues: function(projectKey, epicKey) {
       var project = projectKey != null ? String(projectKey).trim() : "";
       var epic = epicKey != null ? String(epicKey).trim() : "";

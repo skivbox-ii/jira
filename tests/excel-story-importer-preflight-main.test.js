@@ -27,7 +27,7 @@ function setup(loader) {
     "_ujgESI_api":{getProjects:()=>Promise.resolve([])},"_ujgESI_excel-loader":{readWorkbook:loader || (file=>Promise.resolve({id:file.name,SheetNames:["Sheet"]}))},
     "_ujgESI_parser":parser,"_ujgESI_creator":{},"_ujgESI_mappingStore":{...mapping,create:()=>({load:()=>Promise.resolve(mapping.defaultSettings()),save:s=>{saved.push(s);return Promise.resolve(s);}})},
     "_ujgESI_xlsxPatcher":null,"_ujgESI_rendering":{init:(_,svc)=>{callbacks=svc;},render:s=>{state=s;}},
-    "_ujgShared_llmClient":null,"_ujgESI_teams":null,_ujgESI_activityLoader: require("./helpers/import-activity-loader"), "_ujgESI_activity":null,"_ujgESI_dueDateSync":null,"_ujgESI_componentSync":null,
+    "_ujgShared_llmClient":null,"_ujgESI_teams":null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), "_ujgESI_activity":null,"_ujgESI_dueDateSync":null,"_ujgESI_componentSync":null,
     _ujgESI_deadlines:load(path.join(dir,"deadlines.js"),{})});
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})})});
   return {get state(){return state;},get callbacks(){return callbacks;},saved,parsed};

@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi) {
   "use strict";
   var sequence = 0;
 
@@ -79,6 +79,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
   }
   function create() {
     var aiUi = activityAiUi.create();
+    var remarkUi = remarkReportUi.create();
     var reportStore = activityStore.create(), cacheDay = moscowToday();
     var drawVersion = 0;
     var namespace = ".ujgActivity" + (++sequence);
@@ -867,6 +868,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             group.dayHighlights && !group.dayHighlights.completed && !group.dayHighlights.created && !group.dayHighlights.reopened && !group.dayActivityCount && !group.dayNoopStatusCount && group.dayComplete ? $("<span/>").addClass("ujg-esi-activity-group-badge").text("Без изменений") : $("<span/>"),
             group.dayComplete === false ? $("<span/>").addClass("ujg-esi-activity-group-badge is-incomplete").text("История неполна") : $("<span/>"),
             $("<span/>").addClass("ujg-esi-activity-group-badge ujg-esi-activity-group-deadline " + (group.deadline && group.deadline.state === "overdue" ? "is-overdue" : group.deadline && (group.deadline.state === "today" || group.deadline.state === "tomorrow") ? "is-near" : "is-neutral")).attr("title",deadlineTitle(group.deadline,report.deadlineReferenceDate)).text(deadlineText(group.deadline)))));
+        $group.children("th").append(button("WandSparkles","AI-разбор замечания #" + (group.remarkId || group.key),function(event) {
+          event.stopPropagation();aiUi.dismiss();remarkUi.open(group,currentState,currentServices,this);
+        }).addClass("ujg-esi-remark-ai-command").attr({"data-remark-key":group.key,"aria-haspopup":"dialog","aria-expanded":"false"})
+          .prop("disabled",!group.key || !!state.registryLoading).append($("<span/>").text("AI")));
         $body.append($group);
         journalRows(group.events,group).forEach(function(rowEvents) {
           var event = rowEvents[0];
@@ -913,6 +918,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $journal.append($scroll.append($table.append($cols,$("<thead/>").append($head),$body)));
       $root.append($journal); $host.empty().append($root);
       aiUi.rebindAnchor($root.find(".ujg-esi-activity-ai-command")[0]);
+      remarkUi.rebindAnchor($root.find(".ujg-esi-remark-ai-command").toArray());
       resize();
       if (typeof window.ResizeObserver === "function") {
         if (!resizeObserver) resizeObserver = new window.ResizeObserver(function() {
@@ -941,12 +947,13 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $old.replaceWith($next);
       $host.find(".ujg-esi-activity-ai-command").prop("disabled",!!(state.activityLoading || state.registryLoading));
       return true;
-    },suspend:function() { aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
-      aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+    },suspend:function() { remarkUi.dismiss(); aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
+      remarkUi.destroy(); aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
       currentState = state || {}; currentServices = services || {};
+      remarkUi.updateScope(currentState);
       // A main render publishes a new dataset. Never cache across that boundary.
       reportStore.clear();
       fullReport=null; scopedReport=null;

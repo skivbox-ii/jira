@@ -15,7 +15,8 @@ define("_ujgESI_main", [
   "_ujgESI_componentSync",
   "_ujgESI_activityLoader",
   "_ujgESI_deadlines",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines) {
+  "_ujgESI_remarkReportLoader",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader) {
   "use strict";
 
   function searchErrorText(err) {
@@ -3505,6 +3506,47 @@ define("_ujgESI_main", [
       return llmClient.writeStoredConfig(storage, prompted, config.LLM_CONFIG_STORAGE_KEY);
     }
 
+    function onLoadRemarkReport(key, options) {
+      options = options || {};
+      var rows = state.rows, row = (rows || []).filter(function(value) { return issueKeyFromRow(value) === key; })[0];
+      function scope() { return JSON.stringify([state.projectKey,state.epicKey,state.viewMode,state.preferencesStorageKey,state.sourceFileName]); }
+      var originalScope = scope();
+      function cancelled() { return state.rows !== rows || scope() !== originalScope || !!(options.isCancelled && options.isCancelled()); }
+      return Promise.resolve().then(function() {
+        if (!row) throw new Error("История не найдена в текущем срезе.");
+        if (!remarkReportLoader) throw new Error("Загрузчик разбора недоступен.");
+        var loader = remarkReportLoader.create({
+          readIssue:function(issueKey) { return api.getIssueWithHistory(issueKey); },
+          readComments:function(issueKey,start) { return api.getIssueComments(issueKey,start); },
+          readWorklogs:function(issueKey,start) { return api.getIssueWorklogs(issueKey,start); },
+          children:function(issue) {
+            if (!Array.isArray(issue.fields && issue.fields.issuelinks)) throw new Error("Список связанных задач недоступен.");
+            issue.fields.issuelinks.forEach(function(link) {
+              if (!link || !link.type) throw new Error("Не удалось определить тип связи задачи.");
+              var type=link.type, childDirections=["inward","outward"].filter(function(direction) { return pointsToChild(type,type[direction]); });
+              if (childDirections.length && !link.inwardIssue && !link.outwardIssue) throw new Error("Дочерняя связь не содержит доступной задачи.");
+              childDirections.forEach(function(direction) {
+                var field=direction+"Issue";
+                if (Object.prototype.hasOwnProperty.call(link,field) && !normalizeIssueKey(link[field] && link[field].key)) throw new Error("Не удалось прочитать ключ дочерней задачи.");
+              });
+            });
+            return childIssueKeysFromIssues([issue]);
+          }
+        });
+        return loader.load(key,{isCancelled:cancelled,onProgress:options.onProgress});
+      }).then(function(result) {
+        if (cancelled()) throw new Error("Срез изменился; загрузка отменена.");
+        if (!isStoryIssue(result.parent)) throw new Error("Выбранная задача больше не является исходной историей.");
+        var childMap = Object.create(null);
+        result.children.forEach(function(issue) { childMap[issueKey(issue)] = issue; });
+        var fresh = Object.assign({},row,{
+          storyDetails:issueDetails(result.parent),childStatuses:issueChildStatusRows(result.parent,childMap),
+          createdKey:key,jiraKey:key
+        });
+        return {row:fresh,asOf:new Date().toISOString(),startedAt:result.startedAt,sourceWarnings:result.warnings};
+      });
+    }
+
     function onActivityLlmRequest(request) {
       return Promise.resolve().then(function() {
         if (!llmClient || typeof llmClient.requestText !== "function") throw new Error("Клиент LLM недоступен.");
@@ -4058,6 +4100,7 @@ define("_ujgESI_main", [
         if (state.reportView === "activity" && state.viewMode === "jira") onLoadActivityHistory({onlyIncomplete:true,date:date});
       },
       onActivityLlmRequest: onActivityLlmRequest,
+      onLoadRemarkReport: onLoadRemarkReport,
       onReportViewChange: function(view) {
         if (view !== "registry" && view !== "activity") return;
         if (state.reportView !== view && !closeDueDateSyncForContextChange()) return;

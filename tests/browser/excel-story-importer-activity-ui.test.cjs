@@ -29,6 +29,7 @@ function setup(report, configureWindow) {
     eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
   modules._ujgESI_activityAiUi = {create:() => ({update(report){calls.aiUpdates++;calls.aiReport=report;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
+  modules._ujgESI_remarkReportUi = {create:()=>({open(...args){calls.remarkOpen=args;},dismiss(){},updateScope(){},rebindAnchor(){},destroy(){}})};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
   for (const file of ["icons","activity-brief","activity-management-ui","activity-store","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const state = {rows:[{id:"row"}],teams:[],projectKey:"P",epicKey:"P-EPIC",viewMode:"jira",registryWarning:"Scope warning"};
@@ -53,6 +54,14 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+test("group header ends with its own AI action independent of daily event filters",t=>{
+  const x=setup(fixture());t.after(()=>x.dom.window.close());
+  const $action=x.$(".ujg-esi-remark-ai-command");
+  assert.equal($action.length,1);assert.equal($action.attr("data-remark-key"),"P-1");
+  assert.equal($action.closest("th").children().last()[0],$action[0]);
+  $action.trigger("click");assert.equal(x.calls.remarkOpen[0].key,"P-1");
+  assert.equal(x.calls.aiOpen,0);
+});
 test("history progress preserves table, filter draft, focus and report calculations", t => {
   const x=setup(fixture()); t.after(()=>x.dom.window.close());
   const table=x.$(".ujg-esi-activity-table")[0], calls=x.calls.summarize.length, ai=x.calls.aiUpdates;
