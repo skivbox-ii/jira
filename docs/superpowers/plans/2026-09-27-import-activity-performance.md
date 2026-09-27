@@ -63,6 +63,6 @@ Ownership: new activity-store.js, activity-ui.js, rendering.js, main.js, CSS, fo
 - [x] Full regression suite, independent spec/code review, resolve findings with regression tests.
 - [x] Personal local desktop/narrow verification, date-switch races, error/retry, scroll to last group, filters, sorting, details. No live LLM or Jira writes.
 - [ ] Read-only Citrix acceptance through testing-citrix-prod; unavailable Citrix leaves prod acceptance open.
-- [ ] Fetch/check origin/main, inspect scoped diff and generated outputs, stage only named files, commit/push without force. Unrelated docs excluded. Record before/after measurements, evidence and remaining limitations in backlog/report.
+- [x] Fetch/check origin/main, inspect scoped diff and generated outputs, stage only named files, commit/push without force (`bfdd85a`). Unrelated docs excluded; runtime/CSS match commit-pinned CDN. Before/after measurements and production blocker recorded.
 
 Full suite: `env NODE_PATH=/tmp/ujg-import-registry-test/node_modules node --test --test-concurrency=1 --test-reporter=tap tests/*.test.js tests/browser/excel-story-importer-*.test.cjs tests/browser/import-preview-*.test.cjs tests/browser/import-performance*.test.cjs`.

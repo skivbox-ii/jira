@@ -6,6 +6,10 @@ PERF-01 реализован и проверен локально. Прод-пр
 Citrix показывает `Failed to reconnect`. Пункт не закрывать до личного
 read-only прогона в восстановленной сессии Jira.
 Исходная версия `0fb73a2`, ветка `codex/import-registry-details`.
+Код опубликован в `origin/main`: `bfdd85a`.
+Runtime и неизменённый CSS побайтово сверены с commit-pinned CDN.
+SHA-256 runtime: `b7880105bcde5d35523b719f8900bfa9e7bf4d36aa51212882222d07fd162a3c`.
+SHA-256 CSS: `d01ae1ffcb676387e74bffcebc5c1f43c8178c97584e7df5688f05fd02d99c56`.
 
 ## Изменения И Границы
 
