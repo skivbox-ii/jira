@@ -10,7 +10,7 @@ test("component editor distinguishes absent components from noncanonical names",
   t.after(() => dom.window.close());
   dom.window.scrollTo = () => {};
   const $ = jquery(dom.window);
-  const modules = {jquery:$, _ujgESI_grid:{button:()=>$("<button/>"),create:()=>({render(){},dismissPopover(){}})}, _ujgESI_icons:()=>$("<span/>")};
+  const modules = {jquery:$, _ujgESI_grid:{button:()=>$("<button/>"),create:()=>({render(){},dismissPopover(){},resetFiltersButton:()=>$("<button/>")})}, _ujgESI_icons:()=>$("<span/>")};
   dom.window.define = (name,deps,factory) => {modules[name]=factory(...deps.map(dep=>modules[dep]));};
   dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/rendering.js"),"utf8"));
   modules._ujgESI_rendering.init($("#root"),{});

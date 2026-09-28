@@ -498,7 +498,7 @@ test("team menu escapes the person label and identifies the local action", t => 
   assert.match($(".ujg-esi-team-menu").text(),/Локальная команда.*<img src=x onerror=alert\(1\)>/s);
 });
 
-test("sorting does not remap source actions and loading a new workbook clears old filters", t => {
+test("sorting does not remap source actions and replacement rows preserve filters", t => {
   const { dom, $, state, calls, render } = setup(); t.after(() => dom.window.close());
   $("[data-filter='remarkId']").trigger("click");
   $(".ujg-esi-menu-command").first().trigger("click");
@@ -510,7 +510,10 @@ test("sorting does not remap source actions and loading a new workbook clears ol
   $(".ujg-esi-filter-apply").trigger("click");
   assert.equal($(".ujg-esi-parent-row").length, 0);
   state.rows = state.rows.slice(); render();
+  assert.equal($(".ujg-esi-parent-row").length, 0);
+  $(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").trigger("click");
   assert.equal($(".ujg-esi-parent-row").length, 3);
+  assert.equal($("[data-sort='remarkId']").closest("th").attr("aria-sort"), "ascending");
 });
 
 function applyFilter($, key, value) {
@@ -519,6 +522,135 @@ function applyFilter($, key, value) {
   option($, value).prop("checked", true).trigger("change");
   $(".ujg-esi-filter-apply").trigger("click");
 }
+
+test("registry filter survives source changes, empty loading and activity navigation", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  applyFilter($, "assignee", "Bob");
+  const original = state.rows;
+  for (const mode of ["jira", "excel"]) {
+    state.viewMode = mode; state.rows = []; render();
+    assert.notEqual($(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").css("display"), "none");
+    state.rows = original.slice(); render();
+    assert.equal($(".ujg-esi-parent-row").length, 1);
+    assert.equal($("tr[data-key='P-11']").length, 1);
+    assert.equal($("tr[data-key='P-12']").length, 0);
+    state.reportView = "activity"; render();
+    state.reportView = "registry"; render();
+    assert.equal($(".ujg-esi-parent-row").length, 1);
+  }
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout.filters, {assignee:["Bob"]});
+});
+
+test("common registry filters restore on reload and remain user scoped", t => {
+  const first = setup(); t.after(() => first.dom.window.close());
+  first.state.preferencesStorageKey = "registry-alice"; first.render();
+  applyFilter(first.$, "assignee", "Bob");
+  const stored = first.dom.window.localStorage.getItem("registry-alice");
+  const next = setup(null,w => w.localStorage.setItem("registry-alice", stored));
+  t.after(() => next.dom.window.close());
+  next.state.preferencesStorageKey = "registry-alice"; next.state.rows = next.state.rows.slice(); next.render();
+  assert.equal(next.$(".ujg-esi-parent-row").length, 1);
+  assert.equal(next.$("tr[data-key='P-11']").length, 1);
+  next.state.preferencesStorageKey = "registry-other"; next.render();
+  assert.equal(next.$(".ujg-esi-parent-row").length, 3);
+  next.state.preferencesStorageKey = "registry-alice"; next.render();
+  assert.equal(next.$(".ujg-esi-parent-row").length, 1);
+});
+
+test("matching child keeps context parent collapsible without exposing excluded siblings", t => {
+  const {dom,$,render} = setup(); t.after(() => dom.window.close());
+  applyFilter($, "assignee", "Bob");
+  const arrow = () => $("tr[data-key='P-10'] .ujg-esi-expand-cell button");
+  assert.equal($("tr[data-key='P-10']").hasClass("is-context"), true);
+  assert.equal(arrow().prop("disabled"), false);
+  arrow().trigger("click");
+  assert.equal(arrow().attr("aria-expanded"), "false");
+  assert.equal($(".ujg-esi-parent-row").length, 1);
+  assert.equal($(".ujg-esi-child-row").length, 0);
+  render();
+  assert.equal(arrow().attr("aria-expanded"), "false");
+  $("[data-filter='assignee']").trigger("click");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal(arrow().attr("aria-expanded"), "false", "unchanged filter confirmation preserves manual collapse");
+  arrow().trigger("click");
+  assert.equal($("tr[data-key='P-11']").length, 1);
+  assert.equal($("tr[data-key='P-12']").length, 0);
+});
+
+test("applying a filter reveals default-collapsed groups and both global toggles work", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const template = state.rows[1];
+  state.rows = Array.from({length:6}, (_,i) => ({...template,id:"group-"+i,jiraKey:"P-"+(100+i),
+    childStatuses:template.childStatuses.map(child=>({...child,assignee:i===4 ? child.assignee : "Other"}))}));
+  render();
+  applyFilter($,"assignee","Bob");
+  assert.equal($(".ujg-esi-parent-row").length,1);
+  assert.equal($(".ujg-esi-child-row").length,1);
+  const toolbar = () => $(".ujg-esi-toolbar [aria-label='Развернуть / свернуть все']");
+  const header = () => $(".ujg-esi-registry thead th").first().find("button");
+  for (const toggle of [toolbar, header, toolbar, header]) {
+    toggle().trigger("click");
+    assert.equal($(".ujg-esi-child-row").length,0);
+    assert.equal($(".ujg-esi-parent-row").length,1);
+    toggle().trigger("click");
+    assert.equal($(".ujg-esi-child-row").length,1);
+  }
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout.filters,{assignee:["Bob"]});
+});
+
+test("top reset clears all filters only, including absent values and completion flags", t => {
+  const {dom,$,state,render} = setup(null,w => w.localStorage.setItem("ujg-esi-state",JSON.stringify({gridLayout:{
+    order:["summary","assignee","deadline","jiraComponent"],visible:["summary","assignee","deadline","jiraComponent"],
+    widths:{summary:350},sort:{column:"summary",direction:"desc"},
+    filters:{assignee:["Missing Person"],excludeDone:true,excludeDoneStories:true}
+  }})));
+  t.after(() => dom.window.close());
+  const reset = () => $(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']");
+  assert.equal(reset().length,1);
+  assert.notEqual(reset().css("display"),"none");
+  const before = JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout;
+  assert.equal($(".ujg-esi-parent-row").length,0);
+  state.rows=[]; render();
+  reset().trigger("click");
+  assert.equal(reset().css("display"),"none");
+  const after = JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout;
+  assert.deepEqual(after.filters,{});
+  assert.deepEqual(after.sort,before.sort);
+  assert.deepEqual(after.visible,before.visible);
+  assert.equal(after.widths.summary,350);
+  assert.deepEqual(after.order.slice(0,4),before.order);
+});
+
+test("expand all first reveals remaining children before it can collapse all", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const row = state.rows[1];
+  state.rows = [{...row,childStatuses:Array.from({length:7},(_,i)=>({...row.childStatuses[0],key:"P-"+(30+i)}))}];
+  render();
+  assert.equal($(".ujg-esi-child-row").length,5);
+  const header = () => $(".ujg-esi-registry thead th").first().find("button");
+  assert.equal(header().attr("aria-label"),"Развернуть все");
+  header().trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,7);
+  header().trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,0);
+});
+
+test("global disclosure covers filtered groups on every page", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const row = state.rows[1];
+  state.rows = Array.from({length:22},(_,i)=>({...row,id:"g"+i,jiraKey:"P-"+(100+i)}));
+  render(); applyFilter($,"assignee","Bob");
+  $("[aria-label='Замечаний на странице']").val("20").trigger("change");
+  $(".ujg-esi-toolbar [aria-label='Развернуть / свернуть все']").trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,0);
+  $("[aria-label='Следующая страница']").trigger("click");
+  assert.equal($(".ujg-esi-parent-row").length,2);
+  assert.equal($(".ujg-esi-child-row").length,0);
+  $(".ujg-esi-registry thead th").first().find("button").trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,2);
+  $("[aria-label='Предыдущая страница']").trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,20);
+});
 
 test("header buttons toggle sorting and priority filtering preserves matching child context", t => {
   const {dom,$,state,render} = setup(); t.after(() => dom.window.close());

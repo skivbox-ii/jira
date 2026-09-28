@@ -43,7 +43,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
   }
   function create() {
     var id = ++sequence;
-    var state, hooks, $host, $viewport, $menu, menuAnchor;
+    var state, hooks, $host, $viewport, $menu, menuAnchor, $filterReset;
     var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
     var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
     var hidden = Object.assign({}, defaultHidden), order = columns.map(function(c) { return c[0]; }), widths = {}, layoutKey, page = 0, pageSize = 50;
@@ -221,6 +221,30 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       return $cell;
     }
     function refresh() { closeMenu(); closeDescription(); draw(); }
+    function hasFilters() { return Object.keys(filters).length > 0; }
+    function updateFilterReset() { if ($filterReset) $filterReset.toggle(hasFilters()); }
+    function filtersChanged() {
+      collapsed = Object.create(null); page = 0;
+      saveLayout(); updateFilterReset(); refresh();
+    }
+    function resetFilters() { filters = Object.create(null); filtersChanged(); }
+    function expandableGroups() {
+      return registry.selectGroups(rows, filters, sort).filter(function(group) { return group.children.length; });
+    }
+    function allExpanded(groups) {
+      var showAll = hasFilters() || !order.some(function(key) { return !hidden[key] && sourceFields.indexOf(key) < 0; });
+      return groups.length > 0 && groups.every(function(group) {
+        return !collapsed[group.parent.groupId] && (showAll || fullChildren[group.parent.groupId] || group.children.length <= 5);
+      });
+    }
+    function toggleAll() {
+      var groups = expandableGroups(), collapse = allExpanded(groups);
+      groups.forEach(function(group) {
+        collapsed[group.parent.groupId] = collapse;
+        if (!collapse) fullChildren[group.parent.groupId] = true;
+      });
+      refresh();
+    }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
       var active = Array.isArray(filters[key]) || key === "status" && !!(filters.excludeDone || filters.excludeDoneStories);
@@ -234,7 +258,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       [ ["asc", "ArrowDownAZ", key === "priority" ? "Сначала низкий приоритет" : "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", key === "priority" ? "Сначала высокий приоритет" : "Сортировка по убыванию"] ].forEach(function(item) {
         $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; saveLayout(); refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
       });
-      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } page = 0; saveLayout(); refresh(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } filtersChanged(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые" }).prop("checked", excludeDone).on("change", function() { excludeDone = this.checked; }), $("<span/>").text("Исключить готовые")));
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые истории" }).prop("checked", excludeDoneStories).on("change", function() { excludeDoneStories = this.checked; }), $("<span/>").text("Исключить готовые истории")));
       var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
@@ -278,10 +302,11 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         update();
       });
       var $apply = $("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() {
+        var previousFilters = JSON.stringify(filters);
         if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; if (excludeDoneStories) filters.excludeDoneStories = true; else delete filters.excludeDoneStories; }
         var allValues = registry.values(rows, key, {});
         if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
-        page = 0; saveLayout(); refresh();
+        if (JSON.stringify(filters) !== previousFilters) filtersChanged(); else refresh();
         $host.find('[data-filter="' + key + '"]').trigger("focus");
       });
       $box.append($("<div/>").addClass("ujg-esi-filter-actions").append($apply, $("<button/>").attr("type", "button").text("Отмена").on("click", function() { closeMenu(true); })));
@@ -396,6 +421,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       return $td.text(value || "—").attr("title", value || "");
     }
     function draw() {
+      updateFilterReset();
       if (!$host) return;
       var scroll = $viewport ? { top: $viewport.scrollTop(), left: $viewport.scrollLeft() } : { top: 0, left: 0 };
       $host.empty();
@@ -406,7 +432,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var tableWidth = visibleWidth();
       var $table = $("<table/>").addClass("ujg-esi-registry-table").css({width:tableWidth + "px", "min-width":tableWidth + "px"}).attr("aria-label", "Замечания и связанные задачи Jira");
       var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "28px"));
-      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("ListTree", "Развернуть все", function() { collapsed = Object.create(null); rows.forEach(function(row) { fullChildren[row.groupId] = true; }); refresh(); })));
+      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("ListTree", allExpanded(groups.filter(function(group) { return group.children.length; })) ? "Свернуть все" : "Развернуть все", toggleAll)));
       visible.forEach(function(column) {
         $colgroup.append($("<col/>").attr({"data-column":column[0],width:widths[column[0]] || column[2]}).css("width", (widths[column[0]] || column[2]) + "px"));
         var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!(filters.excludeDone || filters.excludeDoneStories), sorted = sort && sort.column === column[0];
@@ -442,10 +468,10 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       $table.append($colgroup, $("<thead/>").append($head));
       var $body = $("<tbody/>");
       groups.slice(page * pageSize, (page + 1) * pageSize).forEach(function(group) {
-        var parent = group.parent, force = Object.keys(filters).length > 0;
+        var parent = group.parent;
         if (!sort) group.children.sort(function(a, b) { return registry.compare(a.key, b.key); });
-        var opened = force || !collapsed[parent.groupId];
-        var children = opened ? (force || fullChildren[parent.groupId] || !visible.some(function(c) { return sourceFields.indexOf(c[0]) < 0; }) ? group.children : group.children.slice(0, 5)) : [];
+        var opened = !collapsed[parent.groupId];
+        var children = opened ? (hasFilters() || fullChildren[parent.groupId] || !visible.some(function(c) { return sourceFields.indexOf(c[0]) < 0; }) ? group.children : group.children.slice(0, 5)) : [];
         var remaining = opened ? group.children.length - children.length : 0;
         var span = children.length + 1 + (remaining ? 1 : 0);
         [parent].concat(children).forEach(function(entry, rowNumber) {
@@ -454,7 +480,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           $tr.toggleClass("is-collapsed", !opened).toggleClass("is-last-child", entry.isChild && rowNumber === children.length && !remaining);
           if (!rowNumber) {
             var $toggle = $("<td/>").attr("rowspan", span).addClass("ujg-esi-expand-cell");
-            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.key || parent.source.excelRowNumber || ""), function() { if (!force) { collapsed[parent.groupId] = opened; refresh(); } }).attr("aria-expanded", String(opened)).prop("disabled", force));
+            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.key || parent.source.excelRowNumber || ""), function() { collapsed[parent.groupId] = opened; refresh(); }).attr("aria-expanded", String(opened)));
             $tr.append($toggle);
           }
           visible.forEach(function(column) {
@@ -501,13 +527,20 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var $size = $("<select/>").attr("aria-label", "Замечаний на странице").on("change", function() { pageSize = Number(this.value); page = 0; refresh(); });
       [20, 50, 100].forEach(function(n) { $size.append($("<option/>").val(n).text(n + " на странице")); });
       $size.val(pageSize);
-      $footer.append($size, button("FunnelX", "Сбросить все фильтры", function() { filters = Object.create(null); page = 0; saveLayout(); refresh(); }).prop("disabled", !Object.keys(filters).length));
+      $footer.append($size);
+      if (!$filterReset) $footer.append(button("FunnelX", "Сбросить все фильтры", resetFilters).prop("disabled", !hasFilters()));
       $footer.append($("<span/>").addClass("ujg-esi-page-spacer"), button("ChevronLeft", "Предыдущая страница", function() { page -= 1; refresh(); }).prop("disabled", page === 0), $("<span/>").text((page + 1) + " / " + pages), button("ChevronRight", "Следующая страница", function() { page += 1; refresh(); }).prop("disabled", page >= pages - 1));
       $host.append($footer);
       $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
     }
     return {
       teamMenu: teamMenu,
+      resetFiltersButton: function(nextState) {
+        if (layoutKey !== storageKey(nextState)) loadLayout(storageKey(nextState));
+        $filterReset = button("FunnelX", "Сбросить все фильтры", resetFilters);
+        updateFilterReset();
+        return $filterReset;
+      },
       dismissPopover: function() {
         if ($menu && $menu[0].isConnected) { closeMenu(true); return true; }
         if ($description && $description[0].isConnected) { closeDescription(true); return true; }
@@ -518,11 +551,10 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         if (layoutKey !== storageKey(state)) loadLayout(storageKey(state));
         closeMenu(); closeDescription();
         if (sourceRows !== state.rows) {
-          if (sourceRows !== undefined) { filters = Object.create(null); saveLayout(); }
           sourceRows = state.rows; collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
           var linked = 0;
           (state.rows || []).forEach(function(row, index) {
-            if ((row.createdKey || row.jiraKey) && linked++ >= 3 && row.status !== "partial") collapsed[String(row.id || index)] = true;
+            if (!hasFilters() && (row.createdKey || row.jiraKey) && linked++ >= 3 && row.status !== "partial") collapsed[String(row.id || index)] = true;
           });
         }
         rows = registry.buildRows(state.rows, null, state);
@@ -548,12 +580,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           });
         draw();
       },
-      toggleAll: function() {
-        var collapse = !Object.keys(collapsed).length;
-        collapsed = Object.create(null);
-        rows.forEach(function(row) { if (collapse) collapsed[row.groupId] = true; else fullChildren[row.groupId] = true; });
-        refresh();
-      },
+      toggleAll: toggleAll,
       columnsMenu: function(anchor) {
         if (!$host) return;
         var $box = popup(anchor, "Столбцы");

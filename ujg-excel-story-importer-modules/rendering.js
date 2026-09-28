@@ -1931,6 +1931,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendEpicPicker($toolbar, s);
     if (s.parseMeta && s.viewMode !== "jira") appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
+    if (s.reportView !== "activity") $toolbar.append(grid.resetFiltersButton(s));
     if (s.reportView !== "activity" && s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
       $tools.append(gridModule.button("ChevronsUpDown", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));

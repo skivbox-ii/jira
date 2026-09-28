@@ -22,6 +22,8 @@ The importer registry is the canonical table pattern. New views, including daily
 - Drag a header title to reorder columns; drag the boundary to resize.
 - Provide column visibility and reset controls. Keep at least one column visible. Resetting columns preserves applied filters and sorting.
 - Persist order, visibility, widths, sorting, and applied filters under a view-specific, user-scoped localStorage key. Never overwrite registry preferences from a report.
+- Excel and Jira share the same registry filters. Preserve them through source/data changes, report navigation and reload, including missing selected values and empty results. Show the reset-all-filters icon in the top toolbar whenever filters are active, even with an empty source.
+- Filtering and disclosure are independent: contextual parents stay selectable for expand/collapse when a child matches. Both the header and toolbar toggle all matching groups across pages, without exposing filtered-out children. Applying a filter reveals matches; later manual collapse remains effective.
 - Constrain widths and validate stored values. Storage failures must not break the table.
 - Wrap task titles and remarks fully, without line clamps or ellipses, including collapsed groups and remarks not yet created in Jira. Horizontal overflow belongs inside the table region, not the page.
 
