@@ -6,9 +6,10 @@ const { JSDOM } = require("jsdom");
 const jquery = require("jquery");
 const root = path.join(__dirname, "../..");
 
-function setup(activityReport) {
+function setup(activityReport, configureWindow) {
   const dom = new JSDOM('<div class="ujg-excel-story-importer"></div>', { runScripts: "outside-only", url: "http://localhost" });
   const w = dom.window;
+  if (configureWindow) configureWindow(w);
   w.scrollTo = () => {};
   const $ = jquery(w), modules = { jquery: $ };
   modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
@@ -49,6 +50,103 @@ function setup(activityReport) {
   return { dom, $, state, calls, modules, render: () => modules._ujgESI_rendering.render(state) };
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
+
+test("empty importer reserves the remaining viewport before an epic is selected", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  dom.window.innerHeight = 1000;
+  $(".ujg-excel-story-importer")[0].getBoundingClientRect = () => ({top:120});
+  state.rows = []; state.viewMode = "jira"; state.epicKey = "";
+  render();
+  assert.equal($(".ujg-excel-story-importer")[0].style.minHeight, "880px");
+  state.epicPicker = {open:true,query:""};
+  state.epics = [{key:"P-1",fields:{summary:"First epic"}}];
+  render();
+  assert.equal($(".ujg-excel-story-importer")[0].style.minHeight, "880px");
+  assert.equal($(".ujg-esi-epic-options").length, 1);
+  dom.window.pageYOffset = 100;
+  $(".ujg-excel-story-importer")[0].getBoundingClientRect = () => ({top:20});
+  render();
+  assert.equal($(".ujg-excel-story-importer")[0].style.minHeight, "980px");
+});
+
+test("iframe height is based on the outer viewport, not its previous content height", t => {
+  let parent;
+  const {dom,$,state,render} = setup(null, w => {
+    parent = {innerHeight:1000,pageYOffset:0,document:{documentElement:{clientHeight:1000}}};
+    parent.parent = parent;
+    Object.defineProperty(w,"parent",{value:parent});
+    Object.defineProperty(w,"frameElement",{value:{getBoundingClientRect:()=>({top:180}),clientTop:0}});
+    w.innerHeight = 100;
+  });
+  t.after(() => dom.window.close());
+  state.rows = []; render();
+  const root = $(".ujg-excel-story-importer")[0];
+  assert.equal(root.style.minHeight, "820px");
+  for (const height of [820,1200,820]) {
+    dom.window.innerHeight = height; render();
+    assert.equal(root.style.minHeight, "820px");
+  }
+  parent.innerHeight = 800; parent.document.documentElement.clientHeight = 800;
+  $(parent).trigger("resize");
+  assert.equal(root.style.minHeight, "620px");
+});
+
+test("cross-origin host cannot collapse the importer to the small iframe viewport", t => {
+  const {dom,$,state,render} = setup(null, w => {
+    const parent = {};
+    Object.defineProperty(parent,"document",{get:()=>{throw new Error("Blocked cross-origin access");}});
+    Object.defineProperty(w,"parent",{value:parent});
+    Object.defineProperty(w.screen,"availHeight",{value:900});
+    w.innerHeight = 100;
+  });
+  t.after(() => dom.window.close());
+  state.rows = []; render();
+  assert.equal($(".ujg-excel-story-importer")[0].style.minHeight, "900px");
+  dom.window.innerHeight = 1800; render();
+  assert.equal($(".ujg-excel-story-importer")[0].style.minHeight, "900px");
+});
+
+test("viewport resize notifies the host only when the minimum changes and reinit unbinds it", t => {
+  const {dom,$,state,modules} = setup(); t.after(() => dom.window.close());
+  const root = $(".ujg-excel-story-importer");
+  let oldCalls = 0, newCalls = 0;
+  modules._ujgESI_rendering.init(root,{onViewportResize:()=>oldCalls++});
+  dom.window.innerHeight = 1100;
+  $(dom.window).trigger("resize");
+  $(dom.window).trigger("resize");
+  assert.equal(oldCalls,1);
+  modules._ujgESI_rendering.init(root,{onViewportResize:()=>newCalls++});
+  dom.window.innerHeight = 1200;
+  $(dom.window).trigger("resize");
+  assert.equal(oldCalls,1); assert.equal(newCalls,1);
+  state.rows=[]; modules._ujgESI_rendering.render(state);
+  assert.equal(root[0].style.minHeight,"1200px");
+});
+
+test("parent scroll keeps the bottom filled and iframe pagehide removes parent listeners", t => {
+  let parent, frameTop = 180;
+  const {dom,$,modules,state,render} = setup(null,w => {
+    parent = {innerHeight:1000,pageYOffset:0,document:{documentElement:{clientHeight:1000}}}; parent.parent=parent;
+    Object.defineProperty(w,"parent",{value:parent});
+    Object.defineProperty(w,"frameElement",{value:{getBoundingClientRect:()=>({top:frameTop})}});
+  });
+  t.after(()=>dom.window.close());
+  const root=$(".ujg-excel-story-importer"); let calls=0;
+  modules._ujgESI_rendering.init(root,{onViewportResize:()=>calls++});
+  state.rows=[]; render();
+  parent.pageYOffset=100; frameTop=80;
+  $(parent).trigger("scroll");
+  assert.equal(root[0].style.minHeight,"920px"); assert.equal(calls,1);
+  $(dom.window).trigger("pagehide");
+  parent.innerHeight=1200; $(parent).trigger("resize");
+  assert.equal(calls,1);
+  $(dom.window).trigger("pageshow");
+  assert.equal(root[0].style.minHeight,"1120px");
+  for (const top of [-100,-1000,-2000]) {
+    frameTop=top; $(parent).trigger("scroll");
+    assert.equal(root[0].style.minHeight,"1200px", "scrolling past the top must not grow the page without a bound");
+  }
+});
 
 test("due date sync is a separate Excel-only action with loading guards", t => {
   const {dom,$,state,calls,render} = setup(); t.after(() => dom.window.close());
@@ -745,7 +843,8 @@ test("resize does not sort and fullscreen survives render then exits on Escape",
   assert.equal($("[aria-label='Выйти из полноэкранного режима']").length,1);
   $(dom.window.document).trigger($.Event("keydown", {key:"Escape"}));
   assert.equal(host.hasClass("ujg-esi-fullscreen"),false);
-  assert.equal(host.attr("style"),"color: red");
+  assert.equal(host[0].style.color,"red");
+  assert.equal(host[0].style.minHeight,"768px");
   state.rows=[]; render();
   assert.equal($("[aria-label='На весь экран']").length,1);
 });

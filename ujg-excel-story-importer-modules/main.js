@@ -4087,6 +4087,7 @@ define("_ujgESI_main", [
     }
 
     rendering.init($container, {
+      onViewportResize: function() { if (API && typeof API.resize === "function") API.resize(); },
       onProjectChange: onProjectChange,
       onEpicChange: onEpicChange,
       onEpicSearch: onEpicSearch,

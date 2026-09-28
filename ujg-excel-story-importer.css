@@ -1,6 +1,6 @@
 .ujg-excel-story-importer {
   box-sizing: border-box;
-  min-height: 0;
+  min-height: 480px;
   height: auto !important;
   padding: 6px;
   color: #28323f;
@@ -1708,6 +1708,8 @@
   font-size: 12px;
   cursor: pointer;
 }
+
+.ujg-esi-compact-toolbar .ujg-esi-epic-options { min-width: 0; overflow-wrap: anywhere; }
 
 .ujg-esi-assignee-option:hover,
 .ujg-esi-epic-option:hover,

@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {JSDOM, ResourceLoader, VirtualConsole} = require("jsdom");
+const previewOrigin = process.env.IMPORT_PREVIEW_URL || "http://127.0.0.1:4317";
 
 test("the shared preview URL opens a populated tree without manual import or synchronization", async t => {
   const errors = [];
@@ -12,7 +13,7 @@ test("the shared preview URL opens a populated tree without manual import or syn
       return super.fetch(url,options);
     }
   }
-  const dom = await JSDOM.fromURL("http://127.0.0.1:4317/",{
+  const dom = await JSDOM.fromURL(previewOrigin + "/",{
     runScripts:"dangerously",resources:new LocalResources(),virtualConsole:console,
     beforeParse(window) {
       window.scrollTo = () => {};
@@ -29,7 +30,7 @@ test("the shared preview URL opens a populated tree without manual import or syn
         });
       };
       window.fetch = url => {
-        const target = new URL(url,"http://127.0.0.1:4317/");
+        const target = new URL(url,previewOrigin + "/");
         assert.equal(target.hostname,"127.0.0.1");
         return fetch(target);
       };

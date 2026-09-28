@@ -12,6 +12,58 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
+  var viewportWindows = [];
+
+  function unbindViewport() {
+    viewportWindows.forEach(function(view) { $(view).off("resize.ujgEsiViewport scroll.ujgEsiViewport"); });
+    viewportWindows = [];
+  }
+
+  function fitViewport() {
+    if (!$root || !$root[0] || !$root[0].isConnected) { unbindViewport(); return false; }
+    var view = window;
+    var top = $root[0].getBoundingClientRect().top;
+    var height;
+    // A gadget's own viewport is resized to its content. Using it as the
+    // minimum would feed each resize back into the next measurement.
+    while (view.parent && view.parent !== view) {
+      try {
+        var parent = view.parent;
+        var parentDocument = parent.document;
+        var frame = view.frameElement;
+        if (!parentDocument || !frame) throw new Error("Host viewport unavailable");
+        top += frame.getBoundingClientRect().top + (frame.clientTop || 0);
+        view = parent;
+      } catch (error) {
+        // Cross-origin hosts cannot expose their viewport; reserve stable
+        // screen space and let the Jira page scroll instead of clipping menus.
+        height = Number(window.screen && window.screen.availHeight) || 800;
+        break;
+      }
+    }
+    if (height == null) height = view.innerHeight || view.document.documentElement.clientHeight || 800;
+    // Once the top scrolls out, cap at one viewport to keep the page finite.
+    var minimum = Math.max(480, Math.ceil(height - Math.max(0, top))) + "px";
+    if ($root[0].style.minHeight === minimum) return false;
+    $root[0].style.minHeight = minimum;
+    return true;
+  }
+
+  function bindViewport() {
+    unbindViewport();
+    var view = window;
+    while (view) {
+      viewportWindows.push(view);
+      $(view).on("resize.ujgEsiViewport scroll.ujgEsiViewport", function() {
+        if (fitViewport() && services.onViewportResize) services.onViewportResize();
+      });
+      try {
+        if (!view.parent || view.parent === view || !view.parent.document) break;
+        view = view.parent;
+      } catch (error) { break; }
+    }
+    if (fitViewport() && services.onViewportResize) services.onViewportResize();
+  }
 
   function loadMermaid() {
     if (window.mermaid) return Promise.resolve(window.mermaid);
@@ -102,6 +154,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if ($componentHost) $componentHost.remove();
     $root = container;
     services = svc || {};
+    $(window).off("pagehide.ujgEsiViewport pageshow.ujgEsiViewport")
+      .on("pagehide.ujgEsiViewport", unbindViewport).on("pageshow.ujgEsiViewport", bindViewport);
+    bindViewport();
     grid = gridModule.create();
     activityView = activityUi ? activityUi.create() : null;
     dueDateView = dueDateSyncUi ? dueDateSyncUi.create() : null;
@@ -137,6 +192,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (activityView && activityView.resize) activityView.resize();
     $root.find(".ujg-esi-fullscreen-button").empty().append(icon(fullscreen ? "Minimize2" : "Expand"))
       .attr({ title: fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", "aria-label": fullscreen ? "Выйти из полноэкранного режима" : "На весь экран" });
+    fitViewport();
+    if (services.onViewportResize) services.onViewportResize();
   }
 
   function scheduleEpicSearch(query) {
@@ -1930,6 +1987,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       $root.append($columnPreflightHost);
       columnPreflightView.render($columnPreflightHost,s,services);
     }
+    fitViewport();
   }
 
   function renderDueDateSync(state) {
