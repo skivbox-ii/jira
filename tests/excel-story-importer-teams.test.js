@@ -6,6 +6,53 @@ const loadAmd = require("./helpers/load-amd-module");
 const teams = loadAmd(path.join(__dirname, "../ujg-excel-story-importer-modules/teams.js"), {});
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test("queue assigns every configured QA-role team for exact testing statuses", () => {
+  const configured = teams.normalize([
+    { id: "qa-east", name: "Renamed", roles: [" qa "] },
+    { id: "custom-42", name: "Another", roles: ["QA"] },
+    { id: "qa-label", name: "QA", roles: ["BE"] },
+    { id: "testing-direction", name: "Testing", direction: "testing", roles: [] }
+  ]);
+  for (const status of ["Testing", "In Testing", "Тестирование", "На тестировании", "  in   testing  "]) {
+    assert.deepEqual(plain(teams.queueTeamIds({ status }, configured)), ["qa-east", "custom-42"], status);
+    assert.deepEqual(plain(teams.queueTeamIds({ status, role: "BE" }, configured)), ["qa-east", "custom-42", "qa-label"], status);
+  }
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Review" }, configured)), [], "review is not a QA status alias");
+});
+
+test("queue QA role requires proven open status and ignores derived done false for terminal names", () => {
+  const configured = teams.normalize([{ id: "quality", name: "Renamed", roles: ["qA"] }]);
+  for (const task of [
+    { status: "Open", role: "QA" },
+    { status: "In progress", role: "qa", done: false },
+    { status: "Review", statusCategory: "indeterminate", role: "QA" }
+  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), ["quality"]);
+  for (const task of [
+    { role: "QA", done: false },
+    { status: "Mystery", role: "QA", done: false },
+    { status: "Done", role: "QA", done: false },
+    { status: "Completed", role: "QA", done: false },
+    { status: "Cancelled", role: "QA", done: false },
+    { status: "Testing", done: true },
+    { status: "Testing", statusCategory: "done" },
+    { status: "In Testing", statusState: "done" },
+    { status: "Testing", statusState: "cancelled" }
+  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), [], JSON.stringify(task));
+});
+
+test("queue other teams use configured roles or assignee identifiers, including closed work", () => {
+  const configured = teams.normalize([
+    { id: "dev", name: "Not BE", roles: ["BE"], members: [{ id: "person-1", label: "Alice", identifiers: ["acct-1"] }] },
+    { id: "ops", name: "BE", roles: ["OPS"], members: [{ id: "person-2", label: "Bob", identifiers: ["acct-2"] }] },
+    { id: "quality", name: "Renamed", roles: ["QA"], members: [{ id: "person-3", label: "Carol", identifiers: ["acct-3"] }] }
+  ]);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Done", role: "be", assigneeIdentifiers: ["acct-1", "acct-2"] }, configured)), ["dev", "ops"]);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assigneeIdentifiers: ["person-1"] }, configured)), ["dev"]);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", role: "OPS", assigneeIdentifiers: ["acct-2", "acct-2"] }, configured)), ["ops"]);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", role: "BE", assignee: "Carol" }, configured)), ["dev"]);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assigneeIdentifiers: ["acct-3"] }, configured)), []);
+});
+
 test("defaults contain editable role teams and bounded directions", () => {
   assert.deepEqual(plain(teams.directions.map(x => x.id)), ["development", "testing", "implementation", "analysis", "other"]);
   const defaults = plain(teams.defaults());

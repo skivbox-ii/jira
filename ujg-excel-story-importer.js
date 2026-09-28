@@ -3739,6 +3739,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
   function matches(row, filters, except) {
     return Object.keys(filters || {}).every(function(key) {
       if (key === "excludeDone") return except === "status" || !filters[key] || !row.isChild || !row.done;
+      if (key === "teamIds") return key === except || !Array.isArray(filters[key]) || filters[key].some(function(id) { return Array.isArray(row.teamIds) && row.teamIds.indexOf(id) >= 0; });
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }
@@ -4461,6 +4462,26 @@ define("_ujgESI_teams", [], function() {
     });
     return { roles: Object.keys(roleDirs), members: Object.keys(memberDirs) };
   }
+  function queueTeamIds(task, normalizedTeams) {
+    task = task && typeof task === "object" ? task : {};
+    var status = str(task.status, 160).replace(/\s+/g, " ").toLowerCase();
+    var terminal = task.done === true || str(task.statusCategory, 80).toLowerCase() === "done" || str(task.statusState, 80).toLowerCase() === "done" ||
+      /^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(status) ||
+      statusKind(task) === "cancelled";
+    var qaStatus = /^(testing|in testing|тестирование|на тестировании)$/.test(status);
+    var open = !!status && !terminal && statusKind(task) !== "unknown";
+    var role = str(task.role, 80).toUpperCase();
+    var identifiers = unique(task.assigneeIdentifiers, 20, 160);
+    return (Array.isArray(normalizedTeams) ? normalizedTeams : []).filter(function(team) {
+      var aliases = Array.isArray(team.roles) ? team.roles : [];
+      var isQa = aliases.some(function(alias) { return str(alias, 80).toUpperCase() === "QA"; });
+      var roleMatch = !!role && aliases.some(function(alias) { return str(alias, 80).toUpperCase() === role; });
+      if (isQa) return !terminal && (qaStatus || (open && roleMatch));
+      return roleMatch || identifiers.length && (Array.isArray(team.members) ? team.members : []).some(function(member) {
+        return [member.id].concat(member.identifiers || []).some(function(id) { return identifiers.indexOf(id) >= 0; });
+      });
+    }).map(function(team) { return team.id; });
+  }
   function currentWork(row, inputTeams) {
     row = row && typeof row === "object" ? row : {};
     var teams = normalize(inputTeams), warnings = [], byDirection = Object.create(null);
@@ -4509,7 +4530,7 @@ define("_ujgESI_teams", [], function() {
     var message = groups.length ? "" : (doneChild && !unknownChild ? "Нет подтвержденной передачи в следующую фазу" : "Нет данных о текущей работе");
     return { groups: groups, message: message, warnings: warnings, parent: parent };
   }
-  return { directions: directions, colors: colors, defaults: defaults, normalize: normalize, storageKey: storageKey, load: load, save: save, currentWork: currentWork, forUser: forUser, forRole: forRole, assignUser: assignUser, statusKind: statusKind };
+  return { directions: directions, colors: colors, defaults: defaults, normalize: normalize, storageKey: storageKey, load: load, save: save, currentWork: currentWork, forUser: forUser, forRole: forRole, assignUser: assignUser, statusKind: statusKind, queueTeamIds: queueTeamIds };
 });
 
 /* === Module: teams-ui.js === */
@@ -9528,7 +9549,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
   }
   function create() {
     var id = ++sequence;
-    var state, hooks, $host, $viewport, $menu, menuAnchor, $filterReset;
+    var state, hooks, $host, $viewport, $menu, menuAnchor, $filterReset, $teamFilter, filterTeams = [];
     var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
     var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
     var hidden = Object.assign({}, defaultHidden), order = columns.map(function(c) { return c[0]; }), widths = {}, layoutKey, page = 0, pageSize = 50;
@@ -9563,6 +9584,9 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         });
         if (layout.filters.excludeDone === true) filters.excludeDone = true;
         if (layout.filters.excludeDoneStories === true) filters.excludeDoneStories = true;
+        if (Array.isArray(layout.filters.teamIds)) filters.teamIds = layout.filters.teamIds.filter(function(value, index, all) {
+          return typeof value === "string" && !!value && all.indexOf(value) === index;
+        });
       }
     }
     function saveLayout() {
@@ -9655,6 +9679,12 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       }
       menuAnchor = null;
     }
+    function bindDismiss() {
+      $(document).off("click.ujgRegistry" + id).on("click.ujgRegistry" + id, function(event) {
+        if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
+        if ($description && !$.contains($description[0], event.target) && event.target !== $description[0] && event.target !== descriptionAnchor) closeDescription();
+      });
+    }
     function popup(anchor, title) {
       closeDescription();
       closeMenu();
@@ -9707,7 +9737,18 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     function refresh() { closeMenu(); closeDescription(); draw(); }
     function hasFilters() { return Object.keys(filters).length > 0; }
-    function updateFilterReset() { if ($filterReset) $filterReset.toggle(hasFilters()); }
+    function teamName(teamId) {
+      var team = filterTeams.filter(function(team) { return team.id === teamId; })[0];
+      return team ? team.name : "Недоступная команда: " + teamId;
+    }
+    function updateFilterReset() {
+      if ($filterReset) $filterReset.toggle(hasFilters());
+      if ($teamFilter) {
+        var active = Array.isArray(filters.teamIds), selected = filters.teamIds || [];
+        $teamFilter.toggleClass("is-active", active).attr("title", active ? "Команда: " + (selected.map(teamName).join(", ") || "ничего не выбрано") : "Фильтр: Команда");
+        $teamFilter.find("span").text(active ? (selected.length === 1 ? "Команда: " + teamName(selected[0]) : "Команды: " + selected.length) : "Команда");
+      }
+    }
     function filtersChanged() {
       collapsed = Object.create(null); page = 0;
       saveLayout(); updateFilterReset(); refresh();
@@ -9729,6 +9770,73 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         if (!collapse) fullChildren[group.parent.groupId] = true;
       });
       refresh();
+    }
+    function teamFilterMenu(anchor) {
+      closeDescription(); closeMenu();
+      menuAnchor = anchor;
+      $(anchor).attr("aria-expanded", "true");
+      var ids = filterTeams.map(function(team) { return team.id; });
+      var selected = Array.isArray(filters.teamIds) ? filters.teamIds.slice() : ids.slice();
+      selected.forEach(function(teamId) { if (ids.indexOf(teamId) < 0) ids.push(teamId); });
+      var $box = $("<div/>").addClass("ujg-esi-grid-menu ujg-esi-team-filter-menu").attr({role:"dialog","aria-label":"Фильтр: Команда"});
+      $menu = $box; $(anchor).parent().append($box);
+      $box.on("keydown", function(event) { if (event.key === "Escape") { event.stopPropagation(); closeMenu(true); } });
+      $box.append(button("FunnelX", "Снять фильтр команды", function() { delete filters.teamIds; filtersChanged(); $(anchor).trigger("focus"); })
+        .addClass("ujg-esi-menu-command").prop("disabled", !Array.isArray(filters.teamIds)).append($("<span/>").text("Снять фильтр")));
+      var $search = $("<input/>").attr({type:"search",placeholder:"Поиск команд","aria-label":"Поиск команд"}).addClass("ujg-esi-filter-search");
+      var $all = $("<input/>").attr({type:"checkbox","aria-label":"Выделить все найденные команды"});
+      var $count = $("<span/>").addClass("ujg-esi-filter-count");
+      var $list = $("<div/>").addClass("ujg-esi-filter-values"), choices = [];
+      $box.append($search,$("<label/>").addClass("ujg-esi-filter-all").append($all,$("<span/>").text("Выделить всё"),$count),$list);
+      var $empty = $("<div/>").addClass("ujg-esi-filter-empty").text("Нет команд");
+      ids.forEach(function(teamId) {
+        var $check = $("<input/>").attr({type:"checkbox","data-team-id":teamId}).on("change", function() {
+          if (this.checked && selected.indexOf(teamId) < 0) selected.push(teamId);
+          if (!this.checked) selected = selected.filter(function(value) { return value !== teamId; });
+          update();
+        });
+        var $choice = $("<div/>").addClass("ujg-esi-team-filter-choice").append(
+          $("<label/>").addClass("ujg-esi-filter-option").append($check,$("<span/>").text(teamName(teamId))),
+          button("CheckSquare", "Только команда " + teamName(teamId), function() { selected = [teamId]; update(); })
+            .addClass("ujg-esi-team-filter-only").attr("data-team-id",teamId));
+        choices.push({id:teamId,$element:$choice,$check:$check}); $list.append($choice);
+      });
+      $list.append($empty);
+      function foundIds() {
+        var query = String($search.val() || "").trim().toLocaleLowerCase();
+        return ids.filter(function(teamId) { return teamName(teamId).toLocaleLowerCase().indexOf(query) >= 0; });
+      }
+      function update() {
+        var found = foundIds(), checked = found.filter(function(teamId) { return selected.indexOf(teamId) >= 0; }).length;
+        $all.prop("checked", !!found.length && checked === found.length).prop("indeterminate", checked > 0 && checked < found.length);
+        $count.text(selected.length + " / " + ids.length);
+        choices.forEach(function(choice) {
+          choice.$element.toggle(found.indexOf(choice.id) >= 0);
+          choice.$check.prop("checked", selected.indexOf(choice.id) >= 0).closest("label").toggleClass("is-selected", selected.indexOf(choice.id) >= 0);
+        });
+        $empty.toggle(!found.length);
+      }
+      $search.on("input", update);
+      $all.on("change", function() {
+        var found = foundIds(), checked = this.checked;
+        found.forEach(function(teamId) { if (checked && selected.indexOf(teamId) < 0) selected.push(teamId); });
+        if (!checked) selected = selected.filter(function(teamId) { return found.indexOf(teamId) < 0; });
+        update();
+      });
+      $box.append($("<div/>").addClass("ujg-esi-filter-actions").append(
+        $("<button/>").attr("type","button").addClass("ujg-esi-filter-apply").text("ОК").on("click",function() {
+          var previous = JSON.stringify(filters.teamIds), available = filterTeams.map(function(team) { return team.id; });
+          if (available.length && selected.length === available.length && available.every(function(teamId) { return selected.indexOf(teamId) >= 0; })) delete filters.teamIds;
+          else filters.teamIds = selected.slice().sort();
+          if (JSON.stringify(filters.teamIds) !== previous) filtersChanged(); else refresh();
+          $(anchor).trigger("focus");
+        }), $("<button/>").attr("type","button").text("Отмена").on("click",function() { closeMenu(true); })
+      ));
+      update();
+      var rect = anchor.getBoundingClientRect(), width = Math.min(340, window.innerWidth - 24);
+      $box.css({width:width,left:Math.max(12,Math.min(rect.left,window.innerWidth-width-12)),top:12,maxHeight:Math.max(100,window.innerHeight-24)});
+      $box.css("top",Math.max(12,Math.min(rect.bottom+4,window.innerHeight-$box.outerHeight()-12)));
+      $search.trigger("focus");
     }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
@@ -10020,6 +10128,17 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     return {
       teamMenu: teamMenu,
+      teamFilterButton: function(nextState) {
+        closeMenu();
+        state = nextState;
+        if (layoutKey !== storageKey(state)) loadLayout(storageKey(state));
+        filterTeams = teamsModule.normalize(state.teams);
+        if (!state.rows || !state.rows.length) { rows = []; $host = null; $viewport = null; }
+        $teamFilter = button("Funnel", "Фильтр: Команда", function() { teamFilterMenu(this); })
+          .addClass("ujg-esi-team-filter-button").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>"),icon("ChevronDown"));
+        bindDismiss(); updateFilterReset();
+        return $teamFilter;
+      },
       resetFiltersButton: function(nextState) {
         if (layoutKey !== storageKey(nextState)) loadLayout(storageKey(nextState));
         $filterReset = button("FunnelX", "Сбросить все фильтры", resetFilters);
@@ -10043,11 +10162,10 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           });
         }
         rows = registry.buildRows(state.rows, null, state);
+        var normalizedTeams = teamsModule.normalize(state.teams);
+        rows.forEach(function(row) { row.teamIds = teamsModule.queueTeamIds(row, normalizedTeams); });
         $host = $("<div/>").addClass("ujg-esi-registry"); $parent.append($host); $viewport = null;
-        $(document).off("click.ujgRegistry" + id).on("click.ujgRegistry" + id, function(event) {
-          if ($menu && !$.contains($menu[0], event.target) && event.target !== $menu[0] && !$.contains(menuAnchor, event.target) && event.target !== menuAnchor) closeMenu();
-          if ($description && !$.contains($description[0], event.target) && event.target !== $description[0] && event.target !== descriptionAnchor) closeDescription();
-        });
+        bindDismiss();
         $(document).off("pointermove.ujgRegistry" + id + " pointerup.ujgRegistry" + id)
           .on("pointermove.ujgRegistry" + id, function(event) {
             if (drag && drag.type === "resize") {
@@ -12018,7 +12136,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendEpicPicker($toolbar, s);
     if (s.parseMeta && s.viewMode !== "jira") appendParseMeta($toolbar, s);
     appendExcelActions($toolbar, s);
-    if (s.reportView !== "activity") $toolbar.append(grid.resetFiltersButton(s));
+    if (s.reportView !== "activity") $toolbar.append(grid.teamFilterButton(s), grid.resetFiltersButton(s));
     if (s.reportView !== "activity" && s.rows && s.rows.length) {
       var $tools = $("<div/>").addClass("ujg-esi-grid-tools");
       $tools.append(gridModule.button("ChevronsUpDown", "Развернуть / свернуть все", function() { grid.toggleAll(); }), gridModule.button("Columns3", "Столбцы", function() { grid.columnsMenu(this); }));

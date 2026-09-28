@@ -105,6 +105,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
   function matches(row, filters, except) {
     return Object.keys(filters || {}).every(function(key) {
       if (key === "excludeDone") return except === "status" || !filters[key] || !row.isChild || !row.done;
+      if (key === "teamIds") return key === except || !Array.isArray(filters[key]) || filters[key].some(function(id) { return Array.isArray(row.teamIds) && row.teamIds.indexOf(id) >= 0; });
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }

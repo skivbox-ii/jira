@@ -523,6 +523,88 @@ function applyFilter($, key, value) {
   $(".ujg-esi-filter-apply").trigger("click");
 }
 
+function teamQueueSetup(t) {
+  const result=setup(); t.after(()=>result.dom.window.close());
+  result.state.teams=result.modules._ujgESI_teams.defaults();
+  result.state.rows=[{id:"queue",jiraKey:"P-100",summary:"Queue story",sourceColumns:{"№":"100"},
+    storyDetails:{key:"P-100",status:"В работе",assignee:"Coordinator"},
+    childStatuses:[
+      {key:"P-101",role:"BE",status:"Тестирование",assignee:"Dev"},
+      {key:"P-102",role:"QA",status:"В работе",assignee:"Tester"},
+      {key:"P-103",role:"QA",status:"Готово",assignee:"Tester",done:true},
+      {key:"P-104",role:"QA",status:"Отменено",assignee:"Tester"},
+      {key:"P-105",role:"BE",status:"В работе",assignee:"Dev"},
+      {key:"P-106",role:"QA",status:"На тестировании",assignee:"Tester"}
+    ]}];
+  result.render(); return result;
+}
+function applyTeam($, id) {
+  $("[aria-label='Фильтр: Команда']").trigger("click");
+  $(".ujg-esi-team-filter-only[data-team-id='"+id+"']").trigger("click");
+  $(".ujg-esi-team-filter-menu .ujg-esi-filter-apply").trigger("click");
+}
+
+test("team toolbar filters QA testing OR open roles without duplicate rows or siblings", t => {
+  const {dom,$,state,render}=teamQueueSetup(t);
+  assert.equal($(".ujg-esi-toolbar [aria-label='Фильтр: Команда']").length,1);
+  applyTeam($,"qa");
+  const keys=()=>$(".ujg-esi-child-row").map((_,el)=>$(el).attr("data-key")).get();
+  assert.deepEqual(keys(),["P-101","P-102","P-106"]);
+  assert.equal($(".ujg-esi-parent-row").hasClass("is-context"),true);
+  assert.match($("[aria-label='Фильтр: Команда']").text(),/QA/);
+  $(".ujg-esi-expand-cell button").trigger("click"); assert.deepEqual(keys(),[]);
+  $(".ujg-esi-expand-cell button").trigger("click"); assert.deepEqual(keys(),["P-101","P-102","P-106"]);
+  applyFilter($,"assignee","Tester"); assert.deepEqual(keys(),["P-102","P-106"]);
+  state.viewMode="jira"; state.rows=state.rows.slice(); render();
+  assert.deepEqual(keys(),["P-102","P-106"]);
+  state.reportView="activity"; render(); state.reportView="registry"; render();
+  assert.deepEqual(keys(),["P-102","P-106"]);
+  const stored=JSON.parse(dom.window.localStorage.getItem("ujg-esi-state"));
+  assert.deepEqual(stored.gridLayout.filters,{teamIds:["qa"],assignee:["Tester"]});
+  $(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").trigger("click");
+  assert.equal($("[aria-label='Фильтр: Команда']").hasClass("is-active"),false);
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout.filters,{});
+});
+
+test("team filter keeps stable drafts during search and cancels without applying", t => {
+  const {dom,$}=teamQueueSetup(t);
+  $("[aria-label='Фильтр: Команда']").trigger("click");
+  const input=$(".ujg-esi-team-filter-menu input[data-team-id='qa']")[0];
+  assert.ok(input);
+  $(".ujg-esi-team-filter-only[data-team-id='qa']").trigger("click");
+  $(input).trigger("focus");
+  $(input).prop("checked",false).trigger("change");
+  assert.equal($(".ujg-esi-team-filter-menu input[data-team-id='qa']")[0],input);
+  assert.equal(dom.window.document.activeElement,input);
+  $(".ujg-esi-team-filter-only[data-team-id='qa']").trigger("click");
+  $(".ujg-esi-team-filter-menu .ujg-esi-filter-search").val("BE").trigger("input");
+  $(".ujg-esi-team-filter-menu input[data-team-id='be']").prop("checked",true).trigger("change");
+  assert.equal(input.checked,true);
+  $(".ujg-esi-team-filter-menu").trigger($.Event("keydown",{key:"Escape"}));
+  assert.equal($("[aria-label='Фильтр: Команда']").attr("aria-expanded"),"false");
+  assert.equal(dom.window.document.activeElement,$("[aria-label='Фильтр: Команда']")[0]);
+  assert.equal($(".ujg-esi-team-filter-menu").length,0);
+  assert.equal($(".ujg-esi-parent-row").hasClass("is-context"),false);
+});
+
+test("team selection persists on reload, absent IDs stay removable and empty source menu works", t => {
+  const stored={gridLayout:{filters:{teamIds:["qa","removed-team"]},sort:{column:"summary",direction:"desc"}}};
+  const {dom,$,state,render}=setup(null,w=>w.localStorage.setItem("ujg-esi-state",JSON.stringify(stored)));
+  t.after(()=>dom.window.close());
+  state.teams=[]; state.rows=[]; render();
+  $("[aria-label='Фильтр: Команда']").trigger("click");
+  assert.equal($(".ujg-esi-team-filter-menu input[data-team-id]").length,2);
+  assert.equal($(".ujg-esi-team-filter-menu input[data-team-id='qa']").prop("checked"),true);
+  $(".ujg-esi-team-filter-menu .ujg-esi-filter-all input").prop("checked",false).trigger("change");
+  $(".ujg-esi-team-filter-menu .ujg-esi-filter-apply").trigger("click");
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout.filters,{teamIds:[]});
+  $(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").trigger("click");
+  const after=JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout;
+  assert.deepEqual(after.filters,{});
+  assert.deepEqual(after.sort,stored.gridLayout.sort);
+  assert.equal($(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").css("display"),"none");
+});
+
 test("registry filter survives source changes, empty loading and activity navigation", t => {
   const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
   applyFilter($, "assignee", "Bob");

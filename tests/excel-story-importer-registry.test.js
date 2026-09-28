@@ -65,6 +65,28 @@ test("combined filters must match the same task, not different siblings", () => 
   assert.equal(r.selectGroups(r.buildRows(source()), { owner: ["Owner"], assignee: ["Bob"] }).length, 1);
 });
 
+test("team selection intersects memberships without duplicating a multi-match child", () => {
+  const r = registry(), rows = r.buildRows(source());
+  rows[0].teamIds = [];
+  rows[1].teamIds = ["dev", "ops"];
+  rows[2].teamIds = ["qa"];
+  rows[3].teamIds = [];
+  const shape = filters => Array.from(r.selectGroups(rows, filters), group => [group.parent.key, group.contextOnly, Array.from(group.children, child => child.key)]);
+  assert.deepEqual(shape({teamIds:["dev", "ops"]}), [["P-10", true, ["P-11"]]]);
+  assert.deepEqual(shape({teamIds:[]}), []);
+  assert.deepEqual(shape({}), [["P-10", false, ["P-11", "P-12"]], ["", false, []]]);
+});
+
+test("team and ordinary filters must match the same row and retain parent context", () => {
+  const r = registry(), rows = r.buildRows(source());
+  rows[0].teamIds = [];
+  rows[1].teamIds = ["dev"];
+  rows[2].teamIds = ["qa"];
+  assert.equal(r.selectGroups(rows, {teamIds:["dev"], status:["Done"]}).length, 0);
+  assert.deepEqual(Array.from(r.selectGroups(rows, {teamIds:["dev"], status:["Open"], assignee:["Bob"]}), group => [group.parent.key, group.contextOnly, Array.from(group.children, child => child.key)]), [["P-10", true, ["P-11"]]]);
+  assert.deepEqual(Array.from(r.values(rows, "status", {teamIds:["dev"]})), ["Open"]);
+});
+
 test("empty selection means no rows, blank filter selects missing values", () => {
   const r = registry();
   const rows = r.buildRows(source());

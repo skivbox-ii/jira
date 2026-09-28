@@ -12,7 +12,7 @@ function setup(layout) {
   w.define = (name,deps,factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
   for (const file of ["remark-id","deadlines","registry"]) w.eval(fs.readFileSync(path.join(dir,file + ".js"),"utf8"));
   modules._ujgESI_icons = name => $("<i/>").text(name);
-  modules._ujgESI_teams = {forUser:()=>[],forRole:()=>[],colors:[],currentWork:()=>({groups:[],warnings:[]})};
+  modules._ujgESI_teams = {forUser:()=>[],forRole:()=>[],colors:[],currentWork:()=>({groups:[],warnings:[]}),normalize:()=>[],queueTeamIds:()=>[]};
   w.eval(fs.readFileSync(path.join(dir,"grid.js"),"utf8"));
   if (layout) w.localStorage.setItem("excel-fields-test",JSON.stringify({gridLayout:layout}));
   const state = {preferencesStorageKey:"excel-fields-test",rows:[
