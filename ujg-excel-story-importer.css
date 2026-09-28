@@ -61,7 +61,7 @@
   .ujg-esi-stats-section th, .ujg-esi-stats-section td { padding: 5px 2px; }
 }
 .ujg-esi-registry { position: relative; font-size: 12px; }
-.ujg-esi-registry-scroll { overflow: auto; max-height: min(880px, calc(100vh - 100px)); min-height: 160px; border: 1px solid #dfe3e8; }
+.ujg-esi-registry-scroll { overflow: auto; max-height: calc(var(--ujg-esi-viewport-height, 100vh) - 100px); min-height: 160px; border: 1px solid #dfe3e8; }
 .ujg-esi-registry-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 100%; color: #293441; background: #fff; }
 .ujg-esi-registry-table th { position: sticky; top: 0; z-index: 3; background: #f2f4f7; padding: 0 26px 0 4px; height: 34px; border-right: 1px solid #e2e5e9; border-bottom: 1px solid #cdd4dc; font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap; }
 .ujg-esi-registry .ujg-esi-header-sort { display: flex; align-items: center; gap: 2px; width: 100%; min-width: 0; height: 30px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; }
@@ -211,7 +211,6 @@
   .ujg-esi-compact-toolbar .ujg-esi-toolbar-actions { gap: 3px; }
   .ujg-esi-compact-toolbar .ujg-esi-import-summary > summary { width: 22px; }
   .ujg-esi-compact-toolbar .ujg-esi-meta { display: none; }
-  .ujg-esi-registry-scroll { max-height: 75vh; }
   .ujg-esi-grid-footer { gap: 5px; flex-wrap: wrap; }
   .ujg-esi-registry-table .ujg-esi-cell-remark, .ujg-esi-registry-table .ujg-esi-registry-actions { position: static; }
   .ujg-esi-registry-table th:nth-child(3), .ujg-esi-registry-table th:last-child { left: auto; right: auto; z-index: 3; }

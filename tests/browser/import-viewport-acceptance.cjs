@@ -59,6 +59,12 @@ async function main() {
         assert.match(await frame.locator(".ujg-esi-epic-search").inputValue(), /EVOSCADA-200/);
         await frame.getByRole("button", {name:"Загрузить замечания из Jira",exact:true}).click();
         await frame.locator(".ujg-esi-registry-table").waitFor();
+        const gridSpace = await frame.evaluate(() => {
+          const root = document.querySelector(".ujg-excel-story-importer");
+          const scroll = root.querySelector(".ujg-esi-registry-scroll");
+          return {minimum:parseFloat(root.style.minHeight), maximum:parseFloat(getComputedStyle(scroll).maxHeight)};
+        });
+        assert.equal(gridSpace.maximum, gridSpace.minimum - 100, "registry must use the reserved space, without the old 880px cap");
         await frame.getByRole("button", {name:"На весь экран",exact:true}).click();
         await frame.getByRole("button", {name:"Выйти из полноэкранного режима",exact:true}).click();
         const smaller = {...size,height:size.height-100};

@@ -10106,6 +10106,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     var minimum = Math.max(480, Math.ceil(height - Math.max(0, top))) + "px";
     if ($root[0].style.minHeight === minimum) return false;
     $root[0].style.minHeight = minimum;
+    $root[0].style.setProperty("--ujg-esi-viewport-height", minimum);
     return true;
   }
 
