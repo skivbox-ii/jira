@@ -37,7 +37,20 @@ applies ordinary filters to the same row. `grid` owns the toolbar menu and persi
 - [x] Independent Sol6/medium review, then local Chrome acceptance at 1440/390 px,
   QA selection, search, multi-select, status/assignee interaction, source switch,
   reload, reset and scroll to last row. No live LLM or Jira writes.
-- [ ] Build only importer bundles; run full regression tests, record any existing
+- [x] Build only importer bundles; run full regression tests, record any existing
   timeout without claiming a pass. Publish scoped verified changes through the
   existing main/CDN process, personally check Citrix read-only and record evidence.
   Do not close REG-06 or REG-05 production acceptance without screenshots.
+
+## Verification Result
+- Code `3c793e8`, importer JS/runtime/CSS match commit-pinned CDN.
+- 1610/1610 tests passed, zero skipped: `/tmp/import-team-queue-full-final.log`.
+- Personal Chrome acceptance 1440/390 px: `/tmp/import-team-queue-personal-20260928`.
+  Both QA branches, terminal exclusion, same-row assignee intersection, stable
+  draft/search, multi-select, persistence, reset and four pages; no writes/LLM/errors.
+- Personal Citrix session `import-team-queue-20260928`, 16:44-16:51 MSK:
+  QA role task EVOSCADA-21858 in issued status plus context EVOSCADA-21821;
+  collapse/expand, source roundtrip and reload verified. Screenshots are indexed
+  in REG-06 in the backlog. No exact-testing live example appeared in the QA
+  result; that branch is verified locally, not claimed as a production example.
+- REG-05 assignee-specific production acceptance remains open independently.
