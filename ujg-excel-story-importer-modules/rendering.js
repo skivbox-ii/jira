@@ -1939,9 +1939,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
       var $analytics = $("<div/>").addClass("ujg-esi-analytics").attr({role:"dialog","aria-label":"Сводка замечаний"});
       $analytics.append($("<div/>").addClass("ujg-esi-stats-head").append($("<strong/>").text("Сводка замечаний"),gridModule.button("X","Закрыть сводку",function() { $summary.prop("open",false); $summary.children("summary").trigger("focus"); })));
-      if (statisticsUi) statisticsUi.render($analytics,s);
-      appendCounters($analytics,s);
-      if (s.syncSummary) $analytics.append($("<div/>").addClass("ujg-esi-stats-note").text(s.syncSummary));
+      var $statisticsDetails = statisticsUi && statisticsUi.render($analytics,s) || $analytics;
+      appendCounters($statisticsDetails,s);
+      if (s.syncSummary) $statisticsDetails.append($("<div/>").addClass("ujg-esi-stats-note").text(s.syncSummary));
       $summary.append($analytics).on("toggle",function() {
         if (!$summary.prop("open")) return;
         var rect = $summary[0].getBoundingClientRect(), viewportWidth = document.documentElement.clientWidth || window.innerWidth;

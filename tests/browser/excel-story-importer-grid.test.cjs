@@ -436,15 +436,22 @@ test("assignee and owner team cells expose the existing focus class", t => {
   assert.equal($("tr[data-key='P-11'] .ujg-esi-cell-assignee").hasClass("ujg-esi-team-context"),true);
 });
 
-test("statistics opens four tables, retains counters, and closes on Escape", t => {
+test("statistics opens story totals, keeps four detailed tables and counters, and closes on Escape", t => {
   const {dom,$} = setup(); t.after(()=>dom.window.close());
   const summary = $(".ujg-esi-import-summary"), anchor = summary.children("summary");
   const counters = summary.find(".ujg-esi-counters").text();
   anchor[0].click();
   assert.equal(summary.prop("open"),true);
   assert.deepEqual(summary.find(".ujg-esi-stats-section table").map((_,el)=>$(el).attr("aria-label")).get(),[
-    "Итог по замечаниям","Текущие направления","На командах","Задачи по ролям"
+    "Истории по текущему статусу Jira","Итог по замечаниям","Текущие направления","На командах","Задачи по ролям"
   ]);
+  const details = summary.find(".ujg-esi-stats-details");
+  assert.equal(details.prop("open"),false);
+  assert.equal(details.find("table").length,4);
+  assert.equal(details.find(".ujg-esi-counters").length,1);
+  details.children("summary")[0].click();
+  assert.equal(details.prop("open"),true);
+  assert.equal(summary.prop("open"),true);
   assert.equal(summary.find(".ujg-esi-counters .ujg-esi-counter").length,4);
   assert.equal(summary.find(".ujg-esi-counters").text(),counters);
   summary.trigger($.Event("keydown",{key:"Escape"}));

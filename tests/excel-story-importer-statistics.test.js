@@ -9,6 +9,75 @@ const task = (key,role,status,extra={}) => Object.assign({key,role,status},extra
 const row = (key,status,children=[]) => ({jiraKey:key,storyDetails:task(key,"",status),childStatuses:children});
 const count = (result,key) => result.outcomes.find(x=>x.key===key).count;
 
+test("story summary counts original statuses once, independently of child completion",()=>{
+  const ready=row("P-1","Выполнено",[task("P-11","BE","In progress")]);
+  const withdrawn=row("P-3","Снята"); withdrawn.storyDetails.statusCategory="done";
+  const issued=row("P-4","Выдано",[task("P-13","BE","Done")]); issued.storyDetails.statusCategory="new";
+  const rows=[ready,ready,row("P-2","На тестировании",[task("P-12","QA","Cancelled")]),
+    withdrawn,issued,row("P-5","В работе")];
+  const before=JSON.stringify(rows),result=stats().summarize(rows,[]);
+  assert.ok(result.stories,"main story summary is present");
+  const s=result.stories;
+  assert.equal(s.total,5); assert.equal(s.done,1); assert.equal(s.testing,1);
+  assert.equal(s.cancelled,1); assert.equal(s.open,2); assert.equal(s.unknown,0);
+  assert.equal(s.done+s.testing+s.cancelled+s.open+s.unknown,s.total);
+  assert.deepEqual(Array.from(s.openStatuses,x=>[x.label,x.count]),[["В работе",1],["Выдано",1]]);
+  assert.equal(count(result,"ready"),0,"legacy all-ticket completion stays separate");
+  assert.equal(JSON.stringify(rows),before);
+});
+
+test("unknown and conflicting parent status stays outside the four known story groups",()=>{
+  const rows=[{jiraKey:"P-1"},row("P-2","Unknown"),row("P-3","Done"),row("P-3","Open"),
+    {id:"sheet:1",summary:"Not created"},row("P-4","Done",[task("P-14","QA","Unknown")])];
+  for(const input of [rows,rows.slice().reverse()]) {
+    const result=stats().summarize(input,[]),s=result.stories;
+    assert.ok(s,"main story summary is present");
+    assert.equal(s.total,4); assert.equal(s.unknown,3); assert.equal(s.done,1);
+    assert.equal(s.open,0); assert.equal(s.testing,0); assert.equal(s.cancelled,0);
+    assert.equal(s.uncreated,1); assert.equal(s.total+s.uncreated,result.total);
+  }
+});
+
+test("story summary honors active Jira category and does not invent stories from Excel rows",()=>{
+  const active=row("P-1","Resolved");
+  Object.assign(active.storyDetails,{done:false,statusCategory:"indeterminate",statusState:"progress"});
+  const s=stats().summarize([active,{id:"source:1"}],[]).stories;
+  assert.ok(s,"main story summary is present");
+  assert.equal(s.done,0); assert.equal(s.open,1); assert.equal(s.total,1); assert.equal(s.uncreated,1);
+  const empty=stats().summarize([],[]).stories;
+  assert.equal(empty.total+empty.done+empty.testing+empty.cancelled+empty.open+empty.unknown+empty.uncreated,0);
+  assert.equal(empty.openStatuses.length,0);
+});
+
+test("explicit testing story status is not counted as fixed by a terminal workflow category",()=>{
+  for(const status of ["На тестировании","Тестирование","In Testing","На проверке"]) {
+    const r=row("P-1",status);
+    Object.assign(r.storyDetails,{done:true,statusCategory:"done",statusState:"done"});
+    const s=stats().summarize([r],[]).stories;
+    assert.equal(s.testing,1,status); assert.equal(s.done,0,status);
+  }
+});
+
+test("story status conflicts within one broad stage and missing status names stay unknown",()=>{
+  const a=row("P-1","Open"),b=row("P-1","To do");
+  const missing=row("P-2",""); missing.storyDetails.statusCategory="new";
+  for(const rows of [[a,b,missing],[b,a,missing]]) {
+    const s=stats().summarize(rows,[]).stories;
+    assert.equal(s.unknown,2); assert.equal(s.open,0); assert.equal(s.openStatuses.length,0);
+  }
+});
+
+test("story totals use original parent data rather than linked copies in another group",()=>{
+  const rows=[row("P-1","Open",[task("P-2","","Open")]),row("P-2","Done")];
+  for(const input of [rows,rows.slice().reverse()]) {
+    const s=stats().summarize(input,[]).stories;
+    assert.equal(s.total,2); assert.equal(s.done,1); assert.equal(s.open,1); assert.equal(s.unknown,0);
+  }
+  const active=row("P-2","Done"); Object.assign(active.storyDetails,{done:false,statusCategory:"indeterminate"});
+  assert.equal(stats().summarize([row("P-2","Done"),active],[]).stories.unknown,1,
+    "Contradictory original parent stages remain unknown even with identical names");
+});
+
 test("team matching uses stable identifiers or exact role aliases, never names",()=>{
   const list=teams.defaults(); list[0].members=[{id:"dev",label:"Alex",identifiers:["u1"]}];
   assert.equal(teams.forUser(list,["u1"])[0].id,"be");

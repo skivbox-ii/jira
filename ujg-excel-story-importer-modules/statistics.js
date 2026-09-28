@@ -59,6 +59,25 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
     if (task.statusState === "todo" || task.statusCategory === "new" || /^(open|new|to do|todo|backlog|выдано|новая|новый|открыт[ао]?|к выполнению)$/i.test(text(task.status))) return "waiting";
     return "progress";
   }
+  function storyStage(task) {
+    var status = text(task.status).replace(/\s+/g," ");
+    if (!status) return "unknown";
+    // The summary describes the named story workflow, not Jira's terminal flag.
+    if (/^(testing|in testing|тестирование|на тестировании|проверка|на проверке|на проверку)$/i.test(status)) return "testing";
+    return stage(task);
+  }
+  function conflictingStoryStatuses(rows) {
+    var seen = Object.create(null), conflicts = Object.create(null);
+    (rows || []).forEach(function(row) {
+      if (!row || !row.storyDetails) return;
+      var key = parentKey(row), status = text(row.storyDetails.status).replace(/\s+/g," ").toLowerCase();
+      if (!key) return;
+      status += "|" + storyStage(row.storyDetails);
+      if (seen[key] != null && seen[key] !== status) conflicts[key] = true;
+      seen[key] = status;
+    });
+    return conflicts;
+  }
   function isOpen(task) { return ["done","cancelled","unknown"].indexOf(teamsModule.statusKind(task)) < 0; }
   function outcome(row, tasks) {
     if (!parentKey(row)) return "uncreated";
@@ -84,6 +103,9 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
   }
   function summarize(sourceRows, inputTeams) {
     var teams = teamsModule.normalize(inputTeams), remarks = uniqueRemarks(sourceRows), conflicts = conflictingStatuses(sourceRows);
+    var storyConflicts = conflictingStoryStatuses(sourceRows);
+    var stories = {total:0,done:0,testing:0,cancelled:0,open:0,unknown:0,uncreated:0,openStatuses:[]};
+    var openStatuses = Object.create(null);
     var outcomes = [
       {key:"ready",label:"Готово по всем тикетам",count:0},
       {key:"open",label:"Есть открытые работы",count:0},
@@ -98,6 +120,18 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
     remarks.forEach(function(item) {
       var row = item.row, tasks = tasksFor(row,conflicts), result = outcome(row,tasks);
       outcomes.filter(function(value) { return value.key === result; })[0].count++;
+      // Parent workflow and completion of all linked work are separate measures.
+      var storyKey = parentKey(row), parent = row.storyDetails || {};
+      if (!storyKey) stories.uncreated++;
+      else {
+        stories.total++;
+        var parentStage = storyConflicts[storyKey] ? "unknown" : storyStage(parent);
+        if (parentStage === "waiting" || parentStage === "progress") {
+          stories.open++;
+          var label = text(parent.status);
+          openStatuses[label] = (openStatuses[label] || 0) + 1;
+        } else stories[parentStage]++;
+      }
       var currentRow = Object.assign({},row,{storyDetails:row.storyDetails ? tasks.filter(function(task) { return task.isParent; })[0] : null,childStatuses:tasks.filter(function(task) { return !task.isParent; })});
       var current = teamsModule.currentWork(currentRow,teams), currentKeys = Object.create(null);
       current.groups.forEach(function(group) {
@@ -127,7 +161,8 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
     });
     if (noTeam.tasks) teamRows.push(noTeam);
     if (noDirection.remarks) directions.push(noDirection);
-    return {total:remarks.length,sourceRows:(sourceRows || []).length,outcomes:outcomes,directions:directions.map(finish),teams:teamRows.map(finish),roles:Object.keys(roles).sort().map(function(key) { return finish(roles[key]); })};
+    stories.openStatuses = Object.keys(openStatuses).sort().map(function(label) { return {label:label,count:openStatuses[label]}; });
+    return {total:remarks.length,sourceRows:(sourceRows || []).length,stories:stories,outcomes:outcomes,directions:directions.map(finish),teams:teamRows.map(finish),roles:Object.keys(roles).sort().map(function(key) { return finish(roles[key]); })};
   }
   return {summarize:summarize};
 });

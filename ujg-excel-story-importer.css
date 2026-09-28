@@ -53,6 +53,18 @@
 .ujg-esi-stats-section th:first-child { text-align: left; }
 .ujg-esi-stats-section tbody th { font-weight: 400; }
 .ujg-esi-stats-section thead th { background: #f2f4f7; color: #526174; font-weight: 600; }
+.ujg-esi-stats-stories table { font-size: 13px; }
+.ujg-esi-stats-stories tbody td { width: 90px; font-size: 18px; font-weight: 600; }
+.ujg-esi-stats-stories th, .ujg-esi-stats-stories td { padding: 9px 8px; }
+.ujg-esi-stats-stories [data-story-state="done"] { color: #187044; }
+.ujg-esi-stats-stories [data-story-state="testing"] { color: #866000; }
+.ujg-esi-stats-stories [data-story-state="cancelled"] { color: #596779; }
+.ujg-esi-stats-stories [data-story-state="open"] { color: #0969c7; }
+.ujg-esi-stats-stories [data-story-state="unknown"] { color: #a13c24; }
+.ujg-esi-stats-breakdown { display: block; margin-top: 3px; color: #596779; font-size: 11px; line-height: 1.5; }
+.ujg-esi-stats-details { margin-top: 14px; }
+.ujg-esi-stats-details > summary { cursor: pointer; padding: 6px 0; color: #425b76; }
+.ujg-esi-stats-details > summary:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
 .ujg-esi-import-summary .ujg-esi-counters { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid #dfe3e8; display: flex; flex-wrap: wrap; gap: 12px; }
 .ujg-esi-import-summary .ujg-esi-counter { border: 0; padding: 0; min-height: 22px; font-size: 11px; }
 @media (max-width: 700px) {

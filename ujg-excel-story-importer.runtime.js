@@ -4682,6 +4682,25 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
     if (task.statusState === "todo" || task.statusCategory === "new" || /^(open|new|to do|todo|backlog|выдано|новая|новый|открыт[ао]?|к выполнению)$/i.test(text(task.status))) return "waiting";
     return "progress";
   }
+  function storyStage(task) {
+    var status = text(task.status).replace(/\s+/g," ");
+    if (!status) return "unknown";
+    // The summary describes the named story workflow, not Jira's terminal flag.
+    if (/^(testing|in testing|тестирование|на тестировании|проверка|на проверке|на проверку)$/i.test(status)) return "testing";
+    return stage(task);
+  }
+  function conflictingStoryStatuses(rows) {
+    var seen = Object.create(null), conflicts = Object.create(null);
+    (rows || []).forEach(function(row) {
+      if (!row || !row.storyDetails) return;
+      var key = parentKey(row), status = text(row.storyDetails.status).replace(/\s+/g," ").toLowerCase();
+      if (!key) return;
+      status += "|" + storyStage(row.storyDetails);
+      if (seen[key] != null && seen[key] !== status) conflicts[key] = true;
+      seen[key] = status;
+    });
+    return conflicts;
+  }
   function isOpen(task) { return ["done","cancelled","unknown"].indexOf(teamsModule.statusKind(task)) < 0; }
   function outcome(row, tasks) {
     if (!parentKey(row)) return "uncreated";
@@ -4707,6 +4726,9 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
   }
   function summarize(sourceRows, inputTeams) {
     var teams = teamsModule.normalize(inputTeams), remarks = uniqueRemarks(sourceRows), conflicts = conflictingStatuses(sourceRows);
+    var storyConflicts = conflictingStoryStatuses(sourceRows);
+    var stories = {total:0,done:0,testing:0,cancelled:0,open:0,unknown:0,uncreated:0,openStatuses:[]};
+    var openStatuses = Object.create(null);
     var outcomes = [
       {key:"ready",label:"Готово по всем тикетам",count:0},
       {key:"open",label:"Есть открытые работы",count:0},
@@ -4721,6 +4743,18 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
     remarks.forEach(function(item) {
       var row = item.row, tasks = tasksFor(row,conflicts), result = outcome(row,tasks);
       outcomes.filter(function(value) { return value.key === result; })[0].count++;
+      // Parent workflow and completion of all linked work are separate measures.
+      var storyKey = parentKey(row), parent = row.storyDetails || {};
+      if (!storyKey) stories.uncreated++;
+      else {
+        stories.total++;
+        var parentStage = storyConflicts[storyKey] ? "unknown" : storyStage(parent);
+        if (parentStage === "waiting" || parentStage === "progress") {
+          stories.open++;
+          var label = text(parent.status);
+          openStatuses[label] = (openStatuses[label] || 0) + 1;
+        } else stories[parentStage]++;
+      }
       var currentRow = Object.assign({},row,{storyDetails:row.storyDetails ? tasks.filter(function(task) { return task.isParent; })[0] : null,childStatuses:tasks.filter(function(task) { return !task.isParent; })});
       var current = teamsModule.currentWork(currentRow,teams), currentKeys = Object.create(null);
       current.groups.forEach(function(group) {
@@ -4750,7 +4784,8 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
     });
     if (noTeam.tasks) teamRows.push(noTeam);
     if (noDirection.remarks) directions.push(noDirection);
-    return {total:remarks.length,sourceRows:(sourceRows || []).length,outcomes:outcomes,directions:directions.map(finish),teams:teamRows.map(finish),roles:Object.keys(roles).sort().map(function(key) { return finish(roles[key]); })};
+    stories.openStatuses = Object.keys(openStatuses).sort().map(function(label) { return {label:label,count:openStatuses[label]}; });
+    return {total:remarks.length,sourceRows:(sourceRows || []).length,stories:stories,outcomes:outcomes,directions:directions.map(finish),teams:teamRows.map(finish),roles:Object.keys(roles).sort().map(function(key) { return finish(roles[key]); })};
   }
   return {summarize:summarize};
 });
@@ -4767,6 +4802,7 @@ define("_ujgESI_statisticsUi", ["jquery", "_ujgESI_statistics"], function($, sta
       columns.forEach(function(column,index) {
         var $cell = $(index ? "<td/>" : "<th/>").text(row[column[0]] == null ? "" : row[column[0]]);
         if (!index) $cell.attr("scope","row");
+        if (!index && row.detail) $cell.append($("<small/>").addClass("ujg-esi-stats-breakdown").text(row.detail));
         $row.append($cell);
       });
       $body.append($row);
@@ -4777,14 +4813,28 @@ define("_ujgESI_statisticsUi", ["jquery", "_ujgESI_statistics"], function($, sta
   function render($parent,state) {
     var data = statistics.summarize(state.rows || [],state.teams);
     var $root = $("<div/>").addClass("ujg-esi-statistics");
-    $root.append($("<p/>").addClass("ujg-esi-stats-scope").text("Все загруженные · Замечаний: " + data.total + " · Строк: " + data.sourceRows));
+    var stories = data.stories, storyRows = [
+      {key:"done",label:"Исправлено",count:stories.done},
+      {key:"testing",label:"На тестировании",count:stories.testing},
+      {key:"cancelled",label:"Снято",count:stories.cancelled},
+      {key:"open",label:"В работе",count:stories.open,detail:stories.openStatuses.map(function(value) { return value.label + ": " + value.count; }).join(" · ")}
+    ];
+    if (stories.unknown) storyRows.push({key:"unknown",label:"Статус неизвестен",count:stories.unknown});
+    $root.append($("<p/>").addClass("ujg-esi-stats-scope").text("Все загруженные · Историй в Jira: " + stories.total + " · Замечаний: " + data.total + " · Строк: " + data.sourceRows));
+    var $stories = table("Истории по текущему статусу Jira",[["label","Состояние истории"],["count","Истории"]],storyRows).addClass("ujg-esi-stats-stories");
+    $stories.find("tbody tr").each(function(index) { $(this).attr("data-story-state",storyRows[index].key); });
+    $root.append($stories);
+    if (stories.uncreated) $root.append($("<p/>").addClass("ujg-esi-stats-note ujg-esi-stats-uncreated").text("Не заведено в Jira: " + stories.uncreated));
+    var $details = $("<details/>").addClass("ujg-esi-stats-details").append($("<summary/>").text("Подробности по задачам и командам"));
     var $tables = $("<div/>").addClass("ujg-esi-stats-tables");
     $tables.append(table("Итог по замечаниям",[["label","Состояние"],["count","Замечания"]],data.outcomes));
     $tables.append(table("Текущие направления",[["label","Направление"],["remarks","Замечания"],["tasks","Задачи"]],data.directions));
     $tables.append(table("На командах",[["label","Команда"],["remarks","Замечания"],["open","Открыто"],["progress","В работе"],["testing","Тест"],["waiting","Ожидают"]],data.teams));
     $tables.append(table("Задачи по ролям",[["label","Роль"],["open","Открыто"],["testing","Тест"],["done","Готово"],["cancelled","Отмена"],["unknown","Нет данных"]],data.roles));
-    $root.append($tables,$("<p/>").addClass("ujg-esi-stats-note").text("Итог: каждое замечание учтено один раз. Направления и команды пересекаются. На командах: открытые задачи по участникам; без известной команды исполнителя учитывается роль задачи."));
+    $details.append($tables,$("<p/>").addClass("ujg-esi-stats-note").text("Итог по замечаниям учитывает историю и все связанные задачи. Направления и команды пересекаются. На командах: открытые задачи по участникам; без известной команды исполнителя учитывается роль задачи."));
+    $root.append($details);
     $parent.append($root);
+    return $details;
   }
   return {render:render};
 });
@@ -12144,9 +12194,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       $summary.append($("<summary/>").attr({ title: "Сводка импорта", "aria-label": "Сводка импорта" }).append(icon("Info")));
       var $analytics = $("<div/>").addClass("ujg-esi-analytics").attr({role:"dialog","aria-label":"Сводка замечаний"});
       $analytics.append($("<div/>").addClass("ujg-esi-stats-head").append($("<strong/>").text("Сводка замечаний"),gridModule.button("X","Закрыть сводку",function() { $summary.prop("open",false); $summary.children("summary").trigger("focus"); })));
-      if (statisticsUi) statisticsUi.render($analytics,s);
-      appendCounters($analytics,s);
-      if (s.syncSummary) $analytics.append($("<div/>").addClass("ujg-esi-stats-note").text(s.syncSummary));
+      var $statisticsDetails = statisticsUi && statisticsUi.render($analytics,s) || $analytics;
+      appendCounters($statisticsDetails,s);
+      if (s.syncSummary) $statisticsDetails.append($("<div/>").addClass("ujg-esi-stats-note").text(s.syncSummary));
       $summary.append($analytics).on("toggle",function() {
         if (!$summary.prop("open")) return;
         var rect = $summary[0].getBoundingClientRect(), viewportWidth = document.documentElement.clientWidth || window.innerWidth;
