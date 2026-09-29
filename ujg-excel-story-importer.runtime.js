@@ -4442,6 +4442,7 @@ define("_ujgESI_teams", [], function() {
     var category = str(task.statusCategory, 80).toLowerCase();
     var state = str(task.statusState, 80).toLowerCase();
     if (/cancel|reject|withdrawn|отмен|отклон|аннулир|^снят[аоы]?$/.test(status) || /cancel|reject/.test(state)) return "cancelled";
+    if (/^(выдано|повторно выдано|reopened)$/.test(status.replace(/\s+/g, " "))) return "active";
     var completed = typeof task.done === "boolean" ? task.done : category ? category === "done" : state ? state === "done" : /^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(status);
     if (completed) return "done";
     if (/test|qa|тест|провер|испыт/.test(status)) return "testing";
@@ -4680,17 +4681,24 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
   function storyStage(task) {
     var status = text(task.status).replace(/\s+/g," ");
     if (!status) return "unknown";
+    if (teamsModule.statusKind(task) === "cancelled") return "cancelled";
     // The summary describes the named story workflow, not Jira's terminal flag.
     if (/^(testing|in testing|тестирование|на тестировании|проверка|на проверке|на проверку)$/i.test(status)) return "testing";
     return stage(task);
   }
-  function conflictingStoryStatuses(rows) {
+  function storySummaryStage(task, teams) {
+    var value = storyStage(task);
+    if (["waiting","progress","testing"].indexOf(value) >= 0 &&
+        teamsModule.forUser(teams,task.assigneeIdentifiers).some(function(team) { return team.direction === "implementation"; })) return "processed";
+    return value;
+  }
+  function conflictingStoryStatuses(rows, teams) {
     var seen = Object.create(null), conflicts = Object.create(null);
     (rows || []).forEach(function(row) {
       if (!row || !row.storyDetails) return;
       var key = parentKey(row), status = text(row.storyDetails.status).replace(/\s+/g," ").toLowerCase();
       if (!key) return;
-      status += "|" + storyStage(row.storyDetails);
+      status += "|" + storySummaryStage(row.storyDetails,teams);
       if (seen[key] != null && seen[key] !== status) conflicts[key] = true;
       seen[key] = status;
     });
@@ -4721,8 +4729,8 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
   }
   function summarize(sourceRows, inputTeams) {
     var teams = teamsModule.normalize(inputTeams), remarks = uniqueRemarks(sourceRows), conflicts = conflictingStatuses(sourceRows);
-    var storyConflicts = conflictingStoryStatuses(sourceRows);
-    var stories = {total:0,done:0,testing:0,cancelled:0,open:0,unknown:0,uncreated:0,openStatuses:[]};
+    var storyConflicts = conflictingStoryStatuses(sourceRows,teams);
+    var stories = {total:0,done:0,processed:0,testing:0,cancelled:0,open:0,unknown:0,uncreated:0,openStatuses:[]};
     var openStatuses = Object.create(null);
     var outcomes = [
       {key:"ready",label:"Готово по всем тикетам",count:0},
@@ -4743,7 +4751,7 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
       if (!storyKey) stories.uncreated++;
       else {
         stories.total++;
-        var parentStage = storyConflicts[storyKey] ? "unknown" : storyStage(parent);
+        var parentStage = storyConflicts[storyKey] ? "unknown" : storySummaryStage(parent,teams);
         if (parentStage === "waiting" || parentStage === "progress") {
           stories.open++;
           var label = text(parent.status);
@@ -4810,6 +4818,7 @@ define("_ujgESI_statisticsUi", ["jquery", "_ujgESI_statistics"], function($, sta
     var $root = $("<div/>").addClass("ujg-esi-statistics");
     var stories = data.stories, storyRows = [
       {key:"done",label:"Исправлено",count:stories.done},
+      {key:"processed",label:"Отработано (внедрение)",count:stories.processed},
       {key:"testing",label:"На тестировании",count:stories.testing},
       {key:"cancelled",label:"Снято",count:stories.cancelled},
       {key:"open",label:"В работе",count:stories.open,detail:stories.openStatuses.map(function(value) { return value.label + ": " + value.count; }).join(" · ")}
@@ -12841,12 +12850,16 @@ define("_ujgESI_main", [
     var categoryColor = category && category.colorName != null ? String(category.colorName).toLowerCase() : "";
     var categoryName = category && category.name != null ? String(category.name).toLowerCase() : "";
     var categoryId = category && category.id != null ? String(category.id) : "";
-    if (categoryKey === "done" || categoryColor === "green" || categoryId === "3") return "done";
-    if (issueResolutionName(issue) || issueResolutionDate(issue)) return "done";
+    var statusText = issueStatusName(issue).toLowerCase().trim().replace(/\s+/g, " ");
+    if (/^(выдано|повторно выдано|reopened)$/.test(statusText)) return "todo";
     if (categoryKey === "indeterminate" || categoryColor === "yellow" || categoryId === "4") return "progress";
     if (categoryKey === "new" || /blue|gray|grey/.test(categoryColor) || categoryId === "2") return "todo";
-    var statusText = issueStatusName(issue).toLowerCase();
+    if (categoryKey === "done" || categoryColor === "green" || categoryId === "3") return "done";
     if (/^(done|resolved|closed|cancelled|canceled|готов[оа]?|закрыт[ао]?|снят[ао]?|выполнен[ао]?|принят[ао]?)$/.test(statusText.trim())) return "done";
+    if (/^(in progress|progress|in review|review|testing|in testing|active|blocked|на тестировании|тестирование|на проверке|проверка|в работе|в процессе|заблокирован)$/.test(statusText)) return "progress";
+    if (/^(в (?:разработке|исполнении|тестировании)|на (?:проверку|проверке|тестировании|ревью))$/.test(statusText)) return "progress";
+    if (/^(open|new|to do|todo|backlog|ожидает|новая|новый|открыт[ао]?|к выполнению)$/.test(statusText)) return "todo";
+    if (issueResolutionName(issue) || issueResolutionDate(issue)) return "done";
     if (/progress|review|testing|тест|работ|разработ|исполн|провер|ревью/.test(statusText)) return "progress";
     if (/todo|open|backlog|нов|выдан|ожид/.test(statusText)) return "todo";
     return categoryName ? "" : "";

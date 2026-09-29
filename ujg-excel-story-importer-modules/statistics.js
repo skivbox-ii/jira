@@ -62,17 +62,24 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
   function storyStage(task) {
     var status = text(task.status).replace(/\s+/g," ");
     if (!status) return "unknown";
+    if (teamsModule.statusKind(task) === "cancelled") return "cancelled";
     // The summary describes the named story workflow, not Jira's terminal flag.
     if (/^(testing|in testing|тестирование|на тестировании|проверка|на проверке|на проверку)$/i.test(status)) return "testing";
     return stage(task);
   }
-  function conflictingStoryStatuses(rows) {
+  function storySummaryStage(task, teams) {
+    var value = storyStage(task);
+    if (["waiting","progress","testing"].indexOf(value) >= 0 &&
+        teamsModule.forUser(teams,task.assigneeIdentifiers).some(function(team) { return team.direction === "implementation"; })) return "processed";
+    return value;
+  }
+  function conflictingStoryStatuses(rows, teams) {
     var seen = Object.create(null), conflicts = Object.create(null);
     (rows || []).forEach(function(row) {
       if (!row || !row.storyDetails) return;
       var key = parentKey(row), status = text(row.storyDetails.status).replace(/\s+/g," ").toLowerCase();
       if (!key) return;
-      status += "|" + storyStage(row.storyDetails);
+      status += "|" + storySummaryStage(row.storyDetails,teams);
       if (seen[key] != null && seen[key] !== status) conflicts[key] = true;
       seen[key] = status;
     });
@@ -103,8 +110,8 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
   }
   function summarize(sourceRows, inputTeams) {
     var teams = teamsModule.normalize(inputTeams), remarks = uniqueRemarks(sourceRows), conflicts = conflictingStatuses(sourceRows);
-    var storyConflicts = conflictingStoryStatuses(sourceRows);
-    var stories = {total:0,done:0,testing:0,cancelled:0,open:0,unknown:0,uncreated:0,openStatuses:[]};
+    var storyConflicts = conflictingStoryStatuses(sourceRows,teams);
+    var stories = {total:0,done:0,processed:0,testing:0,cancelled:0,open:0,unknown:0,uncreated:0,openStatuses:[]};
     var openStatuses = Object.create(null);
     var outcomes = [
       {key:"ready",label:"Готово по всем тикетам",count:0},
@@ -125,7 +132,7 @@ define("_ujgESI_statistics", ["_ujgESI_teams"], function(teamsModule) {
       if (!storyKey) stories.uncreated++;
       else {
         stories.total++;
-        var parentStage = storyConflicts[storyKey] ? "unknown" : storyStage(parent);
+        var parentStage = storyConflicts[storyKey] ? "unknown" : storySummaryStage(parent,teams);
         if (parentStage === "waiting" || parentStage === "progress") {
           stories.open++;
           var label = text(parent.status);

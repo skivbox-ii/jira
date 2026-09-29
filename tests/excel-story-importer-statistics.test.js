@@ -9,6 +9,83 @@ const task = (key,role,status,extra={}) => Object.assign({key,role,status},extra
 const row = (key,status,children=[]) => ({jiraKey:key,storyDetails:task(key,"",status),childStatuses:children});
 const count = (result,key) => result.outcomes.find(x=>x.key===key).count;
 
+test("implementation assignee moves only nonclosed original stories into processed",()=>{
+  const configured=teams.defaults();
+  configured.find(x=>x.direction==="implementation").members=[{id:"impl-old",label:"Alex",identifiers:["impl-current"]}];
+  const cases=[
+    ["Open",{}],
+    ["На тестировании",{done:true,statusCategory:"done",statusState:"done"}],
+    ["Done",{}],
+    ["Снята",{done:true,statusCategory:"done"}],
+    ["Mystery",{}]
+  ];
+  const rows=cases.map(([status,metadata],index)=>{
+    const r=row("P-"+(index+1),status);
+    Object.assign(r.storyDetails,metadata,{assigneeIdentifiers:["impl-current"]});
+    return r;
+  });
+  rows.push(row("P-6","Open",[task("P-60","IMP","Open",{assigneeIdentifiers:["impl-current"]})]));
+  rows.push(row("P-7","Open")); rows[6].storyDetails.assignee="Alex";
+  rows.push(row("P-8","Testing")); rows[7].storyDetails.role="IMP";
+  rows.push({id:"sheet:1",summary:"Uncreated"});
+  rows.push(rows[0]);
+  const conflict=row("P-9","Done"); conflict.storyDetails.assigneeIdentifiers=["impl-current"];
+  const conflictCopy=row("P-9","Open"); conflictCopy.storyDetails.assigneeIdentifiers=["impl-current"];
+  rows.push(conflict,conflictCopy);
+  for(const input of [rows,rows.slice().reverse()]) {
+    const result=stats().summarize(input,configured),s=result.stories;
+    assert.equal(s.total,9); assert.equal(s.processed,2);
+    assert.equal(s.done,1); assert.equal(s.cancelled,1); assert.equal(s.testing,1);
+    assert.equal(s.open,2); assert.equal(s.unknown,2); assert.equal(s.uncreated,1);
+    assert.equal(s.done+s.processed+s.testing+s.cancelled+s.open+s.unknown,s.total);
+    assert.equal(result.sourceRows,12);
+  }
+});
+
+test("cancelled testing metadata remains cancelled for implementation assignees",()=>{
+  const configured=teams.defaults();
+  configured.find(x=>x.direction==="implementation").members=[{id:"impl",label:"Impl",identifiers:[]}];
+  const r=row("P-1","Testing");
+  Object.assign(r.storyDetails,{statusState:"cancelled",assigneeIdentifiers:["impl"]});
+  const s=stats().summarize([r],configured).stories;
+  assert.equal(s.cancelled,1); assert.equal(s.processed,0); assert.equal(s.testing,0);
+});
+
+test("same-key active story snapshots with conflicting implementation membership stay unknown",()=>{
+  const configured=teams.defaults();
+  configured.find(x=>x.direction==="implementation").members=[
+    {id:"impl-old",label:"Impl A",identifiers:["impl-alias"]},
+    {id:"impl-two",label:"Impl B",identifiers:[]}
+  ];
+  configured.find(x=>x.direction==="development").members=[{id:"dev",label:"Dev",identifiers:[]}];
+  function assigned(status,id) {
+    const r=row("P-1",status);
+    r.storyDetails.assigneeIdentifiers=id ? [id] : [];
+    return r;
+  }
+  for(const other of ["", "dev"]) {
+    for(const input of [[assigned("Open","impl-old"),assigned("Open",other)],
+      [assigned("Open",other),assigned("Open","impl-old")]]) {
+      const s=stats().summarize(input,configured).stories;
+      assert.equal(s.total,1); assert.equal(s.unknown,1);
+      assert.equal(s.processed,0); assert.equal(s.open,0);
+    }
+  }
+  for(const other of ["impl-alias","impl-two"]) {
+    for(const input of [[assigned("Testing","impl-old"),assigned("Testing",other)],
+      [assigned("Testing",other),assigned("Testing","impl-old")]]) {
+      const s=stats().summarize(input,configured).stories;
+      assert.equal(s.total,1); assert.equal(s.processed,1);
+      assert.equal(s.unknown,0); assert.equal(s.testing,0);
+    }
+  }
+  for(const status of ["Done","Cancelled"]) {
+    const s=stats().summarize([assigned(status,"impl-old"),assigned(status,"")],configured).stories;
+    assert.equal(s[status==="Done" ? "done" : "cancelled"],1);
+    assert.equal(s.unknown,0); assert.equal(s.processed,0);
+  }
+});
+
 test("story summary counts original statuses once, independently of child completion",()=>{
   const ready=row("P-1","Выполнено",[task("P-11","BE","In progress")]);
   const withdrawn=row("P-3","Снята"); withdrawn.storyDetails.statusCategory="done";

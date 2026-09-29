@@ -8,14 +8,20 @@ function setup(){
   const state={teams:modules._ujgESI_teams.defaults(),rows:[{jiraKey:"P-1",storyDetails:{key:"P-1",status:"Open"},childStatuses:[{key:"P-2",role:"BE",status:"In progress"},{key:"P-3",role:"QA",status:"Testing"}]}]};
   return {dom,$,state,render:()=>modules._ujgESI_statisticsUi.render($("#root"),state)};
 }
-test("analytics leads with four story statuses and keeps old tables in collapsed details",t=>{
-  const {dom,$,state,render}=setup();t.after(()=>dom.window.close());render();
+test("analytics leads with five story statuses and keeps old tables in collapsed details",t=>{
+  const {dom,$,state,render}=setup();t.after(()=>dom.window.close());
+  state.teams.find(team=>team.direction==="implementation").members=[{id:"impl",label:"Implementer",identifiers:["impl-alias"]}];
+  state.rows.push({jiraKey:"P-4",storyDetails:{key:"P-4",status:"Testing",done:true,statusCategory:"done",assigneeIdentifiers:["impl-alias"]},childStatuses:[]});
+  render();
   assert.equal($("table").length,5);
   const $main=$("table[aria-label='Истории по текущему статусу Jira']");
   assert.equal($main.closest("details").length,0);
   assert.deepEqual($main.find("tbody th").map((_,el)=>$(el).clone().children().remove().end().text()).get(),
-    ["Исправлено","На тестировании","Снято","В работе"]);
-  assert.deepEqual($main.find("tbody td").map((_,el)=>$(el).text()).get(),["0","0","0","1"]);
+    ["Исправлено","Отработано (внедрение)","На тестировании","Снято","В работе"]);
+  assert.deepEqual($main.find("tbody tr").map((_,el)=>$(el).attr("data-story-state")).get(),
+    ["done","processed","testing","cancelled","open"]);
+  assert.deepEqual($main.find("tbody td").map((_,el)=>$(el).text()).get(),["0","1","0","0","1"]);
+  assert.match($(".ujg-esi-stats-scope").text(),/Историй в Jira: 2/);
   assert.match($main.text(),/Open: 1/);
   const $details=$("details.ujg-esi-stats-details");
   assert.equal($details.length,1); assert.equal($details.prop("open"),false);

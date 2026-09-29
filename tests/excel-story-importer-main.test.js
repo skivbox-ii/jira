@@ -1055,6 +1055,17 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   let patchArgs = null;
   const sourceBuffer = new ArrayBuffer(12);
   const patchedBuffer = new ArrayBuffer(8);
+  const activeStatusCases = [
+    ["EVOSCADA-20", "Ожидает", "todo"],
+    ["EVOSCADA-21", "В процессе", "progress"],
+    ["EVOSCADA-22", "Blocked", "progress"],
+    ["EVOSCADA-23", "Заблокирован", "progress"],
+    ["EVOSCADA-24", "Active", "progress"],
+    ["EVOSCADA-25", "К выполнению", "todo"],
+    ["EVOSCADA-26", "Повторно выдано", "todo"],
+    ["EVOSCADA-27", "Reopened", "todo"],
+    ["EVOSCADA-28", "Повторно  выдано", "todo"],
+  ];
   const rendering = {
     init: function (_container, services) {
       callbacks = services;
@@ -1112,7 +1123,8 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               key: "EVOSCADA-12",
               fields: {
                 summary: "[QA] Existing",
-                status: { name: "Testing" },
+                status: { name: "На проверку" },
+                resolution: { name: "Готово" },
                 assignee: { displayName: "Ольга" },
                 issuelinks: [
                   {
@@ -1134,7 +1146,9 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
               key: "EVOSCADA-15",
               fields: {
                 summary: "[QA] Existing",
-                status: { name: "Open" },
+                status: { name: "Выдано", statusCategory: { key: "new" } },
+                resolution: { name: "Готово" },
+                resolutiondate: "2026-05-16T10:00:00.000+0300",
                 issuelinks: [
                   {
                     type: { name: "Blocks", inward: "is blocked by", outward: "blocks" },
@@ -1143,7 +1157,25 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                 ],
               },
             },
-          ],
+            {
+              key: "EVOSCADA-16",
+              fields: {
+                summary: "[BE] Active with old resolution",
+                status: { name: "В разработке" },
+                resolutiondate: "2026-05-16T10:00:00.000+0300",
+              },
+            },
+            {
+              key: "EVOSCADA-17",
+              fields: {
+                summary: "[BE] Final with old resolution",
+                status: { name: "Разработка завершена" },
+                resolution: { name: "Готово" },
+              },
+            },
+          ].concat(activeStatusCases.map(function ([key,status]) {
+            return {key,fields:{summary:"[BE] Active status",status:{name:status},resolution:{name:"Готово"}}};
+          })),
         });
       }
       return Promise.resolve({
@@ -1161,7 +1193,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                     key: "EVOSCADA-12",
                     fields: {
                       summary: "[QA] Existing",
-                      status: { name: "Testing" },
+                      status: { name: "На проверку" },
                     },
                   },
                 },
@@ -1205,7 +1237,24 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
                     },
                   },
                 },
-              ],
+                {
+                  type: { name: "Hierarchy", inward: "is child of", outward: "has child" },
+                  outwardIssue: {
+                    key: "EVOSCADA-16",
+                    fields: { summary: "[BE] Active with old resolution", status: { name: "В разработке" } },
+                  },
+                },
+                {
+                  type: { name: "Hierarchy", inward: "is child of", outward: "has child" },
+                  outwardIssue: {
+                    key: "EVOSCADA-17",
+                    fields: { summary: "[BE] Final with old resolution", status: { name: "Разработка завершена" } },
+                  },
+                },
+              ].concat(activeStatusCases.map(function ([key,status]) {
+                return {type:{name:"Hierarchy",inward:"is child of",outward:"has child"},
+                  outwardIssue:{key,fields:{summary:"[BE] Active status",status:{name:status}}}};
+              })),
             },
           },
         ],
@@ -1299,7 +1348,7 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   await flush();
   await flush();
 
-  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10", "EVOSCADA-13"], ["EVOSCADA-12", "EVOSCADA-11", "EVOSCADA-14", "EVOSCADA-15"]]);
+  assert.deepEqual(issueKeyCalls, [["EVOSCADA-10", "EVOSCADA-13"], ["EVOSCADA-12", "EVOSCADA-11", "EVOSCADA-14", "EVOSCADA-15", "EVOSCADA-16", "EVOSCADA-17"].concat(activeStatusCases.map(([key])=>key))]);
   assert.equal(patchArgs.buffer, sourceBuffer);
   assert.equal(patchArgs.patch.sheetName, "Журнал");
   assert.equal(patchArgs.patch.headerRowNumber, 9);
@@ -1325,16 +1374,18 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
   assert.equal(last.rows[0].statusInJira, "In Review");
   assert.equal(last.rows[0].assigneeInJira, "Иван Иванов");
   assert.equal(last.rows[0].sprintInJira, "Sprint 42");
-  assert.equal(last.rows[0].statusTitle, "[SE] Existing | Любой закрытый статус | Сергей\n[QA] Existing | Testing | Ольга");
+  assert.equal(last.rows[0].statusTitle, "[SE] Existing | Любой закрытый статус | Сергей\n[QA] Existing | На проверку | Ольга");
   assert.deepEqual(last.rows[0].childStatuses, [
     "SE:EVOSCADA-11:Любой закрытый статус:done:done:doneFlag:Сергей:open",
-    "QA:EVOSCADA-12:Testing::progress:openFlag:Ольга:open",
+    "QA:EVOSCADA-12:На проверку::progress:openFlag:Ольга:open",
   ]);
   assert.equal(last.rows[1].statusInJira, "Testing");
   assert.deepEqual(last.rows[1].childStatuses, [
     "BE:EVOSCADA-14:Workflow final state::done:doneFlag:Не назначен:open",
-    "QA:EVOSCADA-15:Open::todo:openFlag:Не назначен:open",
-  ]);
+    "BE:EVOSCADA-16:В разработке::progress:openFlag:Не назначен:open",
+    "BE:EVOSCADA-17:Разработка завершена::done:doneFlag:Не назначен:open",
+  ].concat(activeStatusCases.map(([key,status,state])=>"BE:"+key+":"+status+"::"+state+":openFlag:Не назначен:open"),
+    ["QA:EVOSCADA-15:Выдано:new:todo:openFlag:Не назначен:open"]));
 });
 
 test("sync from Jira does not blank existing sprint when issue has no sprint field", async function () {

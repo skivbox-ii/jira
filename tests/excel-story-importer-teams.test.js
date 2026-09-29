@@ -6,6 +6,15 @@ const loadAmd = require("./helpers/load-amd-module");
 const teams = loadAmd(path.join(__dirname, "../ujg-excel-story-importer-modules/teams.js"), {});
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test("explicit reissued status wins over stale completion flags without changing terminal statuses", () => {
+  for (const status of ["Выдано", "Повторно выдано", "Reopened"]) {
+    assert.equal(teams.statusKind({status, done:true, statusCategory:"done", statusState:"done"}), "active", status);
+  }
+  assert.equal(teams.statusKind({status:"Resolved", done:false, statusCategory:"indeterminate", statusState:"progress"}), "active");
+  assert.equal(teams.statusKind({status:"Done", done:true, statusCategory:"done"}), "done");
+  assert.equal(teams.statusKind({status:"Снята", done:true, statusCategory:"done"}), "cancelled");
+});
+
 test("queue assigns every configured QA-role team for exact testing statuses", () => {
   const configured = teams.normalize([
     { id: "qa-east", name: "Renamed", roles: [" qa "] },

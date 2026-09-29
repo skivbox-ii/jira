@@ -124,6 +124,7 @@ define("_ujgESI_teams", [], function() {
     var category = str(task.statusCategory, 80).toLowerCase();
     var state = str(task.statusState, 80).toLowerCase();
     if (/cancel|reject|withdrawn|отмен|отклон|аннулир|^снят[аоы]?$/.test(status) || /cancel|reject/.test(state)) return "cancelled";
+    if (/^(выдано|повторно выдано|reopened)$/.test(status.replace(/\s+/g, " "))) return "active";
     var completed = typeof task.done === "boolean" ? task.done : category ? category === "done" : state ? state === "done" : /^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(status);
     if (completed) return "done";
     if (/test|qa|тест|провер|испыт/.test(status)) return "testing";

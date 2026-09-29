@@ -57,6 +57,7 @@
 .ujg-esi-stats-stories tbody td { width: 90px; font-size: 18px; font-weight: 600; }
 .ujg-esi-stats-stories th, .ujg-esi-stats-stories td { padding: 9px 8px; }
 .ujg-esi-stats-stories [data-story-state="done"] { color: #187044; }
+.ujg-esi-stats-stories [data-story-state="processed"] { color: #167780; }
 .ujg-esi-stats-stories [data-story-state="testing"] { color: #866000; }
 .ujg-esi-stats-stories [data-story-state="cancelled"] { color: #596779; }
 .ujg-esi-stats-stories [data-story-state="open"] { color: #0969c7; }

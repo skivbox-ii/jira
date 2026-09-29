@@ -22,6 +22,7 @@ define("_ujgESI_statisticsUi", ["jquery", "_ujgESI_statistics"], function($, sta
     var $root = $("<div/>").addClass("ujg-esi-statistics");
     var stories = data.stories, storyRows = [
       {key:"done",label:"Исправлено",count:stories.done},
+      {key:"processed",label:"Отработано (внедрение)",count:stories.processed},
       {key:"testing",label:"На тестировании",count:stories.testing},
       {key:"cancelled",label:"Снято",count:stories.cancelled},
       {key:"open",label:"В работе",count:stories.open,detail:stories.openStatuses.map(function(value) { return value.label + ": " + value.count; }).join(" · ")}
