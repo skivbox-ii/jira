@@ -29,7 +29,7 @@ User chose "Две колонки (Recommended)" on 29.09 after the short design
 - [x] Run focused tests with `NODE_PATH=/tmp/ujg-import-registry-test/node_modules node --test tests/excel-story-importer-enrichment.test.js tests/excel-story-importer-main.test.js tests/excel-story-importer-registry.test.js tests/browser/excel-story-importer-grid.test.cjs` and resolve regression failures without dropping old requirements.
 - [x] Independent spec and code review. Controller rebuilds only importer JS/runtime; run `node --test --test-concurrency=4 tests/*.test.js tests/browser/*.test.cjs` with the same NODE_PATH. Final: 1635/1635. Review's midnight in-place styling and timer cleanup findings fixed and personally retested.
 - [x] Personal stubbed Chrome on desktop/mobile: distinct dates, today's/past/future/missing, two different layouts, switches/reload/reset/shared QA filter, horizontal overflow confined to grid, 0 mutations/LLM/errors. Preserve previous summary behavior.
-- [ ] Publish explicit verified importer files only, compare JS/runtime/CSS to commit-pinned CDN.
+- [x] Publish explicit verified importer files only, compare JS/runtime/CSS to commit-pinned CDN. Code `fe0845b`, all three assets match byte-for-byte; see acceptance report.
 - [ ] Citrix after user signal only: visible dates and two profiles, never confirm writes. Leave acceptance open if unavailable; record evidence/backlog.
 
 ## Ownership And Safeguards
