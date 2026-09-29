@@ -29,6 +29,12 @@ User confirmed 29.09: processed is determined by the original Story assignee bel
 - [x] Independent spec and code review; rebuild only importer JS/runtime; run full tests and `git diff --check`.
 - [ ] Publish only verified importer changes with the existing main/CDN process. Verify static asset equality; personally inspect the new summary and reopened Story behavior through Citrix without mutations. Do not declare completed acceptance when blocked.
 
+Publication completed in `3f4a74a`; commit-pinned JS/runtime/CSS match CDN.
+The last checkbox remains open for personal Citrix acceptance: at 14:48
+the active Citrix screen was not Jira. No clicks were sent; awaiting the
+user's return-to-Jira signal. Final local run: 1625 tests, personal desktop
+and mobile stub checks; see `docs/import-processed-summary-acceptance-2026-09-29.md`.
+
 ## Live Diagnostic Evidence
 
 Citrix session `import-summary-counts-20260929`, 14:33-14:38 MSK.
