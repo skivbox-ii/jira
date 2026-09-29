@@ -533,16 +533,31 @@ function applyFilter($, key, value) {
 function teamQueueSetup(t) {
   const result=setup(); t.after(()=>result.dom.window.close());
   result.state.teams=result.modules._ujgESI_teams.defaults();
+  result.state.teams.find(team=>team.id==="qa").members=[
+    {id:"acct-qa",label:"Shared name",identifiers:["acct-qa","qa-login"]}
+  ];
   result.state.rows=[{id:"queue",jiraKey:"P-100",summary:"Queue story",sourceColumns:{"№":"100"},
-    storyDetails:{key:"P-100",status:"В работе",assignee:"Coordinator"},
+    storyDetails:{key:"P-100",status:"В работе",assignee:"Coordinator",assigneeIdentifiers:["acct-other"]},
     childStatuses:[
       {key:"P-101",role:"BE",status:"Тестирование",assignee:"Dev"},
       {key:"P-102",role:"QA",status:"В работе",assignee:"Tester"},
       {key:"P-103",role:"QA",status:"Готово",assignee:"Tester",done:true},
       {key:"P-104",role:"QA",status:"Отменено",assignee:"Tester"},
       {key:"P-105",role:"BE",status:"В работе",assignee:"Dev"},
-      {key:"P-106",role:"QA",status:"На тестировании",assignee:"Tester"}
-    ]}];
+      {key:"P-106",role:"QA",status:"На тестировании",assignee:"Tester"},
+      {key:"P-107",role:"QA",status:"Custom workflow",assignee:"Tester"},
+      {key:"P-108",role:"BE",status:"В работе",assignee:"Shared name",assigneeIdentifiers:["acct-qa"]},
+      {key:"P-109",role:"BE",status:"Готово",assignee:"Shared name",assigneeIdentifiers:["qa-login"],done:true},
+      {key:"P-110",role:"BE",status:"В работе",assignee:"Shared name",assigneeIdentifiers:["acct-other"]},
+      {key:"P-111",role:"QA",status:"Тестирование",assignee:"Shared name",assigneeIdentifiers:["acct-qa"]}
+    ]},
+    {id:"member-story",jiraKey:"P-200",summary:"QA member story",sourceColumns:{"№":"200"},
+      storyDetails:{key:"P-200",status:"Готово",done:true,assignee:"Shared name",assigneeIdentifiers:["acct-qa"]},
+      childStatuses:[{key:"P-201",role:"BE",status:"В работе",assignee:"Dev"}]},
+    {id:"unrelated",jiraKey:"P-300",summary:"Other story",sourceColumns:{"№":"300"},
+      storyDetails:{key:"P-300",status:"В работе",assignee:"Shared name",assigneeIdentifiers:["acct-other"]},
+      childStatuses:[{key:"P-301",role:"BE",status:"В работе",assignee:"Dev"}]}
+  ];
   result.render(); return result;
 }
 function applyTeam($, id) {
@@ -551,26 +566,47 @@ function applyTeam($, id) {
   $(".ujg-esi-team-filter-menu .ujg-esi-filter-apply").trigger("click");
 }
 
-test("team toolbar filters QA testing OR open roles without duplicate rows or siblings", t => {
+test("team toolbar unions exact testing, QA roles and QA assignee identifiers for children and stories", t => {
   const {dom,$,state,render}=teamQueueSetup(t);
   assert.equal($(".ujg-esi-toolbar [aria-label='Фильтр: Команда']").length,1);
   applyTeam($,"qa");
   const keys=()=>$(".ujg-esi-child-row").map((_,el)=>$(el).attr("data-key")).get();
-  assert.deepEqual(keys(),["P-101","P-102","P-106"]);
-  assert.equal($(".ujg-esi-parent-row").hasClass("is-context"),true);
+  assert.deepEqual(keys(),["P-101","P-102","P-103","P-104","P-106","P-107","P-108","P-109","P-111"]);
+  assert.equal(new Set(keys()).size,keys().length);
+  assert.deepEqual($(".ujg-esi-parent-row").map((_,el)=>$(el).attr("data-key")).get(),["P-100","P-200"]);
+  assert.equal($("tr[data-key='P-100']").hasClass("is-context"),true);
+  assert.equal($("tr[data-key='P-200']").hasClass("is-context"),false);
+  assert.equal($("tr[data-key='P-201']").length,0,"Parent match must not bring unrelated children");
   assert.match($("[aria-label='Фильтр: Команда']").text(),/QA/);
-  $(".ujg-esi-expand-cell button").trigger("click"); assert.deepEqual(keys(),[]);
-  $(".ujg-esi-expand-cell button").trigger("click"); assert.deepEqual(keys(),["P-101","P-102","P-106"]);
-  applyFilter($,"assignee","Tester"); assert.deepEqual(keys(),["P-102","P-106"]);
+  $("tr[data-key='P-100'] .ujg-esi-expand-cell button").trigger("click"); assert.deepEqual(keys(),[]);
+  $("tr[data-key='P-100'] .ujg-esi-expand-cell button").trigger("click"); assert.equal(keys().length,9);
+  applyFilter($,"assignee","Tester"); assert.deepEqual(keys(),["P-102","P-103","P-104","P-106","P-107"]);
   state.viewMode="jira"; state.rows=state.rows.slice(); render();
-  assert.deepEqual(keys(),["P-102","P-106"]);
+  assert.deepEqual(keys(),["P-102","P-103","P-104","P-106","P-107"]);
   state.reportView="activity"; render(); state.reportView="registry"; render();
-  assert.deepEqual(keys(),["P-102","P-106"]);
+  assert.deepEqual(keys(),["P-102","P-103","P-104","P-106","P-107"]);
   const stored=JSON.parse(dom.window.localStorage.getItem("ujg-esi-state"));
   assert.deepEqual(stored.gridLayout.filters,{teamIds:["qa"],assignee:["Tester"]});
   $(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").trigger("click");
   assert.equal($("[aria-label='Фильтр: Команда']").hasClass("is-active"),false);
   assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout.filters,{});
+});
+
+test("explicit completed-work exclusions remain AND filters on the QA union", t => {
+  const {$}=teamQueueSetup(t);
+  applyTeam($,"qa");
+  $("[data-filter='status']").trigger("click");
+  $("input[aria-label='Исключить готовые']").prop("checked",true).trigger("change");
+  $(".ujg-esi-grid-menu .ujg-esi-filter-apply").trigger("click");
+  assert.equal($("tr[data-key='P-103']").length,0);
+  assert.equal($("tr[data-key='P-109']").length,0);
+  assert.equal($("tr[data-key='P-104']").length,1,"Cancelled QA role is still in the queue");
+  assert.equal($("tr[data-key='P-200']").length,1,"Child exclusion does not exclude completed stories");
+  $("[data-filter='status']").trigger("click");
+  $("input[aria-label='Исключить готовые истории']").prop("checked",true).trigger("change");
+  $(".ujg-esi-grid-menu .ujg-esi-filter-apply").trigger("click");
+  assert.equal($("tr[data-key='P-200']").length,0);
+  assert.equal($("tr[data-key='P-100']").length,1);
 });
 
 test("team filter keeps stable drafts during search and cancels without applying", t => {

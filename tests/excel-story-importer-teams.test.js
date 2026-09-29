@@ -20,24 +20,44 @@ test("queue assigns every configured QA-role team for exact testing statuses", (
   assert.deepEqual(plain(teams.queueTeamIds({ status: "Review" }, configured)), [], "review is not a QA status alias");
 });
 
-test("queue QA role requires proven open status and ignores derived done false for terminal names", () => {
+test("queue QA role matches any status, including absent, completed and cancelled", () => {
   const configured = teams.normalize([{ id: "quality", name: "Renamed", roles: ["qA"] }]);
   for (const task of [
     { status: "Open", role: "QA" },
     { status: "In progress", role: "qa", done: false },
-    { status: "Review", statusCategory: "indeterminate", role: "QA" }
-  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), ["quality"]);
-  for (const task of [
+    { status: "Review", statusCategory: "indeterminate", role: "QA" },
     { role: "QA", done: false },
     { status: "Mystery", role: "QA", done: false },
     { status: "Done", role: "QA", done: false },
     { status: "Completed", role: "QA", done: false },
     { status: "Cancelled", role: "QA", done: false },
+    { status: "Готово", role: "QA", done: true, statusCategory: "done" }
+  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), ["quality"], JSON.stringify(task));
+});
+
+test("queue testing status matches QA even when terminal metadata disagrees", () => {
+  const configured = teams.normalize([{ id: "quality", name: "Renamed", roles: ["QA"] }]);
+  for (const task of [
     { status: "Testing", done: true },
     { status: "Testing", statusCategory: "done" },
     { status: "In Testing", statusState: "done" },
     { status: "Testing", statusState: "cancelled" }
-  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), [], JSON.stringify(task));
+  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), ["quality"], JSON.stringify(task));
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Review", done: false }, configured)), []);
+});
+
+test("queue QA matches member identifiers on any task and does not duplicate OR matches", () => {
+  const configured = teams.normalize([{ id: "quality", name: "Renamed", roles: ["QA"],
+    members: [{ id: "tester-login", label: "Tester", identifiers: ["tester-key", "tester-account"] }] }]);
+  for (const task of [
+    { status: "В работе", role: "BE", assigneeIdentifiers: ["tester-key"] },
+    { status: "Готово", assigneeIdentifiers: ["tester-login"] },
+    { status: "Снята", assigneeIdentifiers: ["tester-account"] },
+    { assigneeIdentifiers: ["tester-account"] },
+    { status: "Тестирование", role: "QA", assigneeIdentifiers: ["tester-key", "tester-key"] }
+  ]) assert.deepEqual(plain(teams.queueTeamIds(task, configured)), ["quality"], JSON.stringify(task));
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assignee: "Tester" }, configured)), []);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assigneeIdentifiers: ["someone-else"] }, configured)), []);
 });
 
 test("queue other teams use configured roles or assignee identifiers, including closed work", () => {
@@ -50,7 +70,7 @@ test("queue other teams use configured roles or assignee identifiers, including 
   assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assigneeIdentifiers: ["person-1"] }, configured)), ["dev"]);
   assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", role: "OPS", assigneeIdentifiers: ["acct-2", "acct-2"] }, configured)), ["ops"]);
   assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", role: "BE", assignee: "Carol" }, configured)), ["dev"]);
-  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assigneeIdentifiers: ["acct-3"] }, configured)), []);
+  assert.deepEqual(plain(teams.queueTeamIds({ status: "Open", assigneeIdentifiers: ["acct-3"] }, configured)), ["quality"]);
 });
 
 test("defaults contain editable role teams and bounded directions", () => {

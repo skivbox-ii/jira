@@ -4465,19 +4465,14 @@ define("_ujgESI_teams", [], function() {
   function queueTeamIds(task, normalizedTeams) {
     task = task && typeof task === "object" ? task : {};
     var status = str(task.status, 160).replace(/\s+/g, " ").toLowerCase();
-    var terminal = task.done === true || str(task.statusCategory, 80).toLowerCase() === "done" || str(task.statusState, 80).toLowerCase() === "done" ||
-      /^(done|complete|completed|closed|resolved|finished|готово|выполнено|выполнена|закрыто|закрыта|завершено|завершена|принято|принята)$/.test(status) ||
-      statusKind(task) === "cancelled";
     var qaStatus = /^(testing|in testing|тестирование|на тестировании)$/.test(status);
-    var open = !!status && !terminal && statusKind(task) !== "unknown";
     var role = str(task.role, 80).toUpperCase();
     var identifiers = unique(task.assigneeIdentifiers, 20, 160);
     return (Array.isArray(normalizedTeams) ? normalizedTeams : []).filter(function(team) {
       var aliases = Array.isArray(team.roles) ? team.roles : [];
       var isQa = aliases.some(function(alias) { return str(alias, 80).toUpperCase() === "QA"; });
       var roleMatch = !!role && aliases.some(function(alias) { return str(alias, 80).toUpperCase() === role; });
-      if (isQa) return !terminal && (qaStatus || (open && roleMatch));
-      return roleMatch || identifiers.length && (Array.isArray(team.members) ? team.members : []).some(function(member) {
+      return (isQa && qaStatus) || roleMatch || identifiers.length && (Array.isArray(team.members) ? team.members : []).some(function(member) {
         return [member.id].concat(member.identifiers || []).some(function(id) { return identifiers.indexOf(id) >= 0; });
       });
     }).map(function(team) { return team.id; });
@@ -15264,6 +15259,7 @@ define("_ujgESI_main", [
         description: child.description || "",
         descriptionLoaded: Object.prototype.hasOwnProperty.call(child, "description"),
         assignee: child.assignee && typeof child.assignee === "object" ? userLabel(child.assignee) : child.assignee || "",
+        assigneeIdentifiers: userIdentifiers(child.assignee),
         issueType: child.issueType || "",
         linkedToParent: child.linkedToParent,
         linkError: child.linkError || "",

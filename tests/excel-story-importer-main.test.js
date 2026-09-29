@@ -187,6 +187,24 @@ test("empty source may omit Due and Jira rejection remains visible", async () =>
   assert.equal(failed.state.rows[0].status,"failed");
 });
 
+test("new child preserves stable assignee identifiers for QA queue membership", async () => {
+  const x = dueDialogHarness({}, {ok:true,createdKey:"P-50",createdChildren:[
+    {key:"P-51",role:"BE",linkedToParent:true,assignee:{accountId:"qa-account",name:"qa-login",displayName:"Tester"}},
+    {key:"P-52",role:"BE",linkedToParent:true,assignee:{displayName:"Tester"}},
+  ],errors:[]});
+  x.callbacks.onCreateRow(0);
+  x.callbacks.onConfirmCreate();
+  await flush(); await flush();
+
+  const children = x.state.rows[0].childStatuses;
+  assert.deepEqual(Array.from(children[0].assigneeIdentifiers || []), ["qa-account", "qa-login"]);
+  assert.deepEqual(Array.from(children[1].assigneeIdentifiers || []), []);
+  const teams = loadAmdModule(path.join(MODULE_DIR,"teams.js"),{});
+  const configured = teams.normalize([{id:"qa",name:"Renamed QA",roles:["QA"],members:[{id:"qa-account",label:"Tester"}]}]);
+  assert.deepEqual(Array.from(teams.queueTeamIds(children[0],configured)), ["qa"]);
+  assert.deepEqual(Array.from(teams.queueTeamIds(children[1],configured)), []);
+});
+
 test("history retry retains previous failure until a successful final read", async () => {
   let callbacks,state,resolveRead;
   const api={getProjects:()=>Promise.resolve([]),getIssueWithHistory:()=>new Promise(resolve=>{resolveRead=resolve;})};

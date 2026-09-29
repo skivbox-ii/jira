@@ -2983,6 +2983,7 @@ define("_ujgESI_main", [
         description: child.description || "",
         descriptionLoaded: Object.prototype.hasOwnProperty.call(child, "description"),
         assignee: child.assignee && typeof child.assignee === "object" ? userLabel(child.assignee) : child.assignee || "",
+        assigneeIdentifiers: userIdentifiers(child.assignee),
         issueType: child.issueType || "",
         linkedToParent: child.linkedToParent,
         linkError: child.linkError || "",

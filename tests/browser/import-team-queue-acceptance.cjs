@@ -10,6 +10,37 @@ const artifacts = process.env.IMPORT_TEAM_QUEUE_ARTIFACTS || path.join(os.tmpdir
 const teamButton = ".ujg-esi-team-filter-button";
 const menuSelector = ".ujg-esi-team-filter-menu";
 const table = ".ujg-esi-registry-table";
+const syntheticFixture = `
+(function() {
+  var parent = fixtureIssues["EVOSCADA-16104"];
+  function add(key, role, status, category, assignee) {
+    var issue = JSON.parse(JSON.stringify(fixtureIssues["EVOSCADA-23111"]));
+    issue.key = key;
+    issue.fields.summary = "[" + role + "] QA queue regression " + key;
+    issue.fields.status = {id:key,name:status,statusCategory:{key:category}};
+    issue.fields.assignee = {name:assignee,displayName:"Петров П."};
+    fixtureIssues[key] = issue;
+    parent.fields.issuelinks.push({type:{name:"Child",outward:"is parent of",inward:"is child of"},outwardIssue:{key:key,fields:issue.fields}});
+  }
+  add("EVOSCADA-99001","QA","Готово","done","petrov");
+  add("EVOSCADA-99002","QA","Отменено","indeterminate","petrov");
+  add("EVOSCADA-99003","QA","Custom workflow","indeterminate","petrov");
+  add("EVOSCADA-99004","BE","В работе","indeterminate","qa-local");
+  add("EVOSCADA-99005","BE","Готово","done","qa-local");
+  add("EVOSCADA-99006","BE","Тестирование","indeterminate","qa-local");
+  add("EVOSCADA-99007","BE","В работе","indeterminate","petrov");
+  fixtureIssues["EVOSCADA-23110"].fields.assignee = {name:"qa-local",displayName:"Петров П."};
+})();`;
+const teamSeed = `
+(function() {
+  var teamsModule = modules._ujgESI_teams;
+  var key = teamsModule.storageKey("ujg-esi-state", "EVOSCADA");
+  if (localStorage.getItem(key) === null) {
+    var teams = teamsModule.defaults();
+    teams.filter(function(team) { return team.id === "qa"; })[0].members.push({id:"qa-local",label:"Петров П.",identifiers:["qa-local","qa-alias"]});
+    teamsModule.save(localStorage,"ujg-esi-state","EVOSCADA",teams);
+  }
+})();`;
 
 async function layout(page) {
   return page.evaluate(() => {
@@ -31,27 +62,35 @@ async function rows(page) {
 async function expectedQa(page) {
   return page.evaluate(() => {
     const exact = /^(testing|in testing|тестирование|на тестировании)$/i;
-    const aliases = new Set(), openRoles = new Set(), closedQa = new Set();
+    const aliases = new Set(), roles = new Set(), members = new Set(), stories = new Set();
+    const saved = JSON.parse(localStorage.getItem(modules._ujgESI_teams.storageKey("ujg-esi-state","EVOSCADA")));
+    const memberIds = new Set(saved.find(team => team.id === "qa").members.flatMap(member => [member.id,...member.identifiers]));
     for (const issue of Object.values(window.fixtureIssues)) {
-      if (issue.fields.issuetype.name === "История") continue;
+      const story = issue.fields.issuetype.name === "История";
       const role = /^\[([^\]]+)\]/.exec(issue.fields.summary)?.[1].toUpperCase() || "";
       const status = issue.fields.status.name.trim().replace(/\s+/g, " ");
-      const category = issue.fields.status.statusCategory?.key || "";
-      if (role === "QA" && category === "done") closedQa.add(issue.key);
-      if (category === "done") continue;
-      if (exact.test(status)) aliases.add(issue.key);
-      else if (role === "QA" && status && (category === "new" || category === "indeterminate")) openRoles.add(issue.key);
+      const byStatus = exact.test(status), byRole = role === "QA";
+      const byMember = memberIds.has(issue.fields.assignee?.name);
+      if (byStatus) aliases.add(issue.key);
+      if (byRole) roles.add(issue.key);
+      if (byMember) members.add(issue.key);
+      if (story && (byStatus || byMember)) stories.add(issue.key);
     }
-    return {aliases:[...aliases].sort(), openRoles:[...openRoles].sort(), closedQa:[...closedQa].sort(), all:[...new Set([...aliases,...openRoles])].sort()};
+    const children = [...new Set([...aliases,...roles,...members])].filter(key => !stories.has(key)).sort();
+    return {aliases:[...aliases].sort(), roles:[...roles].sort(), members:[...members].sort(), stories:[...stories].sort(), children};
   });
 }
 
 async function qaRows(page, expected) {
   const actual = await rows(page), children = actual.filter(row => row.child);
-  assert.deepEqual(children.map(row => row.key).sort(), expected.all, "QA rows must equal exact testing status OR open QA-role tasks");
+  assert.deepEqual(children.map(row => row.key).sort(), expected.children, "QA rows must equal status OR role OR member union");
   assert.equal(new Set(children.map(row => row.key)).size, children.length, "No duplicate child rows");
   assert.ok(actual.some(row => !row.child && row.context), "Matching children retain context stories");
-  assert.ok(children.every(row => !expected.closedQa.includes(row.key)), "Closed QA work is excluded");
+  assert.ok(expected.stories.every(key => actual.some(row => row.key === key && !row.child && !row.context)), "Directly matching stories remain visible");
+  assert.ok(!actual.some(row => row.key === "EVOSCADA-23111" || row.key === "EVOSCADA-99007"), "Parent and label matches do not leak siblings");
+  for (const key of ["EVOSCADA-99001","EVOSCADA-99002","EVOSCADA-99003","EVOSCADA-99004","EVOSCADA-99005","EVOSCADA-99006"]) {
+    assert.ok(children.some(row => row.key === key), `${key} exercises a QA branch`);
+  }
   assert.equal(await page.locator(`${teamButton}.is-active`).count(), 1);
   return actual;
 }
@@ -107,23 +146,34 @@ async function main() {
   try {
     for (const width of [1440,390]) {
       const context = await browser.newContext({viewport:{width,height:900}});
-      await context.route("**/*", route => new URL(route.request().url()).origin === new URL(origin).origin ? route.continue() : route.abort());
+      await context.route("**/*", async route => {
+        const url = new URL(route.request().url());
+        if (url.origin !== new URL(origin).origin) return route.abort();
+        if (url.pathname === "/test/fixture.js" || url.pathname === "/test/preview-bootstrap.js") {
+          const response = await route.fetch();
+          const body = await response.text();
+          return route.fulfill({response,body:url.pathname === "/test/fixture.js" ? body + syntheticFixture : teamSeed + body});
+        }
+        return route.continue();
+      });
       const page = await context.newPage(), errors = [], shots = [];
       page.on("pageerror", error => errors.push(error.message));
       try {
         await page.goto(origin);
         await page.waitForFunction(() => document.querySelectorAll(".ujg-esi-parent-row").length === 50 &&
-          document.querySelectorAll(".ujg-esi-child-row").length === 10 && !document.querySelector(".ujg-esi-loading"), null, {timeout:60000});
+          document.querySelectorAll(".ujg-esi-child-row").length === 10 && !document.querySelector(".ujg-esi-loading") &&
+          !document.querySelector(".ujg-esi-sync-loading"), null, {timeout:60000});
         await page.getByRole("combobox", {name:"Замечаний на странице"}).selectOption("100");
         await page.locator("[data-sort='remarkId']").click();
         const selectedSort = (await layout(page)).sort;
         assert.equal(selectedSort.column, "remarkId");
         const expected = await expectedQa(page);
-        assert.ok(expected.aliases.length > 0 && expected.openRoles.length > 0 && expected.closedQa.length > 0, "Fixture covers both QA branches and closed QA");
+        assert.ok(expected.aliases.length > 0 && expected.roles.length > 0 && expected.members.length > 0 && expected.stories.length > 0,
+          "Fixture covers status, role, member and parent branches");
         const beFixture = await page.evaluate(() => window.fixtureIssues["EVOSCADA-23111"].fields);
         assert.match(beFixture.summary,/^\[BE\]/);
         assert.equal(beFixture.status.name,"В работе");
-        assert.ok(!expected.all.includes("EVOSCADA-23111"));
+        assert.ok(!expected.children.includes("EVOSCADA-23111"));
 
         // Draft changes keep their inputs and focus; Cancel must leave the applied filter alone.
         let menu = await openTeam(page);
@@ -147,6 +197,25 @@ async function main() {
         const selected = await qaRows(page, expected);
         shots.push(await shot(page,"qa-excel",width));
         const childrenBefore = selected.filter(row => row.child).length;
+        await page.locator("[data-filter='status']").scrollIntoViewIfNeeded();
+        await page.locator("[data-filter='status']").click();
+        await page.locator(".ujg-esi-grid-menu input[aria-label='Исключить готовые']").check();
+        await page.locator(".ujg-esi-grid-menu .ujg-esi-filter-apply").click();
+        await page.waitForFunction(() => {
+          const saved = JSON.parse(localStorage.getItem("ujg-esi-state"));
+          return saved?.gridLayout?.filters?.excludeDone === true &&
+            !document.querySelector("tr[data-key='EVOSCADA-99001'], tr[data-key='EVOSCADA-99005']");
+        });
+        assert.equal(await page.locator("tr[data-key='EVOSCADA-99002']").count(),1);
+        await page.locator("[data-filter='status']").scrollIntoViewIfNeeded();
+        await page.locator("[data-filter='status']").click();
+        await page.locator(".ujg-esi-grid-menu input[aria-label='Исключить готовые истории']").check();
+        await page.locator(".ujg-esi-grid-menu .ujg-esi-filter-apply").click();
+        await page.waitForFunction(() => JSON.parse(localStorage.getItem("ujg-esi-state"))?.gridLayout?.filters?.excludeDoneStories === true);
+        assert.equal(await page.locator("tr[data-key='EVOSCADA-23110']").count(),1);
+        await page.locator(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").click();
+        await onlyQa(page);
+        await qaRows(page,expected);
         const contextStory = page.locator(".ujg-esi-parent-row.is-context").first();
         const disclosure = contextStory.locator(".ujg-esi-expand-cell button");
         await disclosure.click();
@@ -166,7 +235,7 @@ async function main() {
         await applyAssignee(page,"Соколова А.");
         const narrowed = (await rows(page)).filter(row => row.child);
         assert.ok(narrowed.length > 0 && narrowed.length < childrenBefore);
-        assert.ok(narrowed.every(row => row.assignee === "Соколова А." && expected.all.includes(row.key)), "Team and assignee must match the same child");
+        assert.ok(narrowed.every(row => row.assignee === "Соколова А." && expected.children.includes(row.key)), "Team and assignee must match the same child");
         await page.getByRole("button", {name:"Режим Jira", exact:true}).click();
         await refreshJira(page);
         assert.deepEqual((await rows(page)).filter(row => row.child).map(row => row.key).sort(), narrowed.map(row => row.key).sort());
@@ -201,8 +270,8 @@ async function main() {
         await menu.locator(".ujg-esi-filter-apply").click();
         assert.deepEqual((await layout(page)).filters.teamIds,["be","qa"]);
         const both = (await rows(page)).filter(row => row.child);
-        assert.ok(both.some(row => expected.all.includes(row.key)),"Multi-select retains QA tasks");
-        assert.ok(both.some(row => !expected.all.includes(row.key)),"Multi-select adds BE tasks");
+        assert.ok(both.some(row => expected.children.includes(row.key)),"Multi-select retains QA tasks");
+        assert.ok(both.some(row => !expected.children.includes(row.key)),"Multi-select adds BE tasks");
 
         menu = await openTeam(page);
         await menu.locator(".ujg-esi-filter-all input").check();
@@ -229,7 +298,7 @@ async function main() {
         const calls = await page.evaluate(() => ({jira:window.mutationCalls,llm:window.llmPreviewCalls.length}));
         assert.deepEqual(calls,{jira:0,llm:0});
         assert.deepEqual(errors,[]);
-        console.log(JSON.stringify({width,pages,qaAliases:expected.aliases.length,openQa:expected.openRoles.length,closedQa:expected.closedQa.length,
+        console.log(JSON.stringify({width,pages,qaAliases:expected.aliases.length,qaRoles:expected.roles.length,qaMembers:expected.members.length,qaStories:expected.stories.length,
           qaChildren:childrenBefore,edges,...calls,pageErrors:errors.length,screenshots:shots}));
       } finally { await context.close(); }
     }
