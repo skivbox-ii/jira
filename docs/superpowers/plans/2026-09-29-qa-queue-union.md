@@ -19,4 +19,4 @@
 - [x] Update `tests/browser/excel-story-importer-grid.test.cjs` and `tests/browser/import-team-queue-acceptance.cjs` for all three branches, parent/member identities, explicit completion filters and persistence. Keep browser requests local only.
 - [x] Rebuild with `node build-excel-story-importer.js`, run focused and full tests, independently review with gpt-6-sol/medium. Preserve stable identities on newly created children; reviewed separately with a red/green regression test.
 - [x] Personally run/view desktop 1440 and mobile 390 local acceptance, including filtering, collapse/expand, source/reload and last rows.
-- [ ] Update table contract and backlog, publish only scoped importer changes using existing main/CDN process. Attempt Citrix read-only only with available/uncontested control; do not claim blocked acceptance passed.
+- [x] Update table contract and backlog, publish only scoped importer changes using existing main/CDN process. Code c799da8 published; static CDN files match. Citrix attempted read-only, blocked by ERR_TIMED_OUT fetching ujgCommon.js before importer startup. Production acceptance remains open.
