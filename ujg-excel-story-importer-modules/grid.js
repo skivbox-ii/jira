@@ -3,7 +3,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
   var sequence = 0;
   var columns = [
     ["remarkId", "ID", 54], ["remark", "Замечание из Excel", 236], ["owner", "Ответственный", 138],
-    ["module", "Модуль Excel", 116], ["deadline", "Срок исполнения Excel", 150],
+    ["module", "Модуль Excel", 116], ["deadline", "Срок Excel", 150], ["jiraDueDate", "Срок Jira", 116],
     ["mappedComponent", "Компонент по модулю", 160], ["jiraComponent", "Компонент Jira", 150],
     ["componentReason", "Сверка компонента", 190],
     ["sourceStatus", "Статус Excel", 112], ["importState", "Импорт", 136], ["key", "Ключ Jira", 152],
@@ -12,12 +12,43 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     ["priority", "Приоритет", 94], ["updated", "Обновлено", 94]
   ];
   var sourceFields = ["remarkId", "remark", "owner", "module", "deadline", "mappedComponent", "sourceStatus", "importState"];
-  var defaultHidden = { mappedComponent: true, componentReason: true, sourceStatus: true, importState: true };
+  var defaultHidden = { mappedComponent: true, componentReason: true, sourceStatus: true, importState: true, jiraDueDate: true };
+  var knownColumns = columns.map(function(c) { return c[0]; });
+  function modeOf(state) { return state && state.viewMode === "jira" ? "jira" : "excel"; }
+  function profile(layout, mode, legacy) {
+    var requested = mode === "jira" ? "jiraDueDate" : "deadline";
+    var hidden = Object.assign({}, defaultHidden), seen = Object.create(null);
+    hidden.deadline = mode === "jira";
+    hidden.jiraDueDate = mode !== "jira";
+    var savedOrder = Array.isArray(layout && layout.order) ? layout.order.filter(function(id) {
+      if (knownColumns.indexOf(id) < 0 || seen[id]) return false;
+      seen[id] = true; return true;
+    }) : [];
+    if (legacy && !seen.jiraDueDate && savedOrder.indexOf("deadline") >= 0) {
+      savedOrder.splice(savedOrder.indexOf("deadline") + 1, 0, "jiraDueDate");
+      seen.jiraDueDate = true;
+    }
+    var order = savedOrder.concat(knownColumns.filter(function(id) { return !seen[id]; }));
+    if (layout && Array.isArray(layout.visible)) {
+      var visible = layout.visible.filter(function(id) { return knownColumns.indexOf(id) !== -1; });
+      if (visible.length) knownColumns.forEach(function(id) { hidden[id] = visible.indexOf(id) === -1; });
+      if (legacy && (!Array.isArray(layout.order) || layout.order.indexOf("jiraComponent") === -1)) hidden.jiraComponent = false;
+      if (legacy) {
+        hidden[requested] = false;
+        hidden[mode === "jira" ? "deadline" : "jiraDueDate"] = true;
+      }
+    }
+    var widths = {};
+    if (layout && layout.widths && typeof layout.widths === "object" && !Array.isArray(layout.widths)) columns.forEach(function(column) {
+      if (Object.prototype.hasOwnProperty.call(layout.widths, column[0])) widths[column[0]] = clampWidth(layout.widths[column[0]], column[2]);
+    });
+    return {order:order,visible:order.filter(function(id) { return !hidden[id]; }),widths:widths};
+  }
   function storageKey(state) { return state.preferencesStorageKey || "ujg-esi-state"; }
   function readLayout(key) {
     try {
       var value = JSON.parse(window.localStorage.getItem(key) || "null");
-      return value && value.gridLayout && typeof value.gridLayout === "object" ? value.gridLayout : null;
+      return value && value.gridLayout && typeof value.gridLayout === "object" && !Array.isArray(value.gridLayout) ? value.gridLayout : null;
     } catch (ignore) { return null; }
   }
   function clampWidth(value, fallback) {
@@ -46,34 +77,68 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     var state, hooks, $host, $viewport, $menu, menuAnchor, $filterReset, $teamFilter, filterTeams = [];
     var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
     var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
-    var hidden = Object.assign({}, defaultHidden), order = columns.map(function(c) { return c[0]; }), widths = {}, layoutKey, page = 0, pageSize = 50;
+    var hidden = Object.assign({}, defaultHidden), order = knownColumns.slice(), widths = {}, columnLayouts = {}, layoutMode, layoutKey, page = 0, pageSize = 50;
     var suppressSort = false, drag = null;
+    var dateTimer = null, dateEvents = ".ujgRegistryDates" + id;
 
-    function loadLayout(key) {
-      layoutKey = key; hidden = Object.assign({}, defaultHidden); widths = {};
-      filters = Object.create(null); sort = null;
-      order = columns.map(function(c) { return c[0]; });
-      var layout = readLayout(key);
-      if (!layout) return;
-      var known = order.slice(), seen = Object.create(null);
-      if (Array.isArray(layout.order)) order = layout.order.filter(function(id) {
-        if (known.indexOf(id) < 0 || seen[id]) return false;
-        seen[id] = true; return true;
-      }).concat(known.filter(function(id) { return !seen[id]; }));
-      if (Array.isArray(layout.visible)) {
-        var visible = layout.visible.filter(function(id) { return known.indexOf(id) !== -1; });
-        if (visible.length) known.forEach(function(id) { hidden[id] = visible.indexOf(id) === -1; });
-        if (!Array.isArray(layout.order) || layout.order.indexOf("deadline") === -1) hidden.deadline = false;
-        if (!Array.isArray(layout.order) || layout.order.indexOf("jiraComponent") === -1) hidden.jiraComponent = false;
-      }
-      if (layout.widths && typeof layout.widths === "object" && !Array.isArray(layout.widths)) columns.forEach(function(column) {
-        widths[column[0]] = clampWidth(layout.widths[column[0]], column[2]);
+    function stopDateWatch() {
+      if (dateTimer != null) clearTimeout(dateTimer);
+      dateTimer = null;
+      $(document).off(dateEvents);
+      $(window).off(dateEvents);
+    }
+    function dateHostConnected() { return $host && $host[0] && $host[0].isConnected; }
+    function scheduleDateCheck() {
+      if (dateTimer != null) clearTimeout(dateTimer);
+      var now = Date.now();
+      dateTimer = setTimeout(checkDates, Math.max(1, Date.parse(registry.moscowDay(now) + "T21:00:00Z") - now));
+    }
+    function checkDates() {
+      if (!dateHostConnected()) { stopDateWatch(); return; }
+      var now = Date.now();
+      $host.find(".ujg-esi-cell-deadline[data-date],.ujg-esi-cell-jiraDueDate[data-date]").each(function() {
+        $(this).toggleClass("is-overdue", registry.isOverdueDate(this.getAttribute("data-date"), now));
       });
-      if (layout.sort && known.indexOf(layout.sort.column) !== -1 && (layout.sort.direction === "asc" || layout.sort.direction === "desc")) {
+      scheduleDateCheck();
+    }
+    function startDateWatch() {
+      stopDateWatch();
+      if (!dateHostConnected() || !$host.find(".ujg-esi-cell-deadline[data-date],.ujg-esi-cell-jiraDueDate[data-date]").length) return;
+      $(document).on("visibilitychange" + dateEvents, function() { if (!document.hidden) checkDates(); });
+      $(window).on("focus" + dateEvents, checkDates);
+      scheduleDateCheck();
+    }
+
+    function activateMode(mode) {
+      layoutMode = mode;
+      var active = columnLayouts[mode];
+      order = active.order.slice(); widths = Object.assign({}, active.widths);
+      hidden = Object.create(null);
+      knownColumns.forEach(function(id) { hidden[id] = active.visible.indexOf(id) === -1; });
+    }
+    function ensureLayout(nextState) {
+      var key = storageKey(nextState), mode = modeOf(nextState);
+      if (layoutKey !== key) loadLayout(key, mode);
+      else if (layoutMode !== mode) activateMode(mode);
+    }
+    function loadLayout(key, mode) {
+      layoutKey = key;
+      filters = Object.create(null); sort = null;
+      var layout = readLayout(key);
+      var profiles = layout && layout.columnLayouts;
+      columnLayouts = {};
+      ["excel", "jira"].forEach(function(name) {
+        var saved = profiles && typeof profiles === "object" && !Array.isArray(profiles) && profiles[name];
+        var validSaved = saved && typeof saved === "object" && !Array.isArray(saved);
+        columnLayouts[name] = profile(validSaved ? saved : layout, name, !validSaved);
+      });
+      activateMode(mode);
+      if (!layout) return;
+      if (layout.sort && knownColumns.indexOf(layout.sort.column) !== -1 && (layout.sort.direction === "asc" || layout.sort.direction === "desc")) {
         sort = {column:layout.sort.column,direction:layout.sort.direction};
       }
       if (layout.filters && typeof layout.filters === "object" && !Array.isArray(layout.filters)) {
-        known.forEach(function(id) {
+        knownColumns.forEach(function(id) {
           if (Array.isArray(layout.filters[id])) filters[id] = layout.filters[id].filter(function(value) { return typeof value === "string"; });
         });
         if (layout.filters.excludeDone === true) filters.excludeDone = true;
@@ -84,12 +149,13 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       }
     }
     function saveLayout() {
+      columnLayouts[layoutMode] = {order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:Object.assign({}, widths)};
       try {
         var storage = window.localStorage, stored;
         try { stored = JSON.parse(storage.getItem(layoutKey) || "{}"); } catch (ignore) { stored = {}; }
         if (!stored || typeof stored !== "object" || Array.isArray(stored)) stored = {};
         stored.gridLayout = { order: order.slice(), visible: order.filter(function(id) { return !hidden[id]; }), widths: widths,
-          sort: sort, filters: filters };
+          columnLayouts:columnLayouts, sort: sort, filters: filters };
         storage.setItem(layoutKey, JSON.stringify(stored));
       } catch (ignore) { /* Storage is best-effort. */ }
     }
@@ -463,9 +529,12 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     function cell(entry, key) {
       var value = entry[key], $td = $("<td/>").addClass("ujg-esi-cell-" + key);
-      if (key === "deadline") {
+      if (key === "deadline" || key === "jiraDueDate") {
         var displayed = /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value.slice(8, 10) + "." + value.slice(5, 7) + "." + value.slice(0, 4) : value;
-        return $td.text(displayed || entry.deadlineReason || "—").attr("title", [entry.deadlineSource, entry.deadlineReason].filter(Boolean).join(" · "));
+        return $td.toggleClass("is-overdue", registry.isOverdueDate(value, Date.now()))
+          .attr("data-date", value || null)
+          .text(displayed || (key === "deadline" ? entry.deadlineReason : "") || "—")
+          .attr("title", key === "deadline" ? [entry.deadlineSource, entry.deadlineReason].filter(Boolean).join(" · ") : value || "");
       }
       if (key === "jiraComponent") return $td.text(value || "—").attr("title", ["По модулю: " + (entry.mappedComponent || "не сопоставлен"), entry.componentReason].filter(Boolean).join(" · "));
       if (key === "componentReason") return $td.text(value || "—").attr("title", value || "");
@@ -619,22 +688,24 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       $footer.append($("<span/>").addClass("ujg-esi-page-spacer"), button("ChevronLeft", "Предыдущая страница", function() { page -= 1; refresh(); }).prop("disabled", page === 0), $("<span/>").text((page + 1) + " / " + pages), button("ChevronRight", "Следующая страница", function() { page += 1; refresh(); }).prop("disabled", page >= pages - 1));
       $host.append($footer);
       $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
+      startDateWatch();
     }
     return {
       teamMenu: teamMenu,
+      suspend: stopDateWatch,
       teamFilterButton: function(nextState) {
         closeMenu();
         state = nextState;
-        if (layoutKey !== storageKey(state)) loadLayout(storageKey(state));
+        ensureLayout(state);
         filterTeams = teamsModule.normalize(state.teams);
-        if (!state.rows || !state.rows.length) { rows = []; $host = null; $viewport = null; }
+        if (!state.rows || !state.rows.length) { stopDateWatch(); rows = []; $host = null; $viewport = null; }
         $teamFilter = button("Funnel", "Фильтр: Команда", function() { teamFilterMenu(this); })
           .addClass("ujg-esi-team-filter-button").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>"),icon("ChevronDown"));
         bindDismiss(); updateFilterReset();
         return $teamFilter;
       },
       resetFiltersButton: function(nextState) {
-        if (layoutKey !== storageKey(nextState)) loadLayout(storageKey(nextState));
+        ensureLayout(nextState);
         $filterReset = button("FunnelX", "Сбросить все фильтры", resetFilters);
         updateFilterReset();
         return $filterReset;
@@ -645,8 +716,9 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         return false;
       },
       mount: function($parent, nextState, nextHooks) {
+        stopDateWatch();
         state = nextState; hooks = nextHooks;
-        if (layoutKey !== storageKey(state)) loadLayout(storageKey(state));
+        ensureLayout(state);
         closeMenu(); closeDescription();
         if (sourceRows !== state.rows) {
           sourceRows = state.rows; collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
@@ -688,7 +760,12 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           }), $("<span/>").text(column[1])));
         });
         $box.append($("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() { saveLayout(); refresh(); }));
-        $box.append(button("RefreshCw", "Сбросить расположение столбцов", function() { hidden = Object.assign({}, defaultHidden); order = columns.map(function(c) { return c[0]; }); widths = {}; saveLayout(); refresh(); }).addClass("ujg-esi-menu-command").append($("<span/>").text("Сбросить расположение")));
+        $box.append(button("RefreshCw", "Сбросить расположение столбцов", function() {
+          var reset = profile(null, layoutMode, false);
+          order = reset.order; widths = {}; hidden = Object.create(null);
+          knownColumns.forEach(function(id) { hidden[id] = reset.visible.indexOf(id) === -1; });
+          saveLayout(); refresh();
+        }).addClass("ujg-esi-menu-command").append($("<span/>").text("Сбросить расположение")));
         $box.find("input,button").first().trigger("focus");
       }
     };

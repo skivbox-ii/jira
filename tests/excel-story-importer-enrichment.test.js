@@ -381,6 +381,31 @@ test("full issue history reads attribution, comments and logged work without a m
   assert.equal(request.data.expand,"changelog");
   assert.ok(request.data.fields.includes("creator"));
   for (const field of ["timespent", "worklog", "comment"]) assert.ok(request.data.fields.split(",").includes(field), field);
+  assert.ok(request.data.fields.split(",").includes("duedate"));
+});
+
+test("normal parent and child batch reads request Jira due dates without extra calls", async () => {
+  const requests=[];
+  const api=loadAmdModule(path.join(MODULE_DIR,"api.js"),{
+    jquery:{ajax:request=>{requests.push(request);return Promise.resolve({issues:[],total:0});}},
+    _ujgESI_config:{baseUrl:"https://jira.example.test"}
+  });
+  await api.getProjectIssues("TEST");
+  await api.getIssuesByKeys(["TEST-2"]);
+  assert.equal(requests.length,2);
+  requests.forEach(request=>assert.ok(JSON.parse(request.data).fields.includes("duedate")));
+});
+
+test("registry load carries each issue's own raw Jira due date", async () => {
+  const child={key:"TEST-2",fields:{summary:"[QA] Child",duedate:"2026-09-27"}};
+  const parent={key:"TEST-1",fields:{summary:"Parent",duedate:"2026-09-30",issuetype:{name:"Story"},issuelinks:[{type:{name:"Child"},outwardIssue:child}]}};
+  const app=await loadImporter([{jiraKey:"TEST-1",sourceColumns:{}}],{
+    getIssuesByKeys:keys=>Promise.resolve({issues:keys.map(key=>key==="TEST-1"?parent:child)})
+  });
+  app.callbacks.onSyncJira();
+  await flush(); await flush();
+  assert.equal(app.state.rows[0].storyDetails.duedate,"2026-09-30");
+  assert.equal(app.state.rows[0].childStatuses[0].duedate,"2026-09-27");
 });
 
 test("history enrichment deduplicates keys, bounds concurrency, and cancels queued reads on source change", async () => {
@@ -480,7 +505,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     key: "TEST-1", summary: "Existing Story", description: "Story detail", descriptionLoaded: true, status: "In Progress", assignee: "Иван",
     statusCategory: "", statusState: "progress", done: false,
     assigneeIdentifiers: ["JIRAUSER100", "ivan"],
-    priority: "High", components: [], componentsKnown:false, issueType: "Story", updated: "2026-03-03T10:00:00.000+0300",
+    priority: "High", components: [], componentsKnown:false, issueType: "Story", duedate:"", updated: "2026-03-03T10:00:00.000+0300",
     created: issues[0].fields.created,
     activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
@@ -490,7 +515,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     role: "FE", key: "TEST-2", summary: "[FE] Existing child", description: "Child detail", descriptionLoaded: true, status: "Open", linkedToParent: true,
     statusCategory: "new", statusState: "todo", done: false, assignee: "developer", blocked: false,
     assigneeIdentifiers: ["developer"],
-    priority: "Low", components: [], componentsKnown:false, issueType: "Task", updated: "2026-02-02T00:00:00Z",
+    priority: "Low", components: [], componentsKnown:false, issueType: "Task", duedate:"", updated: "2026-02-02T00:00:00Z",
     created: child.fields.created,
     activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[]},
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,

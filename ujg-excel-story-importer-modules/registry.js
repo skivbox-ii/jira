@@ -34,6 +34,13 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     if (hours) return hours + " ч " + Math.floor(ms / 60000 % 60) + " мин";
     return Math.floor(ms / 60000) + " мин";
   }
+  function jiraDate(value) {
+    return typeof value === "string" && deadlines.parseDate(value, {strict:true}) === value ? value : "";
+  }
+  function moscowDay(now) { return new Date(now + 3 * 3600000).toISOString().slice(0, 10); }
+  function isOverdueDate(value, now) {
+    return !!jiraDate(value) && value < moscowDay(now == null ? Date.now() : now);
+  }
   function normalized(value) { return text(value).replace(/\s+/g, " ").toLocaleLowerCase(); }
   function mappedComponent(module, settings) {
     var map = settings && settings.moduleComponentMap || {};
@@ -59,6 +66,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
   function buildRows(rows, now, context) {
     var result = [];
     now = now == null ? Date.now() : now;
+    var today = moscowDay(now);
     context = context || {};
     var settings = Object.assign({}, context.mappingSettings || {}, context.sourceColumnSettings || {});
     (rows || []).forEach(function(row, index) {
@@ -73,12 +81,16 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
         var key = text(details.key || (child ? "" : parentKey));
         var since = key && details.statusSince ? Date.parse(details.statusSince) : NaN;
         var ms = isFinite(since) && since <= now ? now - since : null;
+        var jiraDueDate = key ? jiraDate(details.duedate) : "";
+        var excelDate = deadline && deadline.date || "";
         return {
           source: row, rowIndex: index, groupId: groupId, uid: groupId + ":" + (child ? childIndex : "story"), isChild: !!child,
           remarkId: remarkId(row), remark: text(row.summary), owner: text(Object.prototype.hasOwnProperty.call(cols, "Ответственный") ? cols["Ответственный"] : cols["Исполнитель"]),
           ownerIdentifiers: ["accountId", "key", "name", "username"].map(function(field) { return text(row.ownerAssignee && row.ownerAssignee[field]); }).concat(text(row.ownerAssigneeId),Array.isArray(row.ownerIdentifiers) ? row.ownerIdentifiers : []).filter(function(id, index, all) { return id && all.indexOf(id) === index; }),
           module: text(cols["Модуль"]), mappedComponent: component.mappedComponent, jiraComponent: component.jiraComponent,
-          componentReason: component.componentReason, deadline: deadline && deadline.date || "",
+          componentReason: component.componentReason, deadline: excelDate,
+          deadlineOverdue: !!excelDate && excelDate < today,
+          jiraDueDate: jiraDueDate, jiraDueDateOverdue: !!jiraDueDate && jiraDueDate < today,
           deadlineSource: deadline && deadline.field || "", deadlineReason: deadline && deadline.reasonLabel || "",
           sourceStatus: text(cols["Статус"]), importState: importStatus(row), key: key,
           type: key ? text(details.issueType) : "",
@@ -136,7 +148,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
       function cmp(a, b) {
         var av = value(a), bv = value(b);
         if (sort.column === "priority") return comparePriority(av, bv, sort.direction);
-        if (sort.column === "deadline" && (!av || !bv)) return av ? -1 : bv ? 1 : 0;
+        if ((sort.column === "deadline" || sort.column === "jiraDueDate") && (!av || !bv)) return av ? -1 : bv ? 1 : 0;
         var result = sort.column === "age" ? (av == null ? -1 : av) - (bv == null ? -1 : bv) : compare(av, bv);
         return result * (sort.direction === "desc" ? -1 : 1);
       }
@@ -147,5 +159,6 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     }
     return groups;
   }
-  return { buildRows: buildRows, selectGroups: selectGroups, values: values, remarkId: remarkId, importStatus: importStatus, compare: compare };
+  return { buildRows: buildRows, selectGroups: selectGroups, values: values, remarkId: remarkId, importStatus: importStatus, compare: compare,
+    moscowDay: moscowDay, isOverdueDate: isOverdueDate };
 });

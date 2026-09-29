@@ -104,6 +104,8 @@
 .ujg-esi-registry-table a { color: #075fc4; text-decoration: none; }
 .ujg-esi-registry-table a:hover { text-decoration: underline; }
 .ujg-esi-registry-table .ujg-esi-cell-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ujg-esi-registry-table .ujg-esi-cell-deadline.is-overdue,
+.ujg-esi-registry-table .ujg-esi-cell-jiraDueDate.is-overdue { color: #b42318; font-weight: 700; }
 .ujg-esi-registry-table .ujg-esi-cell-updated { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ujg-esi-child-row .ujg-esi-cell-key { padding-left: 20px; position: relative; }
 .ujg-esi-issue-summary-text { display: block; white-space: normal; overflow-wrap: anywhere; }

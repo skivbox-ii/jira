@@ -146,6 +146,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function init(container, svc) {
+    if (grid && grid.suspend) grid.suspend();
     if (columnPreflightView) columnPreflightView.destroy();
     if ($columnPreflightHost) $columnPreflightHost.remove();
     if (activityView && activityView.destroy) activityView.destroy();
@@ -1902,6 +1903,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     var scrollState = captureScrollState();
     $(document).off("click.ujgEsiOwner");
     $(document).off("click.ujgEsiSummary");
+    if (grid && grid.suspend && (state || {}).reportView === "activity") grid.suspend();
     if (activityView && (state || {}).reportView !== "activity" && activityView.suspend) activityView.suspend();
     else if (activityView && activityView.prepareRender) activityView.prepareRender();
     else if (activityView && activityView.dismissTransient) activityView.dismissTransient();

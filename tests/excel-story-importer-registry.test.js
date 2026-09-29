@@ -20,6 +20,31 @@ test("registry uses current workbook deadline mapping without changing saved set
   assert.equal(context.mappingSettings.columnMap.deadline,"Old due");
 });
 
+test("Excel and Jira deadlines stay independent per issue and use the current Moscow day", () => {
+  const rows = registry().buildRows([{
+    id:"one", jiraKey:"P-10", sourceColumns:{"Мой срок":"29.09.2026"},
+    storyDetails:{key:"P-10",duedate:"2026-09-28",done:true},
+    childStatuses:[{key:"P-11",duedate:"2026-09-29"},{key:"P-12",duedate:"2026-02-30"},{key:"P-13"}]
+  }], Date.parse("2026-09-28T21:00:00Z"), {sourceColumnSettings:{columnMap:{deadline:"Мой срок"}}});
+  assert.deepEqual(JSON.parse(JSON.stringify(rows.map(row => [row.deadline,row.jiraDueDate,row.deadlineOverdue,row.jiraDueDateOverdue]))), [
+    ["2026-09-29","2026-09-28",false,true],
+    ["2026-09-29","2026-09-29",false,false],
+    ["2026-09-29","",false,false],
+    ["2026-09-29","",false,false]
+  ]);
+  assert.equal(rows[0].done,true);
+  assert.equal(registry().buildRows([{sourceColumns:{"Срок исполнения":"2026-09-28"}}], Date.parse("2026-09-28T20:59:59Z"))[0].deadlineOverdue,false);
+});
+
+test("overdue date helper changes exactly at Moscow midnight and rejects invalid dates", () => {
+  const r=registry(), before=Date.parse("2026-09-28T20:59:59Z"), after=Date.parse("2026-09-28T21:00:00Z");
+  assert.equal(r.isOverdueDate("2026-09-28",before),false);
+  assert.equal(r.isOverdueDate("2026-09-28",after),true);
+  assert.equal(r.isOverdueDate("2026-09-29",after),false);
+  assert.equal(r.isOverdueDate("2026-02-30",after),false);
+  assert.equal(r.isOverdueDate("",after),false);
+});
+
 test("registry keeps actual source ID and leaves uncreated Jira fields empty", () => {
   const rows = registry().buildRows(source());
   assert.equal(rows[0].remarkId, "744");

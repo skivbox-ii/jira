@@ -51,6 +51,179 @@ function setup(activityReport, configureWindow) {
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
 
+test("deadline columns show separate dates and only past dates receive the overdue class", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  state.rows[1].sourceColumns["Срок исполнения"] = "2020-01-02";
+  state.rows[1].storyDetails.duedate = "2020-01-03";
+  state.rows[1].childStatuses[0].duedate = null;
+  state.viewMode = "jira"; render();
+  assert.equal($("th[data-column='jiraDueDate'] .ujg-esi-header-sort span").text(),"Срок Jira");
+  assert.equal($("th[data-column='deadline']").length,0);
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-jiraDueDate").text(),"03.01.2020");
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-jiraDueDate").hasClass("is-overdue"),true);
+  assert.equal($("tr[data-key='P-11'] .ujg-esi-cell-jiraDueDate").hasClass("is-overdue"),false);
+  state.viewMode = "excel"; render();
+  assert.equal($("th[data-column='deadline'] .ujg-esi-header-sort span").text(),"Срок Excel");
+  assert.equal($("th[data-column='jiraDueDate']").length,0);
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-deadline").text(),"02.01.2020");
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-deadline").hasClass("is-overdue"),true);
+});
+
+test("midnight updates date cells in place and focus catches a missed timer", t => {
+  const {dom,$,state,render}=setup(); t.after(()=>dom.window.close());
+  const w=dom.window, RealDate=w.Date, realSetTimeout=w.setTimeout.bind(w), realClearTimeout=w.clearTimeout.bind(w);
+  let now=Date.parse("2026-09-28T20:59:59Z"), pending=[], nextId=1000;
+  w.Date=class extends RealDate { static now() { return now; } };
+  w.setTimeout=(fn,ms)=>{ if (ms>100) { const id=++nextId; pending.push({id,fn,ms}); return id; } return realSetTimeout(fn,ms); };
+  w.clearTimeout=id=>{ pending=pending.filter(item=>item.id!==id); realClearTimeout(id); };
+  state.rows[1].sourceColumns["Срок исполнения"]="2026-09-28";
+  state.rows[1].storyDetails.duedate="2026-09-28";
+  render();
+  $("[aria-label='Столбцы']").trigger("click");
+  option($,"Срок Jira").prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  const dateCell=$("tr[data-key='P-10'] .ujg-esi-cell-deadline")[0];
+  const jiraCell=$("tr[data-key='P-10'] .ujg-esi-cell-jiraDueDate")[0];
+  assert.equal(dateCell.classList.contains("is-overdue"),false);
+  assert.equal(jiraCell.classList.contains("is-overdue"),false);
+  assert.equal(pending.length,1);
+  assert.equal(pending[0].ms,1000);
+  $("[data-filter='status']").trigger("click");
+  const search=$(".ujg-esi-grid-menu .ujg-esi-filter-search");
+  search.val("draft").trigger("input").trigger("focus");
+  const menu=$(".ujg-esi-grid-menu")[0], focused=w.document.activeElement, viewport=$(".ujg-esi-registry-scroll")[0];
+  $(viewport).scrollLeft(35);
+  now=Date.parse("2026-09-28T21:00:00Z");
+  pending.shift().fn();
+  assert.equal(dateCell.classList.contains("is-overdue"),true);
+  assert.equal(jiraCell.classList.contains("is-overdue"),true);
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-deadline")[0],dateCell);
+  assert.equal($(".ujg-esi-grid-menu")[0],menu);
+  assert.equal(search.val(),"draft");
+  assert.equal(w.document.activeElement,focused);
+  assert.equal($(viewport).scrollLeft(),35);
+  now=Date.parse("2026-09-27T21:00:00Z");
+  $(w).triggerHandler("focus");
+  assert.equal(dateCell.classList.contains("is-overdue"),false);
+  assert.equal(jiraCell.classList.contains("is-overdue"),false);
+  now=Date.parse("2026-09-28T21:00:00Z");
+  Object.defineProperty(w.document,"hidden",{configurable:true,value:false});
+  $(w.document).triggerHandler("visibilitychange");
+  assert.equal(dateCell.classList.contains("is-overdue"),true);
+  assert.equal(jiraCell.classList.contains("is-overdue"),true);
+  assert.equal(pending.length,1);
+  $(".ujg-esi-registry").remove();
+  pending.shift().fn();
+  assert.equal(pending.length,0,"detached grid stops its clock");
+});
+
+test("Dynamics and renderer replacement release the grid clock immediately, then registry resumes it", t => {
+  const {dom,$,state,render,modules}=setup(); t.after(()=>dom.window.close());
+  const w=dom.window, realSetTimeout=w.setTimeout.bind(w), realClearTimeout=w.clearTimeout.bind(w);
+  let pending=[],nextId=2000;
+  w.setTimeout=(fn,ms)=>{ if (ms>100) { const id=++nextId; pending.push(id); return id; } return realSetTimeout(fn,ms); };
+  w.clearTimeout=id=>{ pending=pending.filter(item=>item!==id); realClearTimeout(id); };
+  const dateHandlers=target=>Object.values($._data(target,"events")||{}).flat()
+    .filter(handler=>handler.namespace && handler.namespace.includes("ujgRegistryDates")).length;
+  state.rows[1].sourceColumns["Срок исполнения"]="2026-09-28";
+  render();
+  assert.equal(pending.length,1);
+  assert.equal(dateHandlers(w),1);
+  assert.equal(dateHandlers(w.document),1);
+  state.reportView="activity"; render();
+  assert.equal(pending.length,0);
+  assert.equal(dateHandlers(w),0);
+  assert.equal(dateHandlers(w.document),0);
+  state.reportView="registry"; render();
+  assert.equal(pending.length,1);
+  assert.equal(dateHandlers(w),1);
+  assert.equal(dateHandlers(w.document),1);
+  modules._ujgESI_rendering.init($(".ujg-excel-story-importer"),{});
+  assert.equal(pending.length,0);
+  assert.equal(dateHandlers(w),0);
+  assert.equal(dateHandlers(w.document),0);
+  render();
+  assert.equal(pending.length,1);
+  assert.equal(dateHandlers(w),1);
+  assert.equal(dateHandlers(w.document),1);
+});
+
+test("mode layouts migrate old columns independently while filters and sort stay shared", t => {
+  const {dom,$,state,render} = setup(null,w => w.localStorage.setItem("ujg-esi-state",JSON.stringify({gridLayout:{
+    order:["summary","deadline","key"],visible:["summary","deadline","key"],widths:{summary:341},
+    sort:{column:"summary",direction:"desc"},filters:{assignee:["Bob"]}
+  }})));
+  t.after(() => dom.window.close());
+  state.viewMode="jira"; render();
+  assert.deepEqual($("thead th[data-column]").toArray().map(th=>th.dataset.column),["summary","jiraDueDate","key","jiraComponent"]);
+  assert.equal($("th[data-column='deadline']").length,0);
+  assert.equal($("col[data-column='summary']").attr("width"),"341");
+  $("[aria-label='Столбцы']").trigger("click");
+  option($,"Срок Jira").prop("checked",false).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  state.viewMode="excel"; render();
+  assert.equal($("th[data-column='deadline']").length,1);
+  assert.equal($("th[data-column='jiraDueDate']").length,0);
+  const saved=JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout;
+  assert.equal(saved.columnLayouts.jira.visible.includes("jiraDueDate"),false);
+  assert.equal(saved.columnLayouts.excel.visible.includes("deadline"),true);
+  assert.deepEqual(saved.filters,{assignee:["Bob"]});
+  assert.deepEqual(saved.sort,{column:"summary",direction:"desc"});
+});
+
+test("legacy migration keeps an explicitly hidden Jira component and rejects malformed profiles", t => {
+  const {dom,$,state,render} = setup(null,w=>w.localStorage.setItem("ujg-esi-state",JSON.stringify({gridLayout:{
+    order:["summary","deadline","jiraComponent","key"],visible:["summary","key"],widths:{key:177},
+    columnLayouts:{excel:"broken",jira:{order:["key","jiraDueDate"],visible:["key"],widths:{key:222}}}
+  }})));
+  t.after(()=>dom.window.close());
+  state.viewMode="excel"; render();
+  assert.deepEqual($("thead th[data-column]").toArray().map(th=>th.dataset.column),["summary","deadline","key"]);
+  assert.equal($("col[data-column='key']").attr("width"),"177");
+  state.viewMode="jira"; render();
+  assert.equal($("th[data-column='jiraDueDate']").length,0,"saved hidden Jira date stays hidden");
+  assert.equal($("col[data-column='key']").attr("width"),"222");
+});
+
+test("mode widths, order and hidden dates survive empty switches, reload and active reset", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  state.preferencesStorageKey="registry-deadline-layouts";
+  render();
+  assert.equal($("col[data-column='deadline']").attr("width"),"150");
+  $("th[data-column='summary'] .ujg-esi-column-resize").trigger($.Event("keydown",{key:"ArrowRight"}));
+  $("[aria-label='Столбцы']").trigger("click");
+  option($,"Срок Excel").prop("checked",false).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  const sourceRows=state.rows;
+  state.rows=[]; state.viewMode="jira"; render();
+  state.rows=sourceRows; render();
+  assert.equal($("col[data-column='summary']").attr("width"),"276");
+  assert.equal($("th[data-column='jiraDueDate']").length,1);
+  $("th[data-column='key']").trigger($.Event("pointerdown",{pageX:100}));
+  $("th[data-column='remarkId']").trigger($.Event("pointerup",{pageX:200}));
+  $("[aria-label='Столбцы']").trigger("click");
+  option($,"Срок Jira").prop("checked",false).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  state.viewMode="excel"; state.rows=state.rows.slice(); render();
+  assert.equal($("col[data-column='summary']").attr("width"),"286");
+  assert.equal($("th[data-column='deadline']").length,0);
+  $("[aria-label='Столбцы']").trigger("click");
+  $("[aria-label='Сбросить расположение столбцов']").trigger("click");
+  assert.equal($("th[data-column='deadline']").length,1);
+  state.viewMode="jira"; render();
+  assert.equal($("th[data-column='jiraDueDate']").length,0);
+  assert.equal($("thead th[data-column]").first().attr("data-column"),"key");
+  const saved=dom.window.localStorage.getItem(state.preferencesStorageKey);
+  const next=setup(null,w=>w.localStorage.setItem("registry-deadline-layouts",saved));
+  t.after(()=>next.dom.window.close());
+  next.state.preferencesStorageKey="registry-deadline-layouts";
+  next.state.viewMode="jira"; next.render();
+  assert.equal(next.$("th[data-column='jiraDueDate']").length,0);
+  next.state.viewMode="excel"; next.render();
+  assert.equal(next.$("th[data-column='deadline']").length,1);
+  assert.equal(next.$("col[data-column='summary']").attr("width"),"276");
+});
+
 test("empty importer reserves the remaining viewport before an epic is selected", t => {
   const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
   dom.window.innerHeight = 1000;
@@ -743,7 +916,7 @@ test("top reset clears all filters only, including absent values and completion 
   assert.deepEqual(after.sort,before.sort);
   assert.deepEqual(after.visible,before.visible);
   assert.equal(after.widths.summary,350);
-  assert.deepEqual(after.order.slice(0,4),before.order);
+  assert.deepEqual(after.order.filter(id=>id!=="jiraDueDate").slice(0,before.order.length),before.order);
 });
 
 test("expand all first reveals remaining children before it can collapse all", t => {
