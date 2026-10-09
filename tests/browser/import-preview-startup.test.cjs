@@ -17,6 +17,7 @@ test("the shared preview URL opens a populated tree without manual import or syn
     runScripts:"dangerously",resources:new LocalResources(),virtualConsole:console,
     beforeParse(window) {
       window.scrollTo = () => {};
+      window.structuredClone = structuredClone;
       // JSZip's postMessage scheduler needs a real event.source, which JSDOM does not provide.
       window.setImmediate = setImmediate;
       window.clearImmediate = clearImmediate;

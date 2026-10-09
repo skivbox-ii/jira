@@ -26,7 +26,7 @@ function setup(report, configureWindow) {
     summarize(rows, teams, options) { calls.summarize.push({rows,teams,options}); return Object.assign({}, report, {date:options.date}); },
     exportHtml(value, context) { calls.exports.push({value,context}); return '<!doctype html><title>Snapshot</title>'; },
     statusLabel(value) { return ({Testing:"Тестирование",Done:"Готово",Open:"Открыто"})[value] || value; },
-    eventText(event) { return event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
+    eventText(event) { return event.kind === "comment" ? (event.commentAction === "updated" ? "Изменён комментарий: " : "Добавлен комментарий: ") + event.to + (event.commentNote ? "\n" + event.commentNote : "") : event.kind === "status" ? "Статус: " + this.statusLabel(event.from) + " → " + this.statusLabel(event.to) : event.kind === "assignee" ? "Исполнитель: " + event.from + " → " + event.to : "Создано"; }
   };
   modules._ujgESI_activityAiUi = {create:() => ({update(report){calls.aiUpdates++;calls.aiReport=report;},open(){calls.aiOpen++;},dismiss(){return false;},rebindAnchor(){},suspend(){},destroy(){}})};
   modules._ujgESI_sourceExportUi = {create:()=>({open(){},dismiss(){},updateScope(){},destroy(){}})};
@@ -55,6 +55,264 @@ function fixture() {
   ];
   return {coverage:{complete:1,total:2,incomplete:1,warnings:["History incomplete"],isComplete:false},metrics:{changed:1,newRemarks:0,completed:null,reopened:null,events:2},balance:{startOpen:null,endOpen:null},transitions:[{from:"Testing",to:"Done",count:1}],transfers:[{from:"BE",to:"QA",count:1}],groups:[{id:"g1",remarkId:"744",key:"P-1",summary:"Remark",events}],events,teams:[]};
 }
+function commentEvent(body, overrides={}) {
+  return {id:"comment-event",kind:"comment",field:"comment",commentAction:"created",commentId:"c-1",from:"",to:body,
+    at:"2026-09-24T12:00:00.000Z",issueKey:"P-2",summary:"Commented task",role:"QA",author:{label:"Ira",identifiers:["ira-id"]},assignee:{label:"Bob"},...overrides};
+}
+function commentReport(events) {
+  const report=fixture(); report.groups[0].events=events; report.events=events; return report;
+}
+test("short Dynamics comment stays in the change cell without a popup affordance", t => {
+  const body="Первая строка\nВторая строка";
+  const x=setup(commentReport([commentEvent(body)])); t.after(()=>x.dom.window.close());
+  const change=x.$(".ujg-esi-activity-event td[data-column='change']");
+  assert.equal(change.find(".ujg-esi-activity-comment-action").text(),"Добавлен комментарий");
+  assert.equal(change.find(".ujg-esi-activity-comment-preview").text(),body);
+  assert.equal(change.find(".ujg-esi-activity-comment-more").length,0);
+  assert.equal(change.find(".ujg-esi-activity-event-details").length,0);
+});
+test("grouped comments keep a preview for each event without splitting the minute row", t => {
+  const first=commentEvent("Первый",{id:"c1"});
+  const second=commentEvent("Второй",{id:"c2",commentAction:"updated",commentNote:"Текст изменён позже"});
+  const x=setup(commentReport([first,second])); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-event").length,1);
+  const change=x.$(".ujg-esi-activity-event td[data-column='change']");
+  assert.deepEqual(change.find(".ujg-esi-activity-comment-preview").map(function(){return x.$(this).text();}).get(),["Первый","Второй\nТекст изменён позже"]);
+  assert.deepEqual(change.find(".ujg-esi-activity-comment-action").map(function(){return x.$(this).text();}).get(),["Добавлен комментарий","Изменён комментарий"]);
+  assert.deepEqual(change.find(".ujg-esi-activity-comment[data-event-id]").map(function(){return x.$(this).attr("data-event-id");}).get(),["c1","c2"]);
+});
+test("short comment note remains visible in the same three-line preview", t => {
+  const x=setup(commentReport([commentEvent("Текущий текст",{commentAction:"updated",commentNote:"Исходная версия недоступна"})]));
+  t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-comment-preview").text(),"Текущий текст\nИсходная версия недоступна");
+  assert.equal(x.$(".ujg-esi-activity-comment-more").length,0);
+});
+test("overflowed comment opens safe full-text popup with metadata and dismisses without reopening", t => {
+  const body="один\nдва\nтри\nчетыре <img src=x onerror=alert(1)>";
+  const event=commentEvent(body,{commentNote:"Текст изменён после создания"});
+  const x=setup(commentReport([event]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 72 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  const preview=x.$(".ujg-esi-activity-comment-preview"), more=x.$(".ujg-esi-activity-comment-more");
+  assert.equal(more.length,1);
+  preview.trigger("mouseenter");
+  let box=x.$(".ujg-esi-activity-comment-popover");
+  assert.equal(box.length,1);
+  assert.equal(x.$(".ujg-esi-activity-comment-popup[data-event-id='comment-event']").length,1);
+  assert.equal(box.find(".ujg-esi-activity-comment-full").text(),body);
+  assert.match(box.text(),/Текст изменён после создания/);
+  assert.match(box.text(),/Ira.*P-2/);
+  assert.equal(box.find("img").length,0);
+  box.find("button").trigger("focus");
+  box.trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(x.$(".ujg-esi-activity-comment-popover").length,0);
+  assert.equal(x.dom.window.document.activeElement,more[0]);
+  preview.parent().trigger("mouseenter");
+  assert.equal(x.$(".ujg-esi-activity-comment-popover").length,0);
+  more.trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-comment-popover").length,1);
+  x.$(x.dom.window.document.body).trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-comment-popover").length,0);
+});
+test("comment overflow affordance follows resize and keyboard opens the full text at 390px", t => {
+  let height=36;
+  const body="Очень длинная строка ".repeat(25);
+  const x=setup(commentReport([commentEvent(body)]),window=>{
+    Object.defineProperty(window.document.documentElement,"clientWidth",{configurable:true,value:390});
+    Object.defineProperty(window.document.documentElement,"clientHeight",{configurable:true,value:620});
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? height : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  assert.equal(x.$(".ujg-esi-activity-comment-more").length,0);
+  height=90; x.ui.resize();
+  const more=x.$(".ujg-esi-activity-comment-more");
+  assert.equal(more.length,1);
+  more.trigger("focus").trigger(x.$.Event("keydown",{key:"Enter"}));
+  const box=x.$(".ujg-esi-activity-comment-popover");
+  assert.equal(box.find(".ujg-esi-activity-comment-full").text(),body);
+  assert.ok(parseFloat(box.css("left"))+parseFloat(box.css("width"))<=390-12);
+  assert.ok(parseFloat(box.css("maxHeight"))<=620-24);
+  assert.equal(x.dom.window.document.activeElement,box.find("button")[0]);
+  height=36; x.ui.resize();
+  assert.equal(x.$(".ujg-esi-activity-comment-more").length,0);
+  assert.equal(x.$(".ujg-esi-activity-comment-popover").length,0);
+});
+test("incomplete comment coverage is visible separately from complete status history", t => {
+  const report=fixture();
+  report.coverage={complete:2,total:2,incomplete:0,warnings:[],isComplete:true};
+  report.commentCoverage={total:2,complete:1,loaded:3,expected:5,isComplete:false,warnings:["P-3: <unsafe> комментарии загружены частично"]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const coverage=x.$(".ujg-esi-activity-coverage");
+  assert.match(coverage.text(),/Проверена история 2 из 2 задач/);
+  const comments=coverage.find(".ujg-esi-activity-comment-coverage");
+  assert.match(comments.text(),/Комментарии.*1 из 2 задач.*3 из 5/);
+  assert.match(comments.text(),/неполно/i);
+  const details=comments.find("details");
+  assert.match(details.text(),/P-3: <unsafe>/);
+  assert.match(details.text(),/Удалённые комментарии.*прежние редакции недоступны/);
+  assert.equal(details.find("unsafe").length,0);
+  assert.equal(x.$(".ujg-esi-activity-metric[data-metric='changed'] strong").text(),"1");
+});
+test("comment coverage with unknown expected count states uncertainty", t => {
+  const report=fixture();
+  report.commentCoverage={total:1,complete:0,loaded:2,expected:null,isComplete:false,warnings:[]};
+  const x=setup(report); t.after(()=>x.dom.window.close());
+  const text=x.$(".ujg-esi-activity-comment-coverage").text();
+  assert.match(text,/загружено 2/);
+  assert.match(text,/общее число неизвестно/);
+  assert.match(text,/Удалённые комментарии.*прежние редакции недоступны/);
+});
+test("expanded grouped details do not repeat full comment text", t => {
+  const body="Скрытая четвёртая строка <script>bad</script>";
+  const first=commentEvent(body,{id:"c1"}), second=commentEvent("Второй",{id:"c2"});
+  const x=setup(commentReport([first,second])); t.after(()=>x.dom.window.close());
+  const details=x.$(".ujg-esi-activity-event-details"); details.prop("open",true);
+  assert.equal(details.find("summary .ujg-esi-activity-comment-preview").first().text(),body);
+  assert.doesNotMatch(details.children("[data-event-id]").text(),/Скрытая четвёртая строка/);
+  assert.match(details.children("[data-event-id]").text(),/Автор: Ira/);
+});
+test("collapsing a group closes its comment popup", t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  x.$(".ujg-esi-activity-comment-more").trigger("click");
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,1);
+  x.$(".ujg-esi-activity-group-toggle").triggerHandler("click");
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+});
+test("outside scroll closes comment popup while its own scroll remains usable", t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  const more=x.$(".ujg-esi-activity-comment-more"); more.trigger("click");
+  x.$(".ujg-esi-activity-comment-popup")[0].dispatchEvent(new x.dom.window.Event("scroll"));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,1);
+  x.$(".ujg-esi-activity-scroll")[0].dispatchEvent(new x.dom.window.Event("scroll"));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+  more.trigger("click");
+  x.dom.window.dispatchEvent(new x.dom.window.Event("scroll"));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+  more.trigger("click"); x.ui.destroy();
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+});
+test("focused popup survives preview mouseleave", async t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  const wrapper=x.$(".ujg-esi-activity-comment"); wrapper.trigger("mouseenter");
+  x.$(".ujg-esi-activity-comment-popup button").trigger("focus");
+  wrapper.trigger("mouseleave");
+  await new Promise(resolve=>setTimeout(resolve,240));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,1);
+});
+test("tabbing out of comment popup closes it without stealing outside focus", async t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  const more=x.$(".ujg-esi-activity-comment-more"); more.trigger("click");
+  const close=x.$(".ujg-esi-activity-comment-popup button")[0];
+  const outside=x.$("<button type='button'>Следующий</button>").appendTo(x.dom.window.document.body)[0];
+  close.focus(); outside.focus();
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+  assert.equal(x.dom.window.document.activeElement,outside);
+  more.trigger("click");
+  const nextClose=x.$(".ujg-esi-activity-comment-popup button")[0];
+  nextClose.focus();
+  nextClose.dispatchEvent(new x.dom.window.FocusEvent("focusout",{bubbles:true,relatedTarget:null}));
+  outside.focus();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+  assert.equal(x.dom.window.document.activeElement,outside);
+});
+test("outside scroll restores focus only when it was inside comment popup", t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  const more=x.$(".ujg-esi-activity-comment-more")[0];
+  x.$(more).trigger("click");
+  x.$(".ujg-esi-activity-comment-popup button")[0].focus();
+  x.$(".ujg-esi-activity-scroll")[0].dispatchEvent(new x.dom.window.Event("scroll"));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+  assert.equal(x.dom.window.document.activeElement,more);
+  x.$(more).trigger("click");
+  const outside=x.$("<button type='button'>Другой</button>").appendTo(x.dom.window.document.body)[0]; outside.focus();
+  x.dom.window.dispatchEvent(new x.dom.window.Event("scroll"));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+  assert.equal(x.dom.window.document.activeElement,outside);
+});
+test("keyboard opening does not scroll the table while focusing popup controls", async t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+    const focus=window.HTMLElement.prototype.focus;
+    window.HTMLElement.prototype.focus=function(options) {
+      focus.call(this,options);
+      if (this.closest(".ujg-esi-activity-comment-popup") && !(options && options.preventScroll)) {
+        window.setTimeout(()=>window.document.querySelector(".ujg-esi-activity-scroll").dispatchEvent(new window.Event("scroll")),0);
+      }
+    };
+  }); t.after(()=>x.dom.window.close());
+  const more=x.$(".ujg-esi-activity-comment-more")[0];
+  more.focus(); x.$(more).trigger(x.$.Event("keydown",{key:"Enter"}));
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,1);
+  assert.equal(x.$(".ujg-esi-activity-comment-popup")[0].contains(x.dom.window.document.activeElement),true);
+});
+test("closing a comment returns keyboard focus without scrolling its anchor", t => {
+  const focusOptions=[];
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+    const focus=window.HTMLElement.prototype.focus;
+    window.HTMLElement.prototype.focus=function(options){
+      if(this.classList.contains("ujg-esi-activity-comment-more"))focusOptions.push(options);
+      focus.call(this,options);
+    };
+  });t.after(()=>x.dom.window.close());
+  const more=x.$(".ujg-esi-activity-comment-more");
+  more.trigger(x.$.Event("keydown",{key:"Enter"}));
+  x.$(x.dom.window.document).trigger(x.$.Event("keydown",{key:"Escape"}));
+  assert.equal(focusOptions.at(-1)?.preventScroll,true);
+  assert.equal(x.dom.window.document.activeElement,more[0]);
+  more.trigger(x.$.Event("keydown",{key:"Enter"}));
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,1);
+});
+test("focus leaving the ellipsis after returning from its popup closes the popup", t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  });t.after(()=>x.dom.window.close());
+  const more=x.$(".ujg-esi-activity-comment-more");
+  more.trigger(x.$.Event("keydown",{key:"Enter"}));
+  more[0].focus({preventScroll:true});
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,1);
+  x.$("<button type='button'>Предыдущий</button>").appendTo(x.dom.window.document.body)[0].focus();
+  assert.equal(x.$(".ujg-esi-activity-comment-popup").length,0);
+});
+test("comment ellipsis overlays the clamped third line and popup avoids preview", t => {
+  const x=setup(commentReport([commentEvent("Длинный\n".repeat(8))]),window=>{
+    Object.defineProperty(window.document.documentElement,"clientHeight",{configurable:true,value:900});
+    Object.defineProperty(window.HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 144 : 0;}});
+    Object.defineProperty(window.HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("ujg-esi-activity-comment-preview") ? 54 : 0;}});
+  }); t.after(()=>x.dom.window.close());
+  const css=fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer.css"),"utf8");
+  x.$("<style/>").text(css).appendTo(x.dom.window.document.head);
+  const more=x.$(".ujg-esi-activity-comment-more")[0];
+  assert.equal(x.dom.window.getComputedStyle(more).position,"absolute");
+  assert.equal(x.dom.window.getComputedStyle(more.parentElement).position,"relative");
+  assert.doesNotMatch(css,/\.ujg-esi-activity-comment-preview\s*\{[^}]*-webkit-line-clamp/);
+  more.getBoundingClientRect=()=>({left:240,right:264,top:400,bottom:420,width:24,height:20});
+  x.$(more).trigger("click");
+  const popup=x.$(".ujg-esi-activity-comment-popup");
+  assert.ok(parseFloat(popup.css("top"))>=420);
+  assert.ok(parseFloat(popup.css("maxHeight"))<=900-420-12);
+});
 test("group header ends with its own AI action independent of daily event filters",t=>{
   const x=setup(fixture());t.after(()=>x.dom.window.close());
   const $action=x.$(".ujg-esi-remark-ai-command");

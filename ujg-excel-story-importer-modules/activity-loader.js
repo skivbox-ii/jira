@@ -35,9 +35,13 @@ define("_ujgESI_activityLoader", [], function() {
         entry.request = options.read(key);
         return entry.request;
       }).then(function(value) {
+        if (!current() || wanted.indexOf(key) < 0) return null;
+        if (value && value.fields) value = Object.assign({},value,{_activityReadAt:new Date().toISOString()});
+        return hydrateComments(key,value,entry,current);
+      }).then(function(value) {
         if (!current() || wanted.indexOf(key) < 0) return;
         options.accept(key,value);
-        if (wanted.indexOf(key) >= 0) results[key] = {};
+        if (wanted.indexOf(key) >= 0) results[key] = {error:value && value.fields && value.fields.comment && value.fields.comment.loadError || ""};
       }).catch(function(error) {
         if (!current() || wanted.indexOf(key) < 0) return;
         results[key] = {error:options.errorText ? options.errorText(error) : String(error && (error.message || error.statusText) || error)};
@@ -45,6 +49,57 @@ define("_ujgESI_activityLoader", [], function() {
         if (!current()) return;
         delete active[key];
         pump(wanted.indexOf(key) < 0 && !queued.length);
+      });
+    }
+    function hydrateComments(key, issue, entry, current) {
+      if (!issue || !issue.fields || typeof options.readComments !== "function") return issue;
+      var initial = issue.fields.comment, raw = initial && initial.comments, ids = Object.create(null);
+      var full = initial && initial.startAt === 0 && /^\d+$/.test(String(initial.total)) && Array.isArray(raw) &&
+        Number(initial.total) === raw.length && initial.isLast !== false && !initial.loadError && raw.every(function(comment) {
+          var id = String(comment && comment.id || "");
+          if (!id || ids[id]) return false;
+          ids[id] = true; return true;
+        });
+      if (full) return issue;
+      var result = Object.assign({},issue,{fields:Object.assign({},issue.fields)}), entries = [], seen = Object.create(null), total = null, pages = 0;
+      function check() { if (!current() || wanted.indexOf(key) < 0) throw new Error("Загрузка отменена"); }
+      function page() {
+        check();
+        if (++pages > 500) throw new Error("Превышен предел страниц комментариев");
+        entry.request = options.readComments(key,entries.length);
+        return Promise.resolve(entry.request).then(function(value) {
+          check();
+          if (!value || value.startAt !== entries.length || !/^\d+$/.test(String(value.total)) || !Array.isArray(value.comments)) throw new Error("Некорректная страница комментариев");
+          if (total === null) total = Number(value.total);
+          if (total !== Number(value.total) || initial && /^\d+$/.test(String(initial.total)) && Number(initial.total) !== total) throw new Error("Список комментариев изменился во время загрузки");
+          var batch = value.comments, batchIds = Object.create(null);
+          if (entries.length + batch.length > total || !batch.length && entries.length < total) throw new Error("Неполная страница комментариев");
+          batch.forEach(function(comment) {
+            var id = String(comment && comment.id || "");
+            if (!id || seen[id] || batchIds[id]) throw new Error("Повторный ID комментария");
+            batchIds[id] = true;
+          });
+          batch.forEach(function(comment) { seen[String(comment.id)] = true; entries.push(comment); });
+          if (entries.length < total) return page();
+          if (value.isLast === false) throw new Error("Последняя страница комментариев не подтверждена");
+          result.fields.comment = {startAt:0,total:total,comments:entries};
+          return result;
+        });
+      }
+      return Promise.resolve().then(page).catch(function(error) {
+        check();
+        // Keep initial evidence not reached by the failed pagination, preferring fresh pages by ID.
+        (Array.isArray(raw) ? raw : []).forEach(function(comment) {
+          var id = String(comment && comment.id || "");
+          if (!id || seen[id]) return;
+          seen[id] = true; entries.push(comment);
+        });
+        var expected = total === null ? initial && initial.total : total;
+        if (expected != null && entries.length > Number(expected)) expected = null;
+        result.fields.comment = {startAt:0,total:expected,
+          comments:entries,isLast:false,
+          loadError:"Не удалось полностью загрузить комментарии: " + String(error && error.message || "Ошибка чтения")};
+        return result;
       });
     }
     function abort(key) {

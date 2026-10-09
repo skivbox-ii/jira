@@ -11,6 +11,7 @@ test("due-date preview writes only explicitly selected fixture dates and leaves 
   const dom=await JSDOM.fromURL("http://127.0.0.1:4317/",{
     runScripts:"dangerously",resources:new LocalResources(),virtualConsole,
     beforeParse(w) {
+      w.structuredClone=structuredClone;
       w.scrollTo=()=>{}; w.setImmediate=setImmediate; w.clearImmediate=clearImmediate;
       w.File.prototype.arrayBuffer=function() {
         return new Promise((resolve,reject)=>{const r=new w.FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsArrayBuffer(this);});

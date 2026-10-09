@@ -90,6 +90,88 @@ function detail(api, jira, role = "") {
 function row(parent, children = []) { return {jiraKey: parent.key, summary: "Remark", storyDetails: parent, childStatuses: children}; }
 function report(api, rows, options = {}) { return api.summarize(rows, teams.defaults(), {date: "2026-09-24", now: "2026-09-24T12:00:00Z", ...options}); }
 
+test("comment-only changes become dated journal events with exact text and full safe export", () => {
+  const api=activity(), body="  First line\n<script>alert(1)</script>\n"+"Long comment ".repeat(300)+"LAST LINE  ";
+  const parent=detail(api,issue("P-1","Open",[],{fields:{comment:{startAt:0,total:1,comments:[
+    {id:"c1",created:"2026-09-24T02:00:00Z",author:person("reviewer","Reviewer"),body}
+  ]}}}));
+  const result=report(api,[row(parent)]), event=result.events[0];
+  assert.equal(result.events.length,1);
+  assert.equal(event.kind,"comment");assert.equal(event.commentAction,"created");
+  assert.equal(event.to,body);assert.equal(event.author.label,"Reviewer");
+  assert.equal(event.assignee.label,"Owner");assert.equal(event.issueKey,"P-1");
+  assert.equal(result.metrics.changed,1);assert.equal(result.groups[0].dayActivityCount,1);
+  assert.equal(api.eventCategory(event),"Комментарии");
+  assert.match(api.eventText(event),/Добавлен комментарий/);
+  const html=api.exportHtml(result,{});
+  assert.match(html,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html,/LAST LINE/);assert.doesNotMatch(html,/<script>/);
+});
+test("comments respect Moscow boundaries and shared children are counted only once", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open")), second=detail(api,issue("P-2","Open"));
+  const child=detail(api,issue("P-3","Open",[],{fields:{comment:{startAt:0,total:3,comments:[
+    {id:"before",created:"2026-09-23T20:59:59Z",body:"before"},
+    {id:"inside",created:"2026-09-23T21:00:00Z",body:"inside"},
+    {id:"after",created:"2026-09-24T21:00:00Z",body:"after"}
+  ]}}}),"QA");
+  const result=report(api,[row(parent,[child]),row(second,[child])],{now:"2026-09-25T12:00:00Z"});
+  assert.equal(result.events.length,1);assert.equal(result.events[0].commentId,"inside");
+  assert.equal(result.events[0].role,"QA");assert.equal(result.groups[1].events.length,1);
+});
+test("comment edits label current text without inventing original revision or update author", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[],{fields:{comment:{startAt:0,total:1,comments:[
+    {id:"edit",created:"2026-09-23T22:00:00Z",updated:"2026-09-24T14:00:00Z",author:person("original","Original"),updateAuthor:person("editor","Editor"),body:"Current revision"}
+  ]}}}));
+  const before=report(api,[row(parent)]);
+  assert.equal(before.events.length,1);assert.equal(before.events[0].author.label,"Original");
+  assert.match(before.events[0].commentNote,/текущ|редакц/);
+  const after=report(api,[row(parent)],{now:"2026-09-25T12:00:00Z"});
+  assert.equal(after.events.length,2);assert.equal(after.events[1].commentAction,"updated");
+  assert.equal(after.events[1].author.label,"Editor");
+  assert.match(api.eventText(after.events[1]),/Изменён комментарий/);
+});
+test("incomplete comment coverage is explicit without discarding valid status history", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[],{fields:{comment:{startAt:0,total:2,comments:[
+    {id:"c1",created:"2026-09-24T02:00:00Z",body:"Known text"}
+  ]}}}));
+  const result=report(api,[row(parent)]);
+  assert.equal(result.events.length,1);assert.equal(result.coverage.complete,1);
+  assert.equal(result.commentCoverage.complete,0);assert.equal(result.commentCoverage.total,1);
+  assert.equal(result.commentCoverage.loaded,1);assert.equal(result.commentCoverage.expected,2);
+  assert.match(result.commentCoverage.warnings.join(" "),/P-1.*комментар/i);
+  assert.match(api.exportHtml(result,{}),/Комментарии.*1.*2/s);
+});
+test("comment assignee is reconstructed at its own time not at the end of the day", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("assign","2026-09-24T05:00:00Z","manager",[item("assignee","earlier","owner","Earlier","Owner")])
+  ],{fields:{comment:{startAt:0,total:1,comments:[{id:"c",created:"2026-09-24T02:00:00Z",body:"Before transfer"}]}}}));
+  const result=report(api,[row(parent)]);
+  assert.equal(result.events.find(e=>e.kind==="comment").assignee.label,"Earlier");
+});
+test("capture retains original issue read time and stale comments are not certified", () => {
+  const api=activity(), jira=issue("P-1","Open",[],{fields:{comment:{startAt:0,total:0,comments:[]}}});
+  jira._activityReadAt="2026-09-23T12:00:00.000Z";
+  const parent=detail(api,jira);
+  assert.equal(parent.activity.capturedAt,jira._activityReadAt);
+  const result=report(api,[row(parent)],{now:"2026-09-25T12:00:00Z"});
+  assert.equal(result.commentCoverage.isComplete,false);
+  assert.match(result.commentCoverage.warnings.join(" "),/срез|обнов/i);
+});
+test("text-and-time matched comment changelog does not duplicate comment API evidence", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("comment-log","2026-09-24T02:00:00Z","reviewer",[item("comment",null,null,"","Same comment")])
+  ],{fields:{comment:{startAt:0,total:1,comments:[{id:"c",created:"2026-09-24T02:00:00Z",body:"Same comment",author:person("reviewer","reviewer")}]}}}));
+  assert.equal(report(api,[row(parent)]).events.length,1);
+});
+test("partial comments cannot suppress an unidentified same-text changelog record", () => {
+  const api=activity(), parent=detail(api,issue("P-1","Open",[
+    history("comment-log","2026-09-24T02:00:00Z","reviewer",[item("comment",null,null,"","Same comment")])
+  ],{fields:{comment:{startAt:0,total:2,comments:[{id:"known",created:"2026-09-24T02:00:00Z",body:"Same comment",author:person("reviewer","reviewer")}]}}}));
+  const result=report(api,[row(parent)]);
+  assert.equal(result.commentCoverage.isComplete,false);
+  assert.equal(result.events.length,2);
+});
+
 test("component scope uses parent components, OR selection and distinct remark counts", () => {
   const api=activity(), a=detail(api,issue("P-1","Done")), b=detail(api,issue("P-3","Done"));
   const child=detail(api,issue("P-2","Open"));

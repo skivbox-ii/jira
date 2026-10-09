@@ -1122,6 +1122,7 @@ define("_ujgESI_main", [
     }
     var activityLoader = activityLoaderModule.create({
       read:function(key) { return api.getIssueWithHistory(key); },
+      readComments:api && typeof api.getIssueComments === "function" ? function(key,startAt) { return api.getIssueComments(key,startAt); } : null,
       errorText:searchErrorText,
       accept:function(key,issue) {
         if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
@@ -1219,7 +1220,7 @@ define("_ujgESI_main", [
           if (!key) return;
           if (!targets[key]) targets[key] = [];
           targets[key].push(detail);
-          if (!detail.activity || !detail.activity.complete) pending[key] = true;
+          if (!detail.activity || !detail.activity.complete || !detail.activity.comments || !detail.activity.comments.complete) pending[key] = true;
           else if (requiredThrough && (!isFinite(Date.parse(detail.activity.capturedAt)) || Date.parse(detail.activity.capturedAt) < requiredThrough)) pending[key] = true;
         });
       });

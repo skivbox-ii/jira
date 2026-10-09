@@ -85,7 +85,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     var drawVersion = 0;
     var namespace = ".ujgActivity" + (++sequence);
     var date = moscowToday(), filters = {}, sort = {key:"time", descending:false}, collapsed = {}, $host, currentState, currentServices;
-    var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false;
+    var layoutKey, order, hidden = {}, widths = {}, $popover, popoverAnchor, drag, suppressPopoverFocus = false, suppressedCommentHover = null;
     var filterDraftCapture, pendingFilterDraft, renderedScope;
     var resizeObserver, observedViewportWidth;
     var $managementDialog, managementAnchor, bodyOverflow, previewTimer, previewCloseTimer;
@@ -203,6 +203,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     function resize() {
       if (!$host || !$host[0].isConnected) return;
       if ($popover && popoverAnchor && $popover.hasClass("ujg-esi-activity-metric-preview")) placePopover(popoverAnchor);
+      if ($popover && popoverAnchor && $popover.hasClass("ujg-esi-activity-comment-popup")) placeCommentPopover(popoverAnchor);
       var $scroll = $host.find(".ujg-esi-activity-scroll"), $table = $scroll.find(".ujg-esi-activity-table");
       if (!$table.length) return;
       observedViewportWidth = $scroll[0].clientWidth;
@@ -210,6 +211,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       Object.keys(layout.widths).forEach(function(key) { $table.find('col[data-column="'+key+'"]').css("width",layout.widths[key]+"px"); });
       $table.css({width:layout.total+"px",minWidth:layout.total+"px"});
       $scroll.scrollLeft(scrollLeft);
+      syncCommentOverflow();
     }
     function columnWidth(field) {
       var header = $host.find('th[data-column="'+field.key+'"]')[0];
@@ -217,9 +219,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
     }
     function closePopover(focus) {
       clearTimeout(previewTimer); clearTimeout(previewCloseTimer);
+      var commentPopup = $popover && $popover.hasClass("ujg-esi-activity-comment-popover");
+      if (focus && commentPopup) suppressedCommentHover = $(popoverAnchor).closest(".ujg-esi-activity-comment")[0];
       if ($popover) $popover.remove(); $popover = null;
       filterDraftCapture = null;
-      if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; popoverAnchor.focus(); suppressPopoverFocus = false; } }
+      if (popoverAnchor) { $(popoverAnchor).attr("aria-expanded","false"); if (focus && document.contains(popoverAnchor)) { suppressPopoverFocus = true; if (commentPopup) popoverAnchor.focus({preventScroll:true}); else popoverAnchor.focus(); suppressPopoverFocus = false; } }
       popoverAnchor = null;
     }
     function dismissPopover() {
@@ -227,6 +231,11 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var opened = !!($popover && $popover[0].isConnected);
       closePopover(opened);
       return opened;
+    }
+    function onCommentScroll(event) {
+      if (!$popover || !$popover.hasClass("ujg-esi-activity-comment-popup")) return;
+      if (event.target === $popover[0] || $.contains($popover[0],event.target)) return;
+      closePopover(document.activeElement === $popover[0] || $.contains($popover[0],document.activeElement));
     }
     function closeManagement(focus) {
       if ($managementDialog) { $managementDialog.remove(); document.body.style.overflow = bodyOverflow; }
@@ -298,6 +307,15 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       }
       $popover.css("top",Math.max(12,Math.min(rect.bottom+4,viewportHeight-$popover.outerHeight()-12)));
     }
+    function placeCommentPopover(anchor) {
+      var rect = anchor.getBoundingClientRect(), viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      var viewportHeight = document.documentElement.clientHeight || window.innerHeight, gap = 6;
+      var width = Math.min(520,Math.max(180,viewportWidth-24));
+      var below = Math.max(0,viewportHeight-rect.bottom-gap-12), above = Math.max(0,rect.top-gap-12);
+      var useAbove = below < 220 && above > below, available = useAbove ? above : below;
+      $popover.css({width:width,left:Math.max(12,Math.min(rect.left,viewportWidth-width-12)),maxHeight:Math.min(Math.max(80,available),Math.max(80,viewportHeight-24))});
+      $popover.css("top",useAbove ? Math.max(12,rect.top-gap-$popover.outerHeight()) : Math.min(viewportHeight-12,rect.bottom+gap));
+    }
     function matching(event, group) {
       return fields.every(function(field) { return !Array.isArray(filters[field.key]) || [].concat((field.filterValue || field.value)(event,group)).some(function(value) { return filters[field.key].indexOf(value) >= 0; }); });
     }
@@ -353,6 +371,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         from.length > 120 || to.length > 120 || /[\r\n]/.test(from) || /[\r\n]/.test(to);
     }
     function briefAction(event) {
+      if (event.kind === "comment") return event.commentAction === "updated" ? "Изменён комментарий" : "Добавлен комментарий";
       if (!longFieldChange(event)) return activity.eventText(event);
       var field = String(event.fieldId || event.field || "").toLowerCase(), name = String(event.field || "").toLowerCase();
       if (field === "description" || name === "description" || name === "описание") return "Изменено описание";
@@ -361,12 +380,12 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       return separator < 0 ? full : full.slice(0,separator+1);
     }
     function eventDetail(item, services, lazyFormats) {
-      var verbose = longFieldChange(item), $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
-      var $action = $("<span/>").text(verbose ? briefAction(item) : activity.eventText(item));
+      var verbose = longFieldChange(item), isComment = item.kind === "comment", $detail = $("<div/>").attr("data-event-id",item.id == null ? "" : String(item.id));
+      var $action = $("<span/>").text(verbose || isComment ? briefAction(item) : activity.eventText(item));
       if (completedAction(item)) $action.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
       $detail.append($action,$("<small/>").text(" · " + time(item.at) + " · Автор: " + label(item.author) + " · Исполнитель: " + label(item.assignee)));
       if (item.kind === "assignee") $detail.append($("<small/>").text(" · " + label(item.fromTeam) + " → " + label(item.toTeam)));
-      if (!verbose) return $detail;
+      if (isComment || !verbose) return $detail;
       var formatted = /^(description|comment|описание|комментарий)$/i.test(String(item.fieldId || item.field || "")) ||
         /^(description|comment|описание|комментарий)$/i.test(String(item.field || ""));
       [["before","До",item.from,"не задано"],["after","После",item.to,"очищено"]].forEach(function(side) {
@@ -387,6 +406,81 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         $detail.append($section);
       });
       return $detail;
+    }
+    function commentPopover(anchor, event, state) {
+      var title = briefAction(event), $box = popup(anchor,title,"ujg-esi-activity-event-popover ujg-esi-activity-comment-popover ujg-esi-activity-comment-popup",520);
+      $box.attr("data-event-id",event.id == null ? "" : String(event.id));
+      $box.append($("<div/>").addClass("ujg-esi-activity-popover-head").append($("<strong/>").text(title),button("X","Закрыть комментарий",function() { closePopover(true); })));
+      $box.append($("<div/>").addClass("ujg-esi-activity-comment-meta").append(
+        $("<span/>").text("Автор: " + label(event.author) + " · " + time(event.at) + " · "),issueKeyNode(event.issueKey,state.baseUrl)));
+      $box.append($("<div/>").addClass("ujg-esi-activity-popover-title").text(event.summary || "Без темы"));
+      $box.append($("<pre/>").addClass("ujg-esi-activity-comment-full").text(String(event.to == null ? "" : event.to)));
+      if (event.commentNote) $box.append($("<div/>").addClass("ujg-esi-activity-comment-note").text(event.commentNote));
+      $box.on("mouseenter focusin",function() { clearTimeout(previewCloseTimer); })
+        .on("mouseleave",scheduleCommentClose)
+        .on("focusout",function(focusEvent) {
+          function outside(target) {
+            return target !== $box[0] && !$.contains($box[0],target) && target !== anchor && !$.contains(anchor.parentElement,target);
+          }
+          if (focusEvent.relatedTarget) {
+            if (outside(focusEvent.relatedTarget)) closePopover();
+          } else setTimeout(function() {
+            if ($popover && $popover[0] === $box[0] && outside(document.activeElement)) closePopover();
+          },0);
+        });
+      placeCommentPopover(anchor);
+    }
+    function scheduleCommentClose() {
+      clearTimeout(previewCloseTimer);
+      previewCloseTimer = setTimeout(function() {
+        if ($popover && $popover.hasClass("ujg-esi-activity-comment-popover") && !$.contains($popover[0],document.activeElement)) closePopover();
+      },180);
+    }
+    function commentPreview(event, state) {
+      var $wrapper = $("<div/>").addClass("ujg-esi-activity-comment").attr("data-event-id",event.id == null ? "" : String(event.id));
+      var $text = $("<div/>").addClass("ujg-esi-activity-comment-preview").text(String(event.to == null ? "" : event.to) + (event.commentNote ? "\n" + event.commentNote : ""));
+      function show(focusControl, explicit) {
+        if (!$wrapper.hasClass("is-overflowing") || suppressPopoverFocus || !document.contains($wrapper[0])) return;
+        if (!explicit && suppressedCommentHover === $wrapper[0]) return;
+        var anchor = $wrapper.find(".ujg-esi-activity-comment-more")[0];
+        if (!$popover || popoverAnchor !== anchor) commentPopover(anchor,event,state);
+        clearTimeout(previewCloseTimer);
+        if (focusControl) $popover.find("button").first()[0].focus({preventScroll:true});
+      }
+      $wrapper.append($("<span/>").addClass("ujg-esi-activity-comment-action").text(briefAction(event)),$text);
+      $wrapper.on("mouseenter",function() { show(false,false); })
+        .on("mouseleave",function() { suppressedCommentHover = null; scheduleCommentClose(); })
+        .on("focusout",function(focusEvent) {
+          function checkFocus(target) {
+            if (!$popover || !$.contains($wrapper[0],popoverAnchor)) return;
+            if (target !== $wrapper[0] && !$.contains($wrapper[0],target) && target !== $popover[0] && !$.contains($popover[0],target)) closePopover();
+          }
+          if (focusEvent.relatedTarget) checkFocus(focusEvent.relatedTarget);
+          else setTimeout(function() { checkFocus(document.activeElement); },0);
+        });
+      $wrapper.data("commentButton",function() {
+        return $("<button type='button'/>").addClass("ujg-esi-activity-comment-more").attr({
+          "aria-label":"Показать комментарий полностью","aria-haspopup":"dialog","aria-expanded":"false",title:"Показать комментарий полностью"
+        }).text("…").on("click",function(event) { event.stopPropagation(); show(false,true); })
+          .on("keydown",function(event) {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); show(true,true); }
+            else if (event.key === "Tab" && !event.shiftKey && $popover && popoverAnchor === this) { event.preventDefault(); show(true,true); }
+          });
+      });
+      return $wrapper;
+    }
+    function syncCommentOverflow() {
+      $host.find(".ujg-esi-activity-comment").each(function() {
+        var $wrapper = $(this), preview = $wrapper.find(".ujg-esi-activity-comment-preview")[0];
+        if (!preview || !preview.clientHeight) return;
+        var overflow = preview.scrollHeight > preview.clientHeight + 1;
+        $wrapper.toggleClass("is-overflowing",overflow);
+        if (overflow && !$wrapper.find(".ujg-esi-activity-comment-more").length) $wrapper.append($wrapper.data("commentButton")());
+        else if (!overflow) {
+          if (popoverAnchor && $.contains(this,popoverAnchor)) closePopover();
+          $wrapper.find(".ujg-esi-activity-comment-more").remove();
+        }
+      });
     }
     function sortedGroups(groups) {
       var field = fields.filter(function(item) { return item.key === sort.key; })[0] || fields[0];
@@ -583,6 +677,20 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         state.activityError && !retained ? "История не загружена · проверено " + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач" :
         (state.activityError && !failedRetained ? "История загружена частично · проверено " : state.activityError && !someFresh ? "Ранее проверена история " : "Проверена история ") + (coverage.complete || 0) + " из " + (coverage.total || 0) + " задач";
       $coverage.append($("<span/>").text(coverageText));
+      if (report.commentCoverage) {
+        var comments = report.commentCoverage, count = comments.expected == null ? "загружено " + (comments.loaded || 0) + "; общее число неизвестно" :
+          "загружено " + (comments.loaded || 0) + " из " + comments.expected;
+        var $comments = $("<div/>").addClass("ujg-esi-activity-comment-coverage").toggleClass("is-incomplete",comments.isComplete !== true);
+        $comments.append($("<span/>").text((state.activityLoading || state.registryLoading ? "Предыдущий срез · " : "") +
+          "Комментарии: полный список для " + (comments.complete || 0) + " из " + (comments.total || 0) + " задач · " + count +
+          (comments.isComplete === true ? "" : " · неполно")));
+        var $commentDetails = $("<details/>").addClass("ujg-esi-activity-comment-coverage-details");
+        $commentDetails.append($("<summary/>").text((comments.warnings || []).length ? "Подробности по комментариям (" + comments.warnings.length + ")" : "Ограничения истории комментариев"));
+        var $commentWarnings = $("<div/>").addClass("ujg-esi-activity-warning-list");
+        (comments.warnings || []).forEach(function(warning) { $commentWarnings.append($("<div/>").text(warning)); });
+        $commentWarnings.append($("<div/>").text("Удалённые комментарии и прежние редакции недоступны."));
+        $coverage.append($comments.append($commentDetails.append($commentWarnings)));
+      }
       if (state.activityError) {
         $coverage.append($("<span/>").addClass("ujg-esi-activity-loading-note").text(
           (failedRetained ? someFresh ? "Часть сохранённых данных не обновлена; показан предыдущий срез для задач с ошибкой. " : "Показан предыдущий срез; обновление не удалось. " : "") +
@@ -851,8 +959,10 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
         $group.append($("<th/>").attr({scope:"rowgroup",colspan:shown.length}).append(
           button(isCollapsed ? "ChevronRight" : "ChevronDown",(isCollapsed ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),function() {
             collapsed[key] = !collapsed[key];
+            if (collapsed[key] && $popover && $popover.hasClass("ujg-esi-activity-comment-popup") && $(popoverAnchor).closest(".ujg-esi-activity-event").is($group.nextUntil(".ujg-esi-activity-group"))) closePopover();
             $(this).empty().append(icon(collapsed[key] ? "ChevronRight" : "ChevronDown")).attr({"aria-expanded":String(!collapsed[key]),"aria-label":(collapsed[key] ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key),title:(collapsed[key] ? "Развернуть " : "Свернуть ") + label(group.remarkId || group.key)});
             $group.nextUntil(".ujg-esi-activity-group").prop("hidden",collapsed[key]);
+            if (!collapsed[key]) syncCommentOverflow();
           })
             .addClass("ujg-esi-activity-group-toggle").attr("aria-expanded",String(!isCollapsed)),
           $("<span/>").addClass("ujg-esi-activity-group-key").append($("<span/>").text("#" + label(group.remarkId || group.key)),group.key ? issueKeyNode(group.key,state.baseUrl) : $("<span/>")),
@@ -887,7 +997,9 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           if (!mixedAssignees && event.kind === "assignee" && event.fromTeam !== event.toTeam) $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(label(event.fromTeam) + " → " + label(event.toTeam)));
           else if (!mixedAssignees && event.kind === "assignee") $assigneeCell.append($("<small/>").addClass("ujg-esi-activity-team-move").text(assignee));
           var $change = $("<td/>");
-          if (rowEvents.length === 1 && !longFieldChange(event)) {
+          if (rowEvents.length === 1 && event.kind === "comment") {
+            $change.append(commentPreview(event,state));
+          } else if (rowEvents.length === 1 && !longFieldChange(event)) {
             $change.text(activity.eventText(event));
             if (completedAction(event)) $change.addClass("is-done").css({color:"#20653d",backgroundColor:"#eaf5ed"});
           } else {
@@ -895,7 +1007,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
             var count = rowEvents.length, plural = count % 10 === 1 && count % 100 !== 11 ? "изменение" : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? "изменения" : "изменений";
             var $summary = $("<summary/>");
             rowEvents.slice().sort(function(a,b) { return timestamp(a.at)-timestamp(b.at); }).forEach(function(item) {
-              var $action = $("<span/>").addClass("ujg-esi-activity-brief-action").text(briefAction(item));
+              var $action = item.kind === "comment" ? commentPreview(item,state).addClass("ujg-esi-activity-brief-action") : $("<span/>").addClass("ujg-esi-activity-brief-action").text(briefAction(item));
               if (completedAction(item)) $action.addClass("is-done");
               $summary.append($action);
             });
@@ -952,6 +1064,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       return true;
     },suspend:function() { sourceUi.dismiss(); remarkUi.dismiss(); aiUi.suspend(); pendingFilterDraft=null; closePopover(); closeManagement(); reportStore.clear(); },destroy:function() {
       sourceUi.destroy(); remarkUi.destroy(); aiUi.destroy(); reportStore.clear(); closePopover(); closeManagement(); if (resizeObserver) resizeObserver.disconnect();
+      document.removeEventListener("scroll",onCommentScroll,true); window.removeEventListener("scroll",onCommentScroll,true);
       $(window).off(namespace); $(document).off(namespace);
     },render:function($parent,state,services) {
       if (!$host || !$host.length || $host.parent()[0] !== $parent[0]) $host = $("<div/>").addClass("ujg-esi-activity-mount").appendTo($parent);
@@ -965,6 +1078,8 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var key = (currentState.preferencesStorageKey || "ujg-esi-state") + ":activity-layout";
       if (layoutKey !== key) loadLayout(key);
       $(window).off("resize"+namespace).on("resize"+namespace,resize);
+      document.removeEventListener("scroll",onCommentScroll,true); window.removeEventListener("scroll",onCommentScroll,true);
+      document.addEventListener("scroll",onCommentScroll,true); window.addEventListener("scroll",onCommentScroll,true);
       $(document).off(namespace)
         .on("click"+namespace,function(event) { if ($popover && event.target !== popoverAnchor && !$.contains(popoverAnchor,event.target) && event.target !== $popover[0] && !$.contains($popover[0],event.target)) closePopover(); })
         .on("keydown"+namespace,function(event) { if ($popover && event.key === "Escape") { event.stopPropagation(); closePopover(true); } })

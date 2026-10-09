@@ -4,6 +4,13 @@ const path = require("node:path");
 const load = require("./helpers/load-amd-module");
 const ai = () => load(path.join(__dirname, "../ujg-excel-story-importer-modules/activity-ai.js"), {});
 const scope = {projectKey:"P",epicKey:"P-1",baseUrl:"https://jira.test",preferencesStorageKey:"user:a",userScope:"alice",viewMode:"team"};
+test("daily LLM context keeps comment coverage separate from status history", () => {
+  const source=report();
+  source.commentCoverage={total:1,complete:0,loaded:1,expected:2,isComplete:false,warnings:["P-1: comments incomplete"]};
+  const part=ai().prepare(source,scope).parts[0];
+  assert.deepEqual(JSON.parse(part.userPrompt).commentCoverage,source.commentCoverage);
+  assert.match(part.systemPrompt,/commentCoverage/);
+});
 test("LLM scope explicitly includes selected components and isolates conversations", () => {
   const source=report(), normal=ai().prepare(source,scope);
   source.componentScope=[{id:"component:10",name:"Экран"}];

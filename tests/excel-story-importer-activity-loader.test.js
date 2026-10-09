@@ -3,6 +3,84 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const load = require("./helpers/load-amd-module");
 const flush = () => new Promise(resolve => setImmediate(resolve));
+function commentsHarness(initial, readComments) {
+  const api=load(path.join(__dirname,"../ujg-excel-story-importer-modules/activity-loader.js"),{});
+  const accepted=[], completed=[], calls=[];
+  const issue={key:"P-1",fields:{comment:initial}};
+  const loader=api.create({read:()=>Promise.resolve(issue),readComments:(key,offset)=>{calls.push([key,offset]);return readComments(key,offset);},
+    accept:(key,value)=>accepted.push(value),onComplete:value=>completed.push(value)});
+  return {loader,accepted,completed,calls,issue};
+}
+test("comment hydration reads every page and skips already complete envelopes",async()=>{
+  const x=commentsHarness({startAt:0,total:3,comments:[{id:"a",body:"a"}]},(_key,offset)=>Promise.resolve({startAt:offset,total:3,
+    comments:offset===0?[{id:"a",body:"a"},{id:"b",body:"b"}]:[{id:"c",body:"c"}]}));
+  x.loader.select(["P-1"]);await flush();await flush();
+  assert.deepEqual(x.calls,[["P-1",0],["P-1",2]]);
+  assert.deepEqual(Array.from(x.accepted[0].fields.comment.comments,c=>c.id),["a","b","c"]);
+  assert.equal(x.issue.fields.comment.comments.length,1,"Never mutate the API's source envelope");
+  const empty=commentsHarness({startAt:0,total:0,comments:[]},()=>{throw new Error("unexpected");});
+  empty.loader.select(["P-1"]);await flush();assert.equal(empty.calls.length,0);
+});
+test("comment page failure preserves observed entries with explicit incomplete diagnostics and allows retry",async()=>{
+  let fail=true;
+  const x=commentsHarness({startAt:0,total:3,comments:[]},(_key,offset)=>{
+    if(offset>0&&fail)return Promise.reject(new Error("offline"));
+    return Promise.resolve({startAt:offset,total:3,comments:offset===0?[{id:"a"},{id:"b"}]:[{id:"c"}]});
+  });
+  x.loader.select(["P-1"]);await flush();await flush();
+  assert.equal(x.accepted[0].fields.comment.comments.length,2);
+  assert.equal(x.accepted[0].fields.comment.isLast,false);
+  assert.match(x.accepted[0].fields.comment.loadError,/комментар/i);
+  assert.equal(x.completed[0].failures.length,1);
+  fail=false;x.loader.select(["P-1"]);await flush();await flush();
+  assert.equal(x.accepted[1].fields.comment.comments.length,3);
+  assert.equal(x.completed[1].failures.length,0);
+});
+test("malformed comment pagination cannot be certified complete",async()=>{
+  for(const page of [{startAt:1,total:2,comments:[{id:"a"},{id:"b"}]},{startAt:0,total:3,comments:[{id:"a"},{id:"b"}]},
+    {startAt:0,total:2,comments:[{id:"a"},{id:"a"}]},{startAt:0,total:2,comments:[]}]) {
+    const x=commentsHarness({startAt:0,total:2,comments:[]},()=>Promise.resolve(page));
+    x.loader.select(["P-1"]);await flush();await flush();
+    assert.equal(x.accepted[0].fields.comment.isLast,false);
+    assert.equal(x.completed[0].failures.length,1);
+    assert.equal(x.calls.length,1);
+  }
+});
+test("cancellation during comment pagination prevents further reads and acceptance",async()=>{
+  let resolvePage;
+  const x=commentsHarness({startAt:0,total:2,comments:[]},()=>new Promise(resolve=>{resolvePage=resolve;}));
+  x.loader.select(["P-1"]);await flush();
+  assert.equal(x.calls.length,1);x.loader.cancel();
+  resolvePage({startAt:0,total:2,comments:[{id:"a"}]});await flush();await flush();
+  assert.equal(x.calls.length,1);assert.equal(x.accepted.length,0);assert.equal(x.completed.length,0);
+});
+test("issue read timestamp precedes slow comment pagination",async()=>{
+  let resolvePage;
+  const x=commentsHarness({startAt:0,total:1,comments:[]},()=>new Promise(resolve=>{resolvePage=resolve;}));
+  x.loader.select(["P-1"]);await flush();
+  const beforePages=Date.now();await new Promise(resolve=>setTimeout(resolve,15));
+  resolvePage({startAt:0,total:1,comments:[{id:"a"}]});await flush();
+  assert.ok(Date.parse(x.accepted[0]._activityReadAt)<=beforePages);
+});
+test("comment page failure retains initial evidence missing from successful pages",async()=>{
+  const x=commentsHarness({startAt:0,total:4,comments:[{id:"a",body:"old"},{id:"b"},{id:"c"}]},(_key,start)=>
+    start===0 ? Promise.resolve({startAt:0,total:4,comments:[{id:"a",body:"new"}]}) : Promise.reject(new Error("offline")));
+  x.loader.select(["P-1"]);await flush();await flush();
+  const comments=x.accepted[0].fields.comment;
+  assert.deepEqual(Array.from(comments.comments,c=>c.id),["a","b","c"]);
+  assert.equal(comments.comments[0].body,"new");
+  assert.equal(comments.isLast,false);
+  assert.match(comments.loadError,/offline/);
+});
+test("different comment snapshots cannot expose a total below retained evidence",async()=>{
+  const x=commentsHarness({startAt:0,total:3,comments:[{id:"a"},{id:"b"}]},(_key,start)=>
+    start===0 ? Promise.resolve({startAt:0,total:3,comments:[{id:"c"},{id:"d"}]}) : Promise.reject(new Error("offline")));
+  x.loader.select(["P-1"]);await flush();await flush();
+  const comments=x.accepted[0].fields.comment;
+  assert.equal(comments.comments.length,4);
+  assert.equal(comments.total,null);
+  assert.equal(comments.isLast,false);
+});
 function setup(abortable=false) {
   const api=load(path.join(__dirname,"../ujg-excel-story-importer-modules/activity-loader.js"),{});
   const calls=[], accepted=[], progress=[], completed=[], requests=[];

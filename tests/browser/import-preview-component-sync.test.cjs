@@ -10,6 +10,7 @@ test("offline component preview writes only one explicitly selected Story", asyn
   }
   const dom=await JSDOM.fromURL("http://127.0.0.1:4317/",{runScripts:"dangerously",resources:new LocalResources(),virtualConsole,
     beforeParse(w){
+      w.structuredClone=structuredClone;
       w.scrollTo=()=>{};w.setImmediate=setImmediate;w.clearImmediate=clearImmediate;
       w.localStorage.setItem("ujg-esi-mapping-settings",JSON.stringify({mappings:{moduleComponentMap:{"МЭК":"АСУТП","Интерфейс":"Алармы"}}}));
       w.File.prototype.arrayBuffer=function(){return new Promise((resolve,reject)=>{const r=new w.FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsArrayBuffer(this);});};

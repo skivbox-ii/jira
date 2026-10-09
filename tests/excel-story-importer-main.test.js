@@ -205,6 +205,26 @@ test("new child preserves stable assignee identifiers for QA queue membership", 
   assert.deepEqual(Array.from(teams.queueTeamIds(children[1],configured)), []);
 });
 
+test("incomplete comments trigger history hydration even when changelog is already complete", async () => {
+  let callbacks,state;
+  const calls=[];
+  const api={getProjects:()=>Promise.resolve([]),getIssueWithHistory:()=>Promise.resolve({key:"P-1",fields:{comment:{startAt:0,total:1,comments:[]}}}),
+    getIssueComments:(key,startAt)=>{calls.push([key,startAt]);return Promise.resolve({startAt:0,total:1,comments:[{id:"comment",body:"Full text"}]});}};
+  const Gadget=loadAmdModule(path.join(MODULE_DIR,"main.js"),{
+    jquery:()=>({length:1}),_ujgESI_config:CONFIG,_ujgESI_api:api,"_ujgESI_excel-loader":{},
+    _ujgESI_parser:{},_ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:null,
+    _ujgESI_rendering:{init(_container,services){callbacks=services;},render(value){state=value;},renderActivityProgress(){return true;}},
+    _ujgShared_llmClient:null,_ujgESI_teams:null,_ujgESI_activity:{capture:issue=>({complete:true,capturedAt:issue._activityReadAt,comments:{complete:true,entries:issue.fields.comment.comments}})},
+    _ujgESI_dueDateSync:null,_ujgESI_componentSync:null,_ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null,
+    _ujgESI_activityLoader:require("./helpers/import-activity-loader"),
+  });
+  new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})})});await flush();
+  state.rows=[{jiraKey:"P-1",storyDetails:{key:"P-1",activity:{complete:true,capturedAt:"2026-09-27T07:00:00Z",comments:{complete:false,entries:[]}}}}];
+  callbacks.onLoadActivityHistory({onlyIncomplete:true,date:"2026-09-24"});await flush();await flush();
+  assert.deepEqual(calls,[["P-1",0]]);
+  assert.equal(state.rows[0].storyDetails.activity.comments.entries[0].body,"Full text");
+});
+
 test("history retry retains previous failure until a successful final read", async () => {
   let callbacks,state,resolveRead;
   const api={getProjects:()=>Promise.resolve([]),getIssueWithHistory:()=>new Promise(resolve=>{resolveRead=resolve;})};

@@ -108,6 +108,7 @@ for (const key of ["EVOSCADA-20000","EVOSCADA-30020","EVOSCADA-30021"]) {
   target.fields.updated = target.changelog.histories[0].created;
 }
 // Management summaries use explicit offline evidence, never synthetic Jira writes.
+Object.values(issues).forEach(issue => { issue.fields.comment={startAt:0,total:0,comments:[]}; });
 for (const [key,seconds,author,displayName,started] of [
   ["EVOSCADA-20862",0,"ivanov","Иванов И.","2026-09-23T09:00:00+03:00"],
   ["EVOSCADA-30040",10800,"petrov","Петров П.","2026-09-23T09:00:00+03:00"],

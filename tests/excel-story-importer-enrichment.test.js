@@ -38,7 +38,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       renderActivityProgress: state => { app.state = state; app.progressRenders = (app.progressRenders || 0) + 1; return true; },
     },
     _ujgESI_teams: null,
-    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories }) },
+    _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories, comments:{complete:true,total:0,entries:[]} }) },
     _ujgShared_llmClient: null,
   });
   new Gadget({ getGadgetContentEl: () => ({ find: () => ({ length: 1 }) }), resize() {} });
@@ -507,7 +507,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     assigneeIdentifiers: ["JIRAUSER100", "ivan"],
     priority: "High", components: [], componentsKnown:false, issueType: "Story", duedate:"", updated: "2026-03-03T10:00:00.000+0300",
     created: issues[0].fields.created,
-    activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"]},
+    activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"],comments:{complete:true,total:0,entries:[]}},
     statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
   });
   assert.match(row.storyDetails.statusSinceReason, /истор|переход/i);
@@ -517,7 +517,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     assigneeIdentifiers: ["developer"],
     priority: "Low", components: [], componentsKnown:false, issueType: "Task", duedate:"", updated: "2026-02-02T00:00:00Z",
     created: child.fields.created,
-    activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[]},
+    activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[],comments:{complete:true,total:0,entries:[]}},
     statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
   });
   assert.match(row.childStatuses[0].statusSinceReason, /создани/i);

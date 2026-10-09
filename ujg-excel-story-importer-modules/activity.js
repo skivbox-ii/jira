@@ -98,7 +98,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
   function seconds(value) { return typeof value === "number" && isFinite(value) && value >= 0 ? value : null; }
   function captureEntries(envelope,field,convert) {
     var raw = envelope && envelope[field], entries = [], seen = Object.create(null), valid = !!envelope && Array.isArray(raw) && envelope.startAt === 0 &&
-      /^\d+$/.test(String(envelope.total)) && +envelope.total === raw.length && envelope.isLast !== false;
+      /^\d+$/.test(String(envelope.total)) && +envelope.total === raw.length && envelope.isLast !== false && !envelope.loadError;
     if (Array.isArray(raw)) raw.forEach(function(value) {
       var id = str(value && value.id);
       if (!id || seen[id]) { valid = false; return; }
@@ -106,15 +106,20 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var entry = convert(value);
       if (!entry) { valid = false; return; }
       if (field === "worklogs" && entry.seconds === null) valid = false;
-      if (field === "comments" && entry.updatedInvalid) valid = false;
+      if (field === "comments" && (entry.updatedInvalid || !entry.bodyKnown)) valid = false;
       entries.push(entry);
     });
-    return {entries:entries,complete:valid};
+    var result = {entries:entries,complete:valid};
+    if (field === "comments") {
+      result.total = envelope && /^\d+$/.test(String(envelope.total)) ? Number(envelope.total) : null;
+      result.warning = str(envelope && envelope.loadError);
+    }
+    return result;
   }
   function capture(issue) {
     issue = issue || {};
     var fields = issue.fields || {}, log = issue.changelog || {}, raw = log.histories;
-    var result = {complete:false,capturedAt:new Date().toISOString(),created:timestamp(fields.created),updated:timestamp(fields.updated),
+    var result = {complete:false,capturedAt:timestamp(issue._activityReadAt) || new Date().toISOString(),created:timestamp(fields.created),updated:timestamp(fields.updated),
       currentStatus:state(fields.status && fields.status.id,fields.status && fields.status.name,fields.status && fields.status.statusCategory && fields.status.statusCategory.key),
       currentAssignee:person(fields.assignee),creator:person(fields.creator),histories:[],warnings:[],diagnostics:[],spentSeconds:seconds(fields.timespent),
       worklogs:captureEntries(fields.worklog,"worklogs",function(log) {
@@ -122,7 +127,9 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
         return at ? {id:str(log.id),at:at,author:person(log.author),seconds:duration} : null;
       }),comments:captureEntries(fields.comment,"comments",function(comment) {
         var at = timestamp(comment && comment.created), updatedAt = timestamp(comment && comment.updated);
-        return at ? {id:str(comment.id),at:at,updatedAt:updatedAt || null,updatedInvalid:!!str(comment && comment.updated) && !updatedAt,author:person(comment.author),body:str(comment.body)} : null;
+        return at ? {id:str(comment.id),at:at,updatedAt:updatedAt || null,
+          updatedInvalid:!!str(comment.updated) && (!updatedAt || updatedAt < at),author:person(comment.author),updateAuthor:person(comment.updateAuthor),
+          bodyKnown:typeof comment.body === "string",body:typeof comment.body === "string" ? comment.body : ""} : null;
       })};
     function warn(message) { if (result.warnings.indexOf(message) < 0) result.warnings.push(message); }
     if (!result.created) warn("Дата создания Jira недоступна или недостоверна");
@@ -273,6 +280,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       });
     });
     var events = [], warnings = [], diagnostics = [], issueKeys = Object.keys(issues), states = Object.create(null), transitions = Object.create(null), transfers = Object.create(null), statusMeta = Object.create(null), statusBeforeMeta = Object.create(null);
+    var commentCoverage = {total:issueKeys.length,complete:0,loaded:0,expected:0,isComplete:true,warnings:[]};
     order.forEach(function(group) {
       var parent = issues[group.key], links = parent && parent.snapshot && parent.snapshot.linkedKeys;
       if (!Array.isArray(links)) return;
@@ -295,6 +303,16 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     conflicts.forEach(function(issueKey) { warnings.push(issueKey + ": противоречивые снимки Jira в разных замечаниях"); });
     if (now <= window.start) warnings.push("Выбранный день еще не начался");
     if (endpoint < window.start) warnings.push("Срез истории сделан до начала выбранного дня");
+    issueKeys.forEach(function(issueKey) {
+      var snap = issues[issueKey].snapshot, comments = conflicts.indexOf(issueKey) < 0 && snap && snap.comments;
+      commentCoverage.loaded += comments && comments.entries ? comments.entries.length : 0;
+      if (!comments || comments.total == null) commentCoverage.expected = null;
+      else if (commentCoverage.expected !== null) commentCoverage.expected += comments.total;
+      var fresh = snap && now > window.start && endpoint >= window.start && isFinite(Date.parse(snap.capturedAt)) && Date.parse(snap.capturedAt) >= endpoint;
+      if (comments && comments.complete && fresh) commentCoverage.complete++;
+      else commentCoverage.warnings.push(issueKey + ": " + (!fresh ? "Комментарии не подтверждены на время среза; требуется обновление" : comments && comments.warning || "Список комментариев неполон или недоступен"));
+    });
+    commentCoverage.isComplete = commentCoverage.complete === commentCoverage.total;
     issueKeys.forEach(function(issueKey) {
       var entry = issues[issueKey], snap = entry.snapshot;
       if (conflicts.indexOf(issueKey) >= 0) return;
@@ -329,6 +347,12 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       all.forEach(function(change) {
         var at = Date.parse(change.h.at), item = change.item;
         if (at < window.start || at >= endpoint) return;
+        if (/^(comment|комментарий)$/i.test(item.fieldId || item.field) && (snap.comments && snap.comments.entries || []).some(function(comment) {
+          var identity = item.toId === comment.id || item.fromId === comment.id;
+          var createdMatch = !item.from && Math.floor(at / 1000) === Math.floor(Date.parse(comment.at) / 1000);
+          var editedMatch = !comment.updatedInvalid && comment.updatedAt && comment.updatedAt > comment.at && Math.floor(at / 1000) === Math.floor(Date.parse(comment.updatedAt) / 1000);
+          return (createdMatch || editedMatch) && (identity || snap.comments.complete && item.to === comment.body);
+        })) return;
         if (str(item.field).toLowerCase() === "worklogid" && change.h.items.some(function(sibling) { return /^(timespent|timeestimate)$/i.test(sibling.field); })) return;
         var fromAssignee = item.field === "assignee" ? assigneeFrom(item,"from") : eventAssignee;
         var toAssignee = item.field === "assignee" ? assigneeFrom(item,"to") : eventAssignee;
@@ -344,6 +368,27 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
           event.returnKind = returnKind(event);
         }
         eventAssignee = toAssignee;
+      });
+      (snap.comments && snap.comments.entries || []).forEach(function(comment) {
+        function add(at,action,author) {
+          var ms = Date.parse(at);
+          if (!isFinite(ms) || ms < window.start || ms >= endpoint) return;
+          var assigned = endPerson;
+          // Rewind assignment history to the comment's own timestamp, not today's owner.
+          for (var j=all.length-1;j>=0;j--) {
+            if (Date.parse(all[j].h.at) < endpoint && Date.parse(all[j].h.at) > ms && all[j].item.field === "assignee") assigned = assigneeFrom(all[j].item,"from");
+          }
+          var notes = [];
+          if (comment.bodyKnown === false) notes.push("Текст комментария недоступен");
+          if (comment.updatedInvalid) notes.push("Время редактирования недостоверно; показан текущий текст");
+          else if (comment.updatedAt && comment.updatedAt > comment.at) notes.push("Текущая редакция от " + msk(comment.updatedAt) + "; первоначальный текст недоступен");
+          events.push({id:issueKey + ":comment:" + comment.id + ":" + action,at:at,kind:"comment",field:"comment",commentAction:action,commentId:comment.id,
+            commentNote:notes.join(". "),issueKey:issueKey,summary:str(entry.task.summary),role:str(entry.task.role),from:"",to:comment.body,
+            author:author || person(null),assignee:assigned,fromAssignee:assigned,toAssignee:assigned,
+            fromTeam:teamFor(teams,assigned),toTeam:teamFor(teams,assigned),color:"",roleColor:""});
+        }
+        add(comment.at,"created",comment.author);
+        if (!comment.updatedInvalid && comment.updatedAt && comment.updatedAt > comment.at) add(comment.updatedAt,"updated",comment.updateAuthor);
       });
       if (snap.created) {
         var created = Date.parse(snap.created);
@@ -368,7 +413,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       var outcomes = {completed:Object.create(null),created:Object.create(null),reopened:Object.create(null)};
       var active = Object.create(null), unchangedStatus = Object.create(null);
       groupEvents.forEach(function(event) {
-        var changed = event.kind === "created" || str(event.field).toLowerCase() === "worklogid" || event.from !== event.to || !!(event.fromId && event.toId && event.fromId !== event.toId);
+        var changed = event.kind === "created" || event.kind === "comment" || str(event.field).toLowerCase() === "worklogid" || event.from !== event.to || !!(event.fromId && event.toId && event.fromId !== event.toId);
         if (changed) active[event.issueKey] = true;
         if (event.kind === "status" && !changed) unchangedStatus[event.issueKey] = true;
         if (event.kind === "created") outcomes.created[event.issueKey] = true;
@@ -641,7 +686,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       confirmed.balance = {startOpen:null,endOpen:null};
     }
     return {date:window.date,start:window.start,end:window.end,asOf:now <= window.start || endpoint < window.start ? null : new Date(endpoint).toISOString(),generatedAt:new Date(now).toISOString(),timezone:"МСК",coverage:counted,
-      confirmed:confirmed,
+      confirmed:confirmed,commentCoverage:commentCoverage,
       metrics:{changed:complete ? Object.keys(changed).length : null,newRemarks:complete ? Object.keys(newRemarks).length : null,completed:complete ? Object.keys(completed).length : null,reopened:complete ? Object.keys(reopened).length : null,taskReturns:complete ? taskReturns : null,events:events.length,overdue:deadlinesComplete ? overdue : null},
       observed:{changed:Object.keys(changed).length,newRemarks:Object.keys(newRemarks).length,taskReturns:taskReturns,overdue:overdue},returns:returnCounts,deadlineCoverage:deadlineCoverage,deadlineReferenceDate:deadlineDay.date,
       balance:{startOpen:complete ? balanceStart : null,endOpen:complete ? balanceEnd : null},transitions:pairs(transitions),transfers:pairs(transfers),groups:groups,events:events,teams:teams};
@@ -710,6 +755,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     event = event || {};
     var from = str(event.from), to = str(event.to), field = str(event.field).toLowerCase();
     if (event.kind === "created") return "Создана задача";
+    if (event.kind === "comment") return (event.commentAction === "updated" ? "Изменён комментарий" : "Добавлен комментарий") + ":\n" +
+      String(event.to == null ? "" : event.to) + (event.commentNote ? "\n" + event.commentNote : "");
     if (event.kind === "status") {
       if (from && from === to && !(event.fromId && event.toId && event.fromId !== event.toId)) return "Статус не изменился: " + statusLabel(to);
       var destination = statusLabel(to), action = "Изменён статус";
@@ -757,10 +804,12 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
   }
   function exportHtml(report,context) {
     context = context || {};
-    var warnings = report.coverage && report.coverage.warnings || [];
+    var warnings = (report.coverage && report.coverage.warnings || []).concat(report.commentCoverage && report.commentCoverage.warnings || []);
     var html = '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Активность ' + escape(report.date) + '</title><style>body{font:14px system-ui;margin:2rem;max-width:80rem;color:#24313a}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}small{color:#59666e}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:1rem 0}</style></head><body>';
     html += '<h1>Активность за ' + escape(report.date) + ' МСК</h1><p>Проект: ' + escape(context.projectKey) + ' · Эпик: ' + escape(context.epicKey) + '</p>';
     html += '<p>Сформировано: ' + escape(msk(report.generatedAt)) + ' · Срез на: ' + escape(report.asOf ? msk(report.asOf) : '—') + ' · Покрытие: ' + escape(report.coverage && report.coverage.complete) + '/' + escape(report.coverage && report.coverage.total) + '</p>';
+    if (report.commentCoverage) html += '<p>Комментарии: загружено ' + escape(report.commentCoverage.loaded) + ' из ' + escape(report.commentCoverage.expected == null ? 'неизвестного количества' : report.commentCoverage.expected) +
+      '; полный список задач: ' + escape(report.commentCoverage.complete) + '/' + escape(report.commentCoverage.total) + '. Удалённые комментарии и прежние редакции недоступны.</p>';
     html += '<p><small>Текущие связи задач и текущая локальная карта команд. Исторический состав связей и команд не восстанавливается.</small></p>';
     if (Array.isArray(report.componentScope)) html += '<p>Компоненты: ' + escape(report.componentScope.map(function(item) { return item.name; }).join(', ') || 'не выбраны') + ' · текущие компоненты исходных историй</p>';
     html += '<p>Фильтры журнала: <code>' + escape(metadata(context.filters)) + '</code> · Сортировка: <code>' + escape(metadata(context.sort)) + '</code></p>';
@@ -871,7 +920,8 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
       (group.events || []).forEach(function(event) {
         var assignee = event.kind === "assignee" ? (str(event.fromAssignee && event.fromAssignee.label) || "Не назначен") + ' → ' + (str(event.toAssignee && event.toAssignee.label) || "Не назначен") : str(event.assignee && event.assignee.label) || "Не назначен";
         var team = event.kind === "assignee" && event.fromTeam !== event.toTeam ? str(event.fromTeam) + ' → ' + str(event.toTeam) : str(event.toTeam);
-        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(moduleNames) + '</td><td>' + escape(event.role || "История") + '</td><td>' + escape(eventText(event)) + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(assignee) + '</td><td>' + escape(team) + '</td></tr>';
+        var description = event.kind === "comment" ? '<pre>' + escapeRaw(eventText(event)) + '</pre>' : escape(eventText(event));
+        html += '<tr><td>' + escape(msk(event.at)) + '</td><td>' + escape(event.issueKey) + '<br><small>' + escape(event.summary) + '</small></td><td>' + escape(moduleNames) + '</td><td>' + escape(event.role || "История") + '</td><td>' + description + '</td><td>' + escape(event.author && event.author.label) + '</td><td>' + escape(assignee) + '</td><td>' + escape(team) + '</td></tr>';
       }); html += '</tbody></table>'; });
     return html + '</body></html>';
   }
