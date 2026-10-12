@@ -742,6 +742,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
       var draft = preserveFilter ? pendingFilterDraft || filterDraftCapture && filterDraftCapture() : null;
       pendingFilterDraft = null;
+      renderedScope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};

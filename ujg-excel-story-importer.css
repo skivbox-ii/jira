@@ -2526,15 +2526,53 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-preflight-filter-actions [data-preflight-filter-apply] { color: #fff; background: #075fc4; border-color: #075fc4; }
 .ujg-esi-due-dialog button:focus-visible, .ujg-esi-due-dialog input:focus-visible, .ujg-esi-due-dialog [tabindex]:focus-visible { outline: 2px solid #1674d1; outline-offset: 1px; }
 @media (max-width: 640px) { .ujg-esi-due-dialog { width: calc(100vw - 16px); max-height: calc(100vh - 16px); inset-block-start: 8px; } .ujg-esi-due-head, .ujg-esi-due-tools, .ujg-esi-due-foot { padding: 8px; } }
-.ujg-esi-request-progress { border-top: 1px solid #dfe1e6; border-bottom: 1px solid #dfe1e6; padding: 8px 0; margin: 8px 0; min-width: 0; font-size: 12px; }
-.ujg-esi-request-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
-.ujg-esi-request-controls { display: flex; flex-wrap: wrap; gap: 6px; }
-.ujg-esi-request-controls .ujg-esi-small-btn { display: inline-flex; align-items: center; gap: 5px; width: auto; height: auto; min-height: 28px; white-space: normal; max-width: 100%; padding: 4px 7px; }
-.ujg-esi-request-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.ujg-esi-request-spinner { display: inline-flex; width: 14px; height: 14px; flex: 0 0 14px; visibility: hidden; }
-.ujg-esi-request-spinner svg { width: 14px; height: 14px; }
+.ujg-esi-request-progress { border-bottom: 1px solid #dfe1e6; padding: 12px 0; margin: 0; min-width: 0; font-size: 12px; }
+.ujg-esi-request-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.ujg-esi-request-controls { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; border-left: 1px solid #dfe1e6; padding-left: 16px; }
+.ujg-esi-request-controls .ujg-esi-small-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-height: 32px; padding: 0; flex: 0 0 32px; border-radius: 3px; }
+.ujg-esi-request-heading { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1 1 340px; min-height: 58px; justify-content: center; }
+.ujg-esi-request-stages { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ujg-esi-request-stage { display: inline-flex; align-items: center; gap: 7px; color: #8590a2; min-width: 0; font-weight: 600; }
+.ujg-esi-request-stage + .ujg-esi-request-stage::before { content: ""; width: 24px; height: 1px; background: #dfe1e6; margin: 0 4px; flex: 0 0 24px; }
+.ujg-esi-request-stage-label { overflow-wrap: anywhere; }
+.ujg-esi-request-stage-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.ujg-esi-request-stage-icon { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; flex: 0 0 22px; }
+.ujg-esi-request-stage[data-stage-state="completed"] { color: #172b4d; }
+.ujg-esi-request-stage[data-stage-state="completed"] .ujg-esi-request-stage-icon { background: #16815d; color: #fff; border-radius: 50%; }
+.ujg-esi-request-stage[data-stage-state="running"] { color: #0868d4; }
+.ujg-esi-request-stage[data-stage-state="error"] { color: #ae2a19; }
+.ujg-esi-request-spinner { visibility: hidden; }
+.ujg-esi-request-spinner svg { width: 18px; height: 18px; }
+.ujg-esi-request-meter { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ujg-esi-request-track { height: 5px; background: #ebecf0; flex: 1 1 100px; min-width: 48px; overflow: hidden; border-radius: 3px; }
+.ujg-esi-request-track > span { display: block; height: 100%; background: #0c75eb; }
+.ujg-esi-request-track.is-indeterminate > span { width: 28%; animation: ujg-esi-request-slide 1.5s ease-in-out infinite alternate; }
+@keyframes ujg-esi-request-slide { from { transform: translateX(0); } to { transform: translateX(250%); } }
+.ujg-esi-request-percent, .ujg-esi-request-total-elapsed { font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.ujg-esi-request-total-elapsed { font-weight: 600; font-size: 14px; min-width: 44px; text-align: center; margin-right: 4px; }
+.ujg-esi-request-stage-count { color: #5e6c84; overflow-wrap: anywhere; }
+.ujg-esi-request-active-count { color: #5e6c84; overflow-wrap: anywhere; flex: 0 1 auto; }
+.ujg-esi-request-head details { display: contents; }
+.ujg-esi-request-head details::details-content { display: contents; }
+.ujg-esi-request-head summary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; flex: 0 0 80px; cursor: pointer; list-style: none; color: #344563; }
+.ujg-esi-request-head summary::-webkit-details-marker { display: none; }
+.ujg-esi-request-head summary[aria-expanded="true"] svg { transform: rotate(180deg); }
+.ujg-esi-request-head summary:focus-visible, .ujg-esi-request-controls button:focus-visible { outline: 2px solid #1674d1; outline-offset: 2px; }
+.ujg-esi-request-details-body { flex: 0 0 100%; min-width: 0; }
+.ujg-esi-request-details-body[hidden] { display: none; }
+.ujg-esi-request-count { color: #5e6c84; margin: 4px 0; }
 .ujg-esi-request-progress[data-progress-status="running"] .ujg-esi-request-spinner svg { animation: ujg-esi-due-spin .8s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .ujg-esi-request-progress[data-progress-status="running"] .ujg-esi-request-spinner svg { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ujg-esi-request-progress[data-progress-status="running"] .ujg-esi-request-spinner svg, .ujg-esi-request-track.is-indeterminate > span { animation: none; } }
+@media (max-width: 640px) {
+  .ujg-esi-request-head { gap: 8px; }
+  .ujg-esi-request-heading { flex-basis: 100%; }
+  .ujg-esi-request-controls { border-left: 0; padding-left: 0; flex: 1 1 auto; }
+  .ujg-esi-request-stage { flex: 1 1 100px; align-items: flex-start; }
+  .ujg-esi-request-stage + .ujg-esi-request-stage::before { display: none; }
+  .ujg-esi-request-stage-count { flex: 0 1 160px; }
+  .ujg-esi-request-meter { flex-wrap: wrap; }
+  .ujg-esi-request-active-count { flex-basis: 100%; }
+}
 .ujg-esi-request-controls svg { width: 14px; height: 14px; flex-shrink: 0; }
 .ujg-esi-request-snapshot { color: #5e6c84; margin: 4px 0; overflow-wrap: anywhere; }
 .ujg-esi-request-list { max-height: min(190px, 24vh); min-height: 40px; overflow: auto; overscroll-behavior: contain; }

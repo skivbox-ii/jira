@@ -19,19 +19,38 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   function createRequestPanel(kind) {
     var $panel=$("<section/>").addClass("ujg-esi-request-progress").attr({"data-progress-kind":kind,"aria-label":kind === "activity" ? "Запросы истории Jira" : "Запросы реестра Jira"});
     var $head=$("<div/>").addClass("ujg-esi-request-head"), $summary=$("<strong/>"), $controls=$("<div/>").addClass("ujg-esi-request-controls");
-    var $spinner=$("<span/>").addClass("ujg-esi-request-spinner").attr("aria-hidden","true").append(icon("RefreshCw"));
-    var $heading=$("<div/>").addClass("ujg-esi-request-heading").append($spinner,$summary);
+    var $rail=$("<div/>").addClass("ujg-esi-request-stages");
+    var $stageCount=$("<span/>").addClass("ujg-esi-request-stage-count");
+    var $activeCount=$("<span/>").addClass("ujg-esi-request-active-count");
+    var $track=$("<div/>").addClass("ujg-esi-request-track").attr({role:"progressbar","aria-label":"Прогресс загрузки"});
+    var $fill=$("<span/>").appendTo($track), $percent=$("<span/>").addClass("ujg-esi-request-percent");
+    var $heading=$("<div/>").addClass("ujg-esi-request-heading").append($rail,
+      $("<div/>").addClass("ujg-esi-request-meter").append($track,$percent,$stageCount,$activeCount),$summary);
+    var $totalElapsed=$("<span/>").addClass("ujg-esi-request-total-elapsed").attr("aria-label","Время загрузки");
+    $controls.append($totalElapsed);
     var $snapshot=$("<div/>").addClass("ujg-esi-request-snapshot"), $error=$("<div/>").addClass("ujg-esi-error");
-    var $details=$("<details/>").prop("open",true), $count=$("<summary/>"), $list=$("<div/>").addClass("ujg-esi-request-list").attr({role:"list","aria-label":"Все запросы загрузки"});
-    $panel.append($head.append($heading,$controls),$snapshot,$error,$details.append($count,$list));
-    var progress, callbacks={}, nodes=Object.create(null), running=Object.create(null), timer=null;
+    var detailsId="ujg-esi-request-details-" + kind;
+    var $details=$("<details/>"), $disclosure=$("<summary/>").attr({"data-request-details":"",role:"button",tabindex:0,"aria-label":"Детали загрузки","aria-expanded":"false","aria-controls":detailsId}).append($("<span/>").text("Детали"),icon("ChevronDown"));
+    var $count=$("<div/>").addClass("ujg-esi-request-count"), $list=$("<div/>").addClass("ujg-esi-request-list").attr({role:"list","aria-label":"Все запросы загрузки"});
+    var $body=$("<div/>").addClass("ujg-esi-request-details-body").attr("id",detailsId).prop("hidden",true).append($snapshot,$error,$count,$list);
+    $panel.hide().append($head.append($heading,$controls,$details.append($disclosure,$body)));
+    var progress, callbacks={}, nodes=Object.create(null), running=Object.create(null), timer=null, runId, runStartedAt, runFinishedAt, lastLocalStage="";
+    var stageNodes=Object.create(null);
     var states={queued:"В очереди",running:"Выполняется",completed:"Завершён",error:"Ошибка",cancelled:"Отменён"};
-    var stages={stories:"Истории",linked:"Связанные задачи",history:"История задачи",comments:"Комментарии",summary:"Поиск по теме"};
+    var stages={stories:"Истории",linked:"Связанные задачи",history:"История изменений",comments:"Комментарии",summary:"Поиск по теме",local:"Подготовка Excel"};
+    function disclose(open) {
+      $details.prop("open",open); $body.prop("hidden",!open); $disclosure.attr("aria-expanded",String(open));
+      if (open) Object.keys(running).forEach(function(id) { nodes[id].$elapsed.text(elapsed(running[id])); });
+    }
+    $disclosure.on("click",function(event) { event.preventDefault(); disclose(!$details.prop("open")); });
+    $disclosure.on("keydown",function(event) {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); disclose(!$details.prop("open")); }
+    });
     var prefix=kind === "activity" ? "ActivityHistory" : "RegistryLoad";
-    [["stop","X","Остановить загрузку","onStop"], ["restart","RefreshCw","Загрузить заново","onRestart"],
+    [["stop","Square","Остановить загрузку","onStop"], ["restart","RefreshCw","Загрузить заново","onRestart"],
       ["retry","RefreshCw",kind === "activity" ? "Повторить неудачные запросы" : "Повторить загрузку с начала","onRetry"]].forEach(function(control) {
       $controls.append($("<button/>").addClass("ujg-esi-icon-button ujg-esi-small-btn").attr({type:"button","data-request-control":control[0],"aria-label":control[2],title:control[2]})
-        .append(icon(control[1]),$("<span/>").text(control[2])).on("click",function() { var cb=callbacks[control[3]+prefix]; if (cb) cb(); }));
+        .append(icon(control[1])).on("click",function() { var cb=callbacks[control[3]+prefix]; if (cb) cb(); }));
     });
     function suspend() { if (timer !== null) window.clearTimeout(timer); timer=null; }
     function elapsed(row) {
@@ -39,14 +58,100 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     function tick() {
       timer=null;
-      if (!$panel[0].isConnected) return;
-      Object.keys(running).forEach(function(id) { nodes[id].$elapsed.text(elapsed(running[id])); });
-      if (Object.keys(running).length) timer=window.setTimeout(tick,1000);
+      if (!$panel[0].isConnected || !progress || progress.status !== "running") return;
+      updateElapsed();
+      if ($details.prop("open")) Object.keys(running).forEach(function(id) { nodes[id].$elapsed.text(elapsed(running[id])); });
+      timer=window.setTimeout(tick,1000);
+    }
+    function updateElapsed() {
+      var seconds=Math.max(0,Math.floor(((runFinishedAt == null ? Date.now() : runFinishedAt)-runStartedAt)/1000));
+      $totalElapsed.text(String(Math.floor(seconds/60)).padStart(2,"0")+":"+String(seconds%60).padStart(2,"0"));
+    }
+    function renderStages(rows) {
+      var localStage=progress.localStage || ((progress.status === "error" || progress.status === "cancelled") ? lastLocalStage : "");
+      var order=kind === "activity" ? ["history","comments"] : (rows.some(function(row) { return row.stage === "summary"; }) ? ["summary","stories","linked"] : ["stories","linked"]);
+      if (localStage) order.push("local");
+      var active=localStage ? "local" : kind === "activity" ? "history" : order[0];
+      rows.forEach(function(row) { if (kind !== "activity" && !localStage) active=row.stage; });
+      var failures=Array.isArray(progress.failures) ? progress.failures.length : 0;
+      order.forEach(function(stage) {
+        var stageRows=rows.filter(function(row) { return row.stage === stage; });
+        var state="queued", done=stageRows.length && stageRows.every(function(row) { return row.state === "completed"; });
+        if (stageRows.some(function(row) { return row.state === "error"; })) state="error";
+        else if (done && (kind === "activity" ? stage === "history" && stageRows.length === progress.total : stage !== active)) state="completed";
+        else if (stageRows.length || stage === active) state="running";
+        if (kind === "activity" && stage === "comments" && done && progress.status === "running") state="running";
+        if (progress.status === "cancelled" && state === "running") state="cancelled";
+        if (progress.status === "error" && state === "running") state="error";
+        var entry=stageNodes[stage];
+        if (!entry) {
+          entry=stageNodes[stage]={$node:$("<span/>").addClass("ujg-esi-request-stage").attr("data-request-stage",stage),$icon:$("<span/>").addClass("ujg-esi-request-stage-icon").attr("aria-hidden","true"),$label:$("<span/>").addClass("ujg-esi-request-stage-label"),$state:$("<span/>").addClass("ujg-esi-request-stage-status")};
+          entry.$node.append(entry.$icon,entry.$label,entry.$state).appendTo($rail);
+        }
+        entry.$node.attr("data-stage-state",state); entry.$label.text(stage === "local" ? localStage : stages[stage]);
+        entry.$state.text(" · "+states[state]);
+        if (entry.state !== state) {
+          entry.state=state; entry.$icon.empty().removeClass("ujg-esi-request-spinner");
+          if (state === "completed") entry.$icon.append(icon("Check"));
+          else if (state === "running") entry.$icon.addClass("ujg-esi-request-spinner").append(icon("RefreshCw"));
+          else if (state === "error") entry.$icon.append(icon("TriangleAlert"));
+          else entry.$icon.append(icon("ChevronRight"));
+        }
+      });
+      Object.keys(stageNodes).forEach(function(stage) { if (order.indexOf(stage) < 0) { stageNodes[stage].$node.remove(); delete stageNodes[stage]; } });
+      order.forEach(function(stage,index) {
+        var node=stageNodes[stage].$node[0], current=$rail[0].children[index];
+        if (current !== node) $rail[0].insertBefore(node,current || null);
+      });
+      // Registry denominators describe a batch, never the whole network queue.
+      var completed=0, total=null, text="";
+      if (kind === "activity") {
+        completed=Math.max(0,(Number(progress.completed) || 0)-failures);
+        if (Number.isFinite(progress.total) && progress.total > 0) total=progress.total;
+        text=total !== null ? completed+" из "+total+" задач" : completed ? "Прочитано задач: "+completed : "Чтение задач";
+        if (failures) text+=" · Ошибок: "+failures;
+      } else if (active === "local") text=localStage;
+      else {
+        var stageRows=rows.filter(function(row) { return row.stage === active; }), last=stageRows[stageRows.length-1];
+        var batchRows=[];
+        for (var index=stageRows.length-1; index>=0; index--) {
+          var page=stageRows[index];
+          if (page.batch !== last.batch) break;
+          batchRows.unshift(page);
+          // Separate API reads reuse batch numbers; each starts a new page chain at zero.
+          if (page.startAt == null || page.startAt === 0) break;
+        }
+        batchRows.forEach(function(row) {
+          if (row.state === "completed" && Number.isFinite(row.received)) completed+=row.received;
+          if (Number.isFinite(row.total) && row.total > 0) total=row.total;
+        });
+        text=total !== null ? completed+" из "+total : completed ? "Получено: "+completed : "Чтение Jira";
+      }
+      var percent=total !== null ? Math.min(100,Math.floor(completed/total*100)) : null;
+      if (percent === 100 && progress.status !== "running") percent=null;
+      $stageCount.text(text);
+      var phases=order.filter(function(stage) { return stageNodes[stage].state === progress.status; });
+      if (!phases.length) phases=[active];
+      var phaseText=phases.map(function(stage) {
+        var entry=stageNodes[stage];
+        return entry ? entry.$label.text()+entry.$state.text() : (stages[stage] || stage || "Jira")+" · "+(states[progress.status] || progress.status);
+      }).join("; ");
+      $track.toggleClass("is-indeterminate",percent === null && progress.status === "running").attr({"aria-valuemin":0,"aria-valuemax":100,"aria-valuetext":phaseText+" · "+text});
+      if (percent === null) $track.removeAttr("aria-valuenow"); else $track.attr("aria-valuenow",percent);
+      $fill.css("width",percent === null ? "" : percent+"%"); $percent.text(percent === null ? "" : percent+"%").toggle(percent !== null);
     }
     function update(value, services, snapshotAt) {
       progress=value; callbacks=services || {};
-      if (!progress) { suspend(); running=Object.create(null); $panel.hide(); return; }
-      $panel.show().attr({"data-run-id":progress.runId,"data-progress-status":progress.status});
+      if (progress) $panel.attr({"data-run-id":progress.runId,"data-progress-status":progress.status});
+      if (!progress || progress.status === "completed" || progress.status === "idle") {
+        suspend(); running=Object.create(null);
+        $panel.find(".ujg-esi-request-spinner").css("visibility","hidden"); $panel.hide(); return;
+      }
+      if (runId !== progress.runId) {
+        runId=progress.runId; runStartedAt=Date.now(); runFinishedAt=null; lastLocalStage=""; disclose(false);
+      }
+      if (progress.localStage) lastLocalStage=progress.localStage;
+      $panel.show();
       var rows=progress.rows || [], present=Object.create(null), counts={queued:0,running:0,completed:0,error:0,cancelled:0};
       running=Object.create(null);
       rows.forEach(function(row) {
@@ -64,11 +169,18 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
           (row.requested != null ? " · запрошено " + row.requested : "") + (row.received != null ? " · получено " + row.received : "") +
           (row.total != null ? " из " + row.total : "") + " · " + (states[row.state] || row.state) + (row.error ? ": " + row.error : "");
         if (entry.signature !== text) { entry.signature=text; entry.$text.text(text); entry.$row.attr("data-request-state",row.state); entry.$elapsed.text(elapsed(row)); }
-        if (row.state === "running") running[row.id]=row;
+        if (!old && row.startedAt != null) runStartedAt=Math.min(runStartedAt,row.startedAt);
+        if (!old && row.state === "running" && progress.status === "running") running[row.id]=row;
       });
       Object.keys(nodes).forEach(function(id) { if (!present[id]) { nodes[id].$row.remove(); delete nodes[id]; } });
-      $summary.text((kind === "activity" ? "История Jira" : "Чтение Jira") + " · " + (states[progress.status] || progress.status) + (progress.localStage ? " · " + progress.localStage : ""));
-      $spinner.css("visibility",progress.status === "running" ? "visible" : "hidden");
+      renderStages(rows.filter(function(row) { return row.runId == null || row.runId === progress.runId; }));
+      var activeCount=progress.status === "running" ? counts.running : 0;
+      var lastDigit=activeCount%10, lastTwo=activeCount%100;
+      var singular=lastDigit === 1 && lastTwo !== 11;
+      $activeCount.text(activeCount ? activeCount+(singular ? " запрос выполняется" : lastDigit >= 2 && lastDigit <= 4 && (lastTwo < 12 || lastTwo > 14) ? " запроса выполняются" : " запросов выполняются") : "").toggle(activeCount > 0);
+      var previousErrors=rows.filter(function(row) { return row.runId != null && row.runId !== progress.runId && row.state === "error"; }).length;
+      $summary.text(progress.status === "running" ? (previousErrors ? "Предыдущих ошибок: "+previousErrors+" · Детали" : "") : states[progress.status] || progress.status).toggle(progress.status !== "running" || previousErrors > 0);
+      $panel.find(".ujg-esi-request-spinner").css("visibility",progress.status === "running" ? "visible" : "hidden");
       $count.text("Запросов: " + rows.length + " · В очереди: " + counts.queued + " · Выполняется: " + counts.running + " · Завершено: " + counts.completed + " · Ошибок: " + counts.error + " · Отменено: " + counts.cancelled);
       $error.text(progress.error || "").toggle(!!progress.error);
       var at=Date.parse(snapshotAt), stamp="";
@@ -78,16 +190,18 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       }
       $snapshot.text(stamp ? (progress.status === "completed" ? "Снимок Jira: " : "Предыдущий снимок Jira: ") + stamp :
         kind === "registry" ? "Полный снимок нового запуска ещё не опубликован." : "Сохранённые снимки и полнота отчёта указаны ниже.");
-      $controls.find('[data-request-control="stop"]').prop("disabled",progress.status !== "running");
+      $controls.find('[data-request-control="stop"]').prop("disabled",progress.status !== "running").toggle(progress.status === "running");
       $controls.find('[data-request-control="restart"]').prop("disabled",false);
-      $controls.find('[data-request-control="retry"]').prop("disabled",progress.status === "running" || progress.status !== "error");
-      if ($panel[0].isConnected && Object.keys(running).length) {
+      $controls.find('[data-request-control="retry"]').prop("disabled",progress.status !== "error").toggle(progress.status === "error");
+      if (progress.status !== "running" && runFinishedAt == null) runFinishedAt=Date.now();
+      updateElapsed();
+      if ($panel[0].isConnected && progress.status === "running") {
         if (timer === null) timer=window.setTimeout(tick,1000);
       } else suspend();
     }
     return {mount:function($parent) { $parent.append($panel); },detach:function() { suspend(); $panel.detach(); },
       reveal:function() {
-        if (progress && $panel[0].isConnected && typeof $head[0].scrollIntoView === "function") $head[0].scrollIntoView({block:"nearest",inline:"nearest",behavior:"auto"});
+        if (progress && $panel[0].style.display !== "none" && $panel[0].isConnected && typeof $head[0].scrollIntoView === "function") $head[0].scrollIntoView({block:"nearest",inline:"nearest",behavior:"auto"});
       },
       update:update,suspend:suspend,destroy:function() { suspend(); $panel.remove(); nodes=Object.create(null); }};
   }

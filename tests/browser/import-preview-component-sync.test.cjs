@@ -18,12 +18,13 @@ test("offline component preview writes only one explicitly selected Story", asyn
     }});
   t.after(()=>dom.window.close());
   const w=dom.window,doc=w.document,query=selector=>doc.querySelector(selector);
-  async function until(check){const end=Date.now()+15000;while(!check()&&Date.now()<end)await new Promise(resolve=>setTimeout(resolve,20));
+  async function until(check, timeout=15000){const end=Date.now()+timeout;while(!check()&&Date.now()<end)await new Promise(resolve=>setTimeout(resolve,20));
     assert.ok(check(),JSON.stringify({errors:errors,progress:query(".ujg-esi-due-progress")&&query(".ujg-esi-due-progress").textContent,
       rows:doc.querySelectorAll(".ujg-esi-due-row").length,ready:doc.querySelectorAll(".ujg-esi-due-row-select:not(:disabled)").length}));}
   await until(()=>query(".ujg-esi-sync-component") && !query(".ujg-esi-sync-component").disabled);
   query(".ujg-esi-sync-component").click();
-  await until(()=>query(".ujg-esi-due-dialog") && !query(".ujg-esi-due-progress"));
+  // JSDOM computes per-cell styles across 69 mock reads; this is not a network or performance budget.
+  await until(()=>query(".ujg-esi-due-dialog") && !query(".ujg-esi-due-progress"),60000);
   assert.equal(w.componentWriteCalls.length,0);
   const ready=doc.querySelectorAll(".ujg-esi-due-row-select:not(:disabled)");
   assert.ok(ready.length>1,JSON.stringify({rows:doc.querySelectorAll(".ujg-esi-due-row").length,dialog:query(".ujg-esi-due-dialog").textContent.slice(0,700)}));

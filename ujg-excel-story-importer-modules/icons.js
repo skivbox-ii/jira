@@ -9,6 +9,8 @@ define("_ujgESI_icons", [], function() {
   nodes.ListTree = [["path",{"d":"M8 5h13"}],["path",{"d":"M13 12h8"}],["path",{"d":"M13 19h8"}],["path",{"d":"M3 10a2 2 0 0 0 2 2h3"}],["path",{"d":"M3 5v12a2 2 0 0 0 2 2h3"}]];
   nodes.ChevronsUpDown = [["path",{"d":"m7 15 5 5 5-5"}],["path",{"d":"m7 9 5-5 5 5"}]];
   nodes.Undo2 = [["path",{"d":"M9 14 4 9l5-5"}],["path",{"d":"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"}]];
+  nodes.Check = [["path",{"d":"M20 6 9 17l-5-5"}]];
+  nodes.Square = [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}]];
   return function(name) {
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     var attrs = { viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" };
