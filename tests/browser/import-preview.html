@@ -65,7 +65,12 @@ window.offlineApi = {
   createIssue: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");},
   createIssueLink: function(){window.mutationCalls++;throw new Error("Ticket writes are blocked in preview");}
 };
-window.define = function(name,deps,factory){modules[name] = name === "_ujgESI_api" ? offlineApi : factory.apply(null,deps.map(function(dep){return modules[dep];}));};
+window.define = function(name,deps,factory){
+  if(name === "_ujgESI_api" && new URLSearchParams(location.search).has("usability")) {
+    window.usabilityRealApi = factory.apply(null,deps.map(function(dep){return modules[dep];}));
+  }
+  modules[name] = name === "_ujgESI_api" ? offlineApi : factory.apply(null,deps.map(function(dep){return modules[dep];}));
+};
 window.define.amd = true;
 </script>
 <script src="/ujg-excel-story-importer.js"></script>

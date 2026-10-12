@@ -18,7 +18,8 @@ define("_ujgESI_main", [
   "_ujgESI_remarkReportLoader",
   "_ujgESI_sourceExport",
   "_ujgESI_sourceExportApi",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi) {
+  "_ujgESI_statusTransition",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi, statusTransitionModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -725,6 +726,8 @@ define("_ujgESI_main", [
       statusState: issueIsDone(issue) ? "done" : issueStatusState(issue),
       statusCategory: issueStatusCategoryKey(issue),
       done: issueIsDone(issue),
+      resolution: fields.resolution,
+      resolutiondate: fields.resolutiondate,
       assignee: issueAssigneeName(issue),
       assigneeIdentifiers: userIdentifiers(fields.assignee),
       priority: name(fields.priority),
@@ -1102,6 +1105,58 @@ define("_ujgESI_main", [
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
+    var registrySnapshotAt="", excelSnapshotAt="";
+    var registryRun = null, registryRunSequence = 0;
+    function paintRegistryProgress() {
+      if (rendering.renderRequestProgress) rendering.renderRequestProgress(state);
+    }
+    function stopRegistryRead(clear) {
+      var run=registryRun;
+      if (run && run.status === "running") {
+        run.status="cancelled";
+        run.rows.forEach(function(row) { if (row.state === "queued" || row.state === "running") { row.state="cancelled"; row.finishedAt=Date.now(); } });
+        (run.requests || []).forEach(function(request) { if (request && typeof request.abort === "function") { try { request.abort(); } catch (ignore) {} } });
+      }
+      registrySeq++; syncSeq++;
+      state.registryLoading=false; state.syncLoading=false;
+      if (clear) { registryRun=null; state.registryProgress=null; }
+      else paintRegistryProgress();
+    }
+    function beginRegistryRead(kind,retainErrors) {
+      var previous=state.registryProgress;
+      registryRun={runId:++registryRunSequence,status:"running",kind:kind,rows:retainErrors && previous ? previous.rows.filter(function(row) { return row.state === "error"; }) : [],requests:[]};
+      state.registryProgress=registryRun;
+      state.registrySnapshotAt=kind === "excel" ? excelSnapshotAt : registrySnapshotAt;
+      return registryRun;
+    }
+    function registryReadOptions(run,stage) {
+      return {expand:"changelog",stage:stage,onRequest:function(row) {
+        if (registryRun !== run || run.status !== "running") return;
+        row=Object.assign({},row,{runId:run.runId});
+        var index=run.rows.findIndex(function(item) { return item.id === row.id; });
+        if (index < 0) run.rows.push(row); else run.rows[index]=row;
+        paintRegistryProgress();
+      }};
+    }
+    function registryRead(run,read) {
+      if (registryRun !== run || run.status !== "running") { var error=new Error("Загрузка отменена"); error.name="AbortError"; return Promise.reject(error); }
+      try { var request=read(); run.requests.push(request); return promiseOf(request); } catch (error) { return Promise.reject(error); }
+    }
+    function finishRegistryRead(run,error) {
+      if (registryRun !== run || run.status !== "running") return;
+      run.status=error ? "error" : "completed"; run.requests=[];
+      run.localStage="";
+      if (error) run.error=searchErrorText(error);
+      else {
+        state.registrySnapshotAt=new Date().toISOString();
+        if (run.kind === "excel") excelSnapshotAt=state.registrySnapshotAt; else registrySnapshotAt=state.registrySnapshotAt;
+      }
+    }
+    function restartRegistryRead(retry) {
+      var kind=registryRun && registryRun.kind || (state.viewMode === "excel" ? "excel" : "jira");
+      stopRegistryRead(false);
+      if (kind === "excel") onSyncJira(retry); else onLoadRegistry(retry);
+    }
     var fileReadSeq = 0;
     var epicSeq = 0;
     var dialogEpicSeq = 0;
@@ -1168,13 +1223,66 @@ define("_ujgESI_main", [
     }}) : null;
     state.componentSync = componentSync ? componentSync.getState() : null;
 
+    function statusCanOperate() {
+      return !(state.loading || state.registryLoading || state.syncLoading || createInFlight || state.createDialog ||
+        state.mappingEditorOpen || state.dueDateSync && state.dueDateSync.open || state.componentSync && state.componentSync.open);
+    }
+    function statusScope() {
+      return JSON.stringify([state.projectKey,state.epicKey,state.viewMode,state.preferencesStorageKey,state.sourceFileName]);
+    }
+    var statusTransition = statusTransitionModule ? statusTransitionModule.create({api:api,scope:statusScope,canOperate:statusCanOperate,
+      onChange:function(snapshot) {
+        state.statusTransition=snapshot;
+        if (rendering.renderStatusTransition) rendering.renderStatusTransition(state); else render();
+      },onSnapshot:function(issue) {
+        var key=issueKey(issue), details=issueDetails(issue);
+        // Cancel outstanding history accepts before publishing the confirmed readback.
+        invalidateActivityHistory();
+        [excelRows,registryRows].forEach(function(rows) { rows.forEach(function(row) {
+          if (issueKeyFromRow(row) === key) {
+            row.storyDetails=Object.assign({},details);
+            if (rows === registryRows) {
+              row.summary=details.summary;
+              row.ownerIdentifiers=details.assigneeIdentifiers.slice();
+              row.ownerAssignee=issue.fields.assignee;
+              row.ownerAssigneeId="";
+              row.ownerAssigneeLabel=details.assignee;
+              row.sourceColumns=Object.assign({},row.sourceColumns,{"Ответственный":details.assignee,"Исполнитель в Jira":details.assignee});
+            }
+          }
+          ["childStatuses","createdChildren"].forEach(function(field) {
+            if (!Array.isArray(row[field])) return;
+            row[field]=row[field].map(function(child) {
+              return normalizeIssueKey(child.key) === key ? Object.assign({},child,details) : child;
+            });
+          });
+          row.statusTitle=issueChildStatusTitleFromRows(row.childStatuses || []);
+        }); });
+        render();
+      }
+    }) : null;
+    state.statusTransition=statusTransition ? statusTransition.getState() : null;
+    function onOpenStatusTransition(entry) {
+      var key=entry && entry.key;
+      if (!statusTransition || state.statusTransition.open || !statusTransitionModule.validKey(key) || !statusCanOperate()) return false;
+      var matches=state.rows.some(function(row) {
+        return issueKeyFromRow(row) === key.toUpperCase() || (row.childStatuses || []).some(function(child) { return normalizeIssueKey(child.key) === key.toUpperCase(); });
+      });
+      if (!matches) return false;
+      closeUserPicker(); closeEpicPicker();
+      return statusTransition.open(key);
+    }
+
     function closeDueDateSyncForContextChange() {
+      if (state.statusTransition && state.statusTransition.running) return false;
+      if (statusTransition && state.statusTransition.open && statusTransition.close() === false) return false;
       if (state.componentSync && state.componentSync.running || state.dueDateSync && state.dueDateSync.running) return false;
       if (componentSync && state.componentSync.open && componentSync.close() === false) return false;
       return !dueDateSync || !state.dueDateSync.open || dueDateSync.close() !== false;
     }
 
     function onOpenDueDateSync() {
+      if (state.statusTransition && state.statusTransition.open) return;
       if (!dueDateSync || state.dueDateSync.open || state.componentSync && state.componentSync.open || state.viewMode !== "excel" || !state.rows.length ||
           state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
       closeUserPicker();
@@ -1183,6 +1291,7 @@ define("_ujgESI_main", [
     }
 
     function onOpenComponentSync() {
+      if (state.statusTransition && state.statusTransition.open) return;
       if (!componentSync || state.componentSync.open || state.dueDateSync && state.dueDateSync.open ||
           state.viewMode !== "excel" || !state.rows.length || !state.projectKey || state.loading ||
           state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
@@ -1201,6 +1310,7 @@ define("_ujgESI_main", [
     }
 
     function onLoadActivityHistory(options) {
+      if (state.statusTransition && (state.statusTransition.running || state.statusTransition.loading)) return;
       if (state.loading || state.syncLoading || state.registryLoading) return;
       var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
       if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
@@ -1225,9 +1335,17 @@ define("_ujgESI_main", [
         });
       });
       var keys = Object.keys(pending);
-      if (!keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
+      if (opts.force || !keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
+      if (opts.keys) keys=keys.filter(function(key) { return opts.keys.indexOf(key) >= 0; });
       if (opts.excludeKeys) keys = keys.filter(function(key) { return opts.excludeKeys.indexOf(key) < 0; });
-      if (!keys.length && !state.activityLoading) return;
+      if (!keys.length) {
+        if (state.activityLoading) {
+          state.activityLoading=false;
+          activityLoader.stop(); clearActivityProgressPaint();
+          if (rendering.renderActivityProgress) rendering.renderActivityProgress(state);
+        }
+        return;
+      }
       if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
         state.activityError = "Загрузка истории Jira недоступна.";
         render();
@@ -1236,7 +1354,8 @@ define("_ujgESI_main", [
       state.activityLoading = true;
       state.activityPreviousFailures = state.activityError ? state.activityPreviousFailures || (state.activityProgress && (state.activityProgress.failures || []).slice()) : null;
       activityTargets = targets;
-      activityLoader.select(keys);
+      activityLoader.select(keys,opts.retry === true);
+      if (!options && rendering.revealActivityRequests) rendering.revealActivityRequests(state);
     }
 
     function hasOwn(obj, key) {
@@ -1398,6 +1517,9 @@ define("_ujgESI_main", [
     }
 
     function resetExportState() {
+      stopRegistryRead(true);
+      excelSnapshotAt="";
+      if (state.viewMode === "excel") state.registrySnapshotAt="";
       syncSeq += 1;
       state.syncLoading = false;
       state.exportBuffer = null;
@@ -1532,15 +1654,15 @@ define("_ujgESI_main", [
       return keys.length === 1 ? keys[0] : "";
     }
 
-    function tryMatchRowsBySummary(active) {
-      var rows = state.rows || [];
+    function tryMatchRowsBySummary(active, stagedRows, run) {
+      var rows = stagedRows || state.rows || [];
       var projectKey = projectKeyForSummarySearch();
       var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
       var chain = Promise.resolve();
 
       function matchByCandidates(row, candidates, index) {
         if ((active && !active()) || index >= candidates.length) return Promise.resolve(null);
-        return promiseOf(api.searchIssueBySummary(projectKey, candidates[index])).then(function(data) {
+        return registryRead(run,function() { return api.searchIssueBySummary(projectKey, candidates[index],registryReadOptions(run,"summary")); }).then(function(data) {
           if (active && !active()) return null;
           var issue = bestSummaryIssueMatch(data, row.summary);
           if (issue) return issue;
@@ -2435,6 +2557,9 @@ define("_ujgESI_main", [
     }
 
     function invalidateRegistry() {
+      stopRegistryRead(true);
+      registrySnapshotAt="";
+      if (state.viewMode === "jira") state.registrySnapshotAt="";
       registrySeq += 1;
       registryRows = [];
       registryLoaded = false;
@@ -2448,6 +2573,7 @@ define("_ujgESI_main", [
       var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
       if (!next || next === state.viewMode) return;
       if (!closeDueDateSyncForContextChange()) return;
+      stopRegistryRead(true);
       invalidateActivityHistory();
       if (state.viewMode === "excel") excelRows = state.rows;
       if (state.viewMode === "jira") registryRows = state.rows;
@@ -2469,7 +2595,8 @@ define("_ujgESI_main", [
       render();
     }
 
-    function onLoadRegistry() {
+    function onLoadRegistry(retry) {
+      if (state.statusTransition && state.statusTransition.open && !closeDueDateSyncForContextChange()) return;
       var project = state.projectKey;
       var epic = state.epicKey;
       var seq;
@@ -2485,7 +2612,7 @@ define("_ujgESI_main", [
         return;
       }
       seq = ++registrySeq;
-      registryLoaded = false;
+      var run=beginRegistryRead("jira",retry === true);
       invalidateActivityHistory();
       state.registryLoading = true;
       state.registryError = "";
@@ -2493,7 +2620,7 @@ define("_ujgESI_main", [
       state.createDialog = null;
       closeUserPicker();
       render();
-      promiseOf(api.getProjectIssues(project, epic)).then(function(data) {
+      registryRead(run,function() { return api.getProjectIssues(project, epic,registryReadOptions(run,"stories")); }).then(function(data) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return null;
         var fetched = normalizeIssues(data);
         var parents = fetched.filter(isStoryIssue);
@@ -2508,7 +2635,7 @@ define("_ujgESI_main", [
           (function(batch) {
             chain = chain.then(function() {
               if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
-              return promiseOf(api.getIssuesByKeys(copyArrayForHost(batch), { expand: "changelog" })).then(function(childData) {
+              return registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(batch),registryReadOptions(run,"linked")); }).then(function(childData) {
                 var found = issueMapByKey(childData);
                 Object.keys(found).forEach(function(key) { children[key] = found[key]; });
               });
@@ -2543,12 +2670,14 @@ define("_ujgESI_main", [
         state.registryError = "";
         state.registryWarning = data.warning;
         registryLoaded = true;
+        finishRegistryRead(run);
         render();
         if (state.reportView === "activity") onLoadActivityHistory({onlyIncomplete:true});
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
         state.registryLoading = false;
         state.registryError = "Не удалось загрузить Jira: " + searchErrorText(err);
+        finishRegistryRead(run,err);
         render();
       });
     }
@@ -2613,6 +2742,7 @@ define("_ujgESI_main", [
       var seq = ++fileReadSeq;
       if (createInFlight) return;
       if (!closeDueDateSyncForContextChange()) return;
+      stopRegistryRead(true); invalidateActivityHistory();
       state.loading = true;
       state.error = "";
       state.pendingImport = null;
@@ -3060,10 +3190,16 @@ define("_ujgESI_main", [
       render();
     }
 
-    function onSyncJira() {
+    function onSyncJira(retry) {
       if (state.viewMode !== "excel") return;
       if (!closeDueDateSyncForContextChange()) return;
       var rows = state.rows;
+      var stagedRows=rows.map(function(row) {
+        var out=copyRow(row);
+        out.sourceColumns=Object.assign({},row.sourceColumns);
+        out.createdChildren=(row.createdChildren || []).map(function(child) { return Object.assign({},child); });
+        return out;
+      });
       var seq;
       function active() { return seq === syncSeq && state.viewMode === "excel" && state.rows === rows; }
       if (state.syncLoading) return;
@@ -3094,22 +3230,21 @@ define("_ujgESI_main", [
       invalidateActivityHistory();
       state.syncLoading = true;
       seq = ++syncSeq;
+      var run=beginRegistryRead("excel",retry === true);
       state.syncError = "";
       state.syncSummary = "";
-      state.exportBuffer = null;
-      state.exportFileName = "";
       closeUserPicker();
       render();
-      promiseOf(tryMatchRowsBySummary(active)).then(function() {
+      promiseOf(tryMatchRowsBySummary(active,stagedRows,run)).then(function() {
         if (!active()) return null;
-        var keys = uniqueKeys(state.rows);
+        var keys = uniqueKeys(stagedRows);
         if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
-        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys), { expand: "changelog" }));
+        return registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(keys),registryReadOptions(run,"stories")); });
       }).then(function(data) {
         if (!active() || !data) return null;
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
-        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys), { expand: "changelog" })) : Promise.resolve({ issues: [] });
+        var childrenPromise = childKeys.length ? registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(childKeys),registryReadOptions(run,"linked")); }) : Promise.resolve({ issues: [] });
         return childrenPromise.then(function(childData) {
           return {
             data: data,
@@ -3121,9 +3256,13 @@ define("_ujgESI_main", [
         var issues = issueMapByKey(syncData.data);
         var childIssues = syncData.childIssues || {};
         var synced = 0;
-        (state.rows || []).forEach(function(row) {
+        stagedRows.forEach(function(row) {
           var key = issueKeyFromRow(row);
-          row.createdChildren = mergeCreatedChildren(row.createdChildren, knownCreatedChildrenForKey(key));
+          var known=(createdChildrenByParent[key] || []).map(function(child) { return Object.assign({},child); });
+          excelRows.concat(registryRows).forEach(function(sourceRow) {
+            if (issueKeyFromRow(sourceRow) === key) known=mergeCreatedChildren(known,(sourceRow.createdChildren || []).map(function(child) { return Object.assign({},child); }));
+          });
+          row.createdChildren = mergeCreatedChildren(row.createdChildren, known);
           row.childStatuses = mergeKnownChildStatuses([], row.createdChildren);
           row.storyDetails = null;
           row.statusTitle = "";
@@ -3156,29 +3295,33 @@ define("_ujgESI_main", [
           }
           synced += 1;
         });
+        run.localStage="Подготовка Excel"; paintRegistryProgress();
         return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {
           sheetName: state.parseMeta && state.parseMeta.sheetName,
           headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
           boundHeaderColumns: state.sourceColumnSettings && state.parseMeta ? state.parseMeta.headerColumns : undefined,
-          rows: patchRowsForExport(state.rows, sourceImportSettings()),
+          rows: patchRowsForExport(stagedRows, sourceImportSettings()),
         })).then(function(buffer) {
           if (!active()) return;
+          stagedRows.forEach(function(row,index) { Object.assign(rows[index],row); });
+          excelRows=rows; state.rows=excelRows;
+          run.localStage="";
           state.exportBuffer = buffer;
           state.exportFileName = syncedFileName(state.sourceFileName);
           state.syncLoading = false;
           state.syncError = "";
           state.syncSummary = syncSummaryText(synced);
+          finishRegistryRead(run);
           render();
         });
       }).then(null,
         function(err) {
           if (!active()) return;
           state.syncLoading = false;
-          state.exportBuffer = null;
-          state.exportFileName = "";
           state.syncError = "Не удалось синхронизировать Jira: " + searchErrorText(err);
           state.syncSummary = "";
+          finishRegistryRead(run,err);
           render();
         }
       );
@@ -4132,6 +4275,12 @@ define("_ujgESI_main", [
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
       onOpenDueDateSync: onOpenDueDateSync,
+      onOpenStatusTransition: onOpenStatusTransition,
+      onCloseStatusTransition: function() { return statusTransition && statusTransition.close(); },
+      onSelectStatusTransition: function(id) { return statusTransition && statusTransition.select(id); },
+      onApplyStatusTransition: function() { return statusTransition && statusTransition.apply(); },
+      onRetryStatusTransition: function() { return statusTransition && statusTransition.retry(); },
+      onRefreshStatusTransition: function() { return statusTransition && statusTransition.refresh(); },
       onOpenComponentSync: onOpenComponentSync,
       onCloseComponentSync: function() { if (componentSync) componentSync.close(); },
       onSelectComponentSyncRow: function(id, selected) { if (componentSync) componentSync.select(id,selected); },
@@ -4149,7 +4298,27 @@ define("_ujgESI_main", [
       onCancelColumnImport: onCancelColumnImport,
       onConfirmColumnImport: function() { commitPendingImport(true); },
       onLoadRegistry: onLoadRegistry,
+      onStopRegistryLoad:function() { stopRegistryRead(false); render(); },
+      onRestartRegistryLoad:function() { restartRegistryRead(false); },
+      onRetryRegistryLoad:function() { restartRegistryRead(true); },
       onLoadActivityHistory: onLoadActivityHistory,
+      onStopActivityHistory:function() {
+        state.activityLoading=false;
+        state.activityError="Загрузка остановлена; показаны сохранённые данные, обновление частичное.";
+        activityLoader.stop(); clearActivityProgressPaint(); render();
+      },
+      onRestartActivityHistory:function() {
+        activityLoader.cancel(); clearActivityProgressPaint(); state.activityLoading=false;
+        onLoadActivityHistory({force:true});
+      },
+      onRetryActivityHistory:function() {
+        var failures=state.activityProgress && state.activityProgress.failures || [];
+        if (!failures.length) return;
+        onLoadActivityHistory({force:true,retry:true,keys:failures.map(function(item) { return item.key; })});
+      },
+      onSuspendRequestLoads:function() {
+        stopRegistryRead(false); activityLoader.stop(); clearActivityProgressPaint(); state.activityLoading=false;
+      },
       onActivityDateChange: function(date) {
         activityDate = date;
         if (state.reportView === "activity" && state.viewMode === "jira") onLoadActivityHistory({onlyIncomplete:true,date:date});

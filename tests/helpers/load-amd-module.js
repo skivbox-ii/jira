@@ -27,6 +27,8 @@ module.exports = function loadAmdModule(filePath, deps, extraGlobals) {
             }
             exported = factory.apply(null, (names || []).map(function(dep) {
                 if (!Object.prototype.hasOwnProperty.call(deps, dep)) {
+                    // Legacy importer harnesses do not exercise the optional status dialog.
+                    if (dep === "_ujgESI_statusTransition" || dep === "_ujgESI_statusTransitionUi") return null;
                     throw new Error("Missing dependency: " + dep);
                 }
                 return deps[dep];

@@ -160,3 +160,47 @@ test("obsolete non-abortable response does not repaint unchanged unfinished prog
   x.requests[1].resolve("a");x.requests[2].resolve("b");await flush();
   assert.equal(x.completed.length,1);
 });
+test("Stop exposes cancelled queued/read rows; restart isolates late values and retry retains errors",async()=>{
+  const x=setup();x.loader.select(["A","B","C","D"]);await flush();
+  assert.equal(x.progress.at(-1).rows.length,4);assert.equal(x.progress.at(-1).rows.filter(r=>r.state==='running').length,3);
+  const runId=x.progress.at(-1).runId;
+  x.loader.stop();assert.equal(x.progress.at(-1).status,'cancelled');assert.equal(x.progress.at(-1).rows.filter(r=>r.state==='cancelled').length,4);
+  assert.equal(x.progress.at(-1).runId,runId);assert.equal(x.progress.at(-1).total,4);
+  x.loader.restart();await flush();x.requests[0].resolve('late');x.requests[3].reject(new Error('offline'));x.requests[4].resolve('b');x.requests[5].resolve('c');await flush();
+  x.requests[6].resolve('d');await flush();assert.equal(x.accepted.some(v=>v[1]==='late'),false);
+  assert.equal(x.progress.at(-1).status,'error');x.loader.retry();await flush();
+  assert.equal(x.calls.at(-1),'A');assert.ok(x.progress.at(-1).rows.some(r=>r.state==='error'));
+  x.requests[7].resolve('a');await flush();assert.equal(x.progress.at(-1).status,'completed');
+});
+test("comment pages expose actual offsets and counts separately from issue reads",async()=>{
+  const x=commentsHarness({startAt:0,total:2,comments:[]},(_key,startAt)=>Promise.resolve({startAt,total:2,comments:[{id:String(startAt)}]}));
+  x.loader.select(['P-1']);await flush();await flush();
+  const rows=x.completed[0].rows;assert.deepEqual(Array.from(rows,r=>r.stage),['history','comments','comments']);
+  assert.deepEqual(Array.from(rows.filter(r=>r.stage==='comments'),r=>r.startAt),[0,1]);assert.equal(rows.at(-1).received,1);
+  assert.ok(rows.every(r=>r.state==='completed'&&r.finishedAt>=r.startedAt));
+});
+test("date reselection retains every comment request belonging to the shared in-flight issue",async()=>{
+  const pending=[];
+  const x=commentsHarness({startAt:0,total:3,comments:[]},(_key,startAt)=>
+    startAt===0 ? Promise.resolve({startAt:0,total:3,comments:[{id:'a'}]}) :
+      new Promise(resolve=>pending.push({startAt,resolve})));
+  x.loader.select(['P-1']);await flush();await flush();
+  const first=x.loader.getState(), firstRows=Array.from(first.rows), firstIds=firstRows.map(row=>row.id);
+  assert.deepEqual(firstRows.map(row=>[row.stage,row.startAt,row.state]),[
+    ['history',undefined,'completed'],['comments',0,'completed'],['comments',1,'running']]);
+  x.loader.select(['P-1']);
+  const reselected=x.loader.getState();
+  assert.deepEqual(Array.from(reselected.rows,row=>row.id),firstIds);
+  assert.ok(reselected.rows.every(row=>row.runId===reselected.runId),'Retained requests belong to the current selection');
+  assert.ok(reselected.rows.every((row,index)=>row===firstRows[index]),'Retain the existing request records');
+  pending[0].resolve({startAt:1,total:3,comments:[{id:'b'}]});await flush();await flush();
+  const allIds=Array.from(x.loader.getState().rows,row=>row.id);
+  x.loader.select(['P-1']);
+  assert.deepEqual(Array.from(x.loader.getState().rows,row=>row.id),allIds);
+  pending[1].resolve({startAt:2,total:3,comments:[{id:'c'}]});await flush();await flush();
+  assert.deepEqual(x.calls,[['P-1',0],['P-1',1],['P-1',2]]);
+  assert.equal(x.accepted.length,1);assert.equal(x.completed.length,1);
+  assert.deepEqual(Array.from(x.completed[0].rows,row=>row.id),allIds);
+  assert.ok(x.completed[0].rows.every(row=>row.state==='completed'&&row.runId===x.completed[0].runId));
+  assert.equal(x.accepted[0].fields.comment.comments.length,3);
+});

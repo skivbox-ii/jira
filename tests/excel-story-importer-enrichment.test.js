@@ -36,6 +36,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       init: (_container, callbacks) => { app.callbacks = callbacks; },
       render: state => { app.state = state; app.renders = (app.renders || 0) + 1; },
       renderActivityProgress: state => { app.state = state; app.progressRenders = (app.progressRenders || 0) + 1; return true; },
+      revealActivityRequests: state => { app.revealedRuns = app.revealedRuns || []; app.revealedRuns.push(state.activityProgress.runId); },
     },
     _ujgESI_teams: null,
     _ujgESI_dueDateSync: null, _ujgESI_componentSync: null, _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity: { capture: issue => ({ key: issue.key, capturedAt:new Date().toISOString(), complete: !!issue.changelog && issue.changelog.total === issue.changelog.histories.length, histories: issue.changelog && issue.changelog.histories, comments:{complete:true,total:0,entries:[]} }) },
@@ -134,7 +135,8 @@ test("Dynamics automatically enriches missing history after registry load with p
   await flush(); await flush();
   assert.deepEqual(reads,["TEST-1"]);
   assert.equal(app.state.activityLoading,true);
-  assert.deepEqual(plain(app.state.activityProgress),{completed:0,total:1,activeKeys:["TEST-1"],queued:0,failures:[]});
+  const {completed,total,activeKeys,queued,failures}=app.state.activityProgress;
+  assert.deepEqual(plain({completed,total,activeKeys,queued,failures}),{completed:0,total:1,activeKeys:["TEST-1"],queued:0,failures:[]});
   app.callbacks.onReportViewChange("activity");
   app.callbacks.onActivityDateChange("2026-09-24");
   await flush();
@@ -143,7 +145,9 @@ test("Dynamics automatically enriches missing history after registry load with p
   await flush(); await flush();
   assert.equal(app.state.rows[0].storyDetails.activity.complete,true);
   assert.equal(app.state.activityLoading,false);
-  assert.deepEqual(plain(app.state.activityProgress),{completed:1,total:1,activeKeys:[],queued:0,failures:[]});
+  const finished=app.state.activityProgress;
+  assert.deepEqual(plain({completed:finished.completed,total:finished.total,activeKeys:finished.activeKeys,queued:finished.queued,failures:finished.failures}),{completed:1,total:1,activeKeys:[],queued:0,failures:[]});
+  assert.equal(finished.status,"completed");
   app.state.rows[0].storyDetails.activity.capturedAt="2026-09-25T08:00:00Z";
   app.state.rows[0].childStatuses[0].activity.capturedAt="2026-09-25T08:00:00Z";
   app.callbacks.onActivityDateChange("2026-09-23");
@@ -242,6 +246,38 @@ test("history progress updates do not rerender the report after each accepted sn
   assert.equal(app.state.activityProgress.completed,1);
   app.callbacks.onReportViewChange("registry");
   requests.slice(1).forEach(r=>r.resolve({key:r.key,fields:{}}));await flush();
+});
+test("no-op date selection preserves the last real request log and cancels now-unneeded queued history",async()=>{
+  const requests=[],parents=Array.from({length:4},(_,i)=>({key:"TEST-"+(i+1),fields:{issuetype:{name:"Story"}}}));
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:parents}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:key=>new Promise(resolve=>requests.push({key,resolve}))
+  });
+  app.callbacks.onProjectChange("TEST");app.callbacks.onReportViewChange("activity");await flush();await flush();
+  const before=app.state.activityProgress,ids=before.rows.map(row=>row.id);
+  app.state.rows.forEach(row=>row.storyDetails.activity={capturedAt:"2026-10-01T10:00:00Z",complete:true,comments:{complete:true}});
+  app.callbacks.onActivityDateChange("2026-09-24");
+  assert.deepEqual(app.state.activityProgress.rows.map(row=>row.id),ids);assert.equal(app.state.activityProgress.runId,before.runId);
+  assert.equal(app.state.activityLoading,false);
+  requests.forEach(request=>request.resolve({key:request.key,fields:{},changelog:{total:0,histories:[]}}));await flush();
+  assert.equal(requests.length,3,"No fourth request after the selected day is already covered");
+  const retained=app.state.activityProgress;app.callbacks.onActivityDateChange("2026-09-23");assert.equal(app.state.activityProgress,retained);
+});
+test("only explicit history refresh reveals request controls; automatic loads, dates and progress do not scroll",async()=>{
+  const requests=[],parent={key:'TEST-1',fields:{issuetype:{name:'Story'}}};
+  const app=await loadImporter([],{
+    getProjectIssues:()=>Promise.resolve({issues:[parent]}),getIssuesByKeys:()=>Promise.resolve({issues:[]}),
+    getIssueWithHistory:()=>new Promise(resolve=>requests.push(resolve))
+  });
+  app.callbacks.onProjectChange('TEST');app.callbacks.onReportViewChange('activity');await flush();await flush();
+  assert.equal((app.revealedRuns || []).length,0);
+  requests[0]({...parent,changelog:{total:0,histories:[]}});await flush();await flush();
+  assert.equal((app.revealedRuns || []).length,0);
+  app.callbacks.onLoadActivityHistory();await flush();
+  assert.deepEqual(app.revealedRuns,[app.state.activityProgress.runId]);
+  app.callbacks.onActivityDateChange('2026-09-24');await flush();
+  requests[1]({...parent,changelog:{total:0,histories:[]}});await flush();await flush();
+  assert.equal(app.revealedRuns.length,1);
 });
 
 test("status-since retains the real transition time for same-second Jira timestamp skew only", async () => {
@@ -497,8 +533,8 @@ test("explicit sync enriches Story and child fields without extra requests or is
   await flush();
   await flush();
   assert.deepEqual(calls, [
-    { keys: ["TEST-1"], options: { expand: "changelog" } },
-    { keys: ["TEST-2"], options: { expand: "changelog" } },
+    { keys: ["TEST-1"], options: { expand: "changelog", stage:"stories" } },
+    { keys: ["TEST-2"], options: { expand: "changelog", stage:"linked" } },
   ]);
   assert.equal(app.state.syncError, "");
   assert.deepEqual(plain(row.storyDetails), {
@@ -677,7 +713,7 @@ test("API serializes POST search expand as an array only when requested", async 
   assert.equal(calls[0].type, "POST");
   const body = JSON.parse(calls[0].data);
   assert.deepEqual(body.expand, ["changelog"]);
-  assert.equal(body.jql, "key in (TEST-1)");
+  assert.equal(body.jql, "key in (TEST-1) ORDER BY key ASC");
   assert.equal(body.maxResults, 1);
   for (const field of ["summary", "description", "status", "assignee", "priority", "issuetype", "updated", "created", "issuelinks", "resolution", "resolutiondate", "customfield_42", "customfield_10020", "customfield_10007"]) {
     assert.ok(body.fields.includes(field), field);

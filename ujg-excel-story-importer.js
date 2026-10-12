@@ -1451,6 +1451,142 @@ define("_ujgESI_componentSync", [], function() {
   return {create:create};
 });
 
+/* === Module: status-transition.js === */
+define("_ujgESI_statusTransition", [], function() {
+  "use strict";
+  function validKey(key) { return typeof key === "string" && /^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(key); }
+  function validId(id) { return typeof id === "string" && /^[1-9][0-9]*$/.test(id); }
+  function object(value) { return !!value && typeof value === "object" && !Array.isArray(value); }
+  function transitions(data) {
+    if (!data || !Array.isArray(data.transitions)) throw new Error("unknown-transitions");
+    var seen = Object.create(null);
+    return data.transitions.map(function(t) {
+      if (!object(t) || !validId(t.id) || seen[t.id] || typeof t.name !== "string" || !t.name.trim() ||
+          !object(t.to) || typeof t.to.name !== "string" || !t.to.name.trim() || !validId(String(t.to.id || ""))) throw new Error("invalid-transition");
+      seen[t.id] = true;
+      var known = object(t.fields);
+      var fields = known ? Object.keys(t.fields).map(function(key) {
+        var field = t.fields[key];
+        if (!object(field) || typeof field.name !== "string" || !field.name.trim() || typeof field.required !== "boolean") known = false;
+        return {name:object(field) && typeof field.name === "string" && field.name.trim() ? field.name : key,required:!!(field && field.required)};
+      }) : [];
+      return {id:t.id,name:t.name,target:t.to.name,targetId:String(t.to.id),fields:fields,simple:known && !fields.length,
+        hint:!known ? "Метаданные полей неполные; откройте карточку Jira" : fields.length ? "Переход требует полей в Jira" : "Без дополнительных полей"};
+    });
+  }
+  function create(options) {
+    var api=options.api, generation=0, request=null, identity=null, scope=null;
+    var retained=Object.create(null);
+    var state={open:false,loading:false,running:false,key:null,transitions:[],selectedId:null,outcome:null,message:""};
+    function snapshot() { return JSON.parse(JSON.stringify(state)); }
+    function notify() { if (options.onChange) options.onChange(snapshot()); }
+    function allowed() { return !options.canOperate || options.canOperate(); }
+    function currentScope() { return options.scope ? options.scope() : ""; }
+    function active(token) { return state.open && token === generation && scope === currentScope(); }
+    function abort() { if (request && typeof request.abort === "function") request.abort(); request=null; }
+    function errorMessage(prefix, error) {
+      var status=error && error.status;
+      return prefix + (typeof status === "number" && status >= 100 && status <= 599 ? " (HTTP " + status + ")" : "");
+    }
+    function load() {
+      if (retained[identity]) return refresh();
+      if (!state.open || state.running || !allowed() || scope !== currentScope()) return false;
+      abort(); var token=++generation;
+      state.loading=true; state.selectedId=null; state.message="Чтение доступных переходов…"; notify();
+      try { request=api.getIssueTransitions(state.key); } catch (e) { request=Promise.reject(e); }
+      return Promise.resolve(request).then(function(data) {
+        if (!active(token)) return;
+        state.transitions=transitions(data); state.outcome=state.transitions.length ? "ready" : "empty";
+        state.message=state.transitions.length ? "" : "Нет доступных переходов для текущего пользователя";
+      }).catch(function(error) {
+        if (!active(token)) return;
+        state.transitions=[]; state.outcome="load-failed"; state.message=errorMessage("Не удалось прочитать доступные переходы Jira",error);
+      }).then(function() { if (active(token)) { request=null; state.loading=false; notify(); } });
+    }
+    function open(key) {
+      if (state.running || !validKey(key) || !allowed()) return false;
+      abort(); ++generation; scope=currentScope(); key=key.toUpperCase(); identity=key;
+      state={open:true,loading:false,running:false,key:key,transitions:[],selectedId:null,outcome:null,message:""};
+      if (retained[identity]) { state.outcome=retained[identity]; state.message=state.outcome === "unconfirmed" ? "Результат записи не подтверждён. Обновите данные или откройте Jira; повторная запись заблокирована" : "Переход выполнен, но обновить данные не удалось. Повторите чтение"; notify(); return Promise.resolve(); }
+      return load();
+    }
+    function close() {
+      if (state.running) return false;
+      ++generation; abort(); state.open=false; state.loading=false; state.selectedId=null; notify(); return true;
+    }
+    function select(id) {
+      if (!state.open || state.loading || state.running || retained[identity] || scope !== currentScope()) return false;
+      if (!state.transitions.some(function(t) { return t.id === id; })) return false;
+      state.selectedId=id; notify(); return true;
+    }
+    function readback(token, uncertain) {
+      try { request=api.getIssueWithHistory(state.key); } catch (e) { request=Promise.reject(e); }
+      return Promise.resolve(request).then(function(issue) {
+        if (!active(token)) return;
+        var f=issue && issue.fields;
+        if (!validKey(issue && issue.key) || issue.key.toUpperCase() !== state.key || !object(f) || !object(f.status) ||
+            typeof f.status.name !== "string" || !f.status.name.trim() ||
+            !["assignee","resolution","updated"].every(function(name) { return Object.prototype.hasOwnProperty.call(f,name); }) ||
+            !object(issue.changelog) || !Array.isArray(issue.changelog.histories)) throw new Error("incomplete-readback");
+        if (options.onSnapshot) options.onSnapshot(issue);
+        state.outcome=uncertain ? "unconfirmed" : "success";
+        state.message=uncertain ? "Данные обновлены. Результат записи не подтверждён; проверьте карточку Jira. Повторная запись заблокирована" : "Переход выполнен. Данные Jira обновлены";
+        if (!uncertain) delete retained[identity];
+      }).catch(function(error) {
+        if (!active(token)) return;
+        state.outcome=uncertain ? "unconfirmed" : "refresh-failed"; retained[identity]=state.outcome;
+        state.message=errorMessage(uncertain ? "Результат записи не подтверждён; не удалось обновить данные. Повторите чтение" : "Переход выполнен, но обновить данные не удалось. Повторите чтение",error);
+      });
+    }
+    function refresh() {
+      if (!state.open || state.running || state.loading || !allowed() || scope !== currentScope() || !retained[identity]) return false;
+      var token=++generation, uncertain=retained[identity] === "unconfirmed";
+      state.loading=true; notify();
+      return readback(token,uncertain).then(function() { if (active(token)) { request=null; state.loading=false; notify(); } });
+    }
+    function apply() {
+      var chosen=state.transitions.find(function(t) { return t.id === state.selectedId; });
+      if (!state.open || state.loading || state.running || !allowed() || scope !== currentScope() || retained[identity] ||
+          state.outcome === "success" || !chosen || !chosen.simple) return false;
+      var token=generation, key=state.key;
+      state.running=true; state.message="Проверка перехода…"; notify();
+      try { request=api.getIssueTransitions(key); } catch (e) { request=Promise.reject(e); }
+      return Promise.resolve(request).then(function(data) {
+        if (!active(token) || !allowed()) return;
+        var fresh=transitions(data), now=fresh.find(function(t) { return t.id === chosen.id; });
+        state.transitions=fresh;
+        if (!now || !now.simple || JSON.stringify(now) !== JSON.stringify(chosen)) {
+          state.selectedId=null; state.outcome="changed"; state.message="Переход изменился или недоступен. Выберите переход заново"; return;
+        }
+        request=null; state.message="Выполнение перехода…"; state.selectedId=null; notify();
+        // Persist the uncertain result before invoking POST, including synchronous transport failures.
+        retained[identity]="unconfirmed";
+        var write;
+        try { write=api.transitionIssue(key,chosen.id); } catch (e) { write=Promise.reject(e); }
+        return Promise.resolve(write).then(function() {
+          retained[identity]="refresh-failed";
+          if (active(token)) return readback(token,false);
+        },function(error) {
+          // Timeouts and unfamiliar proxy responses do not prove the write was rejected.
+          var rejected=error && [400,401,403,404,405,409,422].indexOf(error.status) >= 0;
+          if (rejected) delete retained[identity];
+          if (!active(token)) return;
+          state.outcome=rejected ? "rejected" : "unconfirmed";
+          state.message=errorMessage(rejected ? "Jira отклонила переход. Выберите переход заново" : "Результат записи не подтверждён. Обновите данные или откройте Jira; повторная запись заблокирована",error);
+        });
+      }).catch(function(error) {
+        if (!active(token)) return;
+        state.selectedId=null; state.outcome="load-failed"; state.message=errorMessage("Не удалось проверить доступные переходы Jira",error);
+      }).then(function() {
+        state.running=false;
+        if (active(token)) { request=null; notify(); }
+      });
+    }
+    return {open:open,close:close,select:select,apply:apply,retry:load,refresh:refresh,getState:snapshot};
+  }
+  return {create:create,validKey:validKey};
+});
+
 /* === Module: parser.js === */
 define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
   "use strict";
@@ -2655,8 +2791,80 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
   }
 
+  var requestSequence = 0;
+  function paginatedSearch(queries, options, limit) {
+    var opts = options || {}, issues = [], cancelled = false, settled = false, request, row, rejectRun, seen=Object.create(null);
+    function emit(state, error) {
+      if (!row) return;
+      row.state = state;
+      if (state !== "running") row.finishedAt = Date.now();
+      if (error) row.error = String(error.message || error.statusText || error);
+      if (opts.onRequest) opts.onRequest(Object.assign({}, row));
+    }
+    function abortError() { var error = new Error("Загрузка отменена"); error.name = "AbortError"; return error; }
+    var promise = new Promise(function(resolve, reject) {
+      rejectRun = reject;
+      var queryIndex = 0, totalAll = 0;
+      function page(startAt, expectedTotal) {
+        if (cancelled) return;
+        var query = queries[queryIndex], requested = Math.min(query.size || 200, limit - issues.length);
+        row = {id:"search-" + (++requestSequence),stage:opts.stage || "stories",batch:queryIndex + 1,
+          startAt:startAt,requested:requested,state:"running",startedAt:Date.now()};
+        emit("running");
+        try {
+          request = $.ajax({url:config.baseUrl + "/rest/api/2/search",type:"POST",timeout:30000,
+            contentType:"application/json",dataType:"json",
+            data:JSON.stringify({jql:query.jql || query,fields:issueFields(),expand:opts.expand === "changelog" ? ["changelog"] : undefined,
+              startAt:startAt,maxResults:requested})});
+        } catch (error) { fail(error); return; }
+        Promise.resolve(request).then(function(data) {
+          if (cancelled) return;
+          var batch = data && data.issues, total = data && data.total == null && Array.isArray(batch) ? startAt + batch.length : Number(data && data.total);
+          if (!Array.isArray(batch) || !Number.isInteger(total) || total < 0 ||
+              data.startAt != null && data.startAt !== startAt || expectedTotal != null && total !== expectedTotal ||
+              batch.length > requested || startAt + batch.length > total || !batch.length && startAt < total) {
+            throw new Error("Некорректная или неполная страница Jira");
+          }
+          batch.forEach(function(issue) {
+            var key=String(issue && issue.key || "").toUpperCase();
+            if (!key || seen[key]) throw new Error("Некорректная страница Jira: повторный или пустой ключ");
+            seen[key]=true;
+          });
+          row.received = batch.length; row.total = total; emit("completed");
+          issues = issues.concat(batch);
+          var next = startAt + batch.length;
+          if (next < total && issues.length < limit) return page(next,total);
+          totalAll += total;
+          if (issues.length < limit && ++queryIndex < queries.length) return page(0,null);
+          settled = true;
+          resolve({issues:issues,total:totalAll,truncated:next < total});
+        }).catch(fail);
+      }
+      function fail(error) { if (cancelled || settled) return; settled = true; emit("error",error); reject(error); }
+      if (!queries.length) { settled = true; resolve({issues:[]}); } else page(0,null);
+    });
+    promise.abort = function() {
+      if (settled || cancelled) return;
+      cancelled = true; emit("cancelled"); rejectRun(abortError());
+      if (request && typeof request.abort === "function") { try { request.abort(); } catch (ignore) {} }
+    };
+    return promise;
+  }
+
   return {
     baseUrl: config.baseUrl,
+    getIssueTransitions: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey) + "/transitions",
+        type:"GET",timeout:30000,dataType:"json",data:{expand:"transitions.fields"}});
+    },
+    transitionIssue: function(key, id) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey || typeof id !== "string" || !/^[1-9][0-9]*$/.test(id)) return Promise.reject(new Error("Invalid Jira issue key or transition ID"));
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey) + "/transitions",
+        type:"POST",timeout:30000,contentType:"application/json",data:JSON.stringify({transition:{id:id}})});
+    },
     getIssueDueDate: function(key) {
       var issueKey = dueDateKey(key);
       if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
@@ -2771,83 +2979,51 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys, options) {
       var list = uniqueIssueKeys(keys);
-      var fields = issueFields();
-      if (!list.length) return Promise.resolve({ issues: [] });
-      return $.ajax({
-        url: config.baseUrl + "/rest/api/2/search",
-        type: "POST",
-        contentType: "application/json",
-        dataType: "json",
-        data: JSON.stringify({
-          jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
-          fields: fields,
-          expand: options && options.expand === "changelog" ? ["changelog"] : undefined,
-          maxResults: list.length,
-        }),
-      });
+      var queries = [];
+      for (var offset = 0; offset < list.length; offset += 100) {
+        var batch=list.slice(offset,offset+100);
+        queries.push({jql:"key in (" + batch.map(toJqlToken).join(", ") + ") ORDER BY key ASC",size:batch.length});
+      }
+      return paginatedSearch(queries,Object.assign({stage:"linked"},options),Infinity);
     },
     getIssueWithHistory: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
       return $.ajax({
-        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()),
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
         type: "GET",
+        timeout: 30000,
         dataType: "json",
         data: { fields: issueFields().join(","), expand: "changelog" },
       });
     },
     getIssueComments: function(key, startAt) {
       return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()) + "/comment",
-        type:"GET",dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
+        type:"GET",timeout:30000,dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
     },
     getIssueWorklogs: function(key, startAt) {
       return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()) + "/worklog",
         type:"GET",dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
     },
-    getProjectIssues: function(projectKey, epicKey) {
+    getProjectIssues: function(projectKey, epicKey, options) {
       var project = projectKey != null ? String(projectKey).trim() : "";
       var epic = epicKey != null ? String(epicKey).trim() : "";
       var jql;
-      var issues = [];
-      var pageSize = 100;
-      var maxIssues = 1000;
       if (!project) return Promise.resolve({ issues: [] });
       jql = "project = " + toJqlToken(project) + " AND issuetype = Story";
       if (epic && config.EPIC_LINK_FIELD) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + " = " + toJqlToken(epic);
       jql += " ORDER BY key DESC";
-      function page(startAt) {
-        return Promise.resolve($.ajax({
-          url: config.baseUrl + "/rest/api/2/search",
-          type: "POST",
-          contentType: "application/json",
-          dataType: "json",
-          data: JSON.stringify({ jql: jql, fields: issueFields(), expand: ["changelog"], startAt: startAt, maxResults: Math.min(pageSize, maxIssues - startAt) }),
-        })).then(function(data) {
-          var batch = data && Array.isArray(data.issues) ? data.issues : [];
-          issues = issues.concat(batch);
-          var next = startAt + batch.length;
-          if (batch.length && next < Number(data && data.total) && next < maxIssues) return page(next);
-          return { issues: issues, total: data && data.total != null ? Number(data.total) : issues.length, truncated: next < Number(data && data.total) };
-        });
-      }
-      return page(0);
+      return paginatedSearch([jql],Object.assign({stage:"stories",expand:"changelog"},options),1000);
     },
-    searchIssueBySummary: function(projectKey, summaryText) {
+    searchIssueBySummary: function(projectKey, summaryText, options) {
       var text = summaryText != null ? String(summaryText).trim() : "";
       var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "issuetype"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
       if (!projectKey || !text) return Promise.resolve({ issues: [] });
-      return $.ajax({
-        url: config.baseUrl + "/rest/api/2/search",
-        type: "POST",
-        contentType: "application/json",
-        dataType: "json",
-        data: JSON.stringify({
-          jql: "project = " + toJqlToken(projectKey) + " AND " + summaryTextJql(text) + " ORDER BY updated DESC",
-          fields: fields,
-          maxResults: 10,
-        }),
-      });
+      return paginatedSearch(["project = " + toJqlToken(projectKey) + " AND " + summaryTextJql(text) + " ORDER BY updated DESC"],
+        Object.assign({stage:"summary"},options),10);
     },
     toJqlToken: toJqlToken,
     uniqueIssueKeys: uniqueIssueKeys,
@@ -4076,6 +4252,97 @@ define("_ujgESI_dueDateSyncUi", ["jquery", "_ujgESI_icons"], function($, icon) {
       },
       destroy:function(){if(doc){$(doc).off(eventNamespace);if(bodyOverflow !== null)doc.body.style.overflow=bodyOverflow;}if(host)host.empty().removeClass("ujg-esi-due-active");open=false;bodyOverflow=null;anchor=null;host=null;lastState=null;lastServices=null;}
     };
+  }
+  return {create:create};
+});
+
+/* === Module: status-transition-ui.js === */
+define("_ujgESI_statusTransitionUi", ["jquery", "_ujgESI_icons"], function($, icon) {
+  "use strict";
+  function jiraUrl(base,key) {
+    if (!/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(key || "")) return null;
+    try { var url=new URL(base); return /^https?:$/.test(url.protocol) ? url.origin + url.pathname.replace(/\/+$/,"") + "/browse/" + encodeURIComponent(key) : null; } catch (_) { return null; }
+  }
+  function create() {
+    var host=null, services=null, state=null, open=false, anchor=null, overflow=null;
+    function button(className,label,action,iconName) {
+      var el=$("<button type='button'/>").addClass(className).attr({"aria-label":label,title:label,"data-status-focus":className}).on("click",action);
+      return iconName ? el.append(icon(iconName)) : el.text(label);
+    }
+    function close() { if (state && !state.running) services.onCloseStatusTransition(); }
+    function keydown(e) {
+      if (!open) return;
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+      var items=host.find("button:not(:disabled),a[href]").toArray();
+      if (e.key === "Tab" && items.length) {
+        var first=items[0], last=items[items.length-1], active=document.activeElement;
+        if (e.shiftKey && (active === first || !host[0].contains(active))) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && (active === last || !host[0].contains(active))) { first.focus(); e.preventDefault(); }
+      }
+      if (/^(ArrowDown|ArrowUp|ArrowLeft|ArrowRight)$/.test(e.key) && $(e.target).is("[data-transition-id]")) {
+        var choices=host.find("[data-transition-id]:not(:disabled)").toArray(), index=choices.indexOf(e.target);
+        if (choices.length) { choices[(index + (/^(ArrowDown|ArrowRight)$/.test(e.key) ? 1 : choices.length-1)) % choices.length].focus(); e.preventDefault(); }
+      }
+    }
+    function destroy() {
+      $(document).off("keydown.ujgStatusTransition");
+      if (open) document.body.style.overflow=overflow;
+      open=false;
+      if (host) host.empty();
+    }
+    function render(target, data, svc) {
+      host=target; services=svc; state=data.statusTransition || {};
+      if (!state.open) {
+        if (open) {
+          destroy();
+          var restored=anchor && anchor.isConnected ? anchor : $(document).find(".ujg-esi-status-trigger[data-issue-key]").filter(function() {
+            return $(this).attr("data-issue-key") === state.key && !this.disabled;
+          })[0];
+          if (restored) restored.focus();
+        }
+        return;
+      }
+      var focus=host[0].contains(document.activeElement) ? $(document.activeElement).attr("data-status-focus") : null;
+      var oldScroll=host.find(".ujg-esi-status-body").scrollTop() || 0;
+      if (!open) {
+        anchor=document.activeElement; overflow=document.body.style.overflow; document.body.style.overflow="hidden";
+        open=true; $(document).on("keydown.ujgStatusTransition",keydown);
+      }
+      host.empty();
+      host.append($("<div/>").addClass("ujg-esi-status-overlay").attr("aria-hidden","true"));
+      var dialog=$("<section/>").addClass("ujg-esi-status-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"Статус Jira: " + state.key,"data-issue-key":state.key,tabindex:"-1"});
+      var head=$("<header/>").addClass("ujg-esi-status-head").append($("<h2/>").text("Статус Jira · " + state.key));
+      head.append(button("ujg-esi-status-close","Закрыть",close,"X").prop("disabled",!!state.running)); dialog.append(head);
+      var body=$("<div/>").addClass("ujg-esi-status-body"), blocked=!!(state.loading || state.running);
+      if (state.message) body.append($("<p/>").addClass("ujg-esi-status-message").attr({role:/failed|rejected|unconfirmed/.test(state.outcome || "") ? "alert" : "status","aria-live":"polite"}).text(state.message));
+      if (state.outcome === "load-failed") body.append(button("ujg-esi-status-retry","Повторить чтение",services.onRetryStatusTransition).prop("disabled",blocked));
+      var recovery=/^(refresh-failed|unconfirmed)$/.test(state.outcome || "");
+      if (recovery) body.append(button("ujg-esi-status-refresh","Обновить данные",services.onRefreshStatusTransition).prop("disabled",blocked));
+      var choices=$("<div/>").addClass("ujg-esi-status-choices").attr({role:"radiogroup","aria-label":"Доступные переходы"});
+      (state.transitions || []).forEach(function(t) {
+        var choice=button("ujg-esi-status-choice",t.name + " → " + t.target,function() { services.onSelectStatusTransition(t.id); })
+          .attr({role:"radio","aria-checked":String(state.selectedId === t.id),"data-transition-id":t.id,"data-status-focus":"transition-"+t.id})
+          .prop("disabled",blocked || recovery || state.outcome === "success");
+        choice.append($("<small/>").text(t.hint)); choices.append(choice);
+      });
+      body.append(choices);
+      var selected=(state.transitions || []).find(function(t) { return t.id === state.selectedId; });
+      if (selected && !selected.simple) {
+        var fields=$("<div/>").addClass("ujg-esi-status-fields");
+        fields.append($("<p/>").text("Этот переход выполняется в карточке Jira"));
+        (selected.fields || []).forEach(function(field) { fields.append($("<p/>").text(field.name + (field.required ? " (обязательное)" : ""))); });
+        body.append(fields);
+      }
+      dialog.append(body);
+      var footer=$("<footer/>").addClass("ujg-esi-status-footer"), url=jiraUrl(data.baseUrl,state.key);
+      if (url) footer.append($("<a/>").addClass("ujg-esi-status-jira").attr({href:url,target:"_blank",rel:"noopener noreferrer","data-status-focus":"jira"}).text("Открыть Jira"));
+      footer.append(button("ujg-esi-status-apply","Применить",services.onApplyStatusTransition)
+        .prop("disabled",blocked || recovery || state.outcome === "success" || !selected || !selected.simple));
+      dialog.append(footer); host.append(dialog); body.scrollTop(oldScroll);
+      var next=focus ? host.find("[data-status-focus]").filter(function() { return $(this).attr("data-status-focus") === focus && !this.disabled; })[0] : null;
+      (next || head.find("button:not(:disabled)")[0] || dialog[0]).focus();
+    }
+    return {render:render,destroy:destroy};
   }
   return {create:create};
 });
@@ -5800,19 +6067,32 @@ define("_ujgESI_activityLoader", [], function() {
   function create(options) {
     var active = Object.create(null), wanted = [], queued = [], results = Object.create(null);
     var epoch = 0, selection = 0, completedSelection = -1, enabled = false;
+    var rows = [], rowSequence = 0, runId = 0, stoppedSnapshot = null, status = "idle", lastKeys = [], historyRows = Object.create(null);
+    function requestRow(stage,key,startAt) {
+      var row = {id:"activity-" + (++rowSequence),runId:runId,stage:stage,key:key,startAt:startAt,state:"queued"};
+      if (stage === "history") row.requested=1;
+      rows.push(row); return row;
+    }
+    function finishRow(row,state,error) {
+      if (!row) return;
+      row.state=state; row.finishedAt=Date.now();
+      if (error) row.error=options.errorText ? options.errorText(error) : String(error.message || error.statusText || error);
+    }
     function snapshot() {
+      if (stoppedSnapshot) return stoppedSnapshot;
       var failures = [], completed = 0;
       wanted.forEach(function(key) {
         if (!results[key]) return;
         completed++;
         if (results[key].error) failures.push({key:key,message:results[key].error});
       });
-      return {total:wanted.length,completed:completed,failures:failures,
+      return {runId:runId,status:status,rows:rows.slice(),total:wanted.length,completed:completed,failures:failures,
         activeKeys:Object.keys(active).filter(function(key) { return wanted.indexOf(key) >= 0; }),queued:queued.length};
     }
     function notify() {
       if (!enabled || completedSelection === selection) return;
       var current = selection, progress = snapshot();
+      if (progress.completed === progress.total) { status=progress.failures.length ? "error" : "completed"; progress.status=status; }
       if (options.onProgress) options.onProgress(progress);
       if (current === selection && progress.completed === progress.total && completedSelection !== current) {
         completedSelection = current;
@@ -5824,7 +6104,8 @@ define("_ujgESI_activityLoader", [], function() {
       if (!skipNotification) notify();
     }
     function start(key) {
-      var entry = {epoch:epoch,request:null};
+      var entry = {epoch:epoch,request:null,row:historyRows[key],rows:[historyRows[key]]};
+      entry.row.state="running"; entry.row.startedAt=Date.now();
       active[key] = entry;
       function current() { return enabled && entry.epoch === epoch && active[key] === entry; }
       Promise.resolve().then(function() {
@@ -5833,6 +6114,8 @@ define("_ujgESI_activityLoader", [], function() {
         return entry.request;
       }).then(function(value) {
         if (!current() || wanted.indexOf(key) < 0) return null;
+        entry.row.received=value ? 1 : 0;
+        finishRow(entry.row,"completed");
         if (value && value.fields) value = Object.assign({},value,{_activityReadAt:new Date().toISOString()});
         return hydrateComments(key,value,entry,current);
       }).then(function(value) {
@@ -5841,6 +6124,7 @@ define("_ujgESI_activityLoader", [], function() {
         if (wanted.indexOf(key) >= 0) results[key] = {error:value && value.fields && value.fields.comment && value.fields.comment.loadError || ""};
       }).catch(function(error) {
         if (!current() || wanted.indexOf(key) < 0) return;
+        finishRow(entry.row,"error",error);
         results[key] = {error:options.errorText ? options.errorText(error) : String(error && (error.message || error.statusText) || error)};
       }).then(function() {
         if (!current()) return;
@@ -5863,6 +6147,10 @@ define("_ujgESI_activityLoader", [], function() {
       function page() {
         check();
         if (++pages > 500) throw new Error("Превышен предел страниц комментариев");
+        entry.commentRow=requestRow("comments",key,entries.length);
+        entry.rows.push(entry.commentRow);
+        entry.commentRow.state="running"; entry.commentRow.startedAt=Date.now(); entry.commentRow.requested=100;
+        if (options.onProgress) options.onProgress(snapshot());
         entry.request = options.readComments(key,entries.length);
         return Promise.resolve(entry.request).then(function(value) {
           check();
@@ -5877,14 +6165,17 @@ define("_ujgESI_activityLoader", [], function() {
             batchIds[id] = true;
           });
           batch.forEach(function(comment) { seen[String(comment.id)] = true; entries.push(comment); });
-          if (entries.length < total) return page();
+          entry.commentRow.received=batch.length; entry.commentRow.total=total;
+          if (entries.length < total) { finishRow(entry.commentRow,"completed"); return page(); }
           if (value.isLast === false) throw new Error("Последняя страница комментариев не подтверждена");
+          finishRow(entry.commentRow,"completed");
           result.fields.comment = {startAt:0,total:total,comments:entries};
           return result;
         });
       }
       return Promise.resolve().then(page).catch(function(error) {
         check();
+        finishRow(entry.commentRow,"error",error);
         // Keep initial evidence not reached by the failed pagination, preferring fresh pages by ID.
         (Array.isArray(raw) ? raw : []).forEach(function(comment) {
           var id = String(comment && comment.id || "");
@@ -5901,29 +6192,59 @@ define("_ujgESI_activityLoader", [], function() {
     }
     function abort(key) {
       var entry = active[key];
+      if (entry) {
+        if (entry.row.state === "running" || entry.row.state === "queued") finishRow(entry.row,"cancelled");
+        if (entry.commentRow && entry.commentRow.state === "running") finishRow(entry.commentRow,"cancelled");
+      }
       delete active[key];
       if (entry && entry.request && typeof entry.request.abort === "function") {
         try { entry.request.abort(); } catch (ignore) { /* Late responses are isolated by identity. */ }
       }
     }
-    function select(keys) {
+    function select(keys, retainErrors) {
       selection++; enabled = true; results = Object.create(null);
+      runId++; stoppedSnapshot=null;
+      status="running";
+      rows=retainErrors ? rows.filter(function(row) { return row.state === "error"; }) : [];
       var seen = Object.create(null);
       wanted = (keys || []).filter(function(key) {
         if (typeof key !== "string" || !key || seen[key]) return false;
         seen[key] = true; return true;
       });
+      lastKeys=wanted.slice();
       Object.keys(active).forEach(function(key) {
         if (!seen[key] && (!active[key].request || typeof active[key].request.abort === "function")) abort(key);
       });
       queued = wanted.filter(function(key) { return !active[key]; });
+      historyRows=Object.create(null);
+      wanted.forEach(function(key) {
+        if (active[key]) {
+          historyRows[key]=active[key].row;
+          active[key].rows.forEach(function(row) {
+            row.runId=runId;
+            if (rows.indexOf(row) < 0) rows.push(row);
+          });
+        }
+        else historyRows[key]=requestRow("history",key);
+      });
       pump();
     }
     function cancel() {
+      stoppedSnapshot=null;
       enabled = false; epoch++; selection++; queued = []; wanted = []; results = Object.create(null);
       Object.keys(active).forEach(abort);
     }
-    return {select:select,cancel:cancel};
+    function stop() {
+      var keys=lastKeys.slice();
+      rows.forEach(function(row) { if (row.state === "running" || row.state === "queued") finishRow(row,"cancelled"); });
+      var progress=snapshot();
+      cancel(); lastKeys=keys; status="cancelled";
+      stoppedSnapshot=Object.assign({},progress,{status:status,activeKeys:[],queued:0});
+      if (options.onProgress) options.onProgress(snapshot());
+    }
+    function restart() { var keys=lastKeys.slice(); cancel(); select(keys); }
+    function retry() { var keys=snapshot().failures.map(function(item) { return item.key; }); if (!keys.length) return; cancel(); select(keys,true); }
+    return {select:select,cancel:cancel,stop:stop,restart:restart,retry:retry,getState:snapshot};
   }
   return {create:create};
 });
@@ -9815,6 +10136,8 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
   var sourceFields = ["remarkId", "remark", "owner", "module", "deadline", "mappedComponent", "sourceStatus", "importState"];
   var defaultHidden = { mappedComponent: true, componentReason: true, sourceStatus: true, importState: true, jiraDueDate: true };
   var knownColumns = columns.map(function(c) { return c[0]; });
+  var fittedWidths = {remarkId:50, remark:360, status:100, age:86, assignee:112, priority:64};
+  var summaryMinimum = 240;
   function modeOf(state) { return state && state.viewMode === "jira" ? "jira" : "excel"; }
   function profile(layout, mode, legacy) {
     var requested = mode === "jira" ? "jiraDueDate" : "deadline";
@@ -9843,7 +10166,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     if (layout && layout.widths && typeof layout.widths === "object" && !Array.isArray(layout.widths)) columns.forEach(function(column) {
       if (Object.prototype.hasOwnProperty.call(layout.widths, column[0])) widths[column[0]] = clampWidth(layout.widths[column[0]], column[2]);
     });
-    return {order:order,visible:order.filter(function(id) { return !hidden[id]; }),widths:widths};
+    return {order:order,visible:order.filter(function(id) { return !hidden[id]; }),widths:widths,fitSummary:!!(layout && layout.fitSummary === true)};
   }
   function storageKey(state) { return state.preferencesStorageKey || "ujg-esi-state"; }
   function readLayout(key) {
@@ -9882,6 +10205,48 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     var hidden = Object.assign({}, defaultHidden), order = knownColumns.slice(), widths = {}, columnLayouts = {}, layoutMode, layoutKey, page = 0, pageSize = 50;
     var suppressSort = false, drag = null;
     var dateTimer = null, dateEvents = ".ujgRegistryDates" + id;
+    var fitSummary = false, widthObserver = null, widthEvents = ".ujgRegistryWidths" + id;
+
+    function stopWidthWatch() {
+      if (widthObserver) widthObserver.disconnect();
+      widthObserver = null;
+      $(window).off(widthEvents);
+    }
+    function suspend() {
+      stopDateWatch(); stopWidthWatch();
+      drag = null;
+      closeMenu(); closeDescription();
+    }
+    function columnWidth(column) {
+      if (column[0] === "summary" && fitSummary && !hidden.summary) {
+        var fixed = 72 + orderedColumns().filter(function(c) { return !hidden[c[0]] && c[0] !== "summary"; })
+          .reduce(function(total, c) { return total + (widths[c[0]] || c[2]); }, 0);
+        return Math.max(summaryMinimum, ($viewport && $viewport[0].clientWidth || 0) - fixed);
+      }
+      return widths[column[0]] || column[2];
+    }
+    function updateWidths() {
+      if (!$viewport || !$viewport[0].isConnected) { stopWidthWatch(); return; }
+      orderedColumns().forEach(function(column) {
+        if (!hidden[column[0]]) $viewport.find('col[data-column="' + column[0] + '"]')
+          .attr("width", columnWidth(column)).css("width", columnWidth(column) + "px");
+      });
+      $viewport.find("table").css({width:visibleWidth() + "px", "min-width":visibleWidth() + "px"});
+    }
+    function startWidthWatch() {
+      stopWidthWatch(); updateWidths();
+      if (!fitSummary || hidden.summary || !$viewport || !$viewport[0].isConnected) return;
+      if (typeof window.ResizeObserver === "function") {
+        widthObserver = new window.ResizeObserver(updateWidths);
+        widthObserver.observe($viewport[0]);
+      } else $(window).on("resize" + widthEvents, updateWidths);
+    }
+    function resizeColumn(column, value) {
+      if (column[0] === "summary") fitSummary = false;
+      widths[column[0]] = clampWidth(value, column[2]);
+      updateWidths();
+      if (!fitSummary) stopWidthWatch();
+    }
 
     function stopDateWatch() {
       if (dateTimer != null) clearTimeout(dateTimer);
@@ -9915,6 +10280,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       layoutMode = mode;
       var active = columnLayouts[mode];
       order = active.order.slice(); widths = Object.assign({}, active.widths);
+      fitSummary = active.fitSummary;
       hidden = Object.create(null);
       knownColumns.forEach(function(id) { hidden[id] = active.visible.indexOf(id) === -1; });
     }
@@ -9998,7 +10364,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       }
     }
     function saveLayout() {
-      columnLayouts[layoutMode] = {order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:Object.assign({}, widths)};
+      columnLayouts[layoutMode] = {order:order.slice(),visible:order.filter(function(id) { return !hidden[id]; }),widths:Object.assign({}, widths),fitSummary:fitSummary};
       try {
         var storage = window.localStorage, stored;
         try { stored = JSON.parse(storage.getItem(layoutKey) || "{}"); } catch (ignore) { stored = {}; }
@@ -10013,7 +10379,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     function visibleWidth() {
       return 72 + orderedColumns().filter(function(c) { return !hidden[c[0]]; })
-        .reduce(function(total, c) { return total + (widths[c[0]] || c[2]); }, 0);
+        .reduce(function(total, c) { return total + columnWidth(c); }, 0);
     }
     function moveColumn(from, to) {
       if (from === to || order.indexOf(from) < 0 || order.indexOf(to) < 0) return;
@@ -10430,7 +10796,10 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       if (key === "status") {
         if (entry.linkedToParent === false) $td.append($("<span/>").addClass("ujg-esi-blocked-marker").attr({role:"img", "aria-label":"Связь с основной задачей не создана", title:entry.linkError || "Связь с основной задачей не создана"}).append(icon("TriangleAlert")));
         if (entry.blocked) $td.append($("<span/>").addClass("ujg-esi-blocked-marker").attr({role:"img", "aria-label":"Заблокирована", title:"Заблокирована"}).append(icon("TriangleAlert")));
-        if (value) $td.append($("<span/>").addClass("ujg-esi-workflow-status is-" + statusClass(entry)).text(value));
+        if (value) $td.append($("<button type='button'/>").addClass("ujg-esi-workflow-status ujg-esi-status-trigger is-" + statusClass(entry))
+          .attr({title:value,"aria-label":"Изменить статус " + (entry.key || "") + ": " + value,"aria-haspopup":"dialog","data-issue-key":entry.key || ""})
+          .prop("disabled",!hooks.openStatus || !/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(entry.key || "") || !!(state.loading || state.registryLoading || state.syncLoading))
+          .text(value).on("click",function(e) { e.stopPropagation(); if (hooks.openStatus) hooks.openStatus(entry); }));
         return $td.attr("title", value);
       }
       if (key === "type" && value) return $td.append($("<span/>").addClass("ujg-esi-issue-type").toggleClass("is-story", !entry.isChild).toggleClass("is-qa", entry.role === "QA").attr({ role: "img", "aria-label": value }).append(icon(entry.isChild ? "CheckSquare" : "Bookmark"))).attr("title", value);
@@ -10446,6 +10815,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       updateFilterReset();
       if (!$host) return;
       var scroll = $viewport ? { top: $viewport.scrollTop(), left: $viewport.scrollLeft() } : { top: 0, left: 0 };
+      stopWidthWatch(); $viewport = null;
       $host.empty();
       var visible = orderedColumns().filter(function(column) { return !hidden[column[0]]; });
       updateTracking();
@@ -10472,7 +10842,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           .addClass("ujg-esi-header-filter").toggleClass("is-active", active).attr({ "data-filter": column[0], "aria-haspopup": "dialog", "aria-expanded": "false" });
         if (active && (column[0] === "owner" || column[0] === "assignee")) $filter.append($("<b/>").text(filters[column[0]].length));
         var $sort = $("<button/>").addClass("ujg-esi-header-sort").attr({ type: "button", "data-sort": column[0], title: "Сортировка: " + heading, "aria-label": "Сортировка: " + heading })
-          .append($("<span/>").text(heading), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null)
+          .append($("<span/>").text(column[0] === "priority" ? "Прио" : heading), sorted ? icon(sort.direction === "desc" ? "ArrowDown" : "ArrowUp") : null)
           .on("click", function() {
             if (suppressSort) { suppressSort = false; return; }
             sort = { column: column[0], direction: sorted ? (sort.direction === "asc" ? "desc" : "asc") : column[0] === "priority" ? "desc" : "asc" };
@@ -10482,10 +10852,10 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           .on("pointerdown", function(event) {
             event.preventDefault(); event.stopPropagation();
             var measured = $(this).closest("th")[0].getBoundingClientRect().width;
-            drag = { type:"resize", id:column[0], start:event.pageX, width:measured || widths[column[0]] || column[2] };
+            drag = { type:"resize", id:column[0], start:event.pageX, width:measured || columnWidth(column) };
           }).on("keydown", function(event) {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            event.preventDefault(); widths[column[0]] = clampWidth((widths[column[0]] || column[2]) + (event.key === "ArrowRight" ? 10 : -10), column[2]); saveLayout(); draw();
+            event.preventDefault(); resizeColumn(column, columnWidth(column) + (event.key === "ArrowRight" ? 10 : -10)); saveLayout();
           });
         $head.append($("<th/>").attr({ scope: "col", "data-column":column[0], "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
           .on("pointerdown", function(event) {
@@ -10580,17 +10950,18 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       $footer.append($("<span/>").addClass("ujg-esi-page-spacer"), button("ChevronLeft", "Предыдущая страница", function() { page -= 1; refresh(); }).prop("disabled", page === 0), $("<span/>").text((page + 1) + " / " + pages), button("ChevronRight", "Следующая страница", function() { page += 1; refresh(); }).prop("disabled", page >= pages - 1));
       $host.append($footer);
       $viewport.scrollTop(scroll.top).scrollLeft(scroll.left);
+      startWidthWatch();
       startDateWatch();
     }
     return {
       teamMenu: teamMenu,
-      suspend: stopDateWatch,
+      suspend: suspend,
       teamFilterButton: function(nextState) {
         closeMenu();
         state = nextState;
         ensureLayout(state);
         filterTeams = teamsModule.normalize(state.teams);
-        if (!state.rows || !state.rows.length) { stopDateWatch(); rows = []; $host = null; $viewport = null; }
+        if (!state.rows || !state.rows.length) { suspend(); rows = []; $host = null; $viewport = null; }
         $teamFilter = button("Funnel", "Фильтр: Команда", function() { teamFilterMenu(this); })
           .addClass("ujg-esi-team-filter-button").attr({"aria-haspopup":"dialog","aria-expanded":"false"}).append($("<span/>"),icon("ChevronDown"));
         bindDismiss(); updateFilterReset();
@@ -10608,7 +10979,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         return false;
       },
       mount: function($parent, nextState, nextHooks) {
-        stopDateWatch();
+        stopDateWatch(); stopWidthWatch(); drag = null;
         state = nextState; hooks = nextHooks;
         ensureLayout(state);
         closeMenu(); closeDescription();
@@ -10628,9 +10999,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           .on("pointermove.ujgRegistry" + id, function(event) {
             if (drag && drag.type === "resize") {
               var column = columns.filter(function(c) { return c[0] === drag.id; })[0];
-              widths[drag.id] = clampWidth(drag.width + event.pageX - drag.start, column[2]);
-              $host.find('col[data-column="' + drag.id + '"]').attr("width", widths[drag.id]).css("width", widths[drag.id] + "px");
-              $host.find("table").css({width:visibleWidth() + "px", "min-width":visibleWidth() + "px"});
+              resizeColumn(column, drag.width + event.pageX - drag.start);
             }
           }).on("pointerup.ujgRegistry" + id, function(event) {
             if (!drag) return;
@@ -10645,16 +11014,22 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       columnsMenu: function(anchor) {
         if (!$host) return;
         var $box = popup(anchor, "Столбцы");
+        var draftHidden = Object.assign({}, hidden);
         orderedColumns().forEach(function(column) {
-          $box.append($("<label/>").addClass("ujg-esi-filter-option").append($("<input/>").attr("type", "checkbox").prop("checked", !hidden[column[0]]).on("change", function() {
-            if (!this.checked && order.filter(function(id) { return !hidden[id]; }).length <= 1) { this.checked = true; return; }
-            hidden[column[0]] = !this.checked;
+          $box.append($("<label/>").addClass("ujg-esi-filter-option").append($("<input/>").attr("type", "checkbox").prop("checked", !draftHidden[column[0]]).on("change", function() {
+            if (!this.checked && order.filter(function(id) { return !draftHidden[id]; }).length <= 1) { this.checked = true; return; }
+            draftHidden[column[0]] = !this.checked;
           }), $("<span/>").text(column[1])));
         });
-        $box.append($("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() { saveLayout(); refresh(); }));
+        $box.append($("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() { hidden = draftHidden; saveLayout(); refresh(); }));
+        $box.append(button("Columns3", "Подстроить ширины", function() {
+          columns.forEach(function(column) { widths[column[0]] = fittedWidths[column[0]] || column[2]; });
+          fitSummary = true;
+          saveLayout(); refresh();
+        }).addClass("ujg-esi-menu-command").append($("<span/>").text("Подстроить ширины")));
         $box.append(button("RefreshCw", "Сбросить расположение столбцов", function() {
           var reset = profile(null, layoutMode, false);
-          order = reset.order; widths = {}; hidden = Object.create(null);
+          order = reset.order; widths = {}; fitSummary = false; hidden = Object.create(null);
           knownColumns.forEach(function(id) { hidden[id] = reset.visible.indexOf(id) === -1; });
           saveLayout(); refresh();
         }).addClass("ujg-esi-menu-command").append($("<span/>").text("Сбросить расположение")));
@@ -10666,7 +11041,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
 });
 
 /* === Module: rendering.js === */
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi) {
   "use strict";
 
   var $root;
@@ -10677,10 +11052,95 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var activityView;
   var dueDateView, $dueHost, componentView, $componentHost;
   var columnPreflightView, $columnPreflightHost;
+  var statusView, $statusHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
   var viewportWindows = [];
+  var registryPanel, activityPanel;
+
+  function createRequestPanel(kind) {
+    var $panel=$("<section/>").addClass("ujg-esi-request-progress").attr({"data-progress-kind":kind,"aria-label":kind === "activity" ? "Запросы истории Jira" : "Запросы реестра Jira"});
+    var $head=$("<div/>").addClass("ujg-esi-request-head"), $summary=$("<strong/>"), $controls=$("<div/>").addClass("ujg-esi-request-controls");
+    var $spinner=$("<span/>").addClass("ujg-esi-request-spinner").attr("aria-hidden","true").append(icon("RefreshCw"));
+    var $heading=$("<div/>").addClass("ujg-esi-request-heading").append($spinner,$summary);
+    var $snapshot=$("<div/>").addClass("ujg-esi-request-snapshot"), $error=$("<div/>").addClass("ujg-esi-error");
+    var $details=$("<details/>").prop("open",true), $count=$("<summary/>"), $list=$("<div/>").addClass("ujg-esi-request-list").attr({role:"list","aria-label":"Все запросы загрузки"});
+    $panel.append($head.append($heading,$controls),$snapshot,$error,$details.append($count,$list));
+    var progress, callbacks={}, nodes=Object.create(null), running=Object.create(null), timer=null;
+    var states={queued:"В очереди",running:"Выполняется",completed:"Завершён",error:"Ошибка",cancelled:"Отменён"};
+    var stages={stories:"Истории",linked:"Связанные задачи",history:"История задачи",comments:"Комментарии",summary:"Поиск по теме"};
+    var prefix=kind === "activity" ? "ActivityHistory" : "RegistryLoad";
+    [["stop","X","Остановить загрузку","onStop"], ["restart","RefreshCw","Загрузить заново","onRestart"],
+      ["retry","RefreshCw",kind === "activity" ? "Повторить неудачные запросы" : "Повторить загрузку с начала","onRetry"]].forEach(function(control) {
+      $controls.append($("<button/>").addClass("ujg-esi-icon-button ujg-esi-small-btn").attr({type:"button","data-request-control":control[0],"aria-label":control[2],title:control[2]})
+        .append(icon(control[1]),$("<span/>").text(control[2])).on("click",function() { var cb=callbacks[control[3]+prefix]; if (cb) cb(); }));
+    });
+    function suspend() { if (timer !== null) window.clearTimeout(timer); timer=null; }
+    function elapsed(row) {
+      return row.startedAt == null ? "" : Math.max(0,Math.floor(((row.finishedAt == null ? Date.now() : row.finishedAt)-row.startedAt)/1000)) + " с";
+    }
+    function tick() {
+      timer=null;
+      if (!$panel[0].isConnected) return;
+      Object.keys(running).forEach(function(id) { nodes[id].$elapsed.text(elapsed(running[id])); });
+      if (Object.keys(running).length) timer=window.setTimeout(tick,1000);
+    }
+    function update(value, services, snapshotAt) {
+      progress=value; callbacks=services || {};
+      if (!progress) { suspend(); running=Object.create(null); $panel.hide(); return; }
+      $panel.show().attr({"data-run-id":progress.runId,"data-progress-status":progress.status});
+      var rows=progress.rows || [], present=Object.create(null), counts={queued:0,running:0,completed:0,error:0,cancelled:0};
+      running=Object.create(null);
+      rows.forEach(function(row) {
+        present[row.id]=true;
+        var old=row.runId != null && row.runId !== progress.runId;
+        if (!old && counts[row.state] != null) counts[row.state]++;
+        var entry=nodes[row.id];
+        if (!entry) {
+          var $row=$("<div/>").addClass("ujg-esi-request-row").attr({role:"listitem","data-request-id":row.id});
+          entry=nodes[row.id]={$row:$row,$text:$("<span/>").addClass("ujg-esi-request-description"),$elapsed:$("<span/>").addClass("ujg-esi-request-elapsed"),signature:""};
+          $list.append($row.append(entry.$text,entry.$elapsed));
+        }
+        var text=(old ? "Предыдущий запрос · " : "") + (stages[row.stage] || row.stage || "Jira") + (row.key ? " · " + row.key : "") +
+          (row.batch != null ? " · пакет " + row.batch : "") + (row.startAt != null ? " · смещение " + row.startAt : "") +
+          (row.requested != null ? " · запрошено " + row.requested : "") + (row.received != null ? " · получено " + row.received : "") +
+          (row.total != null ? " из " + row.total : "") + " · " + (states[row.state] || row.state) + (row.error ? ": " + row.error : "");
+        if (entry.signature !== text) { entry.signature=text; entry.$text.text(text); entry.$row.attr("data-request-state",row.state); entry.$elapsed.text(elapsed(row)); }
+        if (row.state === "running") running[row.id]=row;
+      });
+      Object.keys(nodes).forEach(function(id) { if (!present[id]) { nodes[id].$row.remove(); delete nodes[id]; } });
+      $summary.text((kind === "activity" ? "История Jira" : "Чтение Jira") + " · " + (states[progress.status] || progress.status) + (progress.localStage ? " · " + progress.localStage : ""));
+      $spinner.css("visibility",progress.status === "running" ? "visible" : "hidden");
+      $count.text("Запросов: " + rows.length + " · В очереди: " + counts.queued + " · Выполняется: " + counts.running + " · Завершено: " + counts.completed + " · Ошибок: " + counts.error + " · Отменено: " + counts.cancelled);
+      $error.text(progress.error || "").toggle(!!progress.error);
+      var at=Date.parse(snapshotAt), stamp="";
+      if (isFinite(at)) {
+        var moscow=new Date(at+3*3600000).toISOString();
+        stamp=moscow.slice(8,10)+"."+moscow.slice(5,7)+"."+moscow.slice(0,4)+" "+moscow.slice(11,19)+" МСК";
+      }
+      $snapshot.text(stamp ? (progress.status === "completed" ? "Снимок Jira: " : "Предыдущий снимок Jira: ") + stamp :
+        kind === "registry" ? "Полный снимок нового запуска ещё не опубликован." : "Сохранённые снимки и полнота отчёта указаны ниже.");
+      $controls.find('[data-request-control="stop"]').prop("disabled",progress.status !== "running");
+      $controls.find('[data-request-control="restart"]').prop("disabled",false);
+      $controls.find('[data-request-control="retry"]').prop("disabled",progress.status === "running" || progress.status !== "error");
+      if ($panel[0].isConnected && Object.keys(running).length) {
+        if (timer === null) timer=window.setTimeout(tick,1000);
+      } else suspend();
+    }
+    return {mount:function($parent) { $parent.append($panel); },detach:function() { suspend(); $panel.detach(); },
+      reveal:function() {
+        if (progress && $panel[0].isConnected && typeof $head[0].scrollIntoView === "function") $head[0].scrollIntoView({block:"nearest",inline:"nearest",behavior:"auto"});
+      },
+      update:update,suspend:suspend,destroy:function() { suspend(); $panel.remove(); nodes=Object.create(null); }};
+  }
+
+  function renderRequestProgress(state) {
+    if (!registryPanel || !activityPanel) return false;
+    registryPanel.update(state.registryProgress,services,state.registrySnapshotAt);
+    activityPanel.update(state.reportView === "activity" ? state.activityProgress : null,services);
+    return true;
+  }
 
   function unbindViewport() {
     viewportWindows.forEach(function(view) { $(view).off("resize.ujgEsiViewport scroll.ujgEsiViewport"); });
@@ -10814,6 +11274,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function init(container, svc) {
+    if (registryPanel) registryPanel.destroy();
+    if (activityPanel) activityPanel.destroy();
+    if (statusView) statusView.destroy();
+    if ($statusHost) $statusHost.remove();
     if (grid && grid.suspend) grid.suspend();
     if (columnPreflightView) columnPreflightView.destroy();
     if ($columnPreflightHost) $columnPreflightHost.remove();
@@ -10824,13 +11288,19 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if ($componentHost) $componentHost.remove();
     $root = container;
     services = svc || {};
+    registryPanel=createRequestPanel("registry"); activityPanel=createRequestPanel("activity");
     $(window).off("pagehide.ujgEsiViewport pageshow.ujgEsiViewport")
-      .on("pagehide.ujgEsiViewport", unbindViewport).on("pageshow.ujgEsiViewport", bindViewport);
+      .on("pagehide.ujgEsiViewport",function() {
+        unbindViewport(); registryPanel.suspend(); activityPanel.suspend();
+        if (services.onSuspendRequestLoads) services.onSuspendRequestLoads();
+      }).on("pageshow.ujgEsiViewport", bindViewport);
     bindViewport();
     grid = gridModule.create();
     activityView = activityUi ? activityUi.create() : null;
     dueDateView = dueDateSyncUi ? dueDateSyncUi.create() : null;
     $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
+    statusView = statusTransitionUi ? statusTransitionUi.create() : null;
+    $statusHost = $("<div/>").addClass("ujg-esi-status-mount");
     componentView = dueDateSyncUi ? dueDateSyncUi.create({kind:"component"}) : null;
     $componentHost = $("<div/>").addClass("ujg-esi-component-sync-mount");
     columnPreflightView = columnPreflightUi ? columnPreflightUi.create() : null;
@@ -12535,6 +13005,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     grid.mount($parent, state, {
       appendActions: function($td, row, index) { appendRowActions($td, row, state, index); },
       renderDescription: renderJiraWiki,
+      openStatus: function(entry) { if (services.onOpenStatusTransition) services.onOpenStatusTransition(entry); },
       editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); },
       assignTeam: function(user, teamId) { if (services && services.onAssignUserTeam) services.onAssignUserTeam(user, teamId); }
     });
@@ -12578,6 +13049,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     if ($dueHost) $dueHost.detach();
     if ($columnPreflightHost) $columnPreflightHost.detach();
+    if (registryPanel) registryPanel.detach();
+    if (activityPanel) activityPanel.detach();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -12627,6 +13100,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     $toolbar.append(gridModule.button(fullscreen ? "Minimize2" : "Expand", fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", toggleFullscreen).addClass("ujg-esi-fullscreen-button"));
     $root.append($toolbar);
+    if (registryPanel) registryPanel.mount($root);
+    if (activityPanel) activityPanel.mount($root);
+    renderRequestProgress(s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.teamsError && (!s.mappingEditorOpen || s.activeMappingBlock !== "teams")) $root.append($("<div/>").addClass("ujg-esi-error").attr("role", "alert").text(s.teamsError));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
@@ -12655,6 +13131,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     restoreScrollState(scrollState);
     appendRowOwnerPopover($root, s);
     renderDueDateSync(s);
+    renderStatusTransition(s);
     if (columnPreflightView) {
       $root.append($columnPreflightHost);
       columnPreflightView.render($columnPreflightHost,s,services);
@@ -12679,6 +13156,12 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
   }
 
+  function renderStatusTransition(state) {
+    if (!$root || !statusView) return;
+    if (!$statusHost.parent().length) $root.append($statusHost);
+    statusView.render($statusHost,state,services);
+  }
+
   function clearMappingError() {
     if (!$root || !$root.length) return;
     $root.find(".ujg-esi-mapping-error").remove();
@@ -12687,8 +13170,16 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   return {
     init: init,
     render: render,
-    renderActivityProgress: function(state) { return !!(activityView && activityView.updateProgress(state)); },
+    createRequestPanel:createRequestPanel,
+    renderRequestProgress:renderRequestProgress,
+    revealActivityRequests:function(state) {
+      if (state.reportView !== "activity") return;
+      renderRequestProgress(state);
+      if (activityPanel) activityPanel.reveal();
+    },
+    renderActivityProgress: function(state) { renderRequestProgress(state); return !!(activityView && activityView.updateProgress(state)); },
     renderDueDateSync: renderDueDateSync,
+    renderStatusTransition: renderStatusTransition,
     clearMappingError: clearMappingError,
   };
 });
@@ -12714,7 +13205,8 @@ define("_ujgESI_main", [
   "_ujgESI_remarkReportLoader",
   "_ujgESI_sourceExport",
   "_ujgESI_sourceExportApi",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi) {
+  "_ujgESI_statusTransition",
+], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi, statusTransitionModule) {
   "use strict";
 
   function searchErrorText(err) {
@@ -13421,6 +13913,8 @@ define("_ujgESI_main", [
       statusState: issueIsDone(issue) ? "done" : issueStatusState(issue),
       statusCategory: issueStatusCategoryKey(issue),
       done: issueIsDone(issue),
+      resolution: fields.resolution,
+      resolutiondate: fields.resolutiondate,
       assignee: issueAssigneeName(issue),
       assigneeIdentifiers: userIdentifiers(fields.assignee),
       priority: name(fields.priority),
@@ -13798,6 +14292,58 @@ define("_ujgESI_main", [
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
+    var registrySnapshotAt="", excelSnapshotAt="";
+    var registryRun = null, registryRunSequence = 0;
+    function paintRegistryProgress() {
+      if (rendering.renderRequestProgress) rendering.renderRequestProgress(state);
+    }
+    function stopRegistryRead(clear) {
+      var run=registryRun;
+      if (run && run.status === "running") {
+        run.status="cancelled";
+        run.rows.forEach(function(row) { if (row.state === "queued" || row.state === "running") { row.state="cancelled"; row.finishedAt=Date.now(); } });
+        (run.requests || []).forEach(function(request) { if (request && typeof request.abort === "function") { try { request.abort(); } catch (ignore) {} } });
+      }
+      registrySeq++; syncSeq++;
+      state.registryLoading=false; state.syncLoading=false;
+      if (clear) { registryRun=null; state.registryProgress=null; }
+      else paintRegistryProgress();
+    }
+    function beginRegistryRead(kind,retainErrors) {
+      var previous=state.registryProgress;
+      registryRun={runId:++registryRunSequence,status:"running",kind:kind,rows:retainErrors && previous ? previous.rows.filter(function(row) { return row.state === "error"; }) : [],requests:[]};
+      state.registryProgress=registryRun;
+      state.registrySnapshotAt=kind === "excel" ? excelSnapshotAt : registrySnapshotAt;
+      return registryRun;
+    }
+    function registryReadOptions(run,stage) {
+      return {expand:"changelog",stage:stage,onRequest:function(row) {
+        if (registryRun !== run || run.status !== "running") return;
+        row=Object.assign({},row,{runId:run.runId});
+        var index=run.rows.findIndex(function(item) { return item.id === row.id; });
+        if (index < 0) run.rows.push(row); else run.rows[index]=row;
+        paintRegistryProgress();
+      }};
+    }
+    function registryRead(run,read) {
+      if (registryRun !== run || run.status !== "running") { var error=new Error("Загрузка отменена"); error.name="AbortError"; return Promise.reject(error); }
+      try { var request=read(); run.requests.push(request); return promiseOf(request); } catch (error) { return Promise.reject(error); }
+    }
+    function finishRegistryRead(run,error) {
+      if (registryRun !== run || run.status !== "running") return;
+      run.status=error ? "error" : "completed"; run.requests=[];
+      run.localStage="";
+      if (error) run.error=searchErrorText(error);
+      else {
+        state.registrySnapshotAt=new Date().toISOString();
+        if (run.kind === "excel") excelSnapshotAt=state.registrySnapshotAt; else registrySnapshotAt=state.registrySnapshotAt;
+      }
+    }
+    function restartRegistryRead(retry) {
+      var kind=registryRun && registryRun.kind || (state.viewMode === "excel" ? "excel" : "jira");
+      stopRegistryRead(false);
+      if (kind === "excel") onSyncJira(retry); else onLoadRegistry(retry);
+    }
     var fileReadSeq = 0;
     var epicSeq = 0;
     var dialogEpicSeq = 0;
@@ -13864,13 +14410,66 @@ define("_ujgESI_main", [
     }}) : null;
     state.componentSync = componentSync ? componentSync.getState() : null;
 
+    function statusCanOperate() {
+      return !(state.loading || state.registryLoading || state.syncLoading || createInFlight || state.createDialog ||
+        state.mappingEditorOpen || state.dueDateSync && state.dueDateSync.open || state.componentSync && state.componentSync.open);
+    }
+    function statusScope() {
+      return JSON.stringify([state.projectKey,state.epicKey,state.viewMode,state.preferencesStorageKey,state.sourceFileName]);
+    }
+    var statusTransition = statusTransitionModule ? statusTransitionModule.create({api:api,scope:statusScope,canOperate:statusCanOperate,
+      onChange:function(snapshot) {
+        state.statusTransition=snapshot;
+        if (rendering.renderStatusTransition) rendering.renderStatusTransition(state); else render();
+      },onSnapshot:function(issue) {
+        var key=issueKey(issue), details=issueDetails(issue);
+        // Cancel outstanding history accepts before publishing the confirmed readback.
+        invalidateActivityHistory();
+        [excelRows,registryRows].forEach(function(rows) { rows.forEach(function(row) {
+          if (issueKeyFromRow(row) === key) {
+            row.storyDetails=Object.assign({},details);
+            if (rows === registryRows) {
+              row.summary=details.summary;
+              row.ownerIdentifiers=details.assigneeIdentifiers.slice();
+              row.ownerAssignee=issue.fields.assignee;
+              row.ownerAssigneeId="";
+              row.ownerAssigneeLabel=details.assignee;
+              row.sourceColumns=Object.assign({},row.sourceColumns,{"Ответственный":details.assignee,"Исполнитель в Jira":details.assignee});
+            }
+          }
+          ["childStatuses","createdChildren"].forEach(function(field) {
+            if (!Array.isArray(row[field])) return;
+            row[field]=row[field].map(function(child) {
+              return normalizeIssueKey(child.key) === key ? Object.assign({},child,details) : child;
+            });
+          });
+          row.statusTitle=issueChildStatusTitleFromRows(row.childStatuses || []);
+        }); });
+        render();
+      }
+    }) : null;
+    state.statusTransition=statusTransition ? statusTransition.getState() : null;
+    function onOpenStatusTransition(entry) {
+      var key=entry && entry.key;
+      if (!statusTransition || state.statusTransition.open || !statusTransitionModule.validKey(key) || !statusCanOperate()) return false;
+      var matches=state.rows.some(function(row) {
+        return issueKeyFromRow(row) === key.toUpperCase() || (row.childStatuses || []).some(function(child) { return normalizeIssueKey(child.key) === key.toUpperCase(); });
+      });
+      if (!matches) return false;
+      closeUserPicker(); closeEpicPicker();
+      return statusTransition.open(key);
+    }
+
     function closeDueDateSyncForContextChange() {
+      if (state.statusTransition && state.statusTransition.running) return false;
+      if (statusTransition && state.statusTransition.open && statusTransition.close() === false) return false;
       if (state.componentSync && state.componentSync.running || state.dueDateSync && state.dueDateSync.running) return false;
       if (componentSync && state.componentSync.open && componentSync.close() === false) return false;
       return !dueDateSync || !state.dueDateSync.open || dueDateSync.close() !== false;
     }
 
     function onOpenDueDateSync() {
+      if (state.statusTransition && state.statusTransition.open) return;
       if (!dueDateSync || state.dueDateSync.open || state.componentSync && state.componentSync.open || state.viewMode !== "excel" || !state.rows.length ||
           state.loading || state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
       closeUserPicker();
@@ -13879,6 +14478,7 @@ define("_ujgESI_main", [
     }
 
     function onOpenComponentSync() {
+      if (state.statusTransition && state.statusTransition.open) return;
       if (!componentSync || state.componentSync.open || state.dueDateSync && state.dueDateSync.open ||
           state.viewMode !== "excel" || !state.rows.length || !state.projectKey || state.loading ||
           state.syncLoading || createInFlight || state.createDialog || state.mappingEditorOpen) return;
@@ -13897,6 +14497,7 @@ define("_ujgESI_main", [
     }
 
     function onLoadActivityHistory(options) {
+      if (state.statusTransition && (state.statusTransition.running || state.statusTransition.loading)) return;
       if (state.loading || state.syncLoading || state.registryLoading) return;
       var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
       if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
@@ -13921,9 +14522,17 @@ define("_ujgESI_main", [
         });
       });
       var keys = Object.keys(pending);
-      if (!keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
+      if (opts.force || !keys.length && opts.onlyIncomplete !== true) keys = Object.keys(targets);
+      if (opts.keys) keys=keys.filter(function(key) { return opts.keys.indexOf(key) >= 0; });
       if (opts.excludeKeys) keys = keys.filter(function(key) { return opts.excludeKeys.indexOf(key) < 0; });
-      if (!keys.length && !state.activityLoading) return;
+      if (!keys.length) {
+        if (state.activityLoading) {
+          state.activityLoading=false;
+          activityLoader.stop(); clearActivityProgressPaint();
+          if (rendering.renderActivityProgress) rendering.renderActivityProgress(state);
+        }
+        return;
+      }
       if (!activityModule || !api || typeof api.getIssueWithHistory !== "function") {
         state.activityError = "Загрузка истории Jira недоступна.";
         render();
@@ -13932,7 +14541,8 @@ define("_ujgESI_main", [
       state.activityLoading = true;
       state.activityPreviousFailures = state.activityError ? state.activityPreviousFailures || (state.activityProgress && (state.activityProgress.failures || []).slice()) : null;
       activityTargets = targets;
-      activityLoader.select(keys);
+      activityLoader.select(keys,opts.retry === true);
+      if (!options && rendering.revealActivityRequests) rendering.revealActivityRequests(state);
     }
 
     function hasOwn(obj, key) {
@@ -14094,6 +14704,9 @@ define("_ujgESI_main", [
     }
 
     function resetExportState() {
+      stopRegistryRead(true);
+      excelSnapshotAt="";
+      if (state.viewMode === "excel") state.registrySnapshotAt="";
       syncSeq += 1;
       state.syncLoading = false;
       state.exportBuffer = null;
@@ -14228,15 +14841,15 @@ define("_ujgESI_main", [
       return keys.length === 1 ? keys[0] : "";
     }
 
-    function tryMatchRowsBySummary(active) {
-      var rows = state.rows || [];
+    function tryMatchRowsBySummary(active, stagedRows, run) {
+      var rows = stagedRows || state.rows || [];
       var projectKey = projectKeyForSummarySearch();
       var canSearch = !!(api && typeof api.searchIssueBySummary === "function" && projectKey);
       var chain = Promise.resolve();
 
       function matchByCandidates(row, candidates, index) {
         if ((active && !active()) || index >= candidates.length) return Promise.resolve(null);
-        return promiseOf(api.searchIssueBySummary(projectKey, candidates[index])).then(function(data) {
+        return registryRead(run,function() { return api.searchIssueBySummary(projectKey, candidates[index],registryReadOptions(run,"summary")); }).then(function(data) {
           if (active && !active()) return null;
           var issue = bestSummaryIssueMatch(data, row.summary);
           if (issue) return issue;
@@ -15131,6 +15744,9 @@ define("_ujgESI_main", [
     }
 
     function invalidateRegistry() {
+      stopRegistryRead(true);
+      registrySnapshotAt="";
+      if (state.viewMode === "jira") state.registrySnapshotAt="";
       registrySeq += 1;
       registryRows = [];
       registryLoaded = false;
@@ -15144,6 +15760,7 @@ define("_ujgESI_main", [
       var next = mode === "jira" ? "jira" : mode === "excel" ? "excel" : "";
       if (!next || next === state.viewMode) return;
       if (!closeDueDateSyncForContextChange()) return;
+      stopRegistryRead(true);
       invalidateActivityHistory();
       if (state.viewMode === "excel") excelRows = state.rows;
       if (state.viewMode === "jira") registryRows = state.rows;
@@ -15165,7 +15782,8 @@ define("_ujgESI_main", [
       render();
     }
 
-    function onLoadRegistry() {
+    function onLoadRegistry(retry) {
+      if (state.statusTransition && state.statusTransition.open && !closeDueDateSyncForContextChange()) return;
       var project = state.projectKey;
       var epic = state.epicKey;
       var seq;
@@ -15181,7 +15799,7 @@ define("_ujgESI_main", [
         return;
       }
       seq = ++registrySeq;
-      registryLoaded = false;
+      var run=beginRegistryRead("jira",retry === true);
       invalidateActivityHistory();
       state.registryLoading = true;
       state.registryError = "";
@@ -15189,7 +15807,7 @@ define("_ujgESI_main", [
       state.createDialog = null;
       closeUserPicker();
       render();
-      promiseOf(api.getProjectIssues(project, epic)).then(function(data) {
+      registryRead(run,function() { return api.getProjectIssues(project, epic,registryReadOptions(run,"stories")); }).then(function(data) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return null;
         var fetched = normalizeIssues(data);
         var parents = fetched.filter(isStoryIssue);
@@ -15204,7 +15822,7 @@ define("_ujgESI_main", [
           (function(batch) {
             chain = chain.then(function() {
               if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
-              return promiseOf(api.getIssuesByKeys(copyArrayForHost(batch), { expand: "changelog" })).then(function(childData) {
+              return registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(batch),registryReadOptions(run,"linked")); }).then(function(childData) {
                 var found = issueMapByKey(childData);
                 Object.keys(found).forEach(function(key) { children[key] = found[key]; });
               });
@@ -15239,12 +15857,14 @@ define("_ujgESI_main", [
         state.registryError = "";
         state.registryWarning = data.warning;
         registryLoaded = true;
+        finishRegistryRead(run);
         render();
         if (state.reportView === "activity") onLoadActivityHistory({onlyIncomplete:true});
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
         state.registryLoading = false;
         state.registryError = "Не удалось загрузить Jira: " + searchErrorText(err);
+        finishRegistryRead(run,err);
         render();
       });
     }
@@ -15309,6 +15929,7 @@ define("_ujgESI_main", [
       var seq = ++fileReadSeq;
       if (createInFlight) return;
       if (!closeDueDateSyncForContextChange()) return;
+      stopRegistryRead(true); invalidateActivityHistory();
       state.loading = true;
       state.error = "";
       state.pendingImport = null;
@@ -15756,10 +16377,16 @@ define("_ujgESI_main", [
       render();
     }
 
-    function onSyncJira() {
+    function onSyncJira(retry) {
       if (state.viewMode !== "excel") return;
       if (!closeDueDateSyncForContextChange()) return;
       var rows = state.rows;
+      var stagedRows=rows.map(function(row) {
+        var out=copyRow(row);
+        out.sourceColumns=Object.assign({},row.sourceColumns);
+        out.createdChildren=(row.createdChildren || []).map(function(child) { return Object.assign({},child); });
+        return out;
+      });
       var seq;
       function active() { return seq === syncSeq && state.viewMode === "excel" && state.rows === rows; }
       if (state.syncLoading) return;
@@ -15790,22 +16417,21 @@ define("_ujgESI_main", [
       invalidateActivityHistory();
       state.syncLoading = true;
       seq = ++syncSeq;
+      var run=beginRegistryRead("excel",retry === true);
       state.syncError = "";
       state.syncSummary = "";
-      state.exportBuffer = null;
-      state.exportFileName = "";
       closeUserPicker();
       render();
-      promiseOf(tryMatchRowsBySummary(active)).then(function() {
+      promiseOf(tryMatchRowsBySummary(active,stagedRows,run)).then(function() {
         if (!active()) return null;
-        var keys = uniqueKeys(state.rows);
+        var keys = uniqueKeys(stagedRows);
         if (!keys.length) throw new Error("В строках нет Jira-ключей для синхронизации.");
-        return promiseOf(api.getIssuesByKeys(copyArrayForHost(keys), { expand: "changelog" }));
+        return registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(keys),registryReadOptions(run,"stories")); });
       }).then(function(data) {
         if (!active() || !data) return null;
         var issueList = normalizeIssues(data);
         var childKeys = childIssueKeysFromIssues(issueList);
-        var childrenPromise = childKeys.length ? promiseOf(api.getIssuesByKeys(copyArrayForHost(childKeys), { expand: "changelog" })) : Promise.resolve({ issues: [] });
+        var childrenPromise = childKeys.length ? registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(childKeys),registryReadOptions(run,"linked")); }) : Promise.resolve({ issues: [] });
         return childrenPromise.then(function(childData) {
           return {
             data: data,
@@ -15817,9 +16443,13 @@ define("_ujgESI_main", [
         var issues = issueMapByKey(syncData.data);
         var childIssues = syncData.childIssues || {};
         var synced = 0;
-        (state.rows || []).forEach(function(row) {
+        stagedRows.forEach(function(row) {
           var key = issueKeyFromRow(row);
-          row.createdChildren = mergeCreatedChildren(row.createdChildren, knownCreatedChildrenForKey(key));
+          var known=(createdChildrenByParent[key] || []).map(function(child) { return Object.assign({},child); });
+          excelRows.concat(registryRows).forEach(function(sourceRow) {
+            if (issueKeyFromRow(sourceRow) === key) known=mergeCreatedChildren(known,(sourceRow.createdChildren || []).map(function(child) { return Object.assign({},child); }));
+          });
+          row.createdChildren = mergeCreatedChildren(row.createdChildren, known);
           row.childStatuses = mergeKnownChildStatuses([], row.createdChildren);
           row.storyDetails = null;
           row.statusTitle = "";
@@ -15852,29 +16482,33 @@ define("_ujgESI_main", [
           }
           synced += 1;
         });
+        run.localStage="Подготовка Excel"; paintRegistryProgress();
         return promiseOf(xlsxPatcher.patchWorkbook(state.sourceFileBuffer, {
           sheetName: state.parseMeta && state.parseMeta.sheetName,
           headerRowNumber: state.parseMeta && state.parseMeta.headerRowNumber,
           headerColumns: state.parseMeta && state.parseMeta.headerColumns ? state.parseMeta.headerColumns : {},
           boundHeaderColumns: state.sourceColumnSettings && state.parseMeta ? state.parseMeta.headerColumns : undefined,
-          rows: patchRowsForExport(state.rows, sourceImportSettings()),
+          rows: patchRowsForExport(stagedRows, sourceImportSettings()),
         })).then(function(buffer) {
           if (!active()) return;
+          stagedRows.forEach(function(row,index) { Object.assign(rows[index],row); });
+          excelRows=rows; state.rows=excelRows;
+          run.localStage="";
           state.exportBuffer = buffer;
           state.exportFileName = syncedFileName(state.sourceFileName);
           state.syncLoading = false;
           state.syncError = "";
           state.syncSummary = syncSummaryText(synced);
+          finishRegistryRead(run);
           render();
         });
       }).then(null,
         function(err) {
           if (!active()) return;
           state.syncLoading = false;
-          state.exportBuffer = null;
-          state.exportFileName = "";
           state.syncError = "Не удалось синхронизировать Jira: " + searchErrorText(err);
           state.syncSummary = "";
+          finishRegistryRead(run,err);
           render();
         }
       );
@@ -16828,6 +17462,12 @@ define("_ujgESI_main", [
       onMappingLlmDescriptionPromptChange: onMappingLlmDescriptionPromptChange,
       onSyncJira: onSyncJira,
       onOpenDueDateSync: onOpenDueDateSync,
+      onOpenStatusTransition: onOpenStatusTransition,
+      onCloseStatusTransition: function() { return statusTransition && statusTransition.close(); },
+      onSelectStatusTransition: function(id) { return statusTransition && statusTransition.select(id); },
+      onApplyStatusTransition: function() { return statusTransition && statusTransition.apply(); },
+      onRetryStatusTransition: function() { return statusTransition && statusTransition.retry(); },
+      onRefreshStatusTransition: function() { return statusTransition && statusTransition.refresh(); },
       onOpenComponentSync: onOpenComponentSync,
       onCloseComponentSync: function() { if (componentSync) componentSync.close(); },
       onSelectComponentSyncRow: function(id, selected) { if (componentSync) componentSync.select(id,selected); },
@@ -16845,7 +17485,27 @@ define("_ujgESI_main", [
       onCancelColumnImport: onCancelColumnImport,
       onConfirmColumnImport: function() { commitPendingImport(true); },
       onLoadRegistry: onLoadRegistry,
+      onStopRegistryLoad:function() { stopRegistryRead(false); render(); },
+      onRestartRegistryLoad:function() { restartRegistryRead(false); },
+      onRetryRegistryLoad:function() { restartRegistryRead(true); },
       onLoadActivityHistory: onLoadActivityHistory,
+      onStopActivityHistory:function() {
+        state.activityLoading=false;
+        state.activityError="Загрузка остановлена; показаны сохранённые данные, обновление частичное.";
+        activityLoader.stop(); clearActivityProgressPaint(); render();
+      },
+      onRestartActivityHistory:function() {
+        activityLoader.cancel(); clearActivityProgressPaint(); state.activityLoading=false;
+        onLoadActivityHistory({force:true});
+      },
+      onRetryActivityHistory:function() {
+        var failures=state.activityProgress && state.activityProgress.failures || [];
+        if (!failures.length) return;
+        onLoadActivityHistory({force:true,retry:true,keys:failures.map(function(item) { return item.key; })});
+      },
+      onSuspendRequestLoads:function() {
+        stopRegistryRead(false); activityLoader.stop(); clearActivityProgressPaint(); state.activityLoading=false;
+      },
       onActivityDateChange: function(date) {
         activityDate = date;
         if (state.reportView === "activity" && state.viewMode === "jira") onLoadActivityHistory({onlyIncomplete:true,date:date});

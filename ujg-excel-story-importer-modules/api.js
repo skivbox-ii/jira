@@ -65,8 +65,80 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     return isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
   }
 
+  var requestSequence = 0;
+  function paginatedSearch(queries, options, limit) {
+    var opts = options || {}, issues = [], cancelled = false, settled = false, request, row, rejectRun, seen=Object.create(null);
+    function emit(state, error) {
+      if (!row) return;
+      row.state = state;
+      if (state !== "running") row.finishedAt = Date.now();
+      if (error) row.error = String(error.message || error.statusText || error);
+      if (opts.onRequest) opts.onRequest(Object.assign({}, row));
+    }
+    function abortError() { var error = new Error("Загрузка отменена"); error.name = "AbortError"; return error; }
+    var promise = new Promise(function(resolve, reject) {
+      rejectRun = reject;
+      var queryIndex = 0, totalAll = 0;
+      function page(startAt, expectedTotal) {
+        if (cancelled) return;
+        var query = queries[queryIndex], requested = Math.min(query.size || 200, limit - issues.length);
+        row = {id:"search-" + (++requestSequence),stage:opts.stage || "stories",batch:queryIndex + 1,
+          startAt:startAt,requested:requested,state:"running",startedAt:Date.now()};
+        emit("running");
+        try {
+          request = $.ajax({url:config.baseUrl + "/rest/api/2/search",type:"POST",timeout:30000,
+            contentType:"application/json",dataType:"json",
+            data:JSON.stringify({jql:query.jql || query,fields:issueFields(),expand:opts.expand === "changelog" ? ["changelog"] : undefined,
+              startAt:startAt,maxResults:requested})});
+        } catch (error) { fail(error); return; }
+        Promise.resolve(request).then(function(data) {
+          if (cancelled) return;
+          var batch = data && data.issues, total = data && data.total == null && Array.isArray(batch) ? startAt + batch.length : Number(data && data.total);
+          if (!Array.isArray(batch) || !Number.isInteger(total) || total < 0 ||
+              data.startAt != null && data.startAt !== startAt || expectedTotal != null && total !== expectedTotal ||
+              batch.length > requested || startAt + batch.length > total || !batch.length && startAt < total) {
+            throw new Error("Некорректная или неполная страница Jira");
+          }
+          batch.forEach(function(issue) {
+            var key=String(issue && issue.key || "").toUpperCase();
+            if (!key || seen[key]) throw new Error("Некорректная страница Jira: повторный или пустой ключ");
+            seen[key]=true;
+          });
+          row.received = batch.length; row.total = total; emit("completed");
+          issues = issues.concat(batch);
+          var next = startAt + batch.length;
+          if (next < total && issues.length < limit) return page(next,total);
+          totalAll += total;
+          if (issues.length < limit && ++queryIndex < queries.length) return page(0,null);
+          settled = true;
+          resolve({issues:issues,total:totalAll,truncated:next < total});
+        }).catch(fail);
+      }
+      function fail(error) { if (cancelled || settled) return; settled = true; emit("error",error); reject(error); }
+      if (!queries.length) { settled = true; resolve({issues:[]}); } else page(0,null);
+    });
+    promise.abort = function() {
+      if (settled || cancelled) return;
+      cancelled = true; emit("cancelled"); rejectRun(abortError());
+      if (request && typeof request.abort === "function") { try { request.abort(); } catch (ignore) {} }
+    };
+    return promise;
+  }
+
   return {
     baseUrl: config.baseUrl,
+    getIssueTransitions: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey) + "/transitions",
+        type:"GET",timeout:30000,dataType:"json",data:{expand:"transitions.fields"}});
+    },
+    transitionIssue: function(key, id) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey || typeof id !== "string" || !/^[1-9][0-9]*$/.test(id)) return Promise.reject(new Error("Invalid Jira issue key or transition ID"));
+      return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey) + "/transitions",
+        type:"POST",timeout:30000,contentType:"application/json",data:JSON.stringify({transition:{id:id}})});
+    },
     getIssueDueDate: function(key) {
       var issueKey = dueDateKey(key);
       if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
@@ -181,83 +253,51 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getIssuesByKeys: function(keys, options) {
       var list = uniqueIssueKeys(keys);
-      var fields = issueFields();
-      if (!list.length) return Promise.resolve({ issues: [] });
-      return $.ajax({
-        url: config.baseUrl + "/rest/api/2/search",
-        type: "POST",
-        contentType: "application/json",
-        dataType: "json",
-        data: JSON.stringify({
-          jql: "key in (" + list.map(toJqlToken).join(", ") + ")",
-          fields: fields,
-          expand: options && options.expand === "changelog" ? ["changelog"] : undefined,
-          maxResults: list.length,
-        }),
-      });
+      var queries = [];
+      for (var offset = 0; offset < list.length; offset += 100) {
+        var batch=list.slice(offset,offset+100);
+        queries.push({jql:"key in (" + batch.map(toJqlToken).join(", ") + ") ORDER BY key ASC",size:batch.length});
+      }
+      return paginatedSearch(queries,Object.assign({stage:"linked"},options),Infinity);
     },
     getIssueWithHistory: function(key) {
+      var issueKey = dueDateKey(key);
+      if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
       return $.ajax({
-        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()),
+        url: config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(issueKey),
         type: "GET",
+        timeout: 30000,
         dataType: "json",
         data: { fields: issueFields().join(","), expand: "changelog" },
       });
     },
     getIssueComments: function(key, startAt) {
       return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()) + "/comment",
-        type:"GET",dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
+        type:"GET",timeout:30000,dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
     },
     getIssueWorklogs: function(key, startAt) {
       return $.ajax({url:config.baseUrl + "/rest/api/2/issue/" + encodeURIComponent(String(key || "").trim()) + "/worklog",
         type:"GET",dataType:"json",data:{startAt:startAt || 0,maxResults:100}});
     },
-    getProjectIssues: function(projectKey, epicKey) {
+    getProjectIssues: function(projectKey, epicKey, options) {
       var project = projectKey != null ? String(projectKey).trim() : "";
       var epic = epicKey != null ? String(epicKey).trim() : "";
       var jql;
-      var issues = [];
-      var pageSize = 100;
-      var maxIssues = 1000;
       if (!project) return Promise.resolve({ issues: [] });
       jql = "project = " + toJqlToken(project) + " AND issuetype = Story";
       if (epic && config.EPIC_LINK_FIELD) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + " = " + toJqlToken(epic);
       jql += " ORDER BY key DESC";
-      function page(startAt) {
-        return Promise.resolve($.ajax({
-          url: config.baseUrl + "/rest/api/2/search",
-          type: "POST",
-          contentType: "application/json",
-          dataType: "json",
-          data: JSON.stringify({ jql: jql, fields: issueFields(), expand: ["changelog"], startAt: startAt, maxResults: Math.min(pageSize, maxIssues - startAt) }),
-        })).then(function(data) {
-          var batch = data && Array.isArray(data.issues) ? data.issues : [];
-          issues = issues.concat(batch);
-          var next = startAt + batch.length;
-          if (batch.length && next < Number(data && data.total) && next < maxIssues) return page(next);
-          return { issues: issues, total: data && data.total != null ? Number(data.total) : issues.length, truncated: next < Number(data && data.total) };
-        });
-      }
-      return page(0);
+      return paginatedSearch([jql],Object.assign({stage:"stories",expand:"changelog"},options),1000);
     },
-    searchIssueBySummary: function(projectKey, summaryText) {
+    searchIssueBySummary: function(projectKey, summaryText, options) {
       var text = summaryText != null ? String(summaryText).trim() : "";
       var fields = ["summary", "description", "status", "resolution", "resolutiondate", "assignee", "issuelinks", "issuetype"];
       if (config.SPRINT_FIELD && fields.indexOf(config.SPRINT_FIELD) < 0) fields.push(config.SPRINT_FIELD);
       if (fields.indexOf("customfield_10020") < 0) fields.push("customfield_10020");
       if (fields.indexOf("customfield_10007") < 0) fields.push("customfield_10007");
       if (!projectKey || !text) return Promise.resolve({ issues: [] });
-      return $.ajax({
-        url: config.baseUrl + "/rest/api/2/search",
-        type: "POST",
-        contentType: "application/json",
-        dataType: "json",
-        data: JSON.stringify({
-          jql: "project = " + toJqlToken(projectKey) + " AND " + summaryTextJql(text) + " ORDER BY updated DESC",
-          fields: fields,
-          maxResults: 10,
-        }),
-      });
+      return paginatedSearch(["project = " + toJqlToken(projectKey) + " AND " + summaryTextJql(text) + " ORDER BY updated DESC"],
+        Object.assign({stage:"summary"},options),10);
     },
     toJqlToken: toJqlToken,
     uniqueIssueKeys: uniqueIssueKeys,

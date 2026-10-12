@@ -51,6 +51,173 @@ function setup(activityReport, configureWindow) {
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
 
+function fitFixture(t) {
+  let containerWidth = 1200;
+  const observers = [];
+  const env = setup(null, w => {
+    Object.defineProperty(w.HTMLElement.prototype, "clientWidth", {get() {
+      return this.classList.contains("ujg-esi-registry-scroll") ? containerWidth : 0;
+    }});
+    w.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; observers.push(this); }
+      observe(target) { this.target = target; this.connected = true; }
+      disconnect() { this.connected = false; }
+    };
+  });
+  t.after(() => env.dom.window.close());
+  const {$, state, dom, modules} = env;
+  state.preferencesStorageKey = "reg09-author";
+  const legacy = {order:["summary","remarkId","remark","status","age","assignee","priority"],
+    visible:["summary","remarkId","remark","status","age","assignee","priority"],widths:{summary:310,remark:280}};
+  dom.window.localStorage.setItem(state.preferencesStorageKey, JSON.stringify({gridLayout:legacy}));
+  $(".ujg-excel-story-importer").empty();
+  const grid = modules._ujgESI_grid.create();
+  const mount = () => { $(".ujg-excel-story-importer").empty(); grid.mount($(".ujg-excel-story-importer"),state,{appendActions() {}}); };
+  mount();
+  const choose = () => { grid.columnsMenu($("th")[0]); };
+  const fit = () => { choose(); $("[aria-label='Подстроить ширины']")[0]?.click(); };
+  const saved = () => JSON.parse(dom.window.localStorage.getItem(state.preferencesStorageKey)).gridLayout;
+  const width = key => Number($("col[data-column='" + key + "']").attr("width"));
+  const resizeContainer = value => { containerWidth = value; observers.filter(o => o.connected && o.target.isConnected).forEach(o => o.callback([{target:o.target}])); };
+  return {...env,grid,mount,choose,fit,saved,width,resizeContainer,observers};
+}
+
+test("REG-09 fit is explicit, preserves layout and gives only summary remaining width", t => {
+  const {$,fit,width,saved,resizeContainer} = fitFixture(t);
+  const order = $("th[data-column]").map((i,e) => e.dataset.column).get();
+  assert.equal(width("summary"),310);
+  resizeContainer(1600);
+  assert.equal(width("summary"),310, "legacy layout does not auto-fit");
+  fit();
+  assert.equal($("[data-sort='priority'] span").text(),"Прио");
+  assert.equal($("[data-sort='priority']").attr("aria-label"),"Сортировка: Приоритет");
+  assert.deepEqual($("th[data-column]").map((i,e) => e.dataset.column).get(),order);
+  assert.equal(saved().columnLayouts.excel.fitSummary,true);
+  assert.ok(width("remarkId") <= 54);
+  assert.ok(width("status") < 112);
+  assert.ok(width("age") < 94);
+  assert.ok(width("assignee") <= 124);
+  assert.ok(width("remark") >= 300);
+  // Legacy migration retains the deadline and adds Jira component (150px each).
+  const fixed = ["remarkId","remark","status","age","assignee","priority"].reduce((sum,key) => sum+width(key),372);
+  assert.equal(width("summary"),1600-fixed);
+  resizeContainer(400);
+  assert.equal(width("summary"),240);
+  assert.equal(parseInt($(".ujg-esi-registry-table")[0].style.width),fixed+240);
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-remarkId .ujg-esi-remark-controls").length,1);
+});
+
+test("REG-09 container updates preserve filter drafts and resize focus; summary resize exits fit", t => {
+  const {$,dom,fit,width,saved,resizeContainer} = fitFixture(t);
+  fit();
+  $("[data-filter='assignee']").trigger("click");
+  const search = $(".ujg-esi-filter-search")[0];
+  $(search).val("Bob").trigger("input"); search.focus();
+  const table = $(".ujg-esi-registry-table")[0];
+  resizeContainer(1500);
+  assert.equal($(".ujg-esi-registry-table")[0],table);
+  assert.equal(dom.window.document.activeElement,search);
+  assert.equal(search.value,"Bob");
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown",{key:"Escape",bubbles:true}));
+  const handle = $("th[data-column='remark'] .ujg-esi-column-resize")[0]; handle.focus();
+  $(handle).trigger($.Event("keydown",{key:"ArrowRight"}));
+  assert.equal(dom.window.document.activeElement,handle);
+  assert.equal(saved().columnLayouts.excel.fitSummary,true);
+  const before = width("summary");
+  $("th[data-column='summary'] .ujg-esi-column-resize").trigger($.Event("keydown",{key:"ArrowLeft"}));
+  assert.equal(saved().columnLayouts.excel.fitSummary,false);
+  assert.equal(width("summary"),Math.min(600,before-10));
+  resizeContainer(1800);
+  assert.equal(width("summary"),Math.min(600,before-10));
+});
+
+test("REG-09 fit persists per source and user, hidden summary stays fixed, reset exits fit", t => {
+  const {$,state,grid,mount,fit,width,saved,choose,resizeContainer,modules} = fitFixture(t);
+  fit();
+  state.viewMode="jira"; mount();
+  assert.equal(width("summary"),310);
+  state.viewMode="excel"; mount();
+  assert.notEqual(width("summary"),310);
+  choose(); option($,"Тема задачи").prop("checked",false).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  const before = $(".ujg-esi-registry-table")[0].style.width;
+  resizeContainer(2000);
+  assert.equal($(".ujg-esi-registry-table")[0].style.width,before);
+  choose(); $("[aria-label='Сбросить расположение столбцов']").trigger("click");
+  assert.equal(saved().columnLayouts.excel.fitSummary,false);
+  assert.equal(width("summary"),276);
+  fit();
+  resizeContainer(4000);
+  const restored = modules._ujgESI_grid.create();
+  $(".ujg-excel-story-importer").empty(); restored.mount($(".ujg-excel-story-importer"),state,{appendActions() {}});
+  assert.ok(width("summary") > 276);
+  state.preferencesStorageKey="reg09-another-author";
+  grid.mount($(".ujg-excel-story-importer").empty(),state,{appendActions() {}});
+  assert.equal(width("summary"),276);
+});
+
+test("REG-09 pointer resizing preserves fit for fixed columns and suspend disconnects observation", t => {
+  const {$,dom,grid,fit,saved,observers,resizeContainer,width,mount} = fitFixture(t);
+  fit();
+  const handle = $("th[data-column='status'] .ujg-esi-column-resize");
+  handle.trigger($.Event("pointerdown",{pageX:100}));
+  $(dom.window.document).trigger($.Event("pointermove",{pageX:120}));
+  $(dom.window.document).trigger($.Event("pointerup",{pageX:120}));
+  assert.equal(saved().columnLayouts.excel.fitSummary,true);
+  const before=width("summary");
+  grid.suspend();
+  assert.equal(observers.filter(o => o.connected && o.target.isConnected).length,0);
+  resizeContainer(1900); assert.equal(width("summary"),before);
+  mount(); assert.notEqual(width("summary"),before);
+  $("th[data-column='summary'] .ujg-esi-column-resize").trigger($.Event("pointerdown",{pageX:100}));
+  $(dom.window.document).trigger($.Event("pointermove",{pageX:80}));
+  $(dom.window.document).trigger($.Event("pointerup",{pageX:80}));
+  assert.equal(saved().columnLayouts.excel.fitSummary,false);
+});
+
+for (const [key, caption] of [["remark","Замечание из Excel"],["summary","Тема задачи"]]) {
+  for (const dismissal of ["Escape","outside"]) {
+    test("REG-09 visibility draft for " + key + " stays isolated through resize and " + dismissal, t => {
+      const {$,dom,choose,fit,saved,width,resizeContainer} = fitFixture(t);
+      fit();
+      const visible = saved().columnLayouts.excel.visible;
+      const table = $(".ujg-esi-registry-table")[0];
+      choose(); option($,caption).prop("checked",false).trigger("change");
+      resizeContainer(1800);
+      assert.equal(width("summary"),656,"only committed columns participate in fitting");
+      assert.equal(width("remark"),360);
+      assert.equal(table.style.width,"1800px");
+      assert.equal($(".ujg-esi-registry-table")[0],table);
+      assert.deepEqual(saved().columnLayouts.excel.visible,visible);
+      if (dismissal === "Escape") $(".ujg-esi-grid-menu").trigger($.Event("keydown",{key:"Escape"}));
+      else dom.window.document.body.click();
+      choose();
+      assert.equal(option($,caption).prop("checked"),true,"dismissed visibility draft is discarded");
+      $("[aria-label='Подстроить ширины']").trigger("click");
+      assert.deepEqual(saved().columnLayouts.excel.visible,visible);
+      assert.equal(width("summary"),656);
+      assert.equal(width("remark"),360);
+    });
+  }
+}
+
+for (const confirmation of ["OK","fit"]) {
+  test("REG-09 " + confirmation + (confirmation === "OK" ? " commits" : " discards") + " the current column visibility draft", t => {
+    const {$,choose,fit,saved,resizeContainer,width} = fitFixture(t);
+    fit(); resizeContainer(1800);
+    choose(); option($,"Замечание из Excel").prop("checked",false).trigger("change");
+    if (confirmation === "OK") $(".ujg-esi-filter-apply").trigger("click");
+    else $("[aria-label='Подстроить ширины']").trigger("click");
+    assert.equal($("col[data-column='remark']").length,confirmation === "OK" ? 0 : 1);
+    assert.equal(saved().columnLayouts.excel.visible.includes("remark"),confirmation !== "OK");
+    assert.equal(width("summary"),confirmation === "OK" ? 1016 : 656);
+    choose(); option($,"Тема задачи").prop("checked",false).trigger("change");
+    $(".ujg-esi-grid-menu").trigger($.Event("keydown",{key:"Escape"}));
+    $("[data-sort='remarkId']").trigger("click");
+    assert.equal(saved().columnLayouts.excel.visible.includes("summary"),true,"unrelated layout save cannot commit a cancelled draft");
+  });
+}
+
 test("remark controls live under ID with no separate tree column and no issue actions", t => {
   const {dom,$,calls} = setup(); t.after(() => dom.window.close());
   assert.equal($(".ujg-esi-expand-cell").length,0);

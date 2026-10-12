@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi) {
   "use strict";
 
   var $root;
@@ -9,10 +9,95 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var activityView;
   var dueDateView, $dueHost, componentView, $componentHost;
   var columnPreflightView, $columnPreflightHost;
+  var statusView, $statusHost;
   var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
   var viewportWindows = [];
+  var registryPanel, activityPanel;
+
+  function createRequestPanel(kind) {
+    var $panel=$("<section/>").addClass("ujg-esi-request-progress").attr({"data-progress-kind":kind,"aria-label":kind === "activity" ? "Запросы истории Jira" : "Запросы реестра Jira"});
+    var $head=$("<div/>").addClass("ujg-esi-request-head"), $summary=$("<strong/>"), $controls=$("<div/>").addClass("ujg-esi-request-controls");
+    var $spinner=$("<span/>").addClass("ujg-esi-request-spinner").attr("aria-hidden","true").append(icon("RefreshCw"));
+    var $heading=$("<div/>").addClass("ujg-esi-request-heading").append($spinner,$summary);
+    var $snapshot=$("<div/>").addClass("ujg-esi-request-snapshot"), $error=$("<div/>").addClass("ujg-esi-error");
+    var $details=$("<details/>").prop("open",true), $count=$("<summary/>"), $list=$("<div/>").addClass("ujg-esi-request-list").attr({role:"list","aria-label":"Все запросы загрузки"});
+    $panel.append($head.append($heading,$controls),$snapshot,$error,$details.append($count,$list));
+    var progress, callbacks={}, nodes=Object.create(null), running=Object.create(null), timer=null;
+    var states={queued:"В очереди",running:"Выполняется",completed:"Завершён",error:"Ошибка",cancelled:"Отменён"};
+    var stages={stories:"Истории",linked:"Связанные задачи",history:"История задачи",comments:"Комментарии",summary:"Поиск по теме"};
+    var prefix=kind === "activity" ? "ActivityHistory" : "RegistryLoad";
+    [["stop","X","Остановить загрузку","onStop"], ["restart","RefreshCw","Загрузить заново","onRestart"],
+      ["retry","RefreshCw",kind === "activity" ? "Повторить неудачные запросы" : "Повторить загрузку с начала","onRetry"]].forEach(function(control) {
+      $controls.append($("<button/>").addClass("ujg-esi-icon-button ujg-esi-small-btn").attr({type:"button","data-request-control":control[0],"aria-label":control[2],title:control[2]})
+        .append(icon(control[1]),$("<span/>").text(control[2])).on("click",function() { var cb=callbacks[control[3]+prefix]; if (cb) cb(); }));
+    });
+    function suspend() { if (timer !== null) window.clearTimeout(timer); timer=null; }
+    function elapsed(row) {
+      return row.startedAt == null ? "" : Math.max(0,Math.floor(((row.finishedAt == null ? Date.now() : row.finishedAt)-row.startedAt)/1000)) + " с";
+    }
+    function tick() {
+      timer=null;
+      if (!$panel[0].isConnected) return;
+      Object.keys(running).forEach(function(id) { nodes[id].$elapsed.text(elapsed(running[id])); });
+      if (Object.keys(running).length) timer=window.setTimeout(tick,1000);
+    }
+    function update(value, services, snapshotAt) {
+      progress=value; callbacks=services || {};
+      if (!progress) { suspend(); running=Object.create(null); $panel.hide(); return; }
+      $panel.show().attr({"data-run-id":progress.runId,"data-progress-status":progress.status});
+      var rows=progress.rows || [], present=Object.create(null), counts={queued:0,running:0,completed:0,error:0,cancelled:0};
+      running=Object.create(null);
+      rows.forEach(function(row) {
+        present[row.id]=true;
+        var old=row.runId != null && row.runId !== progress.runId;
+        if (!old && counts[row.state] != null) counts[row.state]++;
+        var entry=nodes[row.id];
+        if (!entry) {
+          var $row=$("<div/>").addClass("ujg-esi-request-row").attr({role:"listitem","data-request-id":row.id});
+          entry=nodes[row.id]={$row:$row,$text:$("<span/>").addClass("ujg-esi-request-description"),$elapsed:$("<span/>").addClass("ujg-esi-request-elapsed"),signature:""};
+          $list.append($row.append(entry.$text,entry.$elapsed));
+        }
+        var text=(old ? "Предыдущий запрос · " : "") + (stages[row.stage] || row.stage || "Jira") + (row.key ? " · " + row.key : "") +
+          (row.batch != null ? " · пакет " + row.batch : "") + (row.startAt != null ? " · смещение " + row.startAt : "") +
+          (row.requested != null ? " · запрошено " + row.requested : "") + (row.received != null ? " · получено " + row.received : "") +
+          (row.total != null ? " из " + row.total : "") + " · " + (states[row.state] || row.state) + (row.error ? ": " + row.error : "");
+        if (entry.signature !== text) { entry.signature=text; entry.$text.text(text); entry.$row.attr("data-request-state",row.state); entry.$elapsed.text(elapsed(row)); }
+        if (row.state === "running") running[row.id]=row;
+      });
+      Object.keys(nodes).forEach(function(id) { if (!present[id]) { nodes[id].$row.remove(); delete nodes[id]; } });
+      $summary.text((kind === "activity" ? "История Jira" : "Чтение Jira") + " · " + (states[progress.status] || progress.status) + (progress.localStage ? " · " + progress.localStage : ""));
+      $spinner.css("visibility",progress.status === "running" ? "visible" : "hidden");
+      $count.text("Запросов: " + rows.length + " · В очереди: " + counts.queued + " · Выполняется: " + counts.running + " · Завершено: " + counts.completed + " · Ошибок: " + counts.error + " · Отменено: " + counts.cancelled);
+      $error.text(progress.error || "").toggle(!!progress.error);
+      var at=Date.parse(snapshotAt), stamp="";
+      if (isFinite(at)) {
+        var moscow=new Date(at+3*3600000).toISOString();
+        stamp=moscow.slice(8,10)+"."+moscow.slice(5,7)+"."+moscow.slice(0,4)+" "+moscow.slice(11,19)+" МСК";
+      }
+      $snapshot.text(stamp ? (progress.status === "completed" ? "Снимок Jira: " : "Предыдущий снимок Jira: ") + stamp :
+        kind === "registry" ? "Полный снимок нового запуска ещё не опубликован." : "Сохранённые снимки и полнота отчёта указаны ниже.");
+      $controls.find('[data-request-control="stop"]').prop("disabled",progress.status !== "running");
+      $controls.find('[data-request-control="restart"]').prop("disabled",false);
+      $controls.find('[data-request-control="retry"]').prop("disabled",progress.status === "running" || progress.status !== "error");
+      if ($panel[0].isConnected && Object.keys(running).length) {
+        if (timer === null) timer=window.setTimeout(tick,1000);
+      } else suspend();
+    }
+    return {mount:function($parent) { $parent.append($panel); },detach:function() { suspend(); $panel.detach(); },
+      reveal:function() {
+        if (progress && $panel[0].isConnected && typeof $head[0].scrollIntoView === "function") $head[0].scrollIntoView({block:"nearest",inline:"nearest",behavior:"auto"});
+      },
+      update:update,suspend:suspend,destroy:function() { suspend(); $panel.remove(); nodes=Object.create(null); }};
+  }
+
+  function renderRequestProgress(state) {
+    if (!registryPanel || !activityPanel) return false;
+    registryPanel.update(state.registryProgress,services,state.registrySnapshotAt);
+    activityPanel.update(state.reportView === "activity" ? state.activityProgress : null,services);
+    return true;
+  }
 
   function unbindViewport() {
     viewportWindows.forEach(function(view) { $(view).off("resize.ujgEsiViewport scroll.ujgEsiViewport"); });
@@ -146,6 +231,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function init(container, svc) {
+    if (registryPanel) registryPanel.destroy();
+    if (activityPanel) activityPanel.destroy();
+    if (statusView) statusView.destroy();
+    if ($statusHost) $statusHost.remove();
     if (grid && grid.suspend) grid.suspend();
     if (columnPreflightView) columnPreflightView.destroy();
     if ($columnPreflightHost) $columnPreflightHost.remove();
@@ -156,13 +245,19 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if ($componentHost) $componentHost.remove();
     $root = container;
     services = svc || {};
+    registryPanel=createRequestPanel("registry"); activityPanel=createRequestPanel("activity");
     $(window).off("pagehide.ujgEsiViewport pageshow.ujgEsiViewport")
-      .on("pagehide.ujgEsiViewport", unbindViewport).on("pageshow.ujgEsiViewport", bindViewport);
+      .on("pagehide.ujgEsiViewport",function() {
+        unbindViewport(); registryPanel.suspend(); activityPanel.suspend();
+        if (services.onSuspendRequestLoads) services.onSuspendRequestLoads();
+      }).on("pageshow.ujgEsiViewport", bindViewport);
     bindViewport();
     grid = gridModule.create();
     activityView = activityUi ? activityUi.create() : null;
     dueDateView = dueDateSyncUi ? dueDateSyncUi.create() : null;
     $dueHost = $("<div/>").addClass("ujg-esi-due-sync-mount");
+    statusView = statusTransitionUi ? statusTransitionUi.create() : null;
+    $statusHost = $("<div/>").addClass("ujg-esi-status-mount");
     componentView = dueDateSyncUi ? dueDateSyncUi.create({kind:"component"}) : null;
     $componentHost = $("<div/>").addClass("ujg-esi-component-sync-mount");
     columnPreflightView = columnPreflightUi ? columnPreflightUi.create() : null;
@@ -1867,6 +1962,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     grid.mount($parent, state, {
       appendActions: function($td, row, index) { appendRowActions($td, row, state, index); },
       renderDescription: renderJiraWiki,
+      openStatus: function(entry) { if (services.onOpenStatusTransition) services.onOpenStatusTransition(entry); },
       editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); },
       assignTeam: function(user, teamId) { if (services && services.onAssignUserTeam) services.onAssignUserTeam(user, teamId); }
     });
@@ -1910,6 +2006,8 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     else if (activityView && activityView.dismissPopover) activityView.dismissPopover();
     if ($dueHost) $dueHost.detach();
     if ($columnPreflightHost) $columnPreflightHost.detach();
+    if (registryPanel) registryPanel.detach();
+    if (activityPanel) activityPanel.detach();
     $root.empty();
     var s = state || {};
     var $toolbar = $("<div/>").addClass("ujg-esi-toolbar ujg-esi-compact-toolbar");
@@ -1959,6 +2057,9 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     $toolbar.append(gridModule.button(fullscreen ? "Minimize2" : "Expand", fullscreen ? "Выйти из полноэкранного режима" : "На весь экран", toggleFullscreen).addClass("ujg-esi-fullscreen-button"));
     $root.append($toolbar);
+    if (registryPanel) registryPanel.mount($root);
+    if (activityPanel) activityPanel.mount($root);
+    renderRequestProgress(s);
     if (s.error) $root.append($("<div/>").addClass("ujg-esi-error").text(s.error));
     if (s.teamsError && (!s.mappingEditorOpen || s.activeMappingBlock !== "teams")) $root.append($("<div/>").addClass("ujg-esi-error").attr("role", "alert").text(s.teamsError));
     if (s.llmError) $root.append($("<div/>").addClass("ujg-esi-error").text(s.llmError));
@@ -1987,6 +2088,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     restoreScrollState(scrollState);
     appendRowOwnerPopover($root, s);
     renderDueDateSync(s);
+    renderStatusTransition(s);
     if (columnPreflightView) {
       $root.append($columnPreflightHost);
       columnPreflightView.render($columnPreflightHost,s,services);
@@ -2011,6 +2113,12 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
   }
 
+  function renderStatusTransition(state) {
+    if (!$root || !statusView) return;
+    if (!$statusHost.parent().length) $root.append($statusHost);
+    statusView.render($statusHost,state,services);
+  }
+
   function clearMappingError() {
     if (!$root || !$root.length) return;
     $root.find(".ujg-esi-mapping-error").remove();
@@ -2019,8 +2127,16 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   return {
     init: init,
     render: render,
-    renderActivityProgress: function(state) { return !!(activityView && activityView.updateProgress(state)); },
+    createRequestPanel:createRequestPanel,
+    renderRequestProgress:renderRequestProgress,
+    revealActivityRequests:function(state) {
+      if (state.reportView !== "activity") return;
+      renderRequestProgress(state);
+      if (activityPanel) activityPanel.reveal();
+    },
+    renderActivityProgress: function(state) { renderRequestProgress(state); return !!(activityView && activityView.updateProgress(state)); },
     renderDueDateSync: renderDueDateSync,
+    renderStatusTransition: renderStatusTransition,
     clearMappingError: clearMappingError,
   };
 });

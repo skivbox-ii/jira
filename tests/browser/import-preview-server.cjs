@@ -163,6 +163,7 @@ function stressFixture() {
 const files = {
   "/": [path.join(__dirname,"import-preview.html"),"text/html; charset=utf-8"],
   "/test/preview-bootstrap.js": [path.join(__dirname,"import-preview-bootstrap.js"),"text/javascript"],
+  "/test/usability-fixture.js": [path.join(__dirname,"import-usability-fixture.js"),"text/javascript"],
   "/test/jquery.js": [require.resolve("jquery/dist/jquery.js"),"text/javascript"],
   "/test/xlsx.js": [require.resolve("xlsx/dist/xlsx.full.min.js"),"text/javascript"],
   "/test/jszip.js": [require.resolve("jszip/dist/jszip.min.js"),"text/javascript"],
@@ -174,9 +175,16 @@ const server = http.createServer((req,res) => {
   const requestUrl = new URL(req.url,"http://localhost"), pathname = requestUrl.pathname;
   res.setHeader("Cache-Control","no-store");
   if (pathname === "/" && requestUrl.searchParams.has("performance")) {
-    const html=fs.readFileSync(files["/"][0],"utf8")
+    let html=fs.readFileSync(files["/"][0],"utf8")
       .replace('src="/test/fixture.js"','src="/test/performance-fixture.js"')
       .replace('src="/test/preview-bootstrap.js"','src="/test/performance-bootstrap.js"');
+    if (requestUrl.searchParams.has("usability")) html=html.replace('<script src="/test/performance-bootstrap.js">',
+      '<script src="/test/usability-fixture.js"></script>\n<script src="/test/performance-bootstrap.js">');
+    res.setHeader("Content-Type","text/html; charset=utf-8");return res.end(html);
+  }
+  if (pathname === "/" && requestUrl.searchParams.has("usability")) {
+    const html=fs.readFileSync(files["/"][0],"utf8").replace('<script src="/test/preview-bootstrap.js">',
+      '<script src="/test/usability-fixture.js"></script>\n<script src="/test/preview-bootstrap.js">');
     res.setHeader("Content-Type","text/html; charset=utf-8");return res.end(html);
   }
   if (pathname === "/test/performance-fixture.js") {
