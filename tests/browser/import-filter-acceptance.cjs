@@ -58,9 +58,42 @@ async function applyAssignee(page) {
 }
 
 async function screenshot(page, name, width) {
-  const file = path.join(artifacts, `${name}-${width}.png`);
+  const file = path.join(artifacts, `${name}-${width}x${page.viewportSize().height}.png`);
   await page.screenshot({path:file, fullPage:false});
   return file;
+}
+
+async function assertRemarkControlGeometry(page) {
+  const geometry = await page.locator(".ujg-esi-parent-row .ujg-esi-cell-remarkId .ujg-esi-remark-controls").first().evaluate(el => {
+    const box = el.getBoundingClientRect(), cell = el.closest("td").getBoundingClientRect();
+    const buttons = Array.from(el.querySelectorAll("button, .ujg-esi-remark-toggle-space"), button => {
+      const rect = button.getBoundingClientRect(), css = getComputedStyle(button);
+      return {left:rect.left,right:rect.right,width:rect.width,height:rect.height,minWidth:css.minWidth};
+    });
+    return {left:box.left,right:box.right,cellLeft:cell.left,cellRight:cell.right,buttons};
+  });
+  assert.ok(geometry.left >= geometry.cellLeft && geometry.right <= geometry.cellRight, "Controls fit the default ID cell");
+  assert.deepEqual(geometry.buttons.map(button => [button.width,button.height]),[[22,24],[22,24]]);
+  assert.ok(geometry.buttons[0].right <= geometry.buttons[1].left, "Disclosure and star do not overlap");
+  const header = await page.locator("th[data-column='remarkId']").evaluate(el => {
+    const title = el.querySelector(".ujg-esi-header-sort span").getBoundingClientRect();
+    const filter = el.querySelector(".ujg-esi-header-filter").getBoundingClientRect();
+    return {titleRight:title.right,filterLeft:filter.left};
+  });
+  assert.ok(header.titleRight <= header.filterLeft, "ID heading is not occluded by the filter");
+}
+
+async function assertFilterViewport(page) {
+  const bounds = await page.locator(".ujg-esi-grid-menu").evaluate(el => {
+    const rect = el.getBoundingClientRect(), actions = el.querySelector(".ujg-esi-filter-actions").getBoundingClientRect();
+    const list = el.querySelector(".ujg-esi-filter-values");
+    return {top:rect.top,bottom:rect.bottom,actionTop:actions.top,actionBottom:actions.bottom,height:innerHeight,
+      listHeight:list.clientHeight,listScrollHeight:list.scrollHeight};
+  });
+  assert.ok(bounds.top >= 12 && bounds.bottom <= bounds.height-12,"Filter stays inside the viewport: " + JSON.stringify(bounds));
+  assert.ok(bounds.actionTop >= bounds.top && bounds.actionBottom <= bounds.bottom,"OK and Cancel remain visible");
+  assert.ok(bounds.listHeight > 0 && bounds.listScrollHeight > bounds.listHeight,"The value list scrolls inside the popup");
+  return bounds;
 }
 
 async function loadJira(page) {
@@ -79,8 +112,8 @@ async function main() {
   fs.mkdirSync(artifacts, {recursive:true});
   const browser = await chromium.launch({headless:true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined});
   try {
-    for (const width of [1440, 390]) {
-      const context = await browser.newContext({viewport:{width,height:900}});
+    for (const {width,height} of [{width:1440,height:900},{width:390,height:900},{width:390,height:500}]) {
+      const context = await browser.newContext({viewport:{width,height}});
       await context.route("**/*", route => {
         const url = new URL(route.request().url());
         return url.origin === new URL(origin).origin ? route.continue() : route.abort();
@@ -91,6 +124,29 @@ async function main() {
         await page.goto(origin);
         await page.waitForFunction(() => document.querySelectorAll(".ujg-esi-parent-row").length === 50 &&
           document.querySelectorAll(".ujg-esi-child-row").length === 10 && !document.querySelector(".ujg-esi-loading"), null, {timeout:60000});
+
+        assert.equal(await page.locator(".ujg-esi-expand-cell").count(),0);
+        await assertRemarkControlGeometry(page);
+        const trackedStory = page.locator(".ujg-esi-parent-row").filter({has:page.locator(".ujg-esi-cell-remarkId", {hasText:"744"})}).first();
+        const star = trackedStory.locator(".ujg-esi-track-remark");
+        const beforeStar = await star.boundingBox();
+        await star.hover(); await star.click();
+        assert.equal(await star.getAttribute("aria-pressed"),"true");
+        assert.deepEqual(await star.boundingBox(),beforeStar,"Hover and tracking do not resize or move the star");
+        await page.locator("[data-filter='remarkId']").click();
+        const trackingPopupBounds = await assertFilterViewport(page);
+        shots.push(await screenshot(page,"tracking-filter",width));
+        await page.locator("[data-tracking-mode='only']").check();
+        await page.locator(".ujg-esi-grid-menu .ujg-esi-filter-actions button").last().click();
+        assert.equal(await page.locator(".ujg-esi-parent-row").count(),50,"Cancel leaves tracking mode unapplied");
+        await page.locator("[data-filter='remarkId']").click();
+        await page.locator("[data-tracking-mode='only']").check();
+        await page.locator(".ujg-esi-grid-menu .ujg-esi-filter-apply").click();
+        assert.equal(await page.locator(".ujg-esi-parent-row").count(),1);
+        assert.equal(await page.locator("[data-filter='remarkId'].is-active").count(),1);
+        await page.locator(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']").click();
+        assert.equal(await star.getAttribute("aria-pressed"),"true","Filter reset retains tracking");
+        shots.push(await screenshot(page,"remark-controls",width));
 
         // Set independent layout preferences before exercising filter resets.
         await page.locator("[data-sort='remarkId']").click();
@@ -115,10 +171,13 @@ async function main() {
         await story.getByRole("button", {name:"Свернуть замечание 744", exact:true}).click();
         assert.ok((await filteredRows(page)).filter(row => row.child).length < matched, "Own disclosure hides its matching children");
         await page.getByRole("button", {name:"Развернуть замечание 744", exact:true}).click();
-        assert.equal((await filteredRows(page)).filter(row => row.child).length, matched, "Own disclosure restores only matching children");
+        assert.ok((await filteredRows(page)).filter(row => row.child).length > matched, "Own disclosure reveals all children of the selected remark");
+        await openAssigneeFilter(page);
+        await page.locator(".ujg-esi-grid-menu .ujg-esi-filter-apply").click();
+        assert.equal((await filteredRows(page)).filter(row => row.child).length, matched, "Unchanged filter OK clears the manual disclosure override");
 
         // Both controls must work while the filter is active and never reveal siblings.
-        const headerToggle = page.locator(".ujg-esi-registry-table thead th").first().locator("button");
+        const headerToggle = page.locator(".ujg-esi-registry-table .ujg-esi-toggle-all");
         await headerToggle.click();
         assert.equal((await filteredRows(page)).filter(row => row.child).length, 0, "Header collapses matching groups");
         shots.push(await screenshot(page, "header-collapsed", width));
@@ -131,6 +190,7 @@ async function main() {
 
         await loadJira(page);
         await assertChildMatch(page);
+        assert.equal(await star.getAttribute("aria-pressed"),"true","Jira and Excel share remark tracking");
         shots.push(await screenshot(page, "filtered-jira", width));
         await refreshJira(page);
         await assertChildMatch(page);
@@ -147,6 +207,7 @@ async function main() {
         await page.waitForFunction(() => document.querySelectorAll(".ujg-esi-parent-row").length > 0 && !document.querySelector(".ujg-esi-loading"), null, {timeout:60000});
         await assertChildMatch(page);
         shots.push(await screenshot(page, "persisted-reload", width));
+        assert.equal(await star.getAttribute("aria-pressed"),"true","Tracking survives reload");
         const beforeResetLayout = await layout(page);
 
         const topReset = page.locator(".ujg-esi-toolbar [aria-label='Сбросить все фильтры']");
@@ -201,7 +262,7 @@ async function main() {
         const stats = await page.evaluate(() => ({mutationCalls:window.mutationCalls, llmCalls:window.llmPreviewCalls?.length || 0}));
         assert.deepEqual(stats, {mutationCalls:0,llmCalls:0});
         assert.deepEqual(errors, []);
-        console.log(JSON.stringify({width,pages,edges,...stats,pageerrors:errors.length,screenshots:shots}));
+        console.log(JSON.stringify({width,height,trackingPopupBounds,pages,edges,...stats,pageerrors:errors.length,screenshots:shots}));
       } finally { await context.close(); }
     }
   } finally { await browser.close(); }

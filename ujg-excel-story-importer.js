@@ -3752,6 +3752,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     return Object.keys(filters || {}).every(function(key) {
       if (key === "excludeDone") return except === "status" || !filters[key] || !row.isChild || !row.done;
       if (key === "teamIds") return key === except || !Array.isArray(filters[key]) || filters[key].some(function(id) { return Array.isArray(row.teamIds) && row.teamIds.indexOf(id) >= 0; });
+      if (key === "trackingMode") return except === "remarkId" || (filters[key] !== "only" && filters[key] !== "without") || (filters[key] === "only" ? !!row.tracked : !row.tracked);
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }
@@ -3764,19 +3765,24 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     });
     return Object.keys(seen).sort(compare);
   }
-  function selectGroups(rows, filters, sort) {
+  function selectGroups(rows, filters, sort, disclosed) {
     var groups = [];
     var current;
     (rows || []).forEach(function(row) {
       if (!row.isChild) {
-        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0, hiddenStory: !!(filters && filters.excludeDoneStories && row.key && row.done) };
+        current = { parent: row, children: [], allChildren: [], contextOnly: !matches(row, filters), totalChildren: 0, hiddenStory: !!(filters && filters.excludeDoneStories && row.key && row.done) };
         groups.push(current);
       } else if (current) {
         current.totalChildren += 1;
+        current.allChildren.push(row);
         if (matches(row, filters)) current.children.push(row);
       }
     });
     groups = groups.filter(function(group) { return !group.hiddenStory && (!group.contextOnly || group.children.length); });
+    // Decide group membership before a manual disclosure can bypass child filters.
+    groups.forEach(function(group) {
+      if (disclosed && disclosed[group.parent.groupId]) group.children = group.allChildren.slice();
+    });
     if (sort && sort.column) {
       function value(row) { return sort.column === "age" ? row.ageMs : row[sort.column]; }
       function cmp(a, b) {
@@ -3803,6 +3809,7 @@ define("_ujgESI_icons", [], function() {
   "use strict";
   var nodes = {"ChevronDown":[["path",{"d":"m6 9 6 6 6-6"}]],"ChevronRight":[["path",{"d":"m9 18 6-6-6-6"}]],"Plus":[["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],"WandSparkles":[["path",{"d":"m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"}],["path",{"d":"m14 7 3 3"}],["path",{"d":"M5 6v4"}],["path",{"d":"M19 14v4"}],["path",{"d":"M10 2v2"}],["path",{"d":"M7 8H3"}],["path",{"d":"M21 16h-4"}],["path",{"d":"M11 3H9"}]],"Upload":[["path",{"d":"M12 3v12"}],["path",{"d":"m17 8-5-5-5 5"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}]],"Download":[["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],"Settings":[["path",{"d":"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"}],["circle",{"cx":"12","cy":"12","r":"3"}]],"RefreshCw":[["path",{"d":"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}],["path",{"d":"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"}],["path",{"d":"M8 16H3v5"}]],"Info":[["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],"Columns3":[["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}],["path",{"d":"M9 3v18"}],["path",{"d":"M15 3v18"}]],"Expand":[["path",{"d":"m15 15 6 6"}],["path",{"d":"m15 9 6-6"}],["path",{"d":"M21 16v5h-5"}],["path",{"d":"M21 8V3h-5"}],["path",{"d":"M3 16v5h5"}],["path",{"d":"m3 21 6-6"}],["path",{"d":"M3 8V3h5"}],["path",{"d":"M9 9 3 3"}]],"Minimize2":[["path",{"d":"m14 10 7-7"}],["path",{"d":"M20 10h-6V4"}],["path",{"d":"m3 21 7-7"}],["path",{"d":"M4 14h6v6"}]],"X":[["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],"Funnel":[["path",{"d":"M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"}]],"FunnelX":[["path",{"d":"M12.531 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14v6a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341l.427-.473"}],["path",{"d":"m16.5 3.5 5 5"}],["path",{"d":"m21.5 3.5-5 5"}]],"ArrowDownAZ":[["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"ArrowUpAZ":[["path",{"d":"m3 8 4-4 4 4"}],["path",{"d":"M7 4v16"}],["path",{"d":"M20 8h-5"}],["path",{"d":"M15 10V6.5a2.5 2.5 0 0 1 5 0V10"}],["path",{"d":"M15 14h5l-5 6h5"}]],"Search":[["path",{"d":"m21 21-4.34-4.34"}],["circle",{"cx":"11","cy":"11","r":"8"}]],"TriangleAlert":[["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],"ExternalLink":[["path",{"d":"M15 3h6v6"}],["path",{"d":"M10 14 21 3"}],["path",{"d":"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}]],"Bookmark":[["path",{"d":"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"}]],"CheckSquare":[["path",{"d":"M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"}],["path",{"d":"m9 11 3 3L22 4"}]],"ChevronLeft":[["path",{"d":"m15 18-6-6 6-6"}]],"ArrowUp":[["path",{"d":"m5 12 7-7 7 7"}],["path",{"d":"M12 19V5"}]],"ArrowDown":[["path",{"d":"M12 5v14"}],["path",{"d":"m19 12-7 7-7-7"}]]};
   nodes.Equal = [["line",{"x1":"5","x2":"19","y1":"9","y2":"9"}],["line",{"x1":"5","x2":"19","y1":"15","y2":"15"}]];
+  nodes.Star = [["path",{"d":"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.164.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.123 2.123 0 0 0-1.974 0L6.392 21.01a.53.53 0 0 1-.77-.56l.881-5.14a2.123 2.123 0 0 0-.611-1.879L2.156 9.794a.53.53 0 0 1 .294-.906l5.163-.755a2.123 2.123 0 0 0 1.597-1.16z"}]];
   nodes.ArrowDownUp = [["path",{"d":"m3 16 4 4 4-4"}],["path",{"d":"M7 20V4"}],["path",{"d":"m21 8-4-4-4 4"}],["path",{"d":"M17 4v16"}]];
   nodes.Trash2 = [["path",{"d":"M10 11v6"}],["path",{"d":"M14 11v6"}],["path",{"d":"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"}],["path",{"d":"M3 6h18"}],["path",{"d":"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"}]];
   nodes.ListTree = [["path",{"d":"M8 5h13"}],["path",{"d":"M13 12h8"}],["path",{"d":"M13 19h8"}],["path",{"d":"M3 10a2 2 0 0 0 2 2h3"}],["path",{"d":"M3 5v12a2 2 0 0 0 2 2h3"}]];
@@ -9871,6 +9878,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     var state, hooks, $host, $viewport, $menu, menuAnchor, $filterReset, $teamFilter, filterTeams = [];
     var $description, descriptionAnchor, descriptionTimer, descriptionPinned = false, skipDescriptionFocus = false;
     var rows = [], sourceRows, filters = Object.create(null), sort = null, collapsed = Object.create(null), fullChildren = Object.create(null);
+    var disclosed = Object.create(null), trackingKey, tracked = [], trackingCache = Object.create(null);
     var hidden = Object.assign({}, defaultHidden), order = knownColumns.slice(), widths = {}, columnLayouts = {}, layoutMode, layoutKey, page = 0, pageSize = 50;
     var suppressSort = false, drag = null;
     var dateTimer = null, dateEvents = ".ujgRegistryDates" + id;
@@ -9914,6 +9922,52 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var key = storageKey(nextState), mode = modeOf(nextState);
       if (layoutKey !== key) loadLayout(key, mode);
       else if (layoutMode !== mode) activateMode(mode);
+      var nextTrackingKey = key + ":tracked-remarks:" + encodeURIComponent(String(nextState.projectKey || ""));
+      if (trackingKey !== nextTrackingKey) {
+        trackingKey = nextTrackingKey;
+        disclosed = Object.create(null); collapsed = Object.create(null);
+        tracked = trackingCache[trackingKey] || [];
+        try {
+          var saved = JSON.parse(window.localStorage.getItem(trackingKey) || "null");
+          if (Array.isArray(saved)) tracked = saved.filter(Array.isArray).map(function(ids) {
+            return ids.filter(function(value,index,all) { return typeof value === "string" && /^(jira|remark):.+/.test(value) && all.indexOf(value) === index; });
+          }).filter(function(ids) { return ids.length; });
+        } catch (ignore) { /* Keep in-memory tracking when storage is unavailable. */ }
+        trackingCache[trackingKey] = tracked;
+      }
+    }
+    function trackingIds(entry) {
+      var ids = [];
+      var key = String(entry.source.createdKey || entry.source.jiraKey || entry.source.storyDetails && entry.source.storyDetails.key || "").trim();
+      if (key) ids.push("jira:" + key);
+      if (entry.remarkId) ids.push("remark:" + entry.remarkId);
+      return ids;
+    }
+    function trackedRecords(ids) {
+      return tracked.filter(function(record) { return ids.some(function(key) { return record.indexOf(key) >= 0; }); });
+    }
+    function isTracked(entry) { return trackedRecords(trackingIds(entry)).length > 0; }
+    function updateTracking() {
+      var changed = false;
+      rows.forEach(function(entry) {
+        var ids = trackingIds(entry), records = trackedRecords(ids);
+        if (!entry.isChild && records.length) {
+          var aliases = records.reduce(function(all,record) { return all.concat(record); },ids).filter(function(key,index,all) { return all.indexOf(key) === index; });
+          if (records.length > 1 || aliases.length !== records[0].length) {
+            tracked = tracked.filter(function(record) { return records.indexOf(record) < 0; }).concat([aliases]);
+            changed = true;
+          }
+        }
+        entry.tracked = records.length > 0;
+      });
+      if (changed) saveTracking();
+    }
+    function saveTracking() {
+      trackingCache[trackingKey] = tracked;
+      try { window.localStorage.setItem(trackingKey, JSON.stringify(tracked)); } catch (ignore) { /* Storage is best-effort. */ }
+    }
+    function activeFilter(key) {
+      return Array.isArray(filters[key]) || key === "status" && !!(filters.excludeDone || filters.excludeDoneStories) || key === "remarkId" && !!filters.trackingMode;
     }
     function loadLayout(key, mode) {
       layoutKey = key;
@@ -9937,6 +9991,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         });
         if (layout.filters.excludeDone === true) filters.excludeDone = true;
         if (layout.filters.excludeDoneStories === true) filters.excludeDoneStories = true;
+        if (layout.filters.trackingMode === "only" || layout.filters.trackingMode === "without") filters.trackingMode = layout.filters.trackingMode;
         if (Array.isArray(layout.filters.teamIds)) filters.teamIds = layout.filters.teamIds.filter(function(value, index, all) {
           return typeof value === "string" && !!value && all.indexOf(value) === index;
         });
@@ -9957,7 +10012,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       return order.map(function(id) { return columns.filter(function(c) { return c[0] === id; })[0]; });
     }
     function visibleWidth() {
-      return 28 + 72 + orderedColumns().filter(function(c) { return !hidden[c[0]]; })
+      return 72 + orderedColumns().filter(function(c) { return !hidden[c[0]]; })
         .reduce(function(total, c) { return total + (widths[c[0]] || c[2]); }, 0);
     }
     function moveColumn(from, to) {
@@ -10104,8 +10159,12 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       }
     }
     function filtersChanged() {
-      collapsed = Object.create(null); page = 0;
+      collapsed = Object.create(null); disclosed = Object.create(null); page = 0;
       saveLayout(); updateFilterReset(); refresh();
+    }
+    function filterConfirmed(changed) {
+      disclosed = Object.create(null);
+      if (changed) filtersChanged(); else refresh();
     }
     function resetFilters() { filters = Object.create(null); filtersChanged(); }
     function expandableGroups() {
@@ -10119,6 +10178,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     function toggleAll() {
       var groups = expandableGroups(), collapse = allExpanded(groups);
+      disclosed = Object.create(null);
       groups.forEach(function(group) {
         collapsed[group.parent.groupId] = collapse;
         if (!collapse) fullChildren[group.parent.groupId] = true;
@@ -10182,7 +10242,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           var previous = JSON.stringify(filters.teamIds), available = filterTeams.map(function(team) { return team.id; });
           if (available.length && selected.length === available.length && available.every(function(teamId) { return selected.indexOf(teamId) >= 0; })) delete filters.teamIds;
           else filters.teamIds = selected.slice().sort();
-          if (JSON.stringify(filters.teamIds) !== previous) filtersChanged(); else refresh();
+          filterConfirmed(JSON.stringify(filters.teamIds) !== previous);
           $(anchor).trigger("focus");
         }), $("<button/>").attr("type","button").text("Отмена").on("click",function() { closeMenu(true); })
       ));
@@ -10194,18 +10254,25 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
     }
     function filterMenu(anchor, column) {
       var key = column[0], isPerson = key === "owner" || key === "assignee";
-      var active = Array.isArray(filters[key]) || key === "status" && !!(filters.excludeDone || filters.excludeDoneStories);
+      var active = activeFilter(key), trackingMode = filters.trackingMode || "all";
       var excludeDone = !!filters.excludeDone;
       var excludeDoneStories = !!filters.excludeDoneStories;
       var options = registry.values(rows, key, filters);
       (filters[key] || []).forEach(function(value) { if (options.indexOf(value) === -1) options.push(value); });
       options.sort(registry.compare);
       var selected = Array.isArray(filters[key]) ? filters[key].slice() : options.slice();
-      var $box = popup(anchor, "Фильтр: " + column[1]);
+      var $box = popup(anchor, "Фильтр: " + column[1]).addClass("ujg-esi-column-filter-menu");
       [ ["asc", "ArrowDownAZ", key === "priority" ? "Сначала низкий приоритет" : "Сортировка по возрастанию"], ["desc", "ArrowUpAZ", key === "priority" ? "Сначала высокий приоритет" : "Сортировка по убыванию"] ].forEach(function(item) {
         $box.append(button(item[1], item[2], function() { sort = { column: key, direction: item[0] }; page = 0; saveLayout(); refresh(); $host.find('[data-filter="' + key + '"]').trigger("focus"); }).addClass("ujg-esi-menu-command").append($("<span/>").text(item[2])));
       });
-      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } filtersChanged(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      $box.append(button("FunnelX", "Снять фильтр", function() { delete filters[key]; if (key === "remarkId") delete filters.trackingMode; if (key === "status") { delete filters.excludeDone; delete filters.excludeDoneStories; } filtersChanged(); }).addClass("ujg-esi-menu-command").prop("disabled", !active).append($("<span/>").text("Снять фильтр")));
+      if (key === "remarkId") {
+        var $modes = $("<fieldset/>").addClass("ujg-esi-tracking-modes").append($("<legend/>").text("Отслеживание"));
+        [["all","Все"],["only","Только отслеживаемые"],["without","Без отслеживаемых"]].forEach(function(mode) {
+          $modes.append($("<label/>").addClass("ujg-esi-filter-option").append($("<input/>").attr({type:"radio",name:"ujg-esi-tracking-" + id,"data-tracking-mode":mode[0]}).prop("checked",trackingMode === mode[0]).on("change",function() { if (this.checked) trackingMode = mode[0]; }),$("<span/>").text(mode[1])));
+        });
+        $box.append($modes);
+      }
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые" }).prop("checked", excludeDone).on("change", function() { excludeDone = this.checked; }), $("<span/>").text("Исключить готовые")));
       if (key === "status") $box.append($("<label/>").addClass("ujg-esi-exclude-done").append($("<input/>").attr({ type: "checkbox", "aria-label": "Исключить готовые истории" }).prop("checked", excludeDoneStories).on("change", function() { excludeDoneStories = this.checked; }), $("<span/>").text("Исключить готовые истории")));
       var $search = $("<input/>").attr({ type: "search", placeholder: "Поиск", "aria-label": "Поиск значений" }).addClass("ujg-esi-filter-search");
@@ -10250,14 +10317,19 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       });
       var $apply = $("<button/>").attr("type", "button").addClass("ujg-esi-filter-apply").text("ОК").on("click", function() {
         var previousFilters = JSON.stringify(filters);
+        if (key === "remarkId") { if (trackingMode === "all") delete filters.trackingMode; else filters.trackingMode = trackingMode; }
         if (key === "status") { if (excludeDone) filters.excludeDone = true; else delete filters.excludeDone; if (excludeDoneStories) filters.excludeDoneStories = true; else delete filters.excludeDoneStories; }
         var allValues = registry.values(rows, key, {});
         if (allValues.length === selected.length && allValues.every(function(value) { return selected.indexOf(value) !== -1; })) delete filters[key]; else filters[key] = selected.slice();
-        if (JSON.stringify(filters) !== previousFilters) filtersChanged(); else refresh();
+        filterConfirmed(JSON.stringify(filters) !== previousFilters);
         $host.find('[data-filter="' + key + '"]').trigger("focus");
       });
       $box.append($("<div/>").addClass("ujg-esi-filter-actions").append($apply, $("<button/>").attr("type", "button").text("Отмена").on("click", function() { closeMenu(true); })));
-      update(); $search.trigger("focus");
+      update();
+      var rect = anchor.getBoundingClientRect(), width = Math.min(282, window.innerWidth - 24);
+      $box.css({position:"fixed",width:width,left:Math.max(12,Math.min(rect.left,window.innerWidth-width-12)),top:12,maxHeight:Math.max(100,window.innerHeight-24)});
+      $box.css("top",Math.max(12,Math.min(rect.bottom+4,window.innerHeight-$box.outerHeight()-12)));
+      $search.trigger("focus");
     }
     function teamPerson(value, identifiers) {
       var $person = person(value);
@@ -10376,16 +10448,24 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       var scroll = $viewport ? { top: $viewport.scrollTop(), left: $viewport.scrollLeft() } : { top: 0, left: 0 };
       $host.empty();
       var visible = orderedColumns().filter(function(column) { return !hidden[column[0]]; });
-      var groups = registry.selectGroups(rows, filters, sort);
+      updateTracking();
+      var groups = registry.selectGroups(rows, filters, sort, disclosed);
+      var controlColumn = !hidden.remarkId ? "remarkId" : (visible.filter(function(column) { return sourceFields.indexOf(column[0]) >= 0; })[0] || visible[0])[0];
+      var $hiddenFilters = $("<div/>").addClass("ujg-esi-hidden-filters");
+      orderedColumns().forEach(function(column) {
+        if (hidden[column[0]] && (activeFilter(column[0]) || column[0] === "remarkId")) $hiddenFilters.append(
+          button("Funnel", "Фильтр скрытого столбца: " + column[1], function() { filterMenu(this,column); })
+            .attr("data-filter",column[0]).toggleClass("is-active",activeFilter(column[0])).append($("<span/>").text(column[1])));
+      });
+      if ($hiddenFilters.children().length) $host.append($hiddenFilters);
       var pages = Math.max(1, Math.ceil(groups.length / pageSize));
       page = Math.max(0, Math.min(page, pages - 1));
       var tableWidth = visibleWidth();
       var $table = $("<table/>").addClass("ujg-esi-registry-table").css({width:tableWidth + "px", "min-width":tableWidth + "px"}).attr("aria-label", "Замечания и связанные задачи Jira");
-      var $colgroup = $("<colgroup/>").append($("<col/>").css("width", "28px"));
-      var $head = $("<tr/>").append($("<th/>").attr("scope", "col").append(button("ListTree", allExpanded(groups.filter(function(group) { return group.children.length; })) ? "Свернуть все" : "Развернуть все", toggleAll)));
+      var $colgroup = $("<colgroup/>"), $head = $("<tr/>");
       visible.forEach(function(column) {
         $colgroup.append($("<col/>").attr({"data-column":column[0],width:widths[column[0]] || column[2]}).css("width", (widths[column[0]] || column[2]) + "px"));
-        var active = Array.isArray(filters[column[0]]) || column[0] === "status" && !!(filters.excludeDone || filters.excludeDoneStories), sorted = sort && sort.column === column[0];
+        var active = activeFilter(column[0]), sorted = sort && sort.column === column[0];
         var heading = column[0] === "remark" && state.viewMode === "jira" ? "Замечание" : column[1];
         var caption = "Фильтр: " + heading;
         var $filter = button(active ? "Funnel" : "ChevronDown", caption, function(event) { event.stopPropagation(); filterMenu(this, column); })
@@ -10409,12 +10489,13 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           });
         $head.append($("<th/>").attr({ scope: "col", "data-column":column[0], "aria-sort": sorted ? (sort.direction === "desc" ? "descending" : "ascending") : "none" })
           .on("pointerdown", function(event) {
-            if ($(event.target).closest(".ujg-esi-header-filter,.ujg-esi-column-resize").length) return;
+            if ($(event.target).closest(".ujg-esi-header-filter,.ujg-esi-column-resize,.ujg-esi-toggle-all").length) return;
             drag = { type:"order", id:column[0], start:event.pageX };
           }).append($sort, $filter, $resize));
       });
       $colgroup.append($("<col/>").css("width", "72px"));
-      $head.append($("<th/>").attr({scope: "col", "aria-label": "Действия", title: "Действия"}).addClass("ujg-esi-actions-head").append(icon("WandSparkles"), icon("Plus")));
+      $head.append($("<th/>").attr({scope: "col", "aria-label": "Действия", title: "Действия"}).addClass("ujg-esi-actions-head").append(
+        button("ListTree", allExpanded(expandableGroups()) ? "Свернуть все" : "Развернуть все", toggleAll).addClass("ujg-esi-toggle-all"), icon("WandSparkles"), icon("Plus")));
       $table.append($colgroup, $("<thead/>").append($head));
       var $body = $("<tbody/>");
       groups.slice(page * pageSize, (page + 1) * pageSize).forEach(function(group) {
@@ -10428,15 +10509,32 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           var $tr = $("<tr/>").addClass(entry.isChild ? "ujg-esi-child-row" : "ujg-esi-parent-row").attr({ "data-key": entry.key, "data-source-index": entry.rowIndex });
           $tr.toggleClass("is-context", rowNumber === 0 && group.contextOnly).toggleClass("is-new", !parent.key).toggleClass("is-failed", parent.source.status === "failed");
           $tr.toggleClass("is-collapsed", !opened).toggleClass("is-last-child", entry.isChild && rowNumber === children.length && !remaining);
-          if (!rowNumber) {
-            var $toggle = $("<td/>").attr("rowspan", span).addClass("ujg-esi-expand-cell");
-            if (group.children.length) $toggle.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + (parent.remarkId || parent.key || parent.source.excelRowNumber || ""), function() { collapsed[parent.groupId] = opened; refresh(); }).attr("aria-expanded", String(opened)));
-            $tr.append($toggle);
-          }
           visible.forEach(function(column) {
             var isSource = sourceFields.indexOf(column[0]) !== -1;
             if (rowNumber && isSource) return;
             var $cell = cell(entry, column[0]);
+            if (!rowNumber && column[0] === controlColumn) {
+              var caption = parent.remarkId || parent.key || parent.source.excelRowNumber || "без ID";
+              var $controls = $("<div/>").addClass("ujg-esi-remark-controls");
+              if (group.totalChildren) $controls.append(button(opened ? "ChevronDown" : "ChevronRight", (opened ? "Свернуть" : "Развернуть") + " замечание " + caption, function() {
+                collapsed[parent.groupId] = opened;
+                if (opened) delete disclosed[parent.groupId]; else { disclosed[parent.groupId] = true; fullChildren[parent.groupId] = true; }
+                refresh();
+                $host.find('.ujg-esi-parent-row[data-source-index="' + parent.rowIndex + '"] .ujg-esi-remark-toggle').trigger("focus");
+              }).addClass("ujg-esi-remark-toggle").attr("aria-expanded",String(opened)));
+              else $controls.append($("<span/>").addClass("ujg-esi-remark-toggle-space").attr("aria-hidden","true"));
+              $controls.append(button("Star", (parent.tracked ? "Не отслеживать" : "Отслеживать") + " замечание " + caption, function() {
+                var ids = trackingIds(parent);
+                var records = trackedRecords(ids);
+                if (records.length) tracked = tracked.filter(function(record) { return records.indexOf(record) < 0; });
+                else tracked.push(ids);
+                saveTracking(); refresh();
+                $host.find('.ujg-esi-parent-row[data-source-index="' + parent.rowIndex + '"] .ujg-esi-track-remark').trigger("focus");
+              }).addClass("ujg-esi-track-remark").toggleClass("is-tracked",parent.tracked).attr("aria-pressed",String(parent.tracked))
+                .attr("title",trackingIds(parent).length ? (parent.tracked ? "Не отслеживать" : "Отслеживать") + " замечание " + caption : "Для отслеживания нужен ID замечания или ключ Jira")
+                .prop("disabled",!trackingIds(parent).length));
+              $cell.append($controls);
+            }
             if (isSource) $cell.attr("rowspan", span).addClass("ujg-esi-source-cell");
             $tr.append($cell);
           });
@@ -10468,7 +10566,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
           $body.append($moreRow);
         }
       });
-      if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 2).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
+      if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 1).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
       $table.append($body);
       $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); closeDescription(); });
       $host.append($viewport);
@@ -10515,7 +10613,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         ensureLayout(state);
         closeMenu(); closeDescription();
         if (sourceRows !== state.rows) {
-          sourceRows = state.rows; collapsed = Object.create(null); fullChildren = Object.create(null); page = 0;
+          sourceRows = state.rows; collapsed = Object.create(null); fullChildren = Object.create(null); disclosed = Object.create(null); page = 0;
           var linked = 0;
           (state.rows || []).forEach(function(row, index) {
             if (!hasFilters() && (row.createdKey || row.jiraKey) && linked++ >= 3 && row.status !== "partial") collapsed[String(row.id || index)] = true;

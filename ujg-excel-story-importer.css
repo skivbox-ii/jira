@@ -95,9 +95,17 @@
 .ujg-esi-registry-table .is-context .ujg-esi-cell-summary { color: #687584; }
 .ujg-esi-registry-table .is-new td { background: #fffdf8; }
 .ujg-esi-registry-table .is-failed td { background: #fff9f9; }
-.ujg-esi-registry-table .ujg-esi-cell-remarkId { font-weight: 650; }
-.ujg-esi-registry-table .ujg-esi-expand-cell { position: sticky; left: 0; background: white; z-index: 1; padding: 3px 0; }
-.ujg-esi-registry-table th:first-child { left: 0; z-index: 4; padding: 2px; }
+.ujg-esi-registry-table .ujg-esi-cell-remarkId { font-weight: 650; padding-left: 2px; padding-right: 2px; }
+.ujg-esi-registry .ujg-esi-actions-head .ujg-esi-toggle-all { width: 24px; min-width: 24px; padding: 2px; border-color: transparent; }
+.ujg-esi-remark-controls { display: flex; width: 44px; height: 24px; margin-top: 4px; align-items: center; }
+.ujg-esi-registry .ujg-esi-remark-controls .ujg-esi-icon-button, .ujg-esi-remark-toggle-space { box-sizing: border-box; flex: 0 0 22px; width: 22px; min-width: 22px; height: 24px; min-height: 24px; padding: 2px; border-color: transparent; }
+.ujg-esi-track-remark.is-tracked { color: #986900; }
+.ujg-esi-track-remark.is-tracked svg { fill: #f4c542; }
+.ujg-esi-tracking-modes { margin: 6px 0; padding: 4px 0; border: 0; }
+.ujg-esi-tracking-modes legend { font-weight: 600; }
+.ujg-esi-hidden-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0; }
+.ujg-esi-registry .ujg-esi-hidden-filters .ujg-esi-icon-button { width: auto; gap: 4px; }
+.ujg-esi-registry-table th:first-child { left: 0; z-index: 4; }
 .ujg-esi-source-text { display: block; white-space: normal; overflow-wrap: anywhere; }
 .ujg-esi-cell-remark small { display: block; margin-top: 4px; color: #77828e; font-size: 10px; line-height: 14px; }
 .ujg-esi-registry-table .ujg-esi-cell-key { white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -169,7 +177,6 @@
 .ujg-esi-import-warning { color: #a86913 !important; }
 .ujg-esi-import-warning svg { width: 12px; height: 12px; vertical-align: middle; margin-right: 3px; }
 .ujg-esi-registry .ujg-esi-icon-button, .ujg-esi-compact-toolbar .ujg-esi-icon-button { width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; }
-.ujg-esi-registry .ujg-esi-expand-cell .ujg-esi-icon-button { width: 26px; min-width: 26px; border-color: transparent; }
 .ujg-esi-registry .ujg-esi-header-filter { position: absolute; right: 5px; top: 7px; width: 20px; min-width: 20px; height: 20px; min-height: 20px; border-radius: 2px; border-color: #cdd5df; color: #526578; background: #fbfcfd; }
 .ujg-esi-header-filter svg { width: 12px; height: 12px; }
 .ujg-esi-header-filter b { font-size: 8px; position: absolute; right: -4px; top: -6px; background: #0052cc; color: white; padding: 0 2px; border-radius: 2px; }
@@ -181,8 +188,9 @@
 .ujg-esi-registry-actions .ujg-esi-create-row, .ujg-esi-registry-actions .ujg-esi-add-child { display: inline-flex; align-items: center; justify-content: center; width: 26px; min-width: 26px; height: 26px; min-height: 26px; padding: 0; border: 0; border-radius: 3px; background: #075fc4; color: white; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .ujg-esi-registry-actions .ujg-esi-add-child { background: #eaf3ff; color: #075fc4; }
 .ujg-esi-registry-actions .ujg-esi-add-child:disabled { opacity: .45; cursor: default; }
-.ujg-esi-registry-table th.ujg-esi-actions-head { padding: 5px 7px; text-align: center; }
-.ujg-esi-registry-table th.ujg-esi-actions-head svg { width: 14px; height: 14px; margin: 0 6px; color: #697989; }
+.ujg-esi-registry-table th.ujg-esi-actions-head { padding: 2px; text-align: center; }
+.ujg-esi-registry-table th.ujg-esi-actions-head > svg { width: 12px; height: 12px; margin: 0 2px; color: #697989; }
+.ujg-esi-actions-head .ujg-esi-toggle-all svg { width: 16px; height: 16px; margin: 0; }
 .ujg-esi-registry-actions .ujg-esi-create-row svg { width: 13px; height: 13px; }
 .ujg-esi-registry-actions .ujg-esi-create-row:disabled { background: #e7eaef; color: #7d8792; cursor: default; }
 .ujg-esi-error-details { position: relative; margin-top: 4px; color: #ad5725; }
@@ -190,6 +198,10 @@
 .ujg-esi-error-details summary { cursor: pointer; list-style: none; }
 .ujg-esi-error-details > div { position: absolute; z-index: 8; right: 0; min-width: 230px; padding: 8px; background: white; border: 1px solid #e0b89a; box-shadow: 0 2px 8px #0002; }
 .ujg-esi-grid-menu { position: absolute; width: 268px; max-width: calc(100vw - 24px); max-height: min(610px, calc(100vh - 90px)); overflow-y: auto; z-index: 50; border: 1px solid #cdd4dd; border-radius: 4px; background: #fff; padding: 6px; color: #293441; box-shadow: 0 4px 18px #10213826; font-size: 12px; }
+.ujg-esi-column-filter-menu { box-sizing: border-box; display: flex; flex-direction: column; }
+.ujg-esi-column-filter-menu > * { flex: 0 0 auto; }
+.ujg-esi-column-filter-menu .ujg-esi-filter-values { flex: 1 1 auto; min-height: 0; overscroll-behavior: contain; }
+.ujg-esi-column-filter-menu .ujg-esi-filter-chips { max-height: min(80px, 16vh); overflow-y: auto; }
 .ujg-esi-registry .ujg-esi-menu-command { justify-content: flex-start; gap: 8px; width: 100%; height: 31px; padding: 4px 6px; border: 0; color: #34475b; font-size: 12px; font-weight: 400; }
 .ujg-esi-grid-menu .ujg-esi-filter-search { width: 100%; margin: 6px 0; min-height: 30px; border: 1px solid #cbd4df; border-radius: 3px; padding: 4px 7px; background: white; color: #28323f; }
 .ujg-esi-filter-values { max-height: 220px; overflow-y: auto; }

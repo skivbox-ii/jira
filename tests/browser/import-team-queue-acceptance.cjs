@@ -217,12 +217,15 @@ async function main() {
         await onlyQa(page);
         await qaRows(page,expected);
         const contextStory = page.locator(".ujg-esi-parent-row.is-context").first();
-        const disclosure = contextStory.locator(".ujg-esi-expand-cell button");
+        const disclosure = contextStory.locator(".ujg-esi-remark-toggle");
         await disclosure.click();
         assert.ok((await rows(page)).filter(row => row.child).length < childrenBefore, "Story disclosure hides its matching children");
-        await contextStory.locator(".ujg-esi-expand-cell button").click();
+        await contextStory.locator(".ujg-esi-remark-toggle").click();
+        assert.ok((await rows(page)).filter(row => row.child).length > childrenBefore, "Specific Story reopen reveals its non-QA children");
+        await page.getByRole("button", {name:"Фильтр: Команда", exact:true}).click();
+        await page.locator(".ujg-esi-team-filter-menu .ujg-esi-filter-apply").click();
         await qaRows(page,expected);
-        const headerToggle = page.locator(`${table} thead th`).first().locator("button");
+        const headerToggle = page.locator(`${table} .ujg-esi-toggle-all`);
         await headerToggle.click();
         assert.equal((await rows(page)).filter(row => row.child).length, 0, "Header collapses matching children");
         await headerToggle.click();

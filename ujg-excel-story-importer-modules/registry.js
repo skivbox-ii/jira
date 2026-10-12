@@ -118,6 +118,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     return Object.keys(filters || {}).every(function(key) {
       if (key === "excludeDone") return except === "status" || !filters[key] || !row.isChild || !row.done;
       if (key === "teamIds") return key === except || !Array.isArray(filters[key]) || filters[key].some(function(id) { return Array.isArray(row.teamIds) && row.teamIds.indexOf(id) >= 0; });
+      if (key === "trackingMode") return except === "remarkId" || (filters[key] !== "only" && filters[key] !== "without") || (filters[key] === "only" ? !!row.tracked : !row.tracked);
       return key === except || !Array.isArray(filters[key]) || filters[key].indexOf(text(row[key])) !== -1;
     });
   }
@@ -130,19 +131,24 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
     });
     return Object.keys(seen).sort(compare);
   }
-  function selectGroups(rows, filters, sort) {
+  function selectGroups(rows, filters, sort, disclosed) {
     var groups = [];
     var current;
     (rows || []).forEach(function(row) {
       if (!row.isChild) {
-        current = { parent: row, children: [], contextOnly: !matches(row, filters), totalChildren: 0, hiddenStory: !!(filters && filters.excludeDoneStories && row.key && row.done) };
+        current = { parent: row, children: [], allChildren: [], contextOnly: !matches(row, filters), totalChildren: 0, hiddenStory: !!(filters && filters.excludeDoneStories && row.key && row.done) };
         groups.push(current);
       } else if (current) {
         current.totalChildren += 1;
+        current.allChildren.push(row);
         if (matches(row, filters)) current.children.push(row);
       }
     });
     groups = groups.filter(function(group) { return !group.hiddenStory && (!group.contextOnly || group.children.length); });
+    // Decide group membership before a manual disclosure can bypass child filters.
+    groups.forEach(function(group) {
+      if (disclosed && disclosed[group.parent.groupId]) group.children = group.allChildren.slice();
+    });
     if (sort && sort.column) {
       function value(row) { return sort.column === "age" ? row.ageMs : row[sort.column]; }
       function cmp(a, b) {

@@ -51,6 +51,181 @@ function setup(activityReport, configureWindow) {
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
 
+test("remark controls live under ID with no separate tree column and no issue actions", t => {
+  const {dom,$,calls} = setup(); t.after(() => dom.window.close());
+  assert.equal($(".ujg-esi-expand-cell").length,0);
+  assert.equal($(".ujg-esi-registry-table thead th").length,$(".ujg-esi-registry-table thead th[data-column]").length+1);
+  const controls = $("tr[data-key='P-10'] .ujg-esi-cell-remarkId .ujg-esi-remark-controls");
+  assert.equal(controls.find(".ujg-esi-remark-toggle").length,1);
+  assert.equal(controls.find(".ujg-esi-track-remark[aria-pressed='false']").length,1);
+  controls.find(".ujg-esi-track-remark")[0].click();
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-track-remark").attr("aria-pressed"),"true");
+  assert.deepEqual(calls,[]);
+});
+
+test("specific manual expansion bypasses child filters only until any filter OK", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  applyFilter($,"assignee","Bob");
+  const toggle = () => $("tr[data-key='P-10'] .ujg-esi-remark-toggle");
+  toggle().trigger("click"); toggle().trigger("click");
+  assert.equal($("tr[data-key='P-12']").length,1);
+  assert.equal($(".ujg-esi-parent-row").length,1);
+  $("[data-sort='remarkId']").trigger("click");
+  $("tr[data-key='P-10'] .ujg-esi-track-remark").trigger("click");
+  $("[aria-label='Ширина: ID']").trigger($.Event("keydown",{key:"ArrowRight"}));
+  assert.equal($("tr[data-key='P-12']").length,1);
+  $("[data-filter='assignee']").trigger("click"); $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($("tr[data-key='P-12']").length,0);
+  toggle().trigger("click"); toggle().trigger("click");
+  state.teams=[]; render();
+  $("[aria-label='Фильтр: Команда']").trigger("click"); $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($("tr[data-key='P-12']").length,0);
+  $("[aria-label='Сбросить все фильтры']").trigger("click");
+  applyFilter($,"assignee","Bob");
+  $(".ujg-esi-toolbar [aria-label='Развернуть / свернуть все']").trigger("click");
+  $(".ujg-esi-toolbar [aria-label='Развернуть / свернуть все']").trigger("click");
+  assert.equal($("tr[data-key='P-12']").length,0);
+  assert.equal($("tr[data-key='P-11']").length,1);
+  assert.equal($(".ujg-esi-parent-row").length,1);
+});
+
+test("tracking mode drafts cancel, persists, intersects filters and resets without untracking", t => {
+  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  state.preferencesStorageKey="tracking-user"; render();
+  $("tr[data-key='P-10'] .ujg-esi-track-remark").trigger("click");
+  $("[data-filter='remarkId']").trigger("click");
+  $("[data-tracking-mode='only']").prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-actions button").last().trigger("click");
+  assert.equal($(".ujg-esi-parent-row").length,3);
+  $("[data-filter='remarkId']").trigger("click");
+  assert.equal($("[data-tracking-mode='all']").prop("checked"),true);
+  $("[data-tracking-mode='only']").prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($(".ujg-esi-parent-row").length,1);
+  assert.equal($("[data-filter='remarkId']").hasClass("is-active"),true);
+  assert.equal(JSON.parse(dom.window.localStorage.getItem("tracking-user")).gridLayout.filters.trackingMode,"only");
+  applyFilter($,"assignee","Nobody");
+  assert.equal($(".ujg-esi-parent-row").length,0);
+  $("[aria-label='Сбросить все фильтры']").trigger("click");
+  assert.equal($(".ujg-esi-parent-row").length,3);
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-track-remark").attr("aria-pressed"),"true");
+  $("[data-filter='remarkId']").trigger("click");
+  $("[data-tracking-mode='without']").prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($("tr[data-key='P-10']").length,0);
+  assert.equal($(".ujg-esi-parent-row").length,2);
+});
+
+test("stars survive reorder, absent rows, source switch, reload and isolate users and projects", t => {
+  const first=setup(); t.after(()=>first.dom.window.close());
+  const {dom,$,state,render}=first;
+  state.preferencesStorageKey="stars-alice"; render();
+  $("tr[data-key='P-10'] .ujg-esi-track-remark").trigger("click");
+  $(".ujg-esi-parent-row").first().find(".ujg-esi-track-remark").trigger("click");
+  const savedRows=state.rows;
+  state.rows=[]; render(); state.rows=savedRows.slice().reverse(); render();
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-track-remark").attr("aria-pressed"),"true");
+  state.viewMode="jira"; state.rows=[{jiraKey:"P-10",summary:"Jira",childStatuses:[]}]; render();
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-track-remark").attr("aria-pressed"),"true");
+  state.preferencesStorageKey="stars-bob"; render();
+  assert.equal($(".ujg-esi-track-remark").attr("aria-pressed"),"false");
+  state.preferencesStorageKey="stars-alice"; state.projectKey="Q"; render();
+  assert.equal($(".ujg-esi-track-remark").attr("aria-pressed"),"false");
+  const stored=Object.fromEntries(Object.keys(dom.window.localStorage).map(key=>[key,dom.window.localStorage.getItem(key)]));
+  const next=setup(null,w=>Object.entries(stored).forEach(([key,value])=>w.localStorage.setItem(key,value)));
+  t.after(()=>next.dom.window.close()); next.state.preferencesStorageKey="stars-alice"; next.render();
+  assert.equal(next.$("tr[data-key='P-10'] .ujg-esi-track-remark").attr("aria-pressed"),"true");
+  assert.equal(next.$(".ujg-esi-parent-row").first().find(".ujg-esi-track-remark").attr("aria-pressed"),"true");
+});
+
+test("hidden ID keeps controls and mode editable; anonymous rows never share stars; denied storage is safe", t => {
+  const {dom,$,state,render}=setup(); t.after(()=>dom.window.close());
+  state.preferencesStorageKey="hidden-stars";
+  dom.window.localStorage.setItem("hidden-stars",JSON.stringify({gridLayout:{columnLayouts:{excel:{visible:["summary"]}},filters:{trackingMode:"without"}}})); render();
+  assert.equal($("th[data-column='remarkId']").length,0);
+  assert.equal($("tr[data-key='P-10'] .ujg-esi-cell-summary .ujg-esi-track-remark").length,1);
+  $("[aria-label='Фильтр скрытого столбца: ID']").trigger("click");
+  assert.equal($("[data-tracking-mode='without']").prop("checked"),true);
+  $(".ujg-esi-filter-actions button").last().trigger("click");
+  $("[aria-label='Сбросить все фильтры']").trigger("click");
+  state.rows=[{summary:"anonymous one"},{summary:"anonymous two"}]; render();
+  assert.equal($(".ujg-esi-track-remark:disabled").length,2);
+  state.rows=[{jiraKey:"P-10",summary:"stable"}]; render();
+  Object.defineProperty(dom.window,"localStorage",{configurable:true,get(){throw Error("denied");}});
+  assert.doesNotThrow(()=>$(".ujg-esi-track-remark").trigger("click"));
+  assert.equal($(".ujg-esi-track-remark").attr("aria-pressed"),"true");
+  assert.doesNotThrow(render);
+});
+
+test("tracking aliases learn a new Jira key and untracking a key clears the Excel alias", t => {
+  const {dom,$,state,render}=setup(); t.after(()=>dom.window.close());
+  const excel=state.rows[0]; state.rows=[excel]; render();
+  $(".ujg-esi-track-remark").trigger("click");
+  excel.jiraKey="P-999"; render();
+  state.viewMode="jira"; state.rows=[{jiraKey:"P-999",summary:"No Excel ID"}]; render();
+  assert.equal($(".ujg-esi-track-remark").attr("aria-pressed"),"true");
+  $(".ujg-esi-track-remark").trigger("click");
+  state.viewMode="excel"; state.rows=[excel]; render();
+  assert.equal($(".ujg-esi-track-remark").attr("aria-pressed"),"false");
+  $(".ujg-esi-track-remark").trigger("click");
+  state.viewMode="jira"; state.rows=[{jiraKey:"P-999",summary:"No Excel ID"}]; render();
+  $(".ujg-esi-track-remark").trigger("click");
+  state.viewMode="excel"; state.rows=[excel]; render();
+  assert.equal($(".ujg-esi-track-remark").attr("aria-pressed"),"false");
+});
+
+test("tree buttons retain keyboard focus after disclosure and override stays off storage", t => {
+  const {dom,$}=setup(); t.after(()=>dom.window.close());
+  applyFilter($,"status","Open");
+  let toggle=$("tr[data-key='P-10'] .ujg-esi-remark-toggle")[0];
+  toggle.focus(); toggle.click();
+  assert.equal(dom.window.document.activeElement,$("tr[data-key='P-10'] .ujg-esi-remark-toggle")[0]);
+  $("tr[data-key='P-10'] .ujg-esi-remark-toggle")[0].click();
+  assert.equal($("tr[data-key='P-12']").length,1);
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ujg-esi-state")).gridLayout.filters,{status:["Open"]});
+  const stored=Object.fromEntries(Object.keys(dom.window.localStorage).map(key=>[key,dom.window.localStorage.getItem(key)]));
+  const next=setup(null,w=>Object.entries(stored).forEach(([key,value])=>w.localStorage.setItem(key,value)));
+  t.after(()=>next.dom.window.close());
+  assert.equal(next.$("tr[data-key='P-12']").length,0);
+});
+
+test("source-only disclosure expands no excluded groups and tracking mode persists across pages and reload", t => {
+  const {dom,$,state,render}=setup(); t.after(()=>dom.window.close());
+  const template=state.rows[1];
+  state.rows=Array.from({length:22},(_,i)=>({...template,id:"unique-"+i,jiraKey:"P-"+(100+i),sourceColumns:{"№":String(i)},storyDetails:{key:"P-"+(100+i),status:"Open"}}));
+  state.preferencesStorageKey="pages-tracking";
+  dom.window.localStorage.setItem(state.preferencesStorageKey,JSON.stringify({gridLayout:{columnLayouts:{excel:{visible:["remarkId"]}}}})); render();
+  $("[aria-label='Замечаний на странице']").val("20").trigger("change");
+  $("[aria-label='Следующая страница']").trigger("click");
+  $("tr[data-key='P-120'] .ujg-esi-track-remark").trigger("click");
+  $("[data-filter='remarkId']").trigger("click");
+  $("[data-tracking-mode='only']").prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($(".ujg-esi-parent-row").length,1);
+  $(".ujg-esi-toggle-all").trigger("click");
+  $(".ujg-esi-toggle-all").trigger("click");
+  assert.equal($(".ujg-esi-parent-row").length,1);
+  assert.equal($(".ujg-esi-child-row").length,2);
+  $("[aria-label='Столбцы']").trigger("click");
+  option($,"Статус Jira").prop("checked",true).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  applyFilter($,"status","Done");
+  $("[aria-label='Столбцы']").trigger("click");
+  option($,"Статус Jira").prop("checked",false).trigger("change");
+  $(".ujg-esi-filter-apply").trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,1);
+  $(".ujg-esi-remark-toggle").trigger("click");
+  $(".ujg-esi-remark-toggle").trigger("click");
+  assert.equal($(".ujg-esi-child-row").length,2);
+  assert.equal($(".ujg-esi-parent-row").length,1);
+  const stored=Object.fromEntries(Object.keys(dom.window.localStorage).map(key=>[key,dom.window.localStorage.getItem(key)]));
+  const next=setup(null,w=>Object.entries(stored).forEach(([key,value])=>w.localStorage.setItem(key,value)));
+  t.after(()=>next.dom.window.close()); next.state.preferencesStorageKey="pages-tracking"; next.state.rows=state.rows; next.render();
+  assert.equal(next.$(".ujg-esi-parent-row").length,1);
+  assert.equal(next.$(".ujg-esi-child-row").length,1);
+  assert.equal(next.$("[data-filter='remarkId']").hasClass("is-active"),true);
+});
+
 test("deadline columns show separate dates and only past dates receive the overdue class", t => {
   const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
   state.rows[1].sourceColumns["Срок исполнения"] = "2020-01-02";
@@ -751,8 +926,8 @@ test("team toolbar unions exact testing, QA roles and QA assignee identifiers fo
   assert.equal($("tr[data-key='P-200']").hasClass("is-context"),false);
   assert.equal($("tr[data-key='P-201']").length,0,"Parent match must not bring unrelated children");
   assert.match($("[aria-label='Фильтр: Команда']").text(),/QA/);
-  $("tr[data-key='P-100'] .ujg-esi-expand-cell button").trigger("click"); assert.deepEqual(keys(),[]);
-  $("tr[data-key='P-100'] .ujg-esi-expand-cell button").trigger("click"); assert.equal(keys().length,9);
+  $("tr[data-key='P-100'] .ujg-esi-remark-toggle").trigger("click"); assert.deepEqual(keys(),[]);
+  $("tr[data-key='P-100'] .ujg-esi-remark-toggle").trigger("click"); assert.equal(keys().length,state.rows[0].childStatuses.length);
   applyFilter($,"assignee","Tester"); assert.deepEqual(keys(),["P-102","P-103","P-104","P-106","P-107"]);
   state.viewMode="jira"; state.rows=state.rows.slice(); render();
   assert.deepEqual(keys(),["P-102","P-103","P-104","P-106","P-107"]);
@@ -855,10 +1030,10 @@ test("common registry filters restore on reload and remain user scoped", t => {
   assert.equal(next.$(".ujg-esi-parent-row").length, 1);
 });
 
-test("matching child keeps context parent collapsible without exposing excluded siblings", t => {
+test("matching child keeps context parent collapsible and manual reopen reveals siblings", t => {
   const {dom,$,render} = setup(); t.after(() => dom.window.close());
   applyFilter($, "assignee", "Bob");
-  const arrow = () => $("tr[data-key='P-10'] .ujg-esi-expand-cell button");
+  const arrow = () => $("tr[data-key='P-10'] .ujg-esi-remark-toggle");
   assert.equal($("tr[data-key='P-10']").hasClass("is-context"), true);
   assert.equal(arrow().prop("disabled"), false);
   arrow().trigger("click");
@@ -872,7 +1047,7 @@ test("matching child keeps context parent collapsible without exposing excluded 
   assert.equal(arrow().attr("aria-expanded"), "false", "unchanged filter confirmation preserves manual collapse");
   arrow().trigger("click");
   assert.equal($("tr[data-key='P-11']").length, 1);
-  assert.equal($("tr[data-key='P-12']").length, 0);
+  assert.equal($("tr[data-key='P-12']").length, 1);
 });
 
 test("applying a filter reveals default-collapsed groups and both global toggles work", t => {
@@ -885,7 +1060,7 @@ test("applying a filter reveals default-collapsed groups and both global toggles
   assert.equal($(".ujg-esi-parent-row").length,1);
   assert.equal($(".ujg-esi-child-row").length,1);
   const toolbar = () => $(".ujg-esi-toolbar [aria-label='Развернуть / свернуть все']");
-  const header = () => $(".ujg-esi-registry thead th").first().find("button");
+  const header = () => $(".ujg-esi-registry .ujg-esi-toggle-all");
   for (const toggle of [toolbar, header, toolbar, header]) {
     toggle().trigger("click");
     assert.equal($(".ujg-esi-child-row").length,0);
@@ -925,7 +1100,7 @@ test("expand all first reveals remaining children before it can collapse all", t
   state.rows = [{...row,childStatuses:Array.from({length:7},(_,i)=>({...row.childStatuses[0],key:"P-"+(30+i)}))}];
   render();
   assert.equal($(".ujg-esi-child-row").length,5);
-  const header = () => $(".ujg-esi-registry thead th").first().find("button");
+  const header = () => $(".ujg-esi-registry .ujg-esi-toggle-all");
   assert.equal(header().attr("aria-label"),"Развернуть все");
   header().trigger("click");
   assert.equal($(".ujg-esi-child-row").length,7);
@@ -944,7 +1119,7 @@ test("global disclosure covers filtered groups on every page", t => {
   $("[aria-label='Следующая страница']").trigger("click");
   assert.equal($(".ujg-esi-parent-row").length,2);
   assert.equal($(".ujg-esi-child-row").length,0);
-  $(".ujg-esi-registry thead th").first().find("button").trigger("click");
+  $(".ujg-esi-registry .ujg-esi-toggle-all").trigger("click");
   assert.equal($(".ujg-esi-child-row").length,2);
   $("[aria-label='Предыдущая страница']").trigger("click");
   assert.equal($(".ujg-esi-child-row").length,20);
@@ -1255,7 +1430,7 @@ test("column layout persists under the user key and aligns a mixed more row", t 
   const occupied = $(".ujg-esi-parent-row").filter("[data-key='P-10']").find("td").toArray().reduce((n,cell) => n + Number(cell.colSpan || 1),0);
   assert.equal(occupied,headCount);
   const more = $(".ujg-esi-more-row").first();
-  assert.equal(more.find("td").toArray().reduce((n,cell) => n + Number(cell.colSpan || 1),0),headCount - $(".ujg-esi-source-cell").filter("[rowspan]").first().closest("tr").find(".ujg-esi-source-cell").length - 2);
+  assert.equal(more.find("td").toArray().reduce((n,cell) => n + Number(cell.colSpan || 1),0),headCount - $(".ujg-esi-source-cell").filter("[rowspan]").first().closest("tr").find(".ujg-esi-source-cell").length - 1);
 });
 
 test("resize does not sort and fullscreen survives render then exits on Escape", t => {
