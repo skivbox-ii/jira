@@ -172,6 +172,32 @@ test('destroy before deferred user search dispatch starts no read; stale search 
     assert.match(host.textContent,/Current user/); assert.doesNotMatch(host.textContent,/Stale user/); second.destroy();
 });
 
+test('actual multiselect selection preserves search focus, Escape closes even from body, outside action closes and destroy cleans listeners', t => {
+    const s = setup(); t.after(() => {s.ui.destroy(); s.dom.window.close();});
+    const host = s.window.document.createElement('div'); s.root.append(host); const doc = s.window.document;
+    const added = [], removed = [], add = doc.addEventListener.bind(doc), remove = doc.removeEventListener.bind(doc);
+    doc.addEventListener = (type, handler, options) => {added.push({type,handler}); add(type,handler,options);};
+    doc.removeEventListener = (type, handler, options) => {removed.push({type,handler}); remove(type,handler,options);};
+    const view = s.fieldUi.create({$:s.$,onChange:() => {}}); view.mount(host);
+    view.update({field:{id:'components',name:'Компоненты',kind:'components',supported:true,writable:true,
+        allowedValues:[{id:'31',label:'API'},{id:'32',label:'UI'}]},value:[],errors:[]});
+    const toggle = host.querySelector('[data-ta-picker]'), panel = host.querySelector('[data-ta-popover]');
+    toggle.click(); host.querySelector('[data-ta-candidate]').click();
+    assert.equal(doc.activeElement,host.querySelector('[data-ta-search]'));
+    assert.equal(host.querySelectorAll('[data-ta-chip]').length,1);
+    assert.equal(host.querySelectorAll('[data-ta-candidate]').length,1);
+    doc.activeElement.blur(); doc.body.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(panel.hidden,true); assert.equal(toggle.getAttribute('aria-expanded'),'false'); assert.equal(doc.activeElement,toggle);
+    toggle.click(); host.querySelector('[data-ta-candidate]').click();
+    s.root.querySelector('[data-ta-check]').click();
+    assert.equal(panel.hidden,true); assert.equal(toggle.getAttribute('aria-expanded'),'false');
+    toggle.click(); s.root.querySelector('[data-ta-source]').dispatchEvent(new s.window.Event('pointerdown',{bubbles:true}));
+    assert.equal(panel.hidden,true);
+    view.destroy();
+    for (const event of added.filter(event => ['pointerdown','click','keydown'].includes(event.type)))
+        assert.ok(removed.some(item => item.type === event.type && item.handler === event.handler),'removed '+event.type);
+});
+
 test('unsupported/read-only current values and orphaned draft fields stay visible', t => {
     const s = setup(); t.after(() => {s.ui.destroy(); s.dom.window.close();});
     s.state.meta.issueTypes[0].fields.find(field => field.id === 'summary').writable = false;
@@ -252,6 +278,25 @@ test('generated runtime works in installed Chrome at desktop and mobile, without
             if (width === 1440) assert.ok(geometry.draft.x > geometry.source.x && Math.abs(geometry.draft.y-geometry.source.y)<2);
             else assert.ok(geometry.draft.y >= geometry.source.bottom);
             assert.equal(await page.locator('[data-ta-create]').isDisabled(),true);
+            const components = page.locator('[data-ta-field="components"]');
+            await components.locator('[data-ta-picker]').click();
+            await components.locator('[data-ta-candidate]').filter({hasText:'API'}).click();
+            assert.equal(await components.locator('[data-ta-search]').evaluate(el => document.activeElement === el),true);
+            assert.equal(await components.locator('[data-ta-picker]').getAttribute('aria-expanded'),'true');
+            assert.equal(await components.locator('[data-ta-candidate]').filter({hasText:'API'}).count(),0);
+            await page.screenshot({path:screenshots + '/picker-' + width + '.png',fullPage:true});
+            await page.keyboard.press('Escape');
+            assert.equal(await components.locator('[data-ta-popover]').isVisible(),false);
+            assert.equal(await components.locator('[data-ta-picker]').evaluate(el => document.activeElement === el),true);
+            await components.locator('[data-ta-picker]').click();
+            await components.locator('[data-ta-candidate]').filter({hasText:'Интерфейс'}).click();
+            await components.locator('[data-ta-search]').evaluate(el => el.blur());
+            await page.keyboard.press('Escape');
+            assert.equal(await components.locator('[data-ta-popover]').isVisible(),false);
+            await components.locator('[data-ta-picker]').click(); await page.locator('[data-ta-check]').click();
+            assert.equal(await components.locator('[data-ta-picker]').getAttribute('aria-expanded'),'false');
+            assert.equal(await components.locator('[data-ta-popover]').isVisible(),false);
+            await page.waitForFunction(() => window.taPreview.instance.controller.getState().stage === 'idle');
             await page.close();
         }
         assert.deepEqual(faults,[]); assert.ok(requests.every(request => request.method === 'GET'));

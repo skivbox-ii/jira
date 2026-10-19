@@ -3,7 +3,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
     var nextId = 0;
     function create(options) {
         var $ = options.$, host, label, body, errors, control, panel, chips, candidates, search, toggle;
-        var current = {}, mode, dead = false, sequence = 0, request = null, userOptions = [], query = '', outside;
+        var current = {}, mode, dead = false, sequence = 0, request = null, userOptions = [], query = '', outside, escape;
         var uid = 'ta-field-' + (++nextId), cache = Object.create(null);
         function multi() { return current.field.multiple === true || ['multioption', 'components', 'versions'].indexOf(current.field.kind) !== -1; }
         function user() { return current.field.kind === 'user'; }
@@ -14,7 +14,9 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
             current.value = value; renderChoices();
             options.onChange(current.field.id, value);
         }
-        function close() { if (panel) {panel.prop('hidden', true); toggle.attr('aria-expanded', 'false');} }
+        function close(restoreFocus) {
+            if (panel) {panel.prop('hidden', true); toggle.attr('aria-expanded', 'false'); if (restoreFocus) toggle.trigger('focus');}
+        }
         function cancelSearch() { sequence++; if (request) request.abort(); request = null; }
         function renderChoices() {
             if (!panel) return;
@@ -88,7 +90,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
                 });
                 search.on('input', runSearch);
                 body.on('keydown.taPicker', function(event) {
-                    if (event.key === 'Escape') {close(); toggle.trigger('focus'); event.stopPropagation();}
+                    if (event.key === 'Escape') {close(true); event.stopPropagation();}
                     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                         event.preventDefault(); var buttons = candidates.find('button').toArray(), index = buttons.indexOf(event.target);
                         var target = buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length];
@@ -134,10 +136,25 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
         function mount(el) {
             host = $(el).addClass('ta-field'); label = $('<label>'); body = $('<div class="ta-field-body">');
             errors = $('<div class="ta-errors" data-ta-errors>').attr('id', uid + '-errors'); host.append(label, body, errors);
-            outside = function(event) {if (!host[0].contains(event.target)) close();};
+            outside = function(event) {
+                // Selection may remove the clicked candidate before the event reaches
+                // document; its original event path still identifies this picker.
+                var path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+                if (path.indexOf(host[0]) === -1 && !host[0].contains(event.target)) close();
+            };
+            escape = function(event) {
+                if (event.key === 'Escape' && panel && !panel.prop('hidden')) {close(true); event.preventDefault();}
+            };
             document.addEventListener('pointerdown', outside);
+            document.addEventListener('click', outside);
+            document.addEventListener('keydown', escape);
         }
-        function destroy() {dead = true; cancelSearch(); if (outside) document.removeEventListener('pointerdown', outside); if (host) host.empty();}
+        function destroy() {
+            dead = true; cancelSearch();
+            if (outside) {document.removeEventListener('pointerdown', outside); document.removeEventListener('click', outside);}
+            if (escape) document.removeEventListener('keydown', escape);
+            if (host) host.empty();
+        }
         return {mount: mount, update: update, destroy: destroy};
     }
     return {create: create};
