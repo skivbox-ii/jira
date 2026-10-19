@@ -43,6 +43,23 @@ async function setup(t, backend = memoryStorage(), searchUsers = async()=>({valu
     return {c,ui,dom,window,root,q,input,click,pick,deps,backend};
 }
 
+for (const [kind,id] of [['profile','devops'],['template','bug']]) {
+    test('keyboard-activated '+kind+' replacement retains focus while prompt typing retains its caret', async t=>{
+        const s=await setup(t);await s.click('[data-ta-open-settings]');
+        const selector='[data-ta-'+kind+'-row][data-id="'+id+'"]',old=s.q(selector);
+        old.focus();old.click();await tick();
+        assert.notEqual(s.q(selector),old);assert.equal(s.q(selector).getAttribute('aria-pressed'),'true');
+        assert.equal(s.window.document.activeElement,s.q(selector));
+        for (const prompt of ['[data-ta-profile-instructions]','[data-ta-template-instructions]']) {
+            const input=s.q(prompt);input.focus();input.setSelectionRange(3,5);input.setRangeText('X',3,5,'end');
+            const value=input.value,start=input.selectionStart,end=input.selectionEnd;
+            input.dispatchEvent(new s.window.Event('input',{bubbles:true}));
+            assert.equal(s.window.document.activeElement,input);assert.equal(input.value,value);
+            assert.equal(input.selectionStart,start);assert.equal(input.selectionEnd,end);
+        }
+    });
+}
+
 test('settings editing is local until Apply; cancel confirmation, Escape and focus preserve source and fields', async t=>{
     const s=await setup(t);await s.click('[data-ta-check]');assert.ok(s.c.getState().draft.checked);
     const revision=s.c.getState().settings.revision;
@@ -186,6 +203,21 @@ test('installed Chrome persists real settings and source across reload, transfer
             await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-source]').fill('Persisted source '+width);await page.locator('[data-ta-field="summary"] input').fill('Persisted summary');
             await page.locator('[data-ta-open-settings]').click();
+            for (const [selector,key,next] of [
+                ['[data-ta-profile-row][data-id="devops"]','Enter','[data-ta-profile-add]'],
+                ['[data-ta-template-row][data-id="bug"]','Space','[data-ta-template-row][data-id="deployment"]']
+            ]) {
+                await page.locator(selector).focus();await page.keyboard.press(key);
+                assert.equal(await page.locator(selector).getAttribute('aria-pressed'),'true');
+                assert.equal(await page.locator(selector).evaluate(el=>el===document.activeElement),true);
+                await page.keyboard.press('Tab');assert.equal(await page.locator(next).evaluate(el=>el===document.activeElement),true);
+            }
+            await page.locator('[data-ta-profile-row][data-id="universal"]').focus();await page.keyboard.press('Enter');
+            for (const selector of ['[data-ta-profile-instructions]','[data-ta-template-instructions]']) {
+                const prompt=page.locator(selector);await prompt.focus();await prompt.evaluate(el=>el.setSelectionRange(3,3));
+                await page.keyboard.type('X');assert.equal(await prompt.evaluate(el=>el===document.activeElement),true);
+                assert.equal(await prompt.evaluate(el=>el.selectionStart),4);assert.equal(await prompt.evaluate(el=>el.selectionEnd),4);
+            }
             const rules='Длинный общий промпт '.repeat(250);await page.locator('[data-ta-profile-instructions]').fill(rules);
             await page.locator('[data-ta-template-add]').click();await page.locator('[data-ta-template-name]').fill('Четвёртый шаблон');
             await page.locator('[data-ta-template-instructions]').fill('Длинные правила шаблона '.repeat(250));

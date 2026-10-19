@@ -29,6 +29,12 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             return $('<label>').append($('<span>').text(text), input);
         }
         function refreshLists() {
+            var focused=document.activeElement, focusedList=null, focusedId=null;
+            if (focused && root[0].contains(focused)) {
+                if (focused.hasAttribute('data-ta-profile-row')) focusedList='[data-ta-profile-row]';
+                else if (focused.hasAttribute('data-ta-template-row')) focusedList='[data-ta-template-row]';
+                if (focusedList) focusedId=focused.getAttribute('data-id');
+            }
             var p = profile(), list = root.find('[data-ta-profile-list]').empty();
             local.profiles.forEach(function(item) {
                 list.append($('<button type="button" data-ta-profile-row>').attr({'data-id':item.id,'aria-pressed':String(item.id===p.id)}).text(item.name || 'Без имени').on('click', function() {
@@ -42,6 +48,9 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             root.find('[data-ta-profile-delete]').prop('disabled',local.profiles.length<=1);
             root.find('[data-ta-template-delete]').prop('disabled',!template());
             root.find('[data-ta-template-duplicate]').prop('disabled',!template());
+            if (focusedList && !focused.isConnected) root.find(focusedList).filter(function() {
+                return this.getAttribute('data-id')===focusedId && this.getAttribute('aria-pressed')==='true';
+            }).first().trigger('focus');
         }
         function renderTemplate() {
             var t=template();
