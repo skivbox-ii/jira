@@ -187,7 +187,8 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             var questionId = 'required:' + fieldId;
             // Reserved IDs cannot be used by the model to suppress a local blocker.
             result.questions = result.questions.filter(function(q) { return q.id !== questionId; });
-            result.questions.push({id: questionId, text: 'Проверьте поле ' + fieldId, reason: 'Локальная проверка metadata требует явного значения или выбора.', required: true});
+            var spec = type.fields.find(function(field) {return field.id === fieldId;});
+            result.questions.push({id: questionId, text: 'Проверьте поле «' + (spec ? spec.name : fieldId) + '»', reason: 'Локальная проверка metadata требует явного значения или выбора.', required: true});
         });
         return result;
     }

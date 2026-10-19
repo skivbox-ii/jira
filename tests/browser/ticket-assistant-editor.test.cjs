@@ -34,6 +34,18 @@ function setup() {
     return {dom, $, window, root, ui, uiModule, fieldUi, calls, state, setState(next) { state = next; ui.update(next); }};
 }
 
+test('attachment outcomes are Russian and checked correction identifies the previous rejection', t => {
+    const s=setup(); t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.state.draft.attachments=['pending','uploading','uploaded','failed','unknown'].map((status,i)=>({id:String(i),name:'file'+i,size:1,status,needsReselect:false}));
+    s.state.draft.creation={status:'rejected',attemptId:'previous',issueKey:null,error:'Previous error'};
+    s.state.draft.checked={sourceRevision:0,settingsRevision:0,draftRevision:0,metaSignature:null};
+    s.setState(s.state);
+    const text=s.root.querySelector('[data-ta-file-list]').textContent;
+    for (const label of ['Ожидает загрузки','Загружается','Загружен','Ошибка загрузки','Результат загрузки неизвестен']) assert.ok(text.includes(label),label);
+    assert.match(s.root.querySelector('[data-ta-creation]').textContent,/Предыдущая попытка создания отклонена/);
+    assert.doesNotMatch(text,/pending|uploading|uploaded|failed|unknown/);
+});
+
 test('sequential labels retain delimiters and caret through normalized echoes, while external values replace the buffer', t => {
     const s = setup(); t.after(() => {s.ui.destroy(); s.dom.window.close();});
     const host = s.window.document.createElement('div'); s.root.append(host);

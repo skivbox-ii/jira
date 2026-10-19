@@ -22,6 +22,16 @@ function response(kind = 'draft', extra = {}) {
 function parse(kind, body, value = input()) { return ai().parseResponse(kind, typeof body === 'string' ? body : JSON.stringify(body), value); }
 const config = {apiBase: 'https://stub.invalid', apiKey: 'KEY_SECRET', model: 'stub', basePrompt: 'unchanged'};
 
+test('missing custom fields ask using current metadata names and keep machine IDs stable', () => {
+    const i=input(), field=i.meta.issueTypes[0].fields.find(f=>f.id==='customfield_2');
+    field.required=true; field.name='Контур проверки';
+    const result=parse('check',response('check'),i);
+    const question=result.questions.find(q=>q.id==='required:customfield_2');
+    assert.equal(question.text,'Проверьте поле «Контур проверки»');
+    const errors=validation.validateFields(i.meta,'10',i.draft.fields);
+    assert.match(errors.fieldErrors.customfield_2[0],/^Обязательное поле: Контур проверки/);
+});
+
 test('three JSONv1 contracts preserve selections and check cannot replace fields', () => {
     assert.equal(parse('route', response('route')).issueTypeId, '10');
     assert.equal(parse('prepare', response()).fields.summary, 'Запуск');

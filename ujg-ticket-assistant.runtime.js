@@ -750,7 +750,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if (!field.required) return;
             var supplied = Object.prototype.hasOwnProperty.call(values, field.id);
             if ((!supplied || !present(values[field.id])) && (supplied || !field.defaultApplicable)) {
-                error(field.id, 'Required field: ' + field.name + ' (' + field.id + ')');
+                error(field.id, 'Обязательное поле: ' + field.name + ' (' + field.id + ')');
                 if (!field.supported || !field.writable) result.unsupportedRequired.push(field.id);
             }
         });
@@ -919,11 +919,11 @@ define('_ujgTA_draft', [], function() {
         return next;
     }
     function hasAnswerBlock(source, block) {
-        var boundary = '\n\nQuestion: ';
+        var boundaries = ['\n\nQuestion: ', '\n\nВопрос: '];
         var index = source.indexOf(block);
         while (index !== -1) {
             var end = index + block.length;
-            if (end === source.length || source.slice(end, end + boundary.length) === boundary) return true;
+            if (end === source.length || boundaries.some(function(boundary) {return source.slice(end, end + boundary.length) === boundary;})) return true;
             index = source.indexOf(block, index + 1);
         }
         return false;
@@ -934,8 +934,9 @@ define('_ujgTA_draft', [], function() {
             if (!safeKey(q.id) || !Object.prototype.hasOwnProperty.call(answersById, q.id)) return;
             var answer = answersById[q.id];
             if (typeof answer !== 'string' || !answer.trim()) return;
-            var block = '\n\nQuestion: ' + q.text + '\nAnswer: ' + answer;
-            if (!hasAnswerBlock(source, block)) source += block;
+            var block = '\n\nВопрос: ' + q.text + '\nОтвет: ' + answer;
+            var legacy = '\n\nQuestion: ' + q.text + '\nAnswer: ' + answer;
+            if (!hasAnswerBlock(source, block) && !hasAnswerBlock(source, legacy)) source += block;
         });
         return setSource(d, source);
     }
@@ -1431,7 +1432,8 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
             var questionId = 'required:' + fieldId;
             // Reserved IDs cannot be used by the model to suppress a local blocker.
             result.questions = result.questions.filter(function(q) { return q.id !== questionId; });
-            result.questions.push({id: questionId, text: 'Проверьте поле ' + fieldId, reason: 'Локальная проверка metadata требует явного значения или выбора.', required: true});
+            var spec = type.fields.find(function(field) {return field.id === fieldId;});
+            result.questions.push({id: questionId, text: 'Проверьте поле «' + (spec ? spec.name : fieldId) + '»', reason: 'Локальная проверка metadata требует явного значения или выбора.', required: true});
         });
         return result;
     }
@@ -2688,6 +2690,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-new-draft]').prop('hidden',status!=='created').prop('disabled',d && d.attachments.some(function(a) {return a.status==='uploading';}));
             var host=root.find('[data-ta-creation]').empty();
             var labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Создание отправлено. Ожидаем результат; остановка не отменяет запись.',created:'Задача создана.',rejected:'Создание отклонено.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.'};
+            if (status==='rejected' && d.checked) labels.rejected='Предыдущая попытка создания отклонена. Исправленный черновик проверен; новая попытка требует явного создания.';
             if (creation) {
                 if (labels[status]) host.append($('<p>').text(labels[status]));
                 if (creation.error) host.append($('<p class="ta-warning">').text(creation.error));
@@ -2700,8 +2703,9 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-reconcile-actions] button').prop('disabled',!root.find('[data-ta-reconcile-confirm]').prop('checked'));
             root.find('[data-ta-files]').prop('disabled',!d || status==='submitting' || status==='unknown' || status==='preflight');
             var list=root.find('[data-ta-file-list]').empty();
+            var fileLabels={pending:'Ожидает загрузки',uploading:'Загружается',uploaded:'Загружен',failed:'Ошибка загрузки',unknown:'Результат загрузки неизвестен'};
             (d && d.attachments || []).forEach(function(a) {
-                var row=$('<div class="ta-file">').append($('<span>').text(a.name+' · '+a.size+' B · '+a.status+(a.needsReselect?' · выберите файл повторно':'')));
+                var row=$('<div class="ta-file">').append($('<span>').text(a.name+' · '+a.size+' B · '+(fileLabels[a.status] || a.status)+(a.needsReselect?' · выберите файл повторно':'')));
                 if(a.error)row.append($('<p class="ta-warning">').text(a.error));
                 if(!locked)row.append(button('Удалить файл','Trash2',{'data-ta-file-remove':a.id}).on('click',function() {c.removeFile(a.id);}));
                 if(creation.issueKey && ['pending','failed','unknown'].indexOf(a.status)!==-1) row.append(

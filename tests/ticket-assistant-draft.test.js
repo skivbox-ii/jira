@@ -4,6 +4,18 @@ const { loadUnit } = require('./helpers/ticket-assistant-fixture');
 const draft = () => loadUnit('draft');
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('Russian answer blocks preserve exact legacy deduplication and multiline boundaries', () => {
+    const api = draft();
+    let d = api.createDraft({projectKey:'DO'});
+    d.questions = [{id:'q',text:'Среда?',required:true},{id:'later',text:'Версия?',required:false}];
+    d = api.appendAnswers(d,{q:'TEST\n\nQuestion: literal\nAnswer: text',later:'v1'});
+    assert.match(d.source,/Вопрос: Среда\?\nОтвет: TEST/);
+    assert.equal(api.appendAnswers(d,{q:'TEST\n\nQuestion: literal\nAnswer: text'}).source,d.source);
+    const legacy = {...d,source:'Original\n\nQuestion: Среда?\nAnswer: TEST\n\nQuestion: Версия?\nAnswer: v1'};
+    assert.equal(api.appendAnswers(legacy,{q:'TEST'}).source,legacy.source);
+    assert.ok(api.appendAnswers(legacy,{q:'TE'}).source.endsWith('Вопрос: Среда?\nОтвет: TE'),'shorter answers still append');
+});
+
 test('late proposal cannot replace manual edits; current replacement requires acceptance', () => {
     const api = draft();
     const initial = api.createDraft({ projectKey: 'DO' });
@@ -167,7 +179,7 @@ test('saving a shorter answer after a longer one still appends its visible text'
     d.questions = [{ id: 'q', text: 'Environment?', required: true }];
     d = api.appendAnswers(d, { q: 'TESTING' });
     d = api.appendAnswers(d, { q: 'TEST' });
-    assert.match(d.source, /Answer: TEST$/);
+    assert.match(d.source, /Ответ: TEST$/);
 });
 
 test('multiline answers containing literal question delimiters remain idempotent at any block position', () => {

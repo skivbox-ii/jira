@@ -142,7 +142,7 @@ test('check retains manual fields, required questions block, answers stay visibl
         return { questions: question ? [{ id: 'q', text: 'Where?', reason: '', required: true }] : [], warnings: ['Optional'], evidence: [] };
     };
     await h.c.check(); assert.equal(h.c.getState().draft.checked, null);
-    await h.c.answer({ q: 'Here' }); assert.match(h.c.getState().draft.source, /Answer: Here/);
+    await h.c.answer({ q: 'Here' }); assert.match(h.c.getState().draft.source, /Ответ: Here/);
     question = false; await h.c.check();
     assert.equal(h.c.getState().draft.fields.summary, 'Manual');
     assert.ok(h.c.getState().draft.checked);

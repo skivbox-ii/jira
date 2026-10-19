@@ -81,7 +81,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if (!field.required) return;
             var supplied = Object.prototype.hasOwnProperty.call(values, field.id);
             if ((!supplied || !present(values[field.id])) && (supplied || !field.defaultApplicable)) {
-                error(field.id, 'Required field: ' + field.name + ' (' + field.id + ')');
+                error(field.id, 'Обязательное поле: ' + field.name + ' (' + field.id + ')');
                 if (!field.supported || !field.writable) result.unsupportedRequired.push(field.id);
             }
         });

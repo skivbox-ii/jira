@@ -203,6 +203,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-new-draft]').prop('hidden',status!=='created').prop('disabled',d && d.attachments.some(function(a) {return a.status==='uploading';}));
             var host=root.find('[data-ta-creation]').empty();
             var labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Создание отправлено. Ожидаем результат; остановка не отменяет запись.',created:'Задача создана.',rejected:'Создание отклонено.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.'};
+            if (status==='rejected' && d.checked) labels.rejected='Предыдущая попытка создания отклонена. Исправленный черновик проверен; новая попытка требует явного создания.';
             if (creation) {
                 if (labels[status]) host.append($('<p>').text(labels[status]));
                 if (creation.error) host.append($('<p class="ta-warning">').text(creation.error));
@@ -215,8 +216,9 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-reconcile-actions] button').prop('disabled',!root.find('[data-ta-reconcile-confirm]').prop('checked'));
             root.find('[data-ta-files]').prop('disabled',!d || status==='submitting' || status==='unknown' || status==='preflight');
             var list=root.find('[data-ta-file-list]').empty();
+            var fileLabels={pending:'Ожидает загрузки',uploading:'Загружается',uploaded:'Загружен',failed:'Ошибка загрузки',unknown:'Результат загрузки неизвестен'};
             (d && d.attachments || []).forEach(function(a) {
-                var row=$('<div class="ta-file">').append($('<span>').text(a.name+' · '+a.size+' B · '+a.status+(a.needsReselect?' · выберите файл повторно':'')));
+                var row=$('<div class="ta-file">').append($('<span>').text(a.name+' · '+a.size+' B · '+(fileLabels[a.status] || a.status)+(a.needsReselect?' · выберите файл повторно':'')));
                 if(a.error)row.append($('<p class="ta-warning">').text(a.error));
                 if(!locked)row.append(button('Удалить файл','Trash2',{'data-ta-file-remove':a.id}).on('click',function() {c.removeFile(a.id);}));
                 if(creation.issueKey && ['pending','failed','unknown'].indexOf(a.status)!==-1) row.append(
