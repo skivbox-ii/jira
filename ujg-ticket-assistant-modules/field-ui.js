@@ -4,7 +4,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
     function create(options) {
         var $ = options.$, host, label, body, errors, control, panel, chips, candidates, search, toggle;
         var current = {}, mode, dead = false, sequence = 0, request = null, userOptions = [], query = '', outside, escape;
-        var uid = 'ta-field-' + (++nextId), cache = Object.create(null);
+        var uid = 'ta-field-' + (++nextId), cache = Object.create(null), localEdit = null;
         function multi() { return current.field.multiple === true || ['multioption', 'components', 'versions'].indexOf(current.field.kind) !== -1; }
         function user() { return current.field.kind === 'user'; }
         function key(value) { return value && (user() ? value.name : value.id); }
@@ -76,7 +76,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
             });
         }
         function build(kind) {
-            cancelSearch(); body.empty(); control = null; panel = null; query = ''; userOptions = [];
+            cancelSearch(); body.empty(); control = null; panel = null; query = ''; userOptions = []; localEdit = null;
             if (kind === 'picker') {
                 toggle = $('<button type="button" class="ta-picker" data-ta-picker aria-haspopup="listbox" aria-expanded="false">').attr('id', uid).append($('<span>'), icon('ChevronDown'));
                 panel = $('<div class="ta-popover" data-ta-popover hidden>');
@@ -108,6 +108,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
                     var value = control.val();
                     if (kind === 'number') value = value === '' ? null : Number(value);
                     if (kind === 'labels') value = value.split(',').map(function(v) {return v.trim();}).filter(Boolean);
+                    if (kind === 'number' || kind === 'labels') localEdit = JSON.stringify(value);
                     options.onChange(current.field.id, value);
                 }); body.append(control);
             }
@@ -115,7 +116,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
         }
         function update(value) {
             if (dead) return; var oldId = current.field && current.field.id; current = value;
-            if (oldId !== current.field.id) {cache = Object.create(null); userOptions = []; cancelSearch();}
+            if (oldId !== current.field.id) {cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();}
             (current.selectedUsers || []).forEach(function(v) {cache[v.name] = v.displayName || v.name;});
             (current.field.allowedValues || []).forEach(function(v) {cache[v.id] = v.label || v.id;});
             var kind = !current.field.supported || !current.field.writable ? 'unsupported' :
@@ -130,7 +131,12 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
                 control.text('Текущее значение: ' + value + '\nПоле недоступно в редакторе; используйте форму Jira.');
             } else {
                 var text = current.value == null ? '' : kind === 'labels' && Array.isArray(current.value) ? current.value.join(', ') : String(current.value);
-                if (control.val() !== text) control.val(text);
+                // Keep delimiters, decimal/exponent editing and caret on local echoes.
+                // A genuinely different controller value replaces the editing buffer.
+                if (localEdit === null || localEdit !== JSON.stringify(current.value)) {
+                    localEdit = null;
+                    if (control.val() !== text) control.val(text);
+                }
             }
         }
         function mount(el) {

@@ -2,14 +2,17 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
     'use strict';
     function create(options) {
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
-        var project, template, type, timer = null, lastAction = 'prepare', dead = false, settingsView = null;
+        var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null;
         var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
         }
         function textValue(value) { return value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
-        function invoke(name) {lastAction = name; return c[name]();}
+        function invoke(name, argument) {
+            lastOperation = {name:name, argument:argument};
+            return argument === undefined ? c[name]() : c[name](argument);
+        }
         function fieldName(id) {
             var found;
             (state.meta && state.meta.issueTypes || []).some(function(t) {found = t.fields.find(function(f) {return f.id === id;}); return !!found;});
@@ -25,7 +28,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             }); return result;
         }
         function makeSelection(host, id, name, action) {
-            var view = fieldUi.create({$: $, onChange: function(unused, value) {c[action](value ? value.id : null);}});
+            var view = fieldUi.create({$: $, onChange: function(unused, value) {
+                var id = value ? value.id : null;
+                if (action === 'selectProject') invoke(action, id); else c[action](id);
+            }});
             view.mount(host); return {view: view, id: id, name: name};
         }
         function updateSelection(selection, values, value, disabled) {
@@ -43,7 +49,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
                 button('Проверить', 'Check', {'data-ta-check':''}).on('click', function() {invoke('check');}),
                 button('Остановить', 'Square', {'data-ta-stop':''}).on('click', function() {c.cancel();}));
             root.find('[data-ta-retry-host]').append(button('Повторить', 'RefreshCw', {'data-ta-retry':''}).on('click', function() {
-                if (!state.draft) c.init(); else invoke(lastAction);
+                if (!state.draft) c.init(); else invoke(lastOperation.name, lastOperation.argument);
             }));
             root.find('[data-ta-copy-actions]').append(
                 button('Копировать тему', null, {'data-ta-copy':'summary'}).on('click', function() {copy('summary');}),

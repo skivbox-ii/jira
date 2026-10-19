@@ -30,8 +30,60 @@ function setup() {
     const root = window.document.querySelector('#root');
     const ui = uiModule.create({$, controller, baseUrl: '/jira'});
     ui.mount(root); ui.update(state);
-    return {dom, $, window, root, ui, fieldUi, calls, state, setState(next) { state = next; ui.update(next); }};
+    return {dom, $, window, root, ui, uiModule, fieldUi, calls, state, setState(next) { state = next; ui.update(next); }};
 }
+
+test('sequential labels retain delimiters and caret through normalized echoes, while external values replace the buffer', t => {
+    const s = setup(); t.after(() => {s.ui.destroy(); s.dom.window.close();});
+    const host = s.window.document.createElement('div'); s.root.append(host);
+    const field = {id:'labels',name:'Labels',kind:'labels',supported:true,writable:true,allowedValues:[]};
+    let value = [], view;
+    view = s.fieldUi.create({$:s.$,onChange:(id,next) => {value=next; view.update({field,value,errors:[]});}});
+    view.mount(host); view.update({field,value,errors:[]}); const input=host.querySelector('input'); input.focus();
+    for (const char of 'alpha,beta') {
+        input.setRangeText(char,input.selectionStart,input.selectionEnd,'end'); input.dispatchEvent(new s.window.Event('input',{bubbles:true}));
+    }
+    assert.equal(input.value,'alpha,beta'); assert.deepEqual([...value],['alpha','beta']);
+    input.value='alpha,  beta,'; input.setSelectionRange(7,7); input.dispatchEvent(new s.window.Event('input',{bubbles:true}));
+    assert.equal(input.value,'alpha,  beta,'); assert.equal(input.selectionStart,7); assert.equal(input.selectionEnd,7);
+    view.update({field,value:[...value],errors:['Visible error']});
+    assert.equal(input.value,'alpha,  beta,'); assert.equal(input.selectionStart,7);
+    view.update({field,value:['external','replacement'],errors:[]}); assert.equal(input.value,'external, replacement');
+    view.destroy();
+});
+
+test('number editing preserves decimal representation on equivalent echoes and accepts external values', t => {
+    const s = setup(); t.after(() => {s.ui.destroy(); s.dom.window.close();});
+    const host=s.window.document.createElement('div'); s.root.append(host);
+    const field={id:'effort',name:'Effort',kind:'number',supported:true,writable:true,allowedValues:[]}; let value=null, view;
+    view=s.fieldUi.create({$:s.$,onChange:(id,next) => {value=next; view.update({field,value,errors:[]});}});
+    view.mount(host); view.update({field,value,errors:[]}); const input=host.querySelector('input'); input.focus();
+    for (const text of ['1','1.0','1.02']) {input.value=text; input.dispatchEvent(new s.window.Event('input',{bubbles:true})); assert.equal(input.value,text);}
+    assert.equal(value,1.02); view.update({field,value:42,errors:[]}); assert.equal(input.value,'42');
+    input.value='-0.50'; input.dispatchEvent(new s.window.Event('input',{bubbles:true})); assert.equal(input.value,'-0.50'); assert.equal(value,-0.5);
+    view.update({field,value:null,errors:[]}); assert.equal(input.value,''); view.destroy();
+});
+
+test('real controller retries failed project metadata with empty source, second read succeeds without AI', async t => {
+    const s=setup(); s.ui.destroy(); const drafts=loadUnit('draft'), profiles=loadUnit('profiles'), fields=loadUnit('fields');
+    const validation=loadUnit('validation',{'_ujgTA_fields':fields});
+    const controllerModule=loadUnit('controller',{'_ujgTA_draft':drafts,'_ujgTA_profiles':profiles,'_ujgTA_fields':fields,'_ujgTA_validation':validation},{AbortController});
+    const storage=loadUnit('storage',{'_ujgTA_profiles':profiles,'_ujgTA_draft':drafts});
+    let reads=0, aiCalls=0, ui;
+    const c=controllerModule.create({api:{getCurrentUser:async()=>({key:'offline-test'}),getProjects:async()=>({values:[{id:'1',key:'DO',name:'Delivery'}]}),
+        getCreateMeta:async()=>{reads++; if(reads===1) throw {kind:'network'}; return {projects:[{id:'1',key:'DO',issuetypes:[{id:'10',name:'Task',subtask:false,fields:{summary:{name:'Summary',required:true,schema:{type:'string',system:'summary'}}}}]}]};},
+        getComponents:async()=>({values:[],complete:true,projectKey:'DO'}),getVersions:async()=>({values:[],complete:true,projectKey:'DO'})},
+        ai:{route:async()=>{aiCalls++;},prepare:async()=>{aiCalls++;},check:async()=>{aiCalls++;}},
+        createStore:key=>storage.createStore({userKey:key,origin:'http://localhost',storage:null}),onChange:state=>{if(ui)ui.update(state);}});
+    ui=s.uiModule.create({$:s.$,controller:c}); ui.mount(s.root); t.after(()=>{ui.destroy();c.destroy();s.dom.window.close();}); await c.init();
+    s.root.querySelector('[data-ta-project] [data-ta-picker]').click(); s.root.querySelector('[data-ta-project] [data-ta-candidate]').click();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(reads,1); assert.equal(c.getState().stage,'error'); assert.equal(c.getState().draft.source,'');
+    assert.equal(s.root.querySelector('[data-ta-retry-host]').hidden,false);
+    s.root.querySelector('[data-ta-retry]').click(); await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(reads,2); assert.equal(c.getState().stage,'idle'); assert.equal(c.getState().meta.projectKey,'DO');
+    assert.equal(c.getState().draft.source,''); assert.equal(aiCalls,0); assert.equal(s.root.querySelector('[data-ta-error]').hidden,true);
+});
 
 test('metadata fields, source, questions, current values and protected proposals render as text', t => {
     const s = setup(); t.after(() => {s.ui.destroy(); s.dom.window.close();});
@@ -253,6 +305,26 @@ test('generated runtime works in installed Chrome at desktop and mobile, without
                 return route.continue();
             });
             await page.goto(server.url); await page.waitForSelector('html[data-ta-preview-ready="true"]');
+            const labels = page.locator('[data-ta-field="labels"] input');
+            await labels.pressSequentially('alpha,beta');
+            assert.equal(await labels.inputValue(),'alpha,beta');
+            assert.deepEqual(await page.evaluate(()=>window.taPreview.instance.controller.getState().draft.fields.labels),['alpha','beta']);
+            await labels.evaluate(el=>{el.setSelectionRange(3,3);});
+            await page.evaluate(()=>{const c=window.taPreview.instance.controller; return c.updateField('labels',[...c.getState().draft.fields.labels]);});
+            assert.equal(await labels.evaluate(el=>el.selectionStart),3); assert.equal(await labels.inputValue(),'alpha,beta');
+            await page.evaluate(()=>window.taPreview.instance.controller.updateField('labels',['external','replacement']));
+            assert.equal(await labels.inputValue(),'external, replacement');
+            const effort=page.locator('[data-ta-field="customfield_1"] input');
+            for(const [typed,value] of [['1.02',1.02],['-0.50',-0.5],['1e-2',0.01]]) {
+                await effort.fill(''); await effort.pressSequentially(typed);
+                assert.equal(await effort.inputValue(),typed);
+                assert.equal(await page.evaluate(()=>window.taPreview.instance.controller.getState().draft.fields.customfield_1),value);
+            }
+            await effort.fill(''); await effort.pressSequentially('-');
+            assert.equal(await effort.evaluate(el=>el.validity.badInput),true);
+            await page.evaluate(()=>window.taPreview.instance.controller.updateField('labels',['unrelated']));
+            assert.equal(await effort.evaluate(el=>el.validity.badInput),true);
+            await effort.pressSequentially('0.5'); assert.equal(await effort.inputValue(),'-0.5');
             await page.locator('[data-ta-source]').fill('Проверить журнал ошибок API на тестовой среде');
             await page.locator('[data-ta-prepare]').click();
             await page.locator('[data-ta-stop]').click();
