@@ -84,6 +84,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 error(field.id, 'Обязательное поле: ' + field.name + ' (' + field.id + ')');
                 if (!field.supported || !field.writable) result.unsupportedRequired.push(field.id);
             }
+            if (fields.catalogUnavailable(field) && result.fieldErrors[field.id]) {
+                error(field.id, 'Каталог вариантов недоступен: ' + field.name + '. Используйте форму Jira.');
+                if (result.unsupportedRequired.indexOf(field.id) === -1) result.unsupportedRequired.push(field.id);
+            }
         });
         result.ok = Object.keys(result.fieldErrors).length === 0;
         return { validation: result, output: output };

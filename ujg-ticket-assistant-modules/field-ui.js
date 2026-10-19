@@ -1,4 +1,4 @@
-define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
+define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, fields) {
     'use strict';
     var nextId = 0;
     function create(options) {
@@ -55,7 +55,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
                 });
                 candidates.append(button);
             });
-            if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text('Нет вариантов'));
+            if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text(fields.catalogUnavailable(current.field) ? 'Каталог вариантов недоступен. Используйте форму Jira.' : 'Нет вариантов'));
             toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : 'Выбрать');
         }
         function runSearch() {
@@ -163,5 +163,5 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
         }
         return {mount: mount, update: update, destroy: destroy};
     }
-    return {create: create};
+    return {create: create, catalogUnavailable: fields.catalogUnavailable};
 });

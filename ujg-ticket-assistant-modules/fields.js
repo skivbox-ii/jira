@@ -93,5 +93,10 @@ define('_ujgTA_fields', [], function() {
         return { ok: false, value: null, error: !field.optionsComplete ? 'Jira confirmation required for this option' : matches.length > 1 ? 'Ambiguous option; select an ID' : 'Unknown option ID or label' };
     }
 
-    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption };
+    function catalogUnavailable(field) {
+        return !!field && ['option','multioption','components','versions'].indexOf(field.kind) !== -1 &&
+            field.optionsComplete === false && !(field.allowedValues || []).length;
+    }
+
+    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable };
 });

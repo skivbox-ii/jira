@@ -8,6 +8,16 @@ function units() {
 }
 const policy = { allowAssignee: false, explicitUserFields: [] };
 
+test('required unavailable catalogs expose ordinary-form fallback without guessing values or rejecting known partial IDs', () => {
+    const {validation}=units(),meta=metadataFixture(),field=meta.issueTypes[0].fields.find(f=>f.id==='customfield_2');
+    field.required=true;field.allowedValues=[];field.optionsComplete=false;field.autoCompleteUrl='https://never-follow.invalid/lookup';
+    for(const values of [{summary:'Title'},{summary:'Title',customfield_2:{id:'unconfirmed'}}]) {
+        const result=validation.validateFields(meta,'10',values,policy);assert.equal(result.ok,false);assert.deepEqual(plain(result.unsupportedRequired),['customfield_2']);
+    }
+    field.allowedValues=[{id:'known',label:'Confirmed known'}];
+    assert.equal(validation.validateFields(meta,'10',{summary:'Title',customfield_2:{id:'known'}},policy).ok,true);
+});
+
 test('normalization preserves project scope, kinds, completeness and stable signatures', () => {
     const { fields } = units(), meta = metadataFixture();
     assert.equal(meta.projectId, 'DO-project');

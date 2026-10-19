@@ -189,7 +189,12 @@ define('_ujgTA_fields', [], function() {
         return { ok: false, value: null, error: !field.optionsComplete ? 'Jira confirmation required for this option' : matches.length > 1 ? 'Ambiguous option; select an ID' : 'Unknown option ID or label' };
     }
 
-    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption };
+    function catalogUnavailable(field) {
+        return !!field && ['option','multioption','components','versions'].indexOf(field.kind) !== -1 &&
+            field.optionsComplete === false && !(field.allowedValues || []).length;
+    }
+
+    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable };
 });
 
 /* === Module: validation.js === */
@@ -278,6 +283,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if ((!supplied || !present(values[field.id])) && (supplied || !field.defaultApplicable)) {
                 error(field.id, 'Обязательное поле: ' + field.name + ' (' + field.id + ')');
                 if (!field.supported || !field.writable) result.unsupportedRequired.push(field.id);
+            }
+            if (fields.catalogUnavailable(field) && result.fieldErrors[field.id]) {
+                error(field.id, 'Каталог вариантов недоступен: ' + field.name + '. Используйте форму Jira.');
+                if (result.unsupportedRequired.indexOf(field.id) === -1) result.unsupportedRequired.push(field.id);
             }
         });
         result.ok = Object.keys(result.fieldErrors).length === 0;
@@ -1474,9 +1483,24 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             } catch(error) {state.error=errorState(null,'storage');return emit();}
         }
         async function discardField(id) {
-            if (destroyed || !state.draft || id !== 'assignee' || policy().allowAssignee) return getState();
-            var next=Object.assign({},state.draft,{fields:Object.assign({},state.draft.fields),protectedFields:Object.assign({},state.draft.protectedFields),pendingFields:Object.assign({},state.draft.pendingFields),
-                draftRevision:state.draft.draftRevision+1,checked:null});
+            if (destroyed || !state.draft || locked() || durableGuard()) return getState();
+            var spec=fields.getField(state.meta,state.draft.issueTypeId,id);
+            var obsolete=!spec || !spec.supported || !spec.writable;
+            var unavailable=spec && !spec.required && fields.catalogUnavailable(spec);
+            if (!(id==='assignee' && !policy().allowAssignee) && !obsolete && !unavailable) return getState();
+            if (!Object.prototype.hasOwnProperty.call(state.draft.fields,id) && !Object.prototype.hasOwnProperty.call(state.draft.pendingFields,id)) return getState();
+            var recovered=state.draft;
+            if (id!=='assignee' || obsolete || unavailable) {
+                var previous=spec;
+                (state.meta && state.meta.issueTypes || []).some(function(type) {previous=previous || type.fields.find(function(field) {return field.id===id;});return !!previous;});
+                var value=Object.prototype.hasOwnProperty.call(recovered.fields,id) ? recovered.fields[id] : recovered.pendingFields[id];
+                var text=typeof value==='string' ? value : JSON.stringify(value);
+                if (Object.prototype.hasOwnProperty.call(recovered.pendingFields,id) && JSON.stringify(value)!==JSON.stringify(recovered.pendingFields[id]))
+                    text+='\nПредлагалось: '+JSON.stringify(recovered.pendingFields[id]);
+                recovered=drafts.setSource(recovered,recovered.source+'\n\nСохранённое поле '+(previous ? previous.name : id)+' ('+id+'):\n'+text);
+            }
+            var next=Object.assign({},recovered,{fields:Object.assign({},recovered.fields),protectedFields:Object.assign({},recovered.protectedFields),pendingFields:Object.assign({},recovered.pendingFields),
+                draftRevision:recovered.draftRevision+1,checked:null});
             delete next.fields[id];delete next.protectedFields[id];delete next.pendingFields[id];
             return edited(next);
         }
@@ -1641,6 +1665,19 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             }
             return emit();
         }
+        async function discardDraft(confirmed) {
+            if (confirmed!==true || destroyed || !state.draft || active || locked() || state.draft.creation.status==='preflight') return getState();
+            if (durableGuard()) return emit();
+            var previous=state.draft,entry=scopes[previous.projectKey];
+            try {
+                var result=store.clearDraft(previous.projectKey,entry.revision);
+                if (!result.ok) {state.error=errorState(null,result.reason==='conflict' || result.reason==='creation-guard' ? 'conflict':'storage');return emit();}
+                stop();previous.attachments.forEach(function(file) {runtimeFiles.delete(file.id);});
+                state.draft=drafts.setSelection(drafts.createDraft({projectKey:previous.projectKey}),{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+                entry.revision=result.revision;entry.error=null;state.validation=null;state.routeCandidates=[];state.stage='idle';state.error=identityWarning;
+                remember();updateScope();return emit();
+            } catch(error) {state.error=errorState(null,'storage');return emit();}
+        }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
@@ -1648,7 +1685,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
             applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
-            submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,
+            submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,discardDraft:discardDraft,
             cancel: cancel, getState: getState, destroy: destroy };
     }
     return { create: create };
@@ -1686,7 +1723,7 @@ define('_ujgTA_icons', [], function() {
 });
 
 /* === Module: field-ui.js === */
-define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
+define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, fields) {
     'use strict';
     var nextId = 0;
     function create(options) {
@@ -1743,7 +1780,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
                 });
                 candidates.append(button);
             });
-            if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text('Нет вариантов'));
+            if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text(fields.catalogUnavailable(current.field) ? 'Каталог вариантов недоступен. Используйте форму Jira.' : 'Нет вариантов'));
             toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : 'Выбрать');
         }
         function runSearch() {
@@ -1851,7 +1888,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
         }
         return {mount: mount, update: update, destroy: destroy};
     }
-    return {create: create};
+    return {create: create, catalogUnavailable: fields.catalogUnavailable};
 });
 
 /* === Module: settings-ui.js === */
@@ -2015,7 +2052,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
     'use strict';
     function create(options) {
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
-        var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null;
+        var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null, discardId = null;
         var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
         function button(label, name, selector) {
@@ -2063,6 +2100,16 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('.ta-footer').empty().append(
                 button('Создать задачу','Check',{'data-ta-create':''}).addClass('ta-primary').on('click',function() {c.submit();}),
                 button('Новая задача','Plus',{'data-ta-new-draft':''}).on('click',function() {c.newDraft();}));
+            root.find('.ta-footer').append(button('Удалить черновик','Trash2',{'data-ta-discard-draft':''}).on('click',function() {
+                discardId=state.draft && state.draft.id;root.find('[data-ta-discard-dialog]').prop('hidden',false);root.find('[data-ta-discard-cancel]').trigger('focus');
+            }));
+            root.find('.ta-footer').before($('<div class="ta-warning" data-ta-discard-dialog role="alertdialog" aria-label="Удалить сохранённый черновик" hidden>').append(
+                $('<p>').text('Удалить исходник, поля и выбранные файлы этого черновика? Личные настройки сохранятся.'),
+                button('Отмена','X',{'data-ta-discard-cancel':''}).on('click',function() {discardId=null;root.find('[data-ta-discard-dialog]').prop('hidden',true);root.find('[data-ta-discard-draft]').trigger('focus');}),
+                button('Удалить черновик навсегда','Trash2',{'data-ta-discard-draft-confirm':''}).on('click',function() {
+                    if (state.draft && state.draft.id===discardId) c.discardDraft(true);
+                    discardId=null;root.find('[data-ta-discard-dialog]').prop('hidden',true);
+                })));
             root.find('.ta-footer').before('<section class="ta-attachments"><h3>Вложения</h3><label>Выбрать файлы<input type="file" multiple data-ta-files></label><div data-ta-file-list></div></section><div data-ta-creation role="status"></div><div data-ta-reconcile hidden><label>Ключ найденной задачи<input data-ta-found-key placeholder="DEMO-123"></label><label><input type="checkbox" data-ta-reconcile-confirm> Я сверил результат создания в Jira</label><div class="ta-actions" data-ta-reconcile-actions></div></div>');
             root.find('[data-ta-files]').on('change',function() {c.selectFiles(this.files);this.value='';});
             root.find('[data-ta-reconcile-actions]').append(
@@ -2139,6 +2186,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     disabled:writeLocked() || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
                 entry.host.find('[data-ta-policy-block]').remove();
+                entry.host.find('[data-ta-field-exclusion]').remove();
+                var unavailable=fieldUi.catalogUnavailable(field),obsolete=!field.supported || !field.writable;
+                if ((obsolete || unavailable && !field.required) && (Object.prototype.hasOwnProperty.call(d.fields,field.id) || Object.prototype.hasOwnProperty.call(d.pendingFields,field.id)))
+                    entry.host.append($('<div data-ta-field-exclusion class="ta-warning">').append($('<p>').text('Поле недоступно для отправки. Значение можно сохранить в исходнике и явно исключить из полей.'),
+                        button('Сохранить в исходнике и исключить поле','Trash2',{'data-ta-discard-field':field.id}).prop('disabled',!!writeLocked()).on('click',function() {c.discardField(field.id);} )));
                 if (field.id === 'assignee' && (!profile || !profile.allowAssignee) && Object.prototype.hasOwnProperty.call(d.fields,field.id)) {
                     entry.host.append($('<div data-ta-policy-block class="ta-warning">').append($('<p>').text('Выбор исполнителя запрещён профилем. Сохранённое значение не будет отправлено без разрешения. Можно разрешить выбор в настройках или исключить поле.'),
                         button('Не отправлять исполнителя','Trash2',{'data-ta-discard-field':field.id}).on('click',function(){c.discardField(field.id);} )));
@@ -2213,6 +2265,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         function renderCreation() {
             var d=state.draft, creation=d && d.creation, status=creation && creation.status, locked=writeLocked();
             root.find('[data-ta-create]').prop('disabled',!d || !d.checked || locked || status==='preflight' || !!stages[state.stage] || !!state.error);
+            var editable=d && !locked && ['idle','rejected'].indexOf(status)!==-1 && !stages[state.stage];
+            root.find('[data-ta-discard-draft]').prop('disabled',!editable);
+            root.find('[data-ta-discard-draft-confirm]').prop('disabled',!editable);
+            if (!editable || discardId && (!d || discardId!==d.id)) {discardId=null;root.find('[data-ta-discard-dialog]').prop('hidden',true);}
             root.find('[data-ta-new-draft]').prop('hidden',status!=='created').prop('disabled',d && d.attachments.some(function(a) {return a.status==='uploading';}));
             var host=root.find('[data-ta-creation]').empty();
             var labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Создание отправлено. Ожидаем результат; остановка не отменяет запись.',created:'Задача создана.',rejected:'Создание отклонено.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.'};
@@ -2327,8 +2383,15 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         try {storage = deps.storage !== undefined ? deps.storage : window.localStorage;} catch (ignored) {storage = null;}
         var controller = controllerModule.create({api:api,
             ai:deps.ai || aiModule.createClient({llmClient:shared, fetchImpl:deps.fetchImpl || function(url, config) {return window.fetch(url, config);}, readConfig:deps.readConfig}),
-            createStore:deps.createStore || function(userKey) {return storageModule.createStore({origin:window.location.origin, userKey:userKey, storage:storage,
-                onWarning:function() {warning = 'Локальное хранилище недоступно; изменения сохраняются только в памяти.';}});},
+            createStore:deps.createStore || function(userKey) {
+                var personalStore = storageModule.createStore({origin:window.location.origin, userKey:userKey, storage:storage,
+                    onWarning:function() {
+                        if (personalStore && personalStore.isPersistent()) return;
+                        warning = 'Локальное хранилище недоступно; изменения сохраняются только в памяти. Перезагрузка может потерять изменения.';
+                        showStorageWarning();
+                    }});
+                return personalStore;
+            },
             onChange:function(state) {if (!dead && ui) ui.update(state);}, now:deps.now});
         var searches = new Set();
         function searchUsers(query, field, options) {
@@ -2341,10 +2404,15 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         }
         ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView});
         ui.mount(root[0]);
+        var warningHost = $('<p class="ta-warning" data-ta-storage-warning hidden>');
+        root.prepend(warningHost);
+        function showStorageWarning() {
+            if (!dead && warningHost && warning) warningHost.text(warning).prop('hidden',false);
+        }
         var instance = this;
         this.controller = controller;
         this.init = function() {return controller.init().then(function(state) {
-            if (!dead && warning) root.prepend($('<p class="ta-warning" data-ta-storage-warning>').text(warning)); return state;
+            showStorageWarning(); return state;
         });};
         this.openSettings = function() {return ui.openSettings();};
         this.destroy = function() {

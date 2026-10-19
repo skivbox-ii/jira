@@ -62,6 +62,47 @@ function harness(options = {}) {
     return { c, api, ai, calls, changes, identities, stores, localStorage, ready, setUser(value) { user = value; } };
 }
 
+test('obsolete field exclusion preserves manual text and removes only the explicit blocker', async () => {
+    const h=harness({api:{getCreateMeta:async key=>{const raw=rawMeta(key);raw.projects[0].issuetypes[0].fields.customfield_10={name:'Task recovery notes',schema:{type:'string',custom:'com.atlassian.jira.plugin.system.customfieldtypes:textarea'}};return raw;}}});
+    await h.ready();await h.c.updateField('summary','Manual title');await h.c.updateField('customfield_10','Keep this\nmanual note');
+    await h.c.selectIssueType('11');await h.c.check();assert.ok(h.c.getState().validation.fieldErrors.customfield_10);
+    await h.c.discardField('customfield_10');const d=h.c.getState().draft;
+    assert.equal(Object.hasOwn(d.fields,'customfield_10'),false);
+    assert.match(d.source,/Task recovery notes[\s\S]*Keep this\nmanual note/);
+    assert.equal(d.fields.summary,'Manual title');await h.c.check();assert.equal(h.c.getState().validation.ok,true);
+    await h.c.init();await h.c.selectProject('DO');assert.match(h.c.getState().draft.source,/Keep this\nmanual note/);
+});
+
+test('optional unavailable catalog exclusion keeps its saved value in visible source', async () => {
+    const h=harness({api:{getCreateMeta:async key=>{const raw=rawMeta(key);const f=raw.projects[0].issuetypes[0].fields.customfield_2;f.allowedValues=[];f.autoCompleteUrl='https://never-follow.invalid/lookup';return raw;}}});
+    await h.ready();await h.c.updateField('customfield_2',{id:'former-known'});await h.c.discardField('customfield_2');
+    assert.equal(Object.hasOwn(h.c.getState().draft.fields,'customfield_2'),false);assert.match(h.c.getState().draft.source,/former-known/);
+});
+
+test('confirmed draft discard clears saved content and files while retaining personal settings', async () => {
+    for(const status of ['idle','rejected']) {
+        const h=harness();await h.ready();await h.c.updateField('summary','Delete me');await h.c.selectFiles([new File(['PRIVATE'],'private.txt')]);
+        const saved=h.stores[0].load('DO');saved.draft.creation.status=status;h.stores[0].save('DO',saved,saved.revision);
+        await h.c.init();await h.c.selectProject('DO');const before=h.c.getState();
+        await h.c.discardDraft(false);assert.equal(h.c.getState().draft.source,before.draft.source);
+        await h.c.discardDraft(true);const after=h.c.getState();
+        assert.notEqual(after.draft.id,before.draft.id);assert.equal(after.draft.source,'');assert.deepEqual(plain(after.draft.fields),{});assert.deepEqual(plain(after.draft.attachments),[]);
+        const persisted=h.stores.at(-1).load('DO');assert.equal(persisted.draft,null);assert.deepEqual(plain(persisted.settings),plain(before.settings));
+        await h.c.init();await h.c.selectProject('DO');assert.equal(h.c.getState().draft.source,'');
+    }
+});
+
+test('draft discard refuses preflight unknown submitting and another tab durable guard', async () => {
+    for(const status of ['preflight','submitting','unknown']) {
+        const h=harness();await h.ready();const store=h.stores[0],saved=store.load('DO');saved.draft.creation={status,attemptId:'guarded',issueKey:null,error:null};
+        store.save('DO',saved,saved.revision);await h.c.init();await h.c.selectProject('DO');const before=h.c.getState().draft;
+        await h.c.discardDraft(true);assert.equal(h.c.getState().draft.id,before.id);assert.equal(h.c.getState().draft.source,before.source);
+    }
+    const h=harness();await h.ready();const saved=h.stores[0].load('DO');saved.draft.creation={status:'submitting',attemptId:'other-tab',issueKey:null,error:null};
+    h.stores[0].save('DO',saved,saved.revision);await h.c.discardDraft(true);
+    assert.equal(h.c.getState().error.code,'conflict');assert.equal(h.stores[0].load('DO').draft.creation.attemptId,'other-tab');
+});
+
 test('routes then refreshes raw metadata and prepares; manual selections skip routing and typing does no AI work', async () => {
     const h = harness(); await h.ready(false);
     const settings = h.c.getState().settings;

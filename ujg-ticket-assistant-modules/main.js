@@ -18,8 +18,15 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         try {storage = deps.storage !== undefined ? deps.storage : window.localStorage;} catch (ignored) {storage = null;}
         var controller = controllerModule.create({api:api,
             ai:deps.ai || aiModule.createClient({llmClient:shared, fetchImpl:deps.fetchImpl || function(url, config) {return window.fetch(url, config);}, readConfig:deps.readConfig}),
-            createStore:deps.createStore || function(userKey) {return storageModule.createStore({origin:window.location.origin, userKey:userKey, storage:storage,
-                onWarning:function() {warning = 'Локальное хранилище недоступно; изменения сохраняются только в памяти.';}});},
+            createStore:deps.createStore || function(userKey) {
+                var personalStore = storageModule.createStore({origin:window.location.origin, userKey:userKey, storage:storage,
+                    onWarning:function() {
+                        if (personalStore && personalStore.isPersistent()) return;
+                        warning = 'Локальное хранилище недоступно; изменения сохраняются только в памяти. Перезагрузка может потерять изменения.';
+                        showStorageWarning();
+                    }});
+                return personalStore;
+            },
             onChange:function(state) {if (!dead && ui) ui.update(state);}, now:deps.now});
         var searches = new Set();
         function searchUsers(query, field, options) {
@@ -32,10 +39,15 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         }
         ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView});
         ui.mount(root[0]);
+        var warningHost = $('<p class="ta-warning" data-ta-storage-warning hidden>');
+        root.prepend(warningHost);
+        function showStorageWarning() {
+            if (!dead && warningHost && warning) warningHost.text(warning).prop('hidden',false);
+        }
         var instance = this;
         this.controller = controller;
         this.init = function() {return controller.init().then(function(state) {
-            if (!dead && warning) root.prepend($('<p class="ta-warning" data-ta-storage-warning>').text(warning)); return state;
+            showStorageWarning(); return state;
         });};
         this.openSettings = function() {return ui.openSettings();};
         this.destroy = function() {

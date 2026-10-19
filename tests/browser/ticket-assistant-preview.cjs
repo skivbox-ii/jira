@@ -2,6 +2,8 @@
 (function() {
     'use strict';
     var $ = window.jQuery, shared = window.taRequire('_ujgTA_llmClient');
+    var review=new URLSearchParams(window.location.search).get('review');
+    if(['obsolete','catalog','storage'].indexOf(review)===-1)review='';
     var records = {calls:[], pending:0}; window.taPreview = records;
     var scenario='success', issueSequence=100, failedFiles=new Set();
     var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
@@ -11,6 +13,8 @@
         }));
     });
     $('#ticket-assistant').before(controls);
+    var failStorage=false;
+    if(review==='storage') controls.append($('<button type="button" data-ta-preview-storage-fail>').text('Имитировать отказ хранилища').on('click',function(){failStorage=true;$(this).text('Следующее сохранение завершится отказом');}));
     var rawFields = {
         summary:{name:'Тема', required:true, schema:{type:'string',system:'summary'}},
         description:{name:'Описание', schema:{type:'string',system:'description'}},
@@ -23,12 +27,13 @@
         labels:{name:'Метки',schema:{type:'array',items:'string',system:'labels'}},
         customfield_1:{name:'Оценка',schema:{type:'number',custom:'com.atlassian.jira.plugin.system.customfieldtypes:float'}}
     };
+    if(review==='catalog') rawFields.customfield_50={name:'Контур приёмки',required:true,schema:{type:'option',custom:'com.atlassian.jira.plugin.system.customfieldtypes:select'},allowedValues:[],autoCompleteUrl:'https://never-follow.invalid/catalog'};
     function result(name, value) {records.calls.push(name); return Promise.resolve(value);}
     var api = {
-        getCurrentUser:function() {return result('identity', {key:'synthetic-ticket-assistant-preview-v1',name:'preview'});},
+        getCurrentUser:function() {return result('identity', {key:'synthetic-ticket-assistant-preview-v1'+(review?'-review-'+review:''),name:'preview'});},
         getProjects:function() {return result('projects',{values:[{id:'101',key:'DEMO',name:'Демонстрационный проект'},{id:'102',key:'APP',name:'Приложение'}],complete:true});},
         getCreateMeta:function(key) {return result('metadata',{projects:[{key:key,id:key === 'DEMO' ? '101':'102',issuetypes:[
-            {id:key==='APP'?'20':'10',name:'Задача',subtask:false,fields:rawFields},
+            {id:key==='APP'?'20':'10',name:'Задача',subtask:false,fields:review==='obsolete'?Object.assign({},rawFields,{customfield_10:{name:'Заметки только для задачи',schema:{type:'string',custom:'com.atlassian.jira.plugin.system.customfieldtypes:textarea'}}}):rawFields},
             {id:key==='APP'?'21':'11',name:'Ошибка',subtask:false,fields:rawFields},
             {id:key==='APP'?'22':'12',name:'Согласование',subtask:false,fields:Object.assign({},rawFields,{customfield_99:{name:'Согласующий комитет',required:true,schema:{type:'string',custom:'fixture:unsupported'}}})}
         ]}]});},
@@ -73,11 +78,18 @@
     }});
     var ai = window.taRequire('_ujgTA_ai').createClient({llmClient:llm,readConfig:function() {return {apiKey:'offline-fixture-key'};},fetchImpl:function() {throw new Error('Offline preview prohibits fetch');}});
     var Gadget = window.taRequire('_ujgTicketAssistantRuntime');
-    var instance = new Gadget({getGadgetContentEl:function() {return $('#ticket-assistant');}}, {api:api,ai:ai,baseUrl:'',storage:window.localStorage,
+    var dependencies={api:api,ai:ai,baseUrl:'',storage:window.localStorage,
         createStore:function(userKey) {
-            var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1',userKey:userKey});
+            var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1'+(review?'/review-'+review:''),userKey:userKey});
             return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft,isPersistent:store.isPersistent};
-        }});
+        }};
+    if(review==='storage') {
+        delete dependencies.createStore;
+        dependencies.storage={getItem:function(key){return window.localStorage.getItem(key);},setItem:function(key,value){
+            if(failStorage){records.storageFailures=(records.storageFailures||0)+1;throw new Error('Synthetic storage quota');}window.localStorage.setItem(key,value);
+        }};
+    }
+    var instance = new Gadget({getGadgetContentEl:function() {return $('#ticket-assistant');}}, dependencies);
     records.instance = instance;
     records.ready = instance.ready.then(function() {return instance.controller.selectProject('DEMO');}).then(function() {
         if (!records.restored) return instance.controller.selectIssueType('10').then(function(){return instance.controller.selectTemplate('task');});

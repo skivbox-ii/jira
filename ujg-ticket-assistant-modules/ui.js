@@ -2,7 +2,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
     'use strict';
     function create(options) {
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
-        var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null;
+        var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null, discardId = null;
         var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
         function button(label, name, selector) {
@@ -50,6 +50,16 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('.ta-footer').empty().append(
                 button('Создать задачу','Check',{'data-ta-create':''}).addClass('ta-primary').on('click',function() {c.submit();}),
                 button('Новая задача','Plus',{'data-ta-new-draft':''}).on('click',function() {c.newDraft();}));
+            root.find('.ta-footer').append(button('Удалить черновик','Trash2',{'data-ta-discard-draft':''}).on('click',function() {
+                discardId=state.draft && state.draft.id;root.find('[data-ta-discard-dialog]').prop('hidden',false);root.find('[data-ta-discard-cancel]').trigger('focus');
+            }));
+            root.find('.ta-footer').before($('<div class="ta-warning" data-ta-discard-dialog role="alertdialog" aria-label="Удалить сохранённый черновик" hidden>').append(
+                $('<p>').text('Удалить исходник, поля и выбранные файлы этого черновика? Личные настройки сохранятся.'),
+                button('Отмена','X',{'data-ta-discard-cancel':''}).on('click',function() {discardId=null;root.find('[data-ta-discard-dialog]').prop('hidden',true);root.find('[data-ta-discard-draft]').trigger('focus');}),
+                button('Удалить черновик навсегда','Trash2',{'data-ta-discard-draft-confirm':''}).on('click',function() {
+                    if (state.draft && state.draft.id===discardId) c.discardDraft(true);
+                    discardId=null;root.find('[data-ta-discard-dialog]').prop('hidden',true);
+                })));
             root.find('.ta-footer').before('<section class="ta-attachments"><h3>Вложения</h3><label>Выбрать файлы<input type="file" multiple data-ta-files></label><div data-ta-file-list></div></section><div data-ta-creation role="status"></div><div data-ta-reconcile hidden><label>Ключ найденной задачи<input data-ta-found-key placeholder="DEMO-123"></label><label><input type="checkbox" data-ta-reconcile-confirm> Я сверил результат создания в Jira</label><div class="ta-actions" data-ta-reconcile-actions></div></div>');
             root.find('[data-ta-files]').on('change',function() {c.selectFiles(this.files);this.value='';});
             root.find('[data-ta-reconcile-actions]').append(
@@ -126,6 +136,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     disabled:writeLocked() || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
                 entry.host.find('[data-ta-policy-block]').remove();
+                entry.host.find('[data-ta-field-exclusion]').remove();
+                var unavailable=fieldUi.catalogUnavailable(field),obsolete=!field.supported || !field.writable;
+                if ((obsolete || unavailable && !field.required) && (Object.prototype.hasOwnProperty.call(d.fields,field.id) || Object.prototype.hasOwnProperty.call(d.pendingFields,field.id)))
+                    entry.host.append($('<div data-ta-field-exclusion class="ta-warning">').append($('<p>').text('Поле недоступно для отправки. Значение можно сохранить в исходнике и явно исключить из полей.'),
+                        button('Сохранить в исходнике и исключить поле','Trash2',{'data-ta-discard-field':field.id}).prop('disabled',!!writeLocked()).on('click',function() {c.discardField(field.id);} )));
                 if (field.id === 'assignee' && (!profile || !profile.allowAssignee) && Object.prototype.hasOwnProperty.call(d.fields,field.id)) {
                     entry.host.append($('<div data-ta-policy-block class="ta-warning">').append($('<p>').text('Выбор исполнителя запрещён профилем. Сохранённое значение не будет отправлено без разрешения. Можно разрешить выбор в настройках или исключить поле.'),
                         button('Не отправлять исполнителя','Trash2',{'data-ta-discard-field':field.id}).on('click',function(){c.discardField(field.id);} )));
@@ -200,6 +215,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         function renderCreation() {
             var d=state.draft, creation=d && d.creation, status=creation && creation.status, locked=writeLocked();
             root.find('[data-ta-create]').prop('disabled',!d || !d.checked || locked || status==='preflight' || !!stages[state.stage] || !!state.error);
+            var editable=d && !locked && ['idle','rejected'].indexOf(status)!==-1 && !stages[state.stage];
+            root.find('[data-ta-discard-draft]').prop('disabled',!editable);
+            root.find('[data-ta-discard-draft-confirm]').prop('disabled',!editable);
+            if (!editable || discardId && (!d || discardId!==d.id)) {discardId=null;root.find('[data-ta-discard-dialog]').prop('hidden',true);}
             root.find('[data-ta-new-draft]').prop('hidden',status!=='created').prop('disabled',d && d.attachments.some(function(a) {return a.status==='uploading';}));
             var host=root.find('[data-ta-creation]').empty();
             var labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Создание отправлено. Ожидаем результат; остановка не отменяет запись.',created:'Задача создана.',rejected:'Создание отклонено.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.'};

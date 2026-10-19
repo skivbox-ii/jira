@@ -10,7 +10,7 @@ function setup() {
     const globals = {window, document: window.document, navigator: window.navigator, URL,
         setInterval, clearInterval, AbortController};
     const icons = loadUnit('icons', {}, globals);
-    const fieldUi = loadUnit('field-ui', {'_ujgTA_icons': icons}, globals);
+    const fieldUi = loadUnit('field-ui', {'_ujgTA_icons': icons,'_ujgTA_fields':loadUnit('fields')}, globals);
     const settingsUi = loadUnit('settings-ui', {'_ujgTA_profiles':loadUnit('profiles'),'_ujgTA_fieldUi':fieldUi,'_ujgTA_icons':icons},globals);
     const uiModule = loadUnit('ui', {'_ujgTA_fieldUi': fieldUi, '_ujgTA_icons': icons, '_ujgTA_settingsUi':settingsUi}, globals);
     const drafts = loadUnit('draft');
@@ -25,7 +25,7 @@ function setup() {
         generationFieldIds: ['summary', 'description'], contextScope: {excludedFieldIds: ['customfield_2']}, routeCandidates: []};
     const calls = [];
     const controller = {getState: () => state};
-    for (const name of ['updateSource','updateField','prepare','check','cancel','answer','acceptField','setGenerationFields','selectProject','selectTemplate','selectIssueType']) {
+    for (const name of ['updateSource','updateField','prepare','check','cancel','answer','acceptField','setGenerationFields','selectProject','selectTemplate','selectIssueType','discardField','discardDraft']) {
         controller[name] = (...args) => { calls.push([name, ...args]); return Promise.resolve(state); };
     }
     const root = window.document.querySelector('#root');
@@ -33,6 +33,49 @@ function setup() {
     ui.mount(root); ui.update(state);
     return {dom, $, window, root, ui, uiModule, fieldUi, calls, state, setState(next) { state = next; ui.update(next); }};
 }
+
+test('obsolete metadata values expose explicit recover-and-exclude action', t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});s.state.draft.fields.customfield_10='Visible recovery';s.setState(s.state);
+    const button=s.root.querySelector('[data-ta-discard-field="customfield_10"]');assert.ok(button);assert.match(s.root.textContent,/Visible recovery/);
+    button.click();assert.deepEqual(s.calls.pop(),['discardField','customfield_10']);
+});
+
+test('editable draft discard requires confirmation and cancellation retains content', t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.root.querySelector('[data-ta-discard-draft]').click();assert.equal(s.calls.length,0);
+    s.root.querySelector('[data-ta-discard-cancel]').click();assert.equal(s.calls.length,0);assert.equal(s.root.querySelector('[data-ta-source]').value,s.state.draft.source);
+    s.root.querySelector('[data-ta-discard-draft]').click();s.root.querySelector('[data-ta-discard-draft-confirm]').click();assert.deepEqual(s.calls.pop(),['discardDraft',true]);
+    s.state.draft.creation.status='unknown';s.setState(s.state);assert.equal(s.root.querySelector('[data-ta-discard-draft]').disabled,true);
+});
+
+test('required unavailable catalog is named and links scoped ordinary Jira form', t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});const field=s.state.meta.issueTypes[0].fields.find(f=>f.id==='customfield_2');
+    field.required=true;field.allowedValues=[];field.optionsComplete=false;field.autoCompleteUrl='https://never-follow.invalid';
+    const core=loadUnit('fields'),validation=loadUnit('validation',{'_ujgTA_fields':core});s.state.validation=validation.validateFields(s.state.meta,'10',s.state.draft.fields);s.setState(s.state);
+    const link=s.root.querySelector('[data-ta-jira-form]');assert.ok(link);assert.match(link.href,/pid=DO-project&issuetype=10/);
+    s.root.querySelector('[data-ta-field="customfield_2"] [data-ta-picker]').click();assert.match(s.root.textContent,/Каталог вариантов недоступен/);
+});
+
+test('main shows quota fallback after init without replacing editor or caret', async()=>{
+    const fs=require('node:fs'),path=require('node:path');
+    for(const trigger of ['project','edit']) {
+        const dom=new JSDOM('<div id="root"></div>',{url:'http://localhost/jira',runScripts:'outside-only'}),$=jquery(dom.window),registry=new Map([['jquery',{value:$}]]);
+        dom.window.define=(name,deps,factory)=>registry.set(name,{deps,factory});dom.window.eval(fs.readFileSync(path.resolve(__dirname,'../../ujg-ticket-assistant.runtime.js'),'utf8'));
+        function resolve(name){const item=registry.get(name);if(!('value'in item))item.value=item.factory(...item.deps.map(resolve));return item.value;}
+        let fail=false;const memory=new Map(),storage={getItem:key=>memory.get(key)??null,setItem:(key,value)=>{if(fail)throw Error('quota');memory.set(key,value);}};
+        const api={getCurrentUser:async()=>({key:'quota-user'}),getProjects:async()=>({values:[{key:'DO',id:'1',name:'Delivery'}]}),
+            getCreateMeta:async()=>({projects:[{key:'DO',id:'1',issuetypes:[{id:'10',name:'Task',fields:{summary:{name:'Summary',required:true,schema:{type:'string',system:'summary'}}}}]}]}),
+            getComponents:async()=>({values:[],complete:true,projectKey:'DO'}),getVersions:async()=>({values:[],complete:true,projectKey:'DO'})};
+        const Gadget=resolve('_ujgTicketAssistantRuntime'),g=new Gadget({getGadgetContentEl:()=>$('#root')},{api,ai:{},storage});
+        try {
+            await g.ready;if(trigger==='project')fail=true;await g.controller.selectProject('DO');
+            const input=dom.window.document.querySelector('[data-ta-source]');input.value='Original';input.focus();input.setSelectionRange(3,3);
+            if(trigger==='edit'){fail=true;input.setRangeText('X',3,3,'end');input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));}
+            const warning=dom.window.document.querySelector('[data-ta-storage-warning]');assert.ok(warning&&!warning.hidden,'visible '+trigger+' fallback warning');
+            assert.equal(dom.window.document.querySelector('[data-ta-source]'),input);assert.equal(dom.window.document.activeElement,input);assert.equal(input.selectionStart,trigger==='edit'?4:3);
+        } finally {g.destroy();dom.window.close();}
+    }
+});
 
 test('attachment outcomes are Russian and checked correction identifies the previous rejection', t => {
     const s=setup(); t.after(()=>{s.ui.destroy();s.dom.window.close();});

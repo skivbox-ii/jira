@@ -299,9 +299,24 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             } catch(error) {state.error=errorState(null,'storage');return emit();}
         }
         async function discardField(id) {
-            if (destroyed || !state.draft || id !== 'assignee' || policy().allowAssignee) return getState();
-            var next=Object.assign({},state.draft,{fields:Object.assign({},state.draft.fields),protectedFields:Object.assign({},state.draft.protectedFields),pendingFields:Object.assign({},state.draft.pendingFields),
-                draftRevision:state.draft.draftRevision+1,checked:null});
+            if (destroyed || !state.draft || locked() || durableGuard()) return getState();
+            var spec=fields.getField(state.meta,state.draft.issueTypeId,id);
+            var obsolete=!spec || !spec.supported || !spec.writable;
+            var unavailable=spec && !spec.required && fields.catalogUnavailable(spec);
+            if (!(id==='assignee' && !policy().allowAssignee) && !obsolete && !unavailable) return getState();
+            if (!Object.prototype.hasOwnProperty.call(state.draft.fields,id) && !Object.prototype.hasOwnProperty.call(state.draft.pendingFields,id)) return getState();
+            var recovered=state.draft;
+            if (id!=='assignee' || obsolete || unavailable) {
+                var previous=spec;
+                (state.meta && state.meta.issueTypes || []).some(function(type) {previous=previous || type.fields.find(function(field) {return field.id===id;});return !!previous;});
+                var value=Object.prototype.hasOwnProperty.call(recovered.fields,id) ? recovered.fields[id] : recovered.pendingFields[id];
+                var text=typeof value==='string' ? value : JSON.stringify(value);
+                if (Object.prototype.hasOwnProperty.call(recovered.pendingFields,id) && JSON.stringify(value)!==JSON.stringify(recovered.pendingFields[id]))
+                    text+='\nПредлагалось: '+JSON.stringify(recovered.pendingFields[id]);
+                recovered=drafts.setSource(recovered,recovered.source+'\n\nСохранённое поле '+(previous ? previous.name : id)+' ('+id+'):\n'+text);
+            }
+            var next=Object.assign({},recovered,{fields:Object.assign({},recovered.fields),protectedFields:Object.assign({},recovered.protectedFields),pendingFields:Object.assign({},recovered.pendingFields),
+                draftRevision:recovered.draftRevision+1,checked:null});
             delete next.fields[id];delete next.protectedFields[id];delete next.pendingFields[id];
             return edited(next);
         }
@@ -466,6 +481,19 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             }
             return emit();
         }
+        async function discardDraft(confirmed) {
+            if (confirmed!==true || destroyed || !state.draft || active || locked() || state.draft.creation.status==='preflight') return getState();
+            if (durableGuard()) return emit();
+            var previous=state.draft,entry=scopes[previous.projectKey];
+            try {
+                var result=store.clearDraft(previous.projectKey,entry.revision);
+                if (!result.ok) {state.error=errorState(null,result.reason==='conflict' || result.reason==='creation-guard' ? 'conflict':'storage');return emit();}
+                stop();previous.attachments.forEach(function(file) {runtimeFiles.delete(file.id);});
+                state.draft=drafts.setSelection(drafts.createDraft({projectKey:previous.projectKey}),{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+                entry.revision=result.revision;entry.error=null;state.validation=null;state.routeCandidates=[];state.stage='idle';state.error=identityWarning;
+                remember();updateScope();return emit();
+            } catch(error) {state.error=errorState(null,'storage');return emit();}
+        }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
@@ -473,7 +501,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
             applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
-            submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,
+            submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,discardDraft:discardDraft,
             cancel: cancel, getState: getState, destroy: destroy };
     }
     return { create: create };
