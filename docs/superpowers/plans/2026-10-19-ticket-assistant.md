@@ -8,7 +8,7 @@
 
 **Tech Stack:** JavaScript, AMD, существующий jQuery, Jira REST v2, localStorage, Node `node:test`, существующий AMD test helper, JSDOM и Playwright только для локальных проверок. Без нового runtime-фреймворка и root `package.json`.
 
-**Spec:** `docs/superpowers/specs/2026-10-19-ticket-assistant-design.md`, подтверждена пользователем 19.10.2026. Этот план ожидает ревью; продуктовый код ещё не менялся.
+**Spec:** `docs/superpowers/specs/2026-10-19-ticket-assistant-design.md`, подтверждена пользователем 19.10.2026. План подтверждён пользователем 19.10.2026, исполнение начато через Sol 6.1 Author/Reviewer.
 
 ## Global Constraints
 
@@ -80,7 +80,7 @@
 
 Чистые тесты используют `node:test`, `node:assert/strict`, `tests/helpers/load-amd-module.js`. Для JSDOM/Playwright использовать существующую среду из `tests/browser/README.md`: сначала проверить доступные зависимости, не устанавливать их повторно в репозиторий. В приведённых командах предполагается `NODE_PATH=/tmp/ujg-import-registry-test/node_modules`; при другой фактической среде зафиксировать найденный путь в отчёте. До общего прогона предпочесть уже проверенный Node 24.19.0, если он доступен; не менять системную версию.
 
-### T1: Редактируемые Профили И Личное Хранение
+### Task 1: Редактируемые Профили И Личное Хранение
 
 **Files:** создать `ujg-ticket-assistant-modules/profiles.js`, `storage.js`, `tests/ticket-assistant-profiles.test.js`, `tests/ticket-assistant-storage.test.js`, `tests/helpers/ticket-assistant-fixture.js`.
 
@@ -111,7 +111,7 @@ test('unknown import version and prototype keys are rejected', () => {
 - [ ] **4. GREEN:** та же команда; PASS всех новых тестов. Проверить, что shared LLM config не читается/не меняется этим модулем.
 - [ ] **5. Review/commit:** свежий Reviewer проверяет границы хранения/импорта; после исправлений коммит только перечисленных файлов: `feat(ticket-assistant): add personal profiles and storage`.
 
-### T2: Реальные Поля Jira И Валидируемый Payload
+### Task 2: Реальные Поля Jira И Валидируемый Payload
 
 **Files:** создать `ujg-ticket-assistant-modules/api.js`, `fields.js`, `validation.js`, `tests/ticket-assistant-api.test.js`, `tests/ticket-assistant-validation.test.js`; расширить `tests/helpers/ticket-assistant-fixture.js` фабрикой `metadataFixture(projectKey='DO')` с типами Task/Bug/Deployment и вторым проектом APP с другими ID.
 
@@ -141,7 +141,7 @@ test('invalid calendar date is not normalized into another day', () => {
 - [ ] **4. GREEN:** та же команда; проверка abort, context path, allowlist payload, отсутствия POST в read-методах. Фикстуры синтетические, без запросов к прод/Jira.
 - [ ] **5. Review/commit:** `feat(ticket-assistant): validate Jira metadata and create fields`.
 
-### T3: Черновик, Ревизии И Защита Ручных Правок
+### Task 3: Черновик, Ревизии И Защита Ручных Правок
 
 **Files:** создать `ujg-ticket-assistant-modules/draft.js`, `tests/ticket-assistant-draft.test.js`; дополнить storage-тесты сериализации.
 
@@ -171,7 +171,7 @@ test('reload cannot turn an interrupted POST into a retryable idle', () => {
 - [ ] **4. GREEN:** та же команда; тесты должны различать «ответ старого запроса игнорирован» и «актуальная замена ручного поля требует принятия».
 - [ ] **5. Review/commit:** `feat(ticket-assistant): preserve versioned drafts and manual edits`.
 
-### T4: LLM-контракт Без Потери Контекста
+### Task 4: LLM-контракт Без Потери Контекста
 
 **Files:** создать `ujg-ticket-assistant-modules/ai.js`, `tests/ticket-assistant-ai.test.js`; существующий shared client не изменять.
 
@@ -201,7 +201,7 @@ test('oversize UTF-8 input is rejected before shared client truncation', async (
 - [ ] **4. GREEN:** та же команда; 0 живых LLM-вызовов, shared tests без изменения ожиданий.
 - [ ] **5. Review/commit:** `feat(ticket-assistant): add constrained LLM preparation contracts`.
 
-### T5: Сценарий Подготовки И Уточнений
+### Task 5: Сценарий Подготовки И Уточнений
 
 **Files:** создать `ujg-ticket-assistant-modules/controller.js`, `tests/ticket-assistant-controller.test.js`.
 
@@ -228,7 +228,7 @@ test('project change makes late AI response inert', async () => {
 - [ ] **4. GREEN:** та же команда. Тест double-prepare даёт один active pipeline; cancellation не применяет даже ответ транспорта, проигнорировавшего abort. Смена identity не читает хранилище предыдущего пользователя.
 - [ ] **5. Review/commit:** `feat(ticket-assistant): coordinate preparation and clarification workflow`.
 
-### T6: Рабочий Редактор И Изолированная Сборка
+### Task 6: Рабочий Редактор И Изолированная Сборка
 
 **Files:** создать `field-ui.js`, `ui.js`, `main.js` в `ujg-ticket-assistant-modules/`, `ujg-ticket-assistant.css`, `build-ticket-assistant.js`, `tests/ticket-assistant-build.test.js`, `tests/browser/ticket-assistant-editor.test.cjs`, `tests/browser/ticket-assistant-preview.html`, `tests/browser/ticket-assistant-preview.cjs`, `tests/browser/ticket-assistant-preview-server.cjs`; изменить `build-widget-bootstrap-assets.js`, `tests/widget-bootstrap.test.js`. Получить собственные `.js/.runtime.js/.bootstrap.js` генерацией.
 
@@ -266,7 +266,7 @@ test('progress preserves input identity and caret', () => {
 - [ ] **4. GREEN и личный промежуточный smoke:** та же test-команда; `node build-ticket-assistant.js`; `node tests/browser/ticket-assistant-preview-server.cjs`. Открыть фактический URL, ввести текст, подготовить/отменить stub, проверить 1440 и 390 px. Не останавливать старый 4317; свой сервер очистить после теста либо оставить как явно переданный пользователю preview.
 - [ ] **5. Review/commit:** `feat(ticket-assistant): add isolated editor and preview` только новый widget/build registration/tests. Не запускать CLI общей сборки, переписывающий все bootstrap-файлы.
 
-### T7: Настройки Промпта И Шаблонов В Интерфейсе
+### Task 7: Настройки Промпта И Шаблонов В Интерфейсе
 
 **Files:** создать `ujg-ticket-assistant-modules/settings-ui.js`, `tests/browser/ticket-assistant-settings.test.cjs`; изменить `ui.js`, `controller.js`, CSS, MODULE_ORDER; обновить тесты T1/T5 только для новых UI-сценариев, не ослабляя проверки.
 
@@ -292,7 +292,7 @@ test('editing instructions is local until Apply and never replaces source', asyn
 - [ ] **4. GREEN и личный UI:** та же команда плюс T1/T5; сохранить, reload, перенести профиль между DO/APP на заглушках, проверить длинный текст/scroll/keyboard на 1440×900 и 390×844.
 - [ ] **5. Review/commit:** `feat(ticket-assistant): add editable prompt and template settings`.
 
-### T8: Явное Создание И Независимые Вложения
+### Task 8: Явное Создание И Независимые Вложения
 
 **Files:** создать `ujg-ticket-assistant-modules/creator.js`, `tests/ticket-assistant-creator.test.js`, `tests/browser/ticket-assistant-create.test.cjs`; изменить api/controller/ui/main/draft и build order нового виджета; `_ujgTA_creator` включить до controller/main.
 
@@ -321,7 +321,7 @@ test('lost create response cannot lead to a second POST', async () => {
 - [ ] **4. GREEN:** test-команда T8 плюс T2/T3/T5; все POST только к stub. Лично пройти full create, отказ, lost response и file retry в локальном preview; убедиться, что ни одно действие агента не пишет в Jira.
 - [ ] **5. Review/commit:** `feat(ticket-assistant): create confirmed tickets with safe attachment recovery`.
 
-### T9: Сквозная Приёмка И Release Candidate
+### Task 9: Сквозная Приёмка И Release Candidate
 
 **Files:** создать `tests/browser/ticket-assistant-acceptance.cjs`, `docs/ticket-assistant-acceptance-2026-10-19.md`; обновить README, browser README, конечные generated assets нового widget. По найденным дефектам ограниченные fixes и tests в соответствующих модулях T1–T8.
 
