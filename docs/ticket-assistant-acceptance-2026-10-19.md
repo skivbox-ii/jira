@@ -2,9 +2,25 @@
 
 Planned task/report date: 19 October 2026. Final acceptance and full regression executed/completed **20 October 2026, Europe/Moscow**. Initial source/TDD checks began on 19 October. Worktree: `/Users/skivbox/.codex/worktrees/ticket-assistant/jira` only. Base: `95f54f6`.
 
-Current candidate source/runtime: **a9c97fb4eade9629720cdf2d728394cb9e1ab7b6**, fallback **a9c97fb**. Local implementation: **complete**. Published: **NO**. Citrix accepted: **NO**. Parent whole-branch review found four P2 issues; all four are implemented and verified below. Parent's final scoped review and full suite on this new source remain **pending**. Initial Task 9 result at `edd6605` was complete with concerns; the author's original full regression failure remains recorded below.
+Current candidate source/runtime: **a9c97fb4eade9629720cdf2d728394cb9e1ab7b6**, fallback **a9c97fb**; packaging **6963255**. Local implementation and acceptance: **complete**. Published: **NO**. Citrix accepted: **NO**. Whole-branch review found four P2 issues; all four and the coexistence gap are closed by the final independent scoped review. Fresh parent full regression: **1908/1908**, zero failures or skips. Initial Task 9 result at `edd6605` was complete with concerns; the original failed run remains recorded below.
 
 **Artifact retention:** the app/OS restart cleared `/tmp`, including every log/screenshot referenced in the historical sections before the final-fix appendix. Those counts describe actual earlier runs, but the old files are no longer available. Fresh evidence was recreated on 20 October with the restored dependency path and is listed in the final appendix. Do not treat historical logs as currently readable artifacts.
+
+Fresh artifacts, including the final full-suite log and screenshots, were also copied to `/Users/skivbox/.cache/ujg-ticket-assistant-acceptance/2026-10-20-a9c97fb/` outside the repository so they survive temporary-directory cleanup.
+
+## Final Parent Acceptance
+
+On 20 October, Sol 6.1 / medium reviewer Halley independently inspected `edd6605..6963255`, the named regressions and fresh logs. Verdict: all four findings and actual-widget coexistence **ADDRESSED**, no new Critical/Important breakage, no out-of-scope findings. The reviewer independently checked generated/source/runtime/bootstrap parity in memory and did not repeat suites. This closes Darwin's earlier whole-branch findings; it is not a claim of production acceptance.
+
+The parent ran the following exact command from the worktree on frozen `a9c97fb` source with final `a9c97fb` bootstrap pin:
+
+```sh
+env NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules /Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --test --test-concurrency=2 --test-reporter=tap tests/*.test.js tests/browser/*.test.cjs
+```
+
+Result: **1908/1908**, exit 0, 0 failed/cancelled/skipped/todo, 71087.883792 ms. Log: `full-offline-post-review.tap` in both artifact locations above. This run used the freshly restarted importer fixture on 4317, without changing importer code. The final nine-scenario standalone acceptance remains separate from this glob. `git diff --check` passed and the implementation worktree was clean; the original checkout's pre-existing user files were unchanged.
+
+Personal IAB checks covered all four fixes after restart. The parent also inspected fresh desktop storage-warning and mobile 390px screenshots, then exercised the normal source -> Prepare -> visible answer -> Check flow on the offline preview. No production Jira writes, live LLM requests, CDN publication, dashboard changes or Citrix takeover occurred. The preview is left available at `http://127.0.0.1:4320/`.
 
 ## Final Review Fixes: 20 October
 
@@ -48,7 +64,7 @@ All fresh logs below are currently in `/tmp/ticket-assistant-20261019/`:
 | `git show a9c97fb:<asset>` and in-memory own build | source/runtime/CSS byte-identical; generated source/runtime/bootstrap match local files, exit 0 | `review-pin-parity.log` |
 | Environment and exact viewport dimensions | Node/browser versions recorded; every viewport PNG is 1440x900 or 390x844, exit 0 | `environment-final.json`, `review-screenshot-dimensions.log` |
 
-The first affected command was `--test tests/ticket-assistant-controller.test.js tests/ticket-assistant-validation.test.js tests/ticket-assistant-storage.test.js tests/ticket-assistant-creator.test.js tests/browser/ticket-assistant-editor.test.cjs tests/browser/ticket-assistant-settings.test.cjs tests/browser/ticket-assistant-review.test.cjs` with the new Node/dependency prefix and no release variable. The selector collision was resolved within the new draft UI/test; settings source was unchanged. All affected tests were included in the later 214/214 run. No author full-suite rerun occurred. Parent started the full suite on frozen `a9c97fb`; its result and the scoped-review outcome are pending.
+The first affected command was `--test tests/ticket-assistant-controller.test.js tests/ticket-assistant-validation.test.js tests/ticket-assistant-storage.test.js tests/ticket-assistant-creator.test.js tests/browser/ticket-assistant-editor.test.cjs tests/browser/ticket-assistant-settings.test.cjs tests/browser/ticket-assistant-review.test.cjs` with the new Node/dependency prefix and no release variable. The selector collision was resolved within the new draft UI/test; settings source was unchanged. All affected tests were included in the later 214/214 run. No author full-suite rerun occurred. The parent subsequently completed the final full suite and scoped review as recorded above.
 
 The new `tests/browser/ticket-assistant-review.test.cjs` uses fresh contexts, an ephemeral server and finally cleanup, only GET on its exact origin, zero issue-create calls, and fails on external requests or page errors. The normal preview default is unchanged. Exact personal CUA hooks (existing server reads fixture/runtime files dynamically; no code-related restart needed):
 
@@ -60,7 +76,7 @@ Parent personally confirmed all four cases in IAB on 20 October after restart, u
 
 Fresh screenshots: `review-{obsolete,catalog,storage,discard}.png` and their exact 1440x900 `-viewport.png` companions, `review-obsolete-before.png`, and all standalone acceptance images listed below recreated by the final run. `coexistence-1440.png` shows both actual widgets; `coexistence-destroy-1440.png` shows the importer after assistant destruction. Author inspected fresh catalog full/viewport and storage viewport. Earlier visual-inspection statements remain historical; no new broad visual audit is claimed.
 
-Final fallback `a9c97fb` contains the matching source/runtime/CSS, rather than pre-fix HEAD. Global dashboard override still takes precedence. Local candidate complete; published **NO**, Citrix **NO**, final parent gates **pending**.
+Final fallback `a9c97fb` contains the matching source/runtime/CSS, rather than pre-fix HEAD. Global dashboard override still takes precedence. Local candidate and parent gates complete; published **NO**, Citrix **NO**.
 
 ## Historical Candidate And Scope
 
