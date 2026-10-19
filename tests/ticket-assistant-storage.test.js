@@ -4,7 +4,7 @@ const { loadUnit, memoryStorage } = require('./helpers/ticket-assistant-fixture'
 
 function fixture(storage = memoryStorage(), globals = {}) {
     const profiles = loadUnit('profiles');
-    const unit = loadUnit('storage', { '_ujgTA_profiles': profiles }, globals);
+    const unit = loadUnit('storage', { '_ujgTA_profiles': profiles, '_ujgTA_draft': loadUnit('draft') }, globals);
     return { profiles, storage, store: options => unit.createStore({ storage, origin: 'https://jira.example', userKey: 'Alice', ...options }) };
 }
 
@@ -22,7 +22,9 @@ test('personal project and origin boundaries use encoded keys and detached snaps
     assert.notEqual(store({ userKey: 'Bob' }).load('DO').settings.profiles[0].name, 'Alice only');
     assert.equal(alice.load('APP').draft, null);
     assert.equal(store({ origin: 'https://other.example' }).load('DO').draft, null);
-    assert.doesNotMatch(storage.getItem(storage.key(0)), /secret.txt|content|secret/);
+    assert.doesNotMatch(storage.getItem(storage.key(0)), /"content"|"secret"/);
+    assert.equal(store().load('DO').draft.attachments[0].name, 'secret.txt');
+    assert.equal(store().load('DO').draft.attachments[0].needsReselect, true);
     const loaded = alice.load('DO');
     loaded.draft.fields.summary = 'mutated';
     assert.equal(alice.load('DO').draft.fields.summary, 'text');
@@ -52,7 +54,7 @@ test('draft saves and clear preserve settings revision independently of the CAS 
     const value = a.load('DO');
     value.settings.revision = 7;
     value.draft = {
-        source: 'checked draft', settingsRevision: 7,
+        source: 'checked draft', settingsRevision: 7, sourceRevision: 1, draftRevision: 2, metaSignature: 'meta',
         checked: { sourceRevision: 1, settingsRevision: 7, draftRevision: 2, metaSignature: 'meta' }
     };
     assert.equal(a.save('DO', value, 0).revision, 1);
@@ -64,7 +66,7 @@ test('draft saves and clear preserve settings revision independently of the CAS 
         assert.equal(loaded.draft.checked.settingsRevision, loaded.settings.revision);
         const restored = store().load('DO');
         assert.equal(restored.settings.revision, 7);
-        assert.equal(restored.draft.checked.settingsRevision, restored.settings.revision);
+        assert.equal(restored.draft.checked, null);
         assert.equal(a.save('DO', loaded, revision).revision, revision + 1);
     }
     assert.equal(a.clearDraft('DO', 4).revision, 5);
@@ -192,4 +194,36 @@ test('reload marks submitting unknown, retains issue key, rejects corruption and
     storage.setItem(storage.key(0), '{bad');
     assert.equal(store({ onWarning: w => warnings.push(w) }).load('DO').draft, null);
     assert.ok(warnings.length);
+});
+
+test('store enforces nested draft whitelist on save and on externally supplied reload data', () => {
+    const { store, storage } = fixture();
+    const a = store();
+    const value = a.load('DO');
+    value.draft = {
+        id: 'd', projectKey: 'DO', source: 'facts',
+        fields: { option: { id: '1', token: 'SECRET' }, invalid: { content: 'SECRET' } },
+        pendingFields: { assignee: { name: 'alice', cookie: 'SECRET' } },
+        protectedFields: { option: true, cookie: 'SECRET' },
+        questions: [{ id: 'q', text: '?', reason: 'why', required: true, apiKey: 'SECRET' }],
+        evidence: [{ fieldId: 'summary', kind: 'source', quote: 'facts', apiKey: 'SECRET' }],
+        warnings: ['warning', { token: 'SECRET' }],
+        creation: { status: 'created', issueKey: 'DO-7', error: { headers: 'SECRET' }, token: 'SECRET' },
+        attachments: [{ name: 'log.txt', status: 'failed', error: 'Upload failed', content: 'SECRET', file: { toJSON() { throw new Error('file'); } } }]
+    };
+    assert.equal(a.save('DO', value, 0).ok, true);
+    const key = storage.key(0);
+    assert.doesNotMatch(storage.getItem(key), /SECRET|"content"|"cookie"|"token"|"apiKey"|"headers"|"file"/);
+    const raw = JSON.parse(storage.getItem(key));
+    raw.draft.fields.option.token = 'SECRET';
+    raw.draft.creation.response = { token: 'SECRET' };
+    raw.draft.checked = { sourceRevision: 0, settingsRevision: 0, draftRevision: 0, metaSignature: null, token: 'SECRET' };
+    storage.setItem(key, JSON.stringify(raw));
+    const restored = store().load('DO').draft;
+    assert.doesNotMatch(JSON.stringify(restored), /SECRET/);
+    assert.equal(restored.checked, null);
+    assert.equal(restored.creation.issueKey, 'DO-7');
+    assert.equal(restored.attachments[0].status, 'failed');
+    assert.equal(restored.attachments[0].error, 'Upload failed');
+    assert.equal(restored.attachments[0].needsReselect, true);
 });

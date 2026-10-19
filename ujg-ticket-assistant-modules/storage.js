@@ -1,4 +1,4 @@
-define('_ujgTA_storage', ['_ujgTA_profiles'], function(profiles) {
+define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles, drafts) {
     'use strict';
 
     // One module listener records invalidations, never retains stores or edits drafts.
@@ -14,16 +14,10 @@ define('_ujgTA_storage', ['_ujgTA_profiles'], function(profiles) {
 
     function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-    // Draft files and arbitrary extra properties never enter persistent storage.
+    // Use the same nested whitelist for writes, rereads and in-memory fallback.
     function copyDraft(input) {
         if (input === null || input === undefined) return null;
-        if (typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid draft');
-        var result = {};
-        ['schemaVersion', 'id', 'projectKey', 'issueTypeId', 'templateId', 'source', 'fields', 'protectedFields', 'pendingFields', 'questions', 'warnings', 'evidence', 'sourceRevision', 'settingsRevision', 'draftRevision', 'metaSignature', 'checked', 'creation'].forEach(function(key) {
-            if (Object.prototype.hasOwnProperty.call(input, key)) result[key] = clone(input[key]);
-        });
-        result.attachments = [];
-        return result;
+        return JSON.parse(drafts.serialize(input));
     }
 
     function createStore(options) {
@@ -57,8 +51,16 @@ define('_ujgTA_storage', ['_ujgTA_profiles'], function(profiles) {
                         var settings = profiles.validateSettings(parsed.settings);
                         if (!settings.ok || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0) throw new Error('Invalid stored settings');
                         var draft = copyDraft(parsed.draft);
+                        var previousDraft = memory[scope] && memory[scope].draft;
+                        if (draft) {
+                            var sameLiveDraft = previousDraft && JSON.stringify(previousDraft) === JSON.stringify(draft);
+                            var recovered = drafts.restore(draft);
+                            // A reread of this instance's unchanged draft is not a reload.
+                            if (sameLiveDraft) recovered.checked = draft.checked;
+                            recovered.creation = draft.creation;
+                            draft = recovered;
+                        }
                         if (draft && draft.creation && draft.creation.status === 'submitting') {
-                            var previousDraft = memory[scope] && memory[scope].draft;
                             var previousCreation = previousDraft && previousDraft.creation;
                             // Only this store's matching live attempt survives a persistent reread.
                             var live = previousCreation && previousCreation.status === 'submitting' &&
