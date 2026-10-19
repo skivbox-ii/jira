@@ -11,7 +11,15 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         transport: 'Не удалось получить ответ AI. Повторите действие вручную.',
         abort: 'Запрос AI отменён.'
     };
-    function fail(code) { var error = new Error(messages[code]); error.code = code; throw error; }
+    function fail(code, details) {
+        var error = new Error(messages[code]);
+        error.code = code;
+        if (code === 'limit' && details) error.details = {
+            systemBytes: details.systemBytes, userBytes: details.userBytes,
+            systemLimit: details.systemLimit, userLimit: details.userLimit
+        };
+        throw error;
+    }
     function record(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
     function id(value) { return typeof value === 'string' && !!value.trim() && value.trim() === value; }
     function keys(value, allowed) {
@@ -29,7 +37,8 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         var seen = Object.create(null);
         return items.every(function(item) { if (item == null) return false; var key = getId(item); if (!id(key) || seen[key]) return false; seen[key] = true; return true; });
     }
-    function generated(field) { return field.id !== 'project' && field.id !== 'issuetype' && field.kind !== 'user' && field.supported === true && field.writable === true; }
+    function currentField(field) { return field.id !== 'project' && field.id !== 'issuetype' && field.kind !== 'user' && field.supported === true; }
+    function generated(field) { return currentField(field) && field.writable === true; }
     function normalizedValue(field, value) {
         if (value === null) return true;
         if (field.kind === 'option') return keys(value, ['id']) && id(value.id);
@@ -76,7 +85,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         ctx.types[0].fields.forEach(function(field) {
             var human = field.kind === 'user' && Array.isArray(input.explicitUserFields) && input.explicitUserFields.indexOf(field.id) !== -1 &&
                 (field.id !== 'assignee' || ctx.profile.allowAssignee === true) && field.supported && field.writable;
-            if (!own(source, field.id) || (local ? !generated(field) && !human : !generated(field) || input.allowFieldIds.indexOf(field.id) === -1)) return;
+            if (!own(source, field.id) || (local ? !generated(field) && !human : !currentField(field))) return;
             if (!normalizedValue(field, source[field.id])) fail('input');
             result[field.id] = JSON.parse(JSON.stringify(source[field.id]));
         });
@@ -93,6 +102,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         'Questions always contain {id,text,reason,required:boolean}; warnings contain strings; evidence contains {fieldId,kind:"source"|"suggestion",quote:string}.',
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
         'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype or user values. Humans select users explicitly.',
+        'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
         'Fields use normalized strings/numbers/null, options {id}, arrays of {id}, or string arrays. No names as option IDs, HTML execution or nested commands.'
     ].join('\n');
     function rejectSecrets(value) {
@@ -102,12 +112,13 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
     }
     function buildRequest(kind, input) {
         var ctx = context(kind, input);
+        var current = draftFields(input, ctx);
         var editable = {profileInstructions: text(ctx.profile.instructions), templates: ctx.templates.map(function(t) {
             return {id: t.id, name: text(t.name), whenToUse: text(t.whenToUse), instructions: text(t.instructions), issueTypeId: t.issueTypeId};
         })};
         var systemPrompt = protocol + '\nEditable content rules (subordinate to JSONv1):\n' + JSON.stringify(editable);
         var userPrompt = JSON.stringify({action: kind, source: input.source,
-            contextScope: 'Only selected issue types/templates and explicitly allowlisted field catalogs are included; other catalogs are excluded. Missing values require human selection.',
+            contextScope: 'Only selected issue types/templates and explicitly allowlisted generation field catalogs are included; other catalogs are excluded. All current supported non-user values are retained for review with minimal context outside generation scope. User values are excluded. Missing values require human selection.',
             project: {id: ctx.meta.projectId, key: ctx.meta.projectKey}, selected: {issueTypeId: ctx.typeId, templateId: ctx.templateId},
             candidatePairs: ctx.pairs, issueTypes: ctx.types.map(function(type) {
                 return {id: type.id, name: text(type.name), fieldSchema: type.fields.filter(function(f) {
@@ -118,8 +129,12 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                         maxLength: f.maxLength, optionsComplete: f.optionsComplete === true,
                         allowedValues: f.allowedValues.map(function(v) { return {id: v.id, label: text(v.label)}; })};
                 }), requiredOutsideScope: type.fields.filter(function(f) { return f.required && (!generated(f) || input.allowFieldIds.indexOf(f.id) === -1); }).map(function(f) { return f.id; })};
-            }), fields: draftFields(input, ctx)});
-        if (shared.utf8ByteLength(systemPrompt) > shared.MAX_BASE_PROMPT_BYTES || shared.utf8ByteLength(userPrompt) > shared.MAX_USER_PROMPT_BYTES) fail('limit');
+            }), fields: current, currentFieldContext: ctx.typeId === null ? [] : ctx.types[0].fields.filter(function(f) {
+                return own(current, f.id) && input.allowFieldIds.indexOf(f.id) === -1;
+            }).map(function(f) { return {id: f.id, name: text(f.name), kind: f.kind}; })});
+        var sizes = {systemBytes: shared.utf8ByteLength(systemPrompt), userBytes: shared.utf8ByteLength(userPrompt),
+            systemLimit: shared.MAX_BASE_PROMPT_BYTES, userLimit: shared.MAX_USER_PROMPT_BYTES};
+        if (sizes.systemBytes > sizes.systemLimit || sizes.userBytes > sizes.userLimit) fail('limit', sizes);
         rejectSecrets(systemPrompt); rejectSecrets(userPrompt);
         return {systemPrompt: systemPrompt, userPrompt: userPrompt, allowProtocolFallback: false};
     }
@@ -148,8 +163,11 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         }
         if (!Array.isArray(result.warnings) || !result.warnings.every(function(w) { return typeof w === 'string'; }) || !Array.isArray(result.evidence)) fail('response');
         var type = ctx.types[0];
+        var current = kind === 'check' ? draftFields(input, ctx) : {};
         if (!result.evidence.every(function(e) {
-            return keys(e, ['fieldId', 'kind', 'quote']) && input.allowFieldIds.indexOf(e.fieldId) !== -1 && type.fields.some(function(f) { return f.id === e.fieldId && generated(f); }) &&
+            return keys(e, ['fieldId', 'kind', 'quote']) && type.fields.some(function(f) {
+                return f.id === e.fieldId && (generated(f) && input.allowFieldIds.indexOf(f.id) !== -1 || kind === 'check' && currentField(f) && own(current, f.id));
+            }) &&
                 typeof e.quote === 'string' && !!e.quote.trim() && (e.kind === 'suggestion' || e.kind === 'source' && input.source.indexOf(e.quote) !== -1);
         })) fail('response');
         var values = draftFields(input, ctx, true);

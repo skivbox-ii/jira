@@ -111,9 +111,19 @@ test('final system and user prompts accept exact UTF8 boundaries and reject next
         const remaining = limit - shared.utf8ByteLength(ai().buildRequest('prepare', i)[property]);
         const padding = 'я'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2);
         edit(i, padding);
-        assert.equal(shared.utf8ByteLength(ai().buildRequest('prepare', i)[property]), limit);
+        const atLimit = ai().buildRequest('prepare', i);
+        assert.equal(shared.utf8ByteLength(atLimit[property]), limit);
         edit(i, padding + 'x');
-        assert.throws(() => ai().buildRequest('prepare', i), /лимит/i);
+        assert.throws(() => ai().buildRequest('prepare', i), error => {
+            assert.equal(error.code, 'limit');
+            assert.deepEqual({...error.details}, {
+                systemBytes: shared.utf8ByteLength(atLimit.systemPrompt) + (property === 'systemPrompt' ? 1 : 0),
+                userBytes: shared.utf8ByteLength(atLimit.userPrompt) + (property === 'userPrompt' ? 1 : 0),
+                systemLimit: 6000, userLimit: 42000
+            });
+            assert.deepEqual(Object.keys(error).sort(), ['code', 'details']);
+            return true;
+        });
     }
 });
 test('oversize UTF-8 input is rejected before shared client truncation', async () => {
@@ -121,6 +131,50 @@ test('oversize UTF-8 input is rejected before shared client truncation', async (
     const client = ai().createClient({llmClient: {...shared, requestText() {calls++;}}, fetchImpl() {}, readConfig: () => config});
     await assert.rejects(client.prepare({...input(), source: 'я'.repeat(42001)}, {}), /лимит/i);
     assert.equal(calls, 0);
+});
+test('client limit rejection retains only numeric sizes for both final prompts', async () => {
+    const i = input(); i.profile.instructions = 'я'.repeat(4000); i.source = 'x'.repeat(43000) + 'PRIVATE_BODY';
+    let calls = 0;
+    const client = ai().createClient({llmClient: {...shared, requestText() {calls++;}}, readConfig: () => config, fetchImpl() {}});
+    await assert.rejects(client.check(i), error => {
+        assert.equal(error.code, 'limit');
+        assert.deepEqual(Object.keys(error.details).sort(), ['systemBytes', 'systemLimit', 'userBytes', 'userLimit']);
+        assert.ok(Object.values(error.details).every(Number.isInteger));
+        assert.ok(error.details.systemBytes > error.details.systemLimit);
+        assert.ok(error.details.userBytes > error.details.userLimit);
+        assert.equal(error.details.systemLimit, 6000);
+        assert.equal(error.details.userLimit, 42000);
+        assert.ok(!JSON.stringify(error).includes('PRIVATE_BODY') && !JSON.stringify(error).includes('KEY_SECRET'));
+        return true;
+    });
+    assert.equal(calls, 0);
+});
+test('check retains populated excluded fields with minimal context while omitting their large catalogs and all users', () => {
+    const i = input();
+    i.allowFieldIds = ['summary'];
+    i.meta.issueTypes[0].fields.find(f => f.id === 'customfield_2').allowedValues =
+        Array.from({length: 2000}, (_, n) => ({id: String(n), label: 'EXCLUDED_CATALOG ' + n}));
+    i.draft.fields.customfield_2 = {id: '42'};
+    i.draft.fields.description = 'Manual result to check';
+    i.draft.protectedFields = {description: true};
+    i.draft.fields.assignee = {name: 'human-picked'};
+    i.profile.allowAssignee = true; i.explicitUserFields = ['assignee'];
+    const request = ai().buildRequest('check', i);
+    const prompt = JSON.parse(request.userPrompt);
+    assert.deepEqual(prompt.fields, {summary: 'Запуск', customfield_2: {id: '42'}, description: 'Manual result to check'});
+    assert.deepEqual(prompt.currentFieldContext, [
+        {id: 'customfield_2', name: 'Environment', kind: 'option'},
+        {id: 'description', name: 'Description', kind: 'textarea'}
+    ]);
+    assert.deepEqual(prompt.issueTypes[0].fieldSchema.map(f => f.id), ['summary']);
+    assert.ok(!request.userPrompt.includes('EXCLUDED_CATALOG') && !request.userPrompt.includes('human-picked'));
+    assert.match(prompt.contextScope, /current.*values/i);
+    assert.ok(!parse('check', response('check'), i).questions.some(q => q.id === 'required:customfield_2'));
+    assert.equal(parse('check', response('check', {evidence: [{fieldId: 'description', kind: 'source', quote: 'исправить'}]}), i).evidence.length, 1);
+    assert.throws(() => parse('prepare', response('draft', {fields: {description: 'replacement'}}), i));
+    assert.throws(() => parse('check', response('check', {fields: {description: 'replacement'}}), i));
+    i.draft.fields.description = 'Cookie: PRIVATE_COOKIE';
+    assert.throws(() => ai().buildRequest('check', i), error => error.code === 'secret' && !JSON.stringify(error).includes('PRIVATE_COOKIE'));
 });
 test('oversized catalogs require explicit field selection without silent truncation', () => {
     const i = input(); i.meta.issueTypes[0].fields.find(f => f.id === 'customfield_2').allowedValues =
