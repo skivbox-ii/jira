@@ -61,7 +61,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if (!result.fieldErrors[id]) result.fieldErrors[id] = [];
             result.fieldErrors[id].push(message);
         }
-        var type = meta && meta.issueTypes.find(function(item) { return item.id === typeId; });
+        var validProject = meta && typeof meta.projectId === 'string' && !!meta.projectId.trim() && meta.projectId.trim() === meta.projectId;
+        if (!validProject) error('project', 'Select a project with a valid metadata ID');
+        var validTypeId = typeof typeId === 'string' && !!typeId.trim() && typeId.trim() === typeId;
+        var type = validTypeId && meta && Array.isArray(meta.issueTypes) && meta.issueTypes.find(function(item) { return item.id === typeId; });
         if (!type || type.subtask) error('issuetype', 'Select an available non-subtask issue type');
         if (!values || typeof values !== 'object' || Array.isArray(values) || !safeTree(values, [])) error('_input', 'Expected field object without forbidden keys or cycles');
         if (Object.keys(result.fieldErrors).length) return { validation: result, output: output };
@@ -73,6 +76,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             else output[id] = encoded.value;
         });
         type.fields.forEach(function(field) {
+            // Scope is validated above and injected by the builder, never supplied by values.
+            if (field.id === 'project' || field.id === 'issuetype') return;
             if (!field.required) return;
             var supplied = Object.prototype.hasOwnProperty.call(values, field.id);
             if ((!supplied || !present(values[field.id])) && (supplied || !field.defaultApplicable)) {

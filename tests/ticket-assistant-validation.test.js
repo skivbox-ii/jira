@@ -27,6 +27,51 @@ test('all supported codecs build an allowlisted payload with scoped IDs', () => 
     assert.deepEqual(plain(validation.buildCreatePayload(meta, '10', values, policy)), { fields: { ...values, components: [{ id: 'DO-9' }], project: { id: 'DO-project' }, issuetype: { id: '10' } } });
 });
 
+test('required project and issue type metadata are satisfied only by trusted selected scope', () => {
+    const { fields, validation } = units();
+    const meta = fields.normalizeMeta({ projects: [{ key: 'DO', id: '10000', issuetypes: [{ id: '10', fields: {
+        project: { name: 'Project', required: true, schema: { type: 'project', system: 'project' } },
+        issuetype: { name: 'Issue Type', required: true, schema: { type: 'issuetype', system: 'issuetype' } },
+        summary: { name: 'Summary', required: true, schema: { type: 'string', system: 'summary' } }
+    } }] }] }, 'DO', {});
+    const values = { summary: 'Fix' };
+    const result = validation.validateFields(meta, '10', values, policy);
+    assert.equal(result.ok, true);
+    assert.deepEqual(plain(result.fieldErrors), {});
+    assert.deepEqual(plain(result.unsupportedRequired), []);
+    assert.deepEqual(plain(validation.buildCreatePayload(meta, '10', values, policy)), {
+        fields: { summary: 'Fix', project: { id: '10000' }, issuetype: { id: '10' } }
+    });
+    for (const extra of [{ project: { id: '10000' } }, { issuetype: { id: '10' } }, { project: { id: 'APP-project' } }, { issuetype: { id: '20' } }, { project: null }, { issuetype: null }]) {
+        const overridden = { ...values, ...extra };
+        assert.equal(validation.validateFields(meta, '10', overridden, policy).ok, false);
+        assert.throws(() => validation.buildCreatePayload(meta, '10', overridden, policy), e => e.kind === 'validation');
+    }
+    assert.equal(validation.validateFields(meta, '10', {}, policy).ok, false);
+});
+
+test('invalid trusted project IDs and unavailable or malformed selected type IDs block creation', () => {
+    const { validation } = units(), values = { summary: 'Fix' };
+    for (const projectId of [undefined, null, '', ' ', ' 10000 ', 10000, {}, []]) {
+        const meta = metadataFixture(); meta.projectId = projectId;
+        const result = validation.validateFields(meta, '10', values, policy);
+        assert.equal(result.ok, false, 'Invalid project ID: ' + JSON.stringify(projectId));
+        assert.ok(result.fieldErrors.project);
+        assert.throws(() => validation.buildCreatePayload(meta, '10', values, policy), e => e.kind === 'validation');
+    }
+    for (const typeId of [undefined, null, '', ' ', ' 10 ', 10, {}, '20']) {
+        const meta = metadataFixture();
+        // Even a matching malformed metadata entry cannot authorize an invalid ID.
+        if (typeId !== '20') meta.issueTypes[0].id = typeId;
+        const result = validation.validateFields(meta, typeId, values, policy);
+        assert.equal(result.ok, false, 'Invalid type ID: ' + JSON.stringify(typeId));
+        assert.ok(result.fieldErrors.issuetype);
+        assert.throws(() => validation.buildCreatePayload(meta, typeId, values, policy), e => e.kind === 'validation');
+    }
+    const subtask = metadataFixture(); subtask.issueTypes[0].subtask = true;
+    assert.equal(validation.validateFields(subtask, '10', values, policy).ok, false);
+});
+
 test('foreign IDs, arbitrary keys, prototype keys and unsupported custom fields block payloads', () => {
     const { validation } = units(), meta = metadataFixture();
     for (const extra of [{ components: [{ id: 'APP-9' }] }, { customfield_999: 'guess' }, { transition: { id: '31' } }, { project: { id: 'APP-project' } }, { issuetype: { id: '20' } }, JSON.parse('{"__proto__":{}}'), { description: JSON.parse('{"constructor":{}}') }]) {
