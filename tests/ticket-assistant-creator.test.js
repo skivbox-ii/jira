@@ -119,8 +119,8 @@ function controllerHarness() {
     const creator=loadUnit('creator',{_ujgTA_draft:h.drafts,_ujgTA_fields:fields,_ujgTA_validation:validation});
     const mod=loadUnit('controller',{_ujgTA_draft:h.drafts,_ujgTA_fields:fields,_ujgTA_validation:validation,_ujgTA_profiles:profiles,_ujgTA_creator:creator},{AbortController});
     h.api.getCurrentUser=async()=>({key:'alice'});h.api.getProjects=async()=>({values:[{key:'DO',id:'100'},{key:'APP',id:'200'}]});
-    const c=mod.create({api:h.api,ai:{check:async()=>({questions:[],warnings:[],evidence:[]})},createStore:()=>h.store});
-    return {...h,c};
+    const createController=(store=h.store)=>mod.create({api:h.api,ai:{check:async()=>({questions:[],warnings:[],evidence:[]})},createStore:()=>store});
+    return {...h,c:createController(),createController};
 }
 test('controller owns File bytes outside state, locks submitted draft and preserves original scope callback',async()=>{
     const h=controllerHarness();await h.c.init();await h.c.selectProject('DO');
@@ -216,4 +216,43 @@ test('unpersisted field or manual-policy changes cannot reuse a checked revision
         if(change==='field')h.draft.fields.summary='Unreviewed title';else h.draft.protectedFields.reporter=true;
         await h.creator.submit(h,h.capture);assert.equal(h.posts.length,0);
     }
+});
+test('reload then adding a different file keeps descriptor IDs, byte mapping, removal and retries independent',async()=>{
+    const h=controllerHarness(),a=new File(['AAA'],'a.txt'),b=new File(['BBB'],'b.txt');
+    await h.c.init();await h.c.selectProject('DO');await h.c.selectFiles([a]);
+    const originalId=h.c.getState().draft.attachments[0].id;
+    await h.c.destroy();
+    const profiles=loadUnit('profiles'),storage=loadUnit('storage',{_ujgTA_profiles:profiles,_ujgTA_draft:h.drafts});
+    const restoredStore=storage.createStore({storage:h.backing,userKey:'alice',origin:'https://jira.test'});
+    const c=h.createController(restoredStore);
+    try {
+        await c.init();await c.selectProject('DO');await c.selectFiles([b]);
+        let attachments=c.getState().draft.attachments;
+        assert.equal(new Set(attachments.map(f=>f.id)).size,2);
+        assert.equal(attachments[0].id,originalId);
+        assert.deepEqual(attachments.map(f=>f.needsReselect),[true,false]);
+        await c.selectFiles([a]);attachments=c.getState().draft.attachments;
+        assert.equal(attachments.length,2);assert.equal(attachments[0].id,originalId);
+        assert.deepEqual(attachments.map(f=>f.needsReselect),[false,false]);
+        await c.removeFile(attachments[1].id);
+        assert.deepEqual(c.getState().draft.attachments.map(f=>[f.id,f.needsReselect]),[[originalId,false]]);
+        await c.selectFiles([b]);attachments=c.getState().draft.attachments;
+        const bId=attachments[1].id;
+        assert.notEqual(originalId,bId);
+        const uploaded=[];let reject=true;
+        h.api.uploadAttachment=async(key,file)=>{
+            uploaded.push([key,file.name,await file.text()]);
+            if(reject)throw {outcome:'rejected'};
+            return {id:file.name,filename:file.name};
+        };
+        await c.check();await c.submit();
+        assert.deepEqual(uploaded,[['DO-123','a.txt','AAA'],['DO-123','b.txt','BBB']]);
+        assert.deepEqual(c.getState().draft.attachments.map(f=>f.status),['failed','failed']);
+        reject=false;await c.retryAttachment(originalId);
+        assert.deepEqual(c.getState().draft.attachments.map(f=>f.status),['uploaded','failed']);
+        await c.retryAttachment(bId);
+        assert.deepEqual(uploaded.slice(2),[['DO-123','a.txt','AAA'],['DO-123','b.txt','BBB']]);
+        assert.deepEqual(c.getState().draft.attachments.map(f=>f.status),['uploaded','uploaded']);
+        assert.equal(h.posts.length,1);
+    } finally {await c.destroy();}
 });

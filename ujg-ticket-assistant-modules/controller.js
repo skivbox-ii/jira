@@ -425,7 +425,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var added=false;
             Array.from(files || []).forEach(function(file) {
                 var previous=next.attachments.find(function(a) {return a.status!=='uploaded' && !runtimeFiles.has(a.id) && a.name===file.name && a.size===file.size && a.type===file.type;});
-                var id=previous ? previous.id : next.id + '-file-' + (++fileSequence);
+                var id=previous && previous.id;
+                if (!previous) {
+                    do {id=next.id + '-file-' + (++fileSequence);}
+                    while (runtimeFiles.has(id) || next.attachments.some(function(a) {return a.id===id;}));
+                }
                 if (!previous && next.creation.issueKey) return;
                 runtimeFiles.set(id,file);
                 if (!previous) {added=true;next.attachments.push({id:id,name:file.name,size:file.size,type:file.type,lastModified:file.lastModified,status:'pending',attachmentId:null,error:null,needsReselect:false});}
