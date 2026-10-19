@@ -2,9 +2,67 @@
 
 Planned task/report date: 19 October 2026. Final acceptance and full regression executed/completed **20 October 2026, Europe/Moscow**. Initial source/TDD checks began on 19 October. Worktree: `/Users/skivbox/.codex/worktrees/ticket-assistant/jira` only. Base: `95f54f6`.
 
-Initial Task 9 result at `edd6605`: **complete with concerns**. The 20 October follow-up below closes actual coexistence coverage and records the later parent full-suite result. Published: **NO**. Citrix accepted: **NO**. Parent whole-branch review is in progress; its outcome remains **pending**. The author's original full regression failure remains recorded below.
+Current candidate source/runtime: **a9c97fb4eade9629720cdf2d728394cb9e1ab7b6**, fallback **a9c97fb**. Local implementation: **complete**. Published: **NO**. Citrix accepted: **NO**. Parent whole-branch review found four P2 issues; all four are implemented and verified below. Parent's final scoped review and full suite on this new source remain **pending**. Initial Task 9 result at `edd6605` was complete with concerns; the author's original full regression failure remains recorded below.
 
-## Candidate And Scope
+**Artifact retention:** the app/OS restart cleared `/tmp`, including every log/screenshot referenced in the historical sections before the final-fix appendix. Those counts describe actual earlier runs, but the old files are no longer available. Fresh evidence was recreated on 20 October with the restored dependency path and is listed in the final appendix. Do not treat historical logs as currently readable artifacts.
+
+## Final Review Fixes: 20 October
+
+Source commit `a9c97fb` contains only six own modules, two own generated bundles, three affected regression files, the offline preview fixture and its new browser test. Coexistence was already completed in `6886e09`; the final nine-test acceptance reruns that real-importer scenario. No importer source, preview-server code, CSS, shared client, other-widget assets or dashboard properties changed. Source/tests are frozen for parent verification.
+
+| Finding | Implemented Behavior | Covering Regressions |
+| --- | --- | --- |
+| Obsolete field after changing issue type | Explicit `discardField` action first preserves original field name and value in visible source, then removes only that field/protection/pending value. Check and reload retain recovery text. Optional unavailable catalogs have the same explicit exclusion. | `tests/ticket-assistant-controller.test.js`: `obsolete field exclusion...`, `optional unavailable catalog...`; `tests/browser/ticket-assistant-editor.test.cjs`: `obsolete metadata values...`; real generated-runtime review fixture |
+| Persistence failure after init hidden | Main updates one dedicated warning node when the actual store falls back to memory, without replacing the editor. | editor test `main shows quota fallback after init without replacing editor or caret` exercises project selection and text edits; generated-runtime `review=storage` covers a post-init failure, text, node identity, focus and caret |
+| Required incomplete empty catalog | Named unavailable-catalog validation makes the ordinary Jira form fallback available. Missing/unconfirmed values stay blocked; known values from a nonempty partial catalog remain valid. Metadata autocomplete URLs are never followed. | `tests/ticket-assistant-validation.test.js`: `required unavailable catalogs...`; editor test `required unavailable catalog is named...`; generated-runtime `review=catalog` asserts exact form URL and zero external requests |
+| No confirmed editable-draft deletion | Idle/rejected drafts have a cancel/confirm action. Confirm clears durable draft content/descriptors and runtime files, retains personal settings, and opens a blank draft. Preflight/submitting/unknown and other-tab durable guards prevent deletion. | controller tests `confirmed draft discard...`, `draft discard refuses...`; editor test `editable draft discard requires confirmation...`; generated-runtime test verifies cancel, confirm, file removal, persisted `draft:null`, reload and retained settings |
+
+Nine focused regressions were written and run RED before production edits: **0/9**, exit 1; then GREEN **9/9**, exit 0. Their original `review-fixes-red.log` and `review-fixes-green-1.log` were lost during restart, not recreated or presented as current files. Exact historical argument list was `--test --test-name-pattern='obsolete field exclusion|optional unavailable|confirmed draft discard|draft discard refuses|required unavailable|obsolete metadata|editable draft discard|main shows quota' tests/ticket-assistant-controller.test.js tests/ticket-assistant-validation.test.js tests/browser/ticket-assistant-editor.test.cjs` with the original `/tmp` dependency path.
+
+Fresh verification after restart uses Node24.19.0, Playwright1.62.1, Chrome155.0.8059.80, macOS arm64. Parent restored pinned dependencies offline outside the repository. Exact executable/environment prefix:
+
+```sh
+env UJG_RELEASE_REF=a9c97fb NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules /Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node
+```
+
+From the worktree root, final argument lists:
+
+```sh
+build-ticket-assistant.js
+--test --test-reporter=tap tests/ticket-assistant-*.test.js tests/browser/ticket-assistant-*.test.cjs tests/shared-llm-client.test.js tests/widget-bootstrap.test.js
+tests/browser/ticket-assistant-acceptance.cjs
+--test --test-reporter=tap tests/ticket-assistant-build.test.js tests/widget-bootstrap.test.js
+```
+
+The profile run used `UJG_RELEASE_REF=6886e09` before the source commit existed; acceptance omitted that variable because it consumes runtime, not bootstrap. After source commit `a9c97fb`, own build and the 46 build/bootstrap checks used the final explicit `a9c97fb` pin. Production source/runtime/CSS were byte-identical across those checks; only bootstrap fallback changed.
+
+All fresh logs below are currently in `/tmp/ticket-assistant-20261019/`:
+
+| Fresh Check | Actual Result | Log |
+| --- | --- | --- |
+| First resumed affected check | 109/110, exit 1; new draft-confirm selector collided with existing settings-confirm selector after opening settings | `review-fixes-affected-resumed.log` |
+| Profile + shared/bootstrap after uniquely naming the new selector | **214/214**, exit 0, 0 fail/skip/cancel/todo; 13867.66175 ms | `review-profile-resumed.tap` |
+| Actual generated acceptance, including real importer coexistence | **9/9**, exit 0, 0 fail/skip/cancel/todo; 61128.219917 ms | `review-acceptance-final.tap` |
+| Own build, final pin | exit 0, fallback `a9c97fb` | `review-build-pinned.log` |
+| Build/bootstrap after pin | **46/46**, exit 0, 0 fail/skip/cancel/todo; 100.588542 ms | `review-pin-tests.tap` |
+| `git show a9c97fb:<asset>` and in-memory own build | source/runtime/CSS byte-identical; generated source/runtime/bootstrap match local files, exit 0 | `review-pin-parity.log` |
+| Environment and exact viewport dimensions | Node/browser versions recorded; every viewport PNG is 1440x900 or 390x844, exit 0 | `environment-final.json`, `review-screenshot-dimensions.log` |
+
+The first affected command was `--test tests/ticket-assistant-controller.test.js tests/ticket-assistant-validation.test.js tests/ticket-assistant-storage.test.js tests/ticket-assistant-creator.test.js tests/browser/ticket-assistant-editor.test.cjs tests/browser/ticket-assistant-settings.test.cjs tests/browser/ticket-assistant-review.test.cjs` with the new Node/dependency prefix and no release variable. The selector collision was resolved within the new draft UI/test; settings source was unchanged. All affected tests were included in the later 214/214 run. No author full-suite rerun occurred. Parent started the full suite on frozen `a9c97fb`; its result and the scoped-review outcome are pending.
+
+The new `tests/browser/ticket-assistant-review.test.cjs` uses fresh contexts, an ephemeral server and finally cleanup, only GET on its exact origin, zero issue-create calls, and fails on external requests or page errors. The normal preview default is unchanged. Exact personal CUA hooks (existing server reads fixture/runtime files dynamically; no code-related restart needed):
+
+1. `http://127.0.0.1:4320/?review=obsolete`: type source, summary and "Заметки только для задачи"; choose Jira type "Ошибка"; click "Сохранить в исходнике и исключить поле"; Check. The original named text is recovered and creation becomes available. For deletion, add a file and optionally change a personal setting; "Удалить черновик" -> cancel retains data, confirm -> reload leaves source/fields/files blank and settings retained.
+2. `http://127.0.0.1:4320/?review=catalog`: type source/summary, Check, open "Контур приёмки". Named missing catalog is explicit, Create is disabled, form href is `/secure/CreateIssue!default.jspa?pid=101&issuetype=10`. No metadata URL request occurs.
+3. `http://127.0.0.1:4320/?review=storage`: type source; click "Имитировать отказ хранилища"; continue typing within source. The real main/store warning appears immediately, with full text, focus and caret retained. Reload resets the synthetic failure switch.
+
+Parent personally confirmed all four cases in IAB on 20 October after restart, using only synthetic UI: obsolete recovery and Check, cancel/confirm/reload deletion, named catalog fallback/form link, immediate memory warning with retained text/focus. This is parent-provided evidence, distinct from the author's automation. Parent owns full-suite and final scoped review.
+
+Fresh screenshots: `review-{obsolete,catalog,storage,discard}.png` and their exact 1440x900 `-viewport.png` companions, `review-obsolete-before.png`, and all standalone acceptance images listed below recreated by the final run. `coexistence-1440.png` shows both actual widgets; `coexistence-destroy-1440.png` shows the importer after assistant destruction. Author inspected fresh catalog full/viewport and storage viewport. Earlier visual-inspection statements remain historical; no new broad visual audit is claimed.
+
+Final fallback `a9c97fb` contains the matching source/runtime/CSS, rather than pre-fix HEAD. Global dashboard override still takes precedence. Local candidate complete; published **NO**, Citrix **NO**, final parent gates **pending**.
+
+## Historical Candidate And Scope
 
 Source/runtime commit: `0cc0795a235de1fe6349cc95f6183361bb133165`, `fix(ticket-assistant): clarify Russian acceptance and recovery labels`. Packaging/acceptance commit is the introducing commit of this report, subject `test(ticket-assistant): verify workflow and document release candidate`; the local SDD report records its resulting SHA.
 

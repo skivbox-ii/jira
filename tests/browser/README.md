@@ -30,12 +30,12 @@ The browser test uses installed Google Chrome, verifies automatic startup, tree 
 
 ## Ticket Assistant Acceptance
 
-Use the existing external dependencies; no repository install is needed. Verified runtime is `/Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`, with `NODE_PATH=/tmp/ujg-ticket-assistant-test/node_modules`.
+Use the existing external dependencies; no repository install is needed. Verified runtime is `/Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`, with `NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules` (parent restored the same pinned dependencies offline after restart cleared `/tmp`).
 
 ```sh
 export PATH=/Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH
-export NODE_PATH=/tmp/ujg-ticket-assistant-test/node_modules
-export UJG_RELEASE_REF=0cc0795
+export NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules
+export UJG_RELEASE_REF=a9c97fb
 node build-ticket-assistant.js
 node --test tests/ticket-assistant-*.test.js tests/browser/ticket-assistant-*.test.cjs tests/shared-llm-client.test.js tests/widget-bootstrap.test.js
 node tests/browser/ticket-assistant-acceptance.cjs
@@ -48,4 +48,12 @@ Coverage includes all three templates plus a fourth, source answers/protected ed
 
 Full-page screenshots and exact viewport companions (`*-viewport.png`) are written outside git to `/tmp/ticket-assistant-20261019/`. This includes `answers-protected-{1440,390}`, `settings-fourth-{1440,390}`, `progress-{1440,390}`, `long-last-field-{1440,390}`, `unsupported-{1440,390}`, `creation-{success,rejected,lostresponse,filefail}`, `file-partial`, `coexistence-1440` (both actual gadgets in the full-page image), and `coexistence-destroy-1440` (importer still working after assistant destruction).
 
-For manual fixture-only use, `node tests/browser/ticket-assistant-preview-server.cjs` prints the local URL. Assistant preview 4320 needs no restart: preview-server code was not changed. The long-running importer 4317 fixture retains its startup date, which can make its existing startup test fail after midnight. Initial execution on 20 October produced 1897/1898 in the author's single full run; an isolated repeat against 4317 failed, and the same unchanged test against a fresh ephemeral importer fixture passed 1/1. Later the parent independently ran the full suite with a fresh ephemeral importer fixture: 1898/1898. Both parent servers were preserved. This test-only follow-up runs focused coexistence and the standalone nine-test acceptance, not another full suite. Publication, CDN byte comparison, the outcome of parent whole-branch review and Citrix acceptance remain pending; see [the acceptance report](../../docs/ticket-assistant-acceptance-2026-10-19.md).
+For manual fixture-only use, `node tests/browser/ticket-assistant-preview-server.cjs` prints the local URL. Assistant preview 4320 needs no code-related restart: preview-server code was not changed. Parent restarted both servers after the app/OS restart. The long-running importer 4317 fixture retains its startup date, which can make its existing startup test fail after midnight. Initial execution on 20 October produced 1897/1898 in the author's single full run; an isolated repeat against 4317 failed, and the same unchanged test against a fresh ephemeral importer fixture passed 1/1. Later the parent independently ran the full suite with a fresh ephemeral importer fixture: 1898/1898. These pre-restart log files were lost with `/tmp`; their results remain historical. On final source `a9c97fb`, fresh author checks are 214/214 profile/shared/bootstrap, 9/9 standalone acceptance, and 46/46 after bootstrap pinning. Parent owns the new full suite and scoped review; see [the acceptance report](../../docs/ticket-assistant-acceptance-2026-10-19.md).
+
+Offline review cases use the same actual generated runtime and keep the normal preview default unchanged. `tests/browser/ticket-assistant-review.test.cjs` automates these in fresh contexts, with no external calls:
+
+- `http://127.0.0.1:4320/?review=obsolete`: enter source, summary and "Заметки только для задачи", switch Jira type to "Ошибка", explicitly save/exclude the obsolete field, then Check. Its original named value appears in source. "Удалить черновик" asks for confirmation; cancel retains data, confirm clears source/fields/files, reload stays blank and personal settings remain.
+- `http://127.0.0.1:4320/?review=catalog`: enter source/summary, Check, then open "Контур приёмки". Its unavailable catalog is explicit, Create stays disabled, and the ordinary Jira form link is scoped to project/type. The metadata autocomplete URL is never requested.
+- `http://127.0.0.1:4320/?review=storage`: enter source, click "Имитировать отказ хранилища", then type within the source. Main's real memory-only warning appears immediately while text, editor identity, focus and caret remain intact.
+
+Fresh artifacts include `review-{obsolete,catalog,storage,discard}.png` and exact 1440x900 `-viewport.png` companions, plus `review-obsolete-before.png`. The unchanged acceptance runner recreates 1440x900/390x844 evidence and actual importer coexistence screenshots. Publication and Citrix remain NO.

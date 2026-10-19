@@ -374,23 +374,23 @@ python3 jira_attach_latest_assets.py --dry-run
 
 Отдельный гаджет с личными настройками по пользователю/проекту, тремя исходными шаблонами и пользовательскими шаблонами. Подготовка и проверка используют существующий LLM client; создание требует явной команды после проверки текущего черновика. Неизвестный результат блокирует повторное создание до ручной сверки. После reload файлы для повторной загрузки нужно выбрать заново.
 
-Реализовано локально: **да**. Опубликовано: **нет**. Приёмка в Citrix: **нет**. Родительский агент лично проверил runtime `0cc0795` 20 октября; итог финального ревью всей ветки остаётся **pending**. Первый полный offline-прогон: 1897/1898, один importer fixture-тест после смены суток; отдельный повтор со свежей fixture 1/1. Позднее родительский агент выполнил полный прогон со свежей временной importer fixture: **1898/1898**. История первого падения сохранена в [acceptance-report](docs/ticket-assistant-acceptance-2026-10-19.md).
+Реализовано локально: **да**. Опубликовано: **нет**. Приёмка в Citrix: **нет**. Четыре замечания финального ревью исправлены в `a9c97fb`; родительский агент лично проверил все четыре сценария 20 октября. Свежие проверки автора: **214/214**, acceptance **9/9**. Scoped review и новый полный прогон родителя остаются **pending**. Прежние результаты полного suite (1897/1898 со старой датой importer fixture, затем parent 1898/1898 со свежей fixture) сохранены в [acceptance-report](docs/ticket-assistant-acceptance-2026-10-19.md).
 
 Будущие URL после отдельно согласованной публикации:
 
 ```text
 https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-ticket-assistant.bootstrap.js
-https://cdn.jsdelivr.net/gh/skivbox-ii/jira@0cc0795/ujg-ticket-assistant.runtime.js
-https://cdn.jsdelivr.net/gh/skivbox-ii/jira@0cc0795/ujg-ticket-assistant.css
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@a9c97fb/ujg-ticket-assistant.runtime.js
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@a9c97fb/ujg-ticket-assistant.css
 ```
 
-Публичный AMD: `_ujgTicketAssistant`; runtime AMD: `_ujgTicketAssistantRuntime`; корневой CSS: `.ujg-ticket-assistant`. При bootstrap CSS URL в настройках гаджета пуст: CSS загружает bootstrap. `ujg-ticket-assistant.js` остаётся отдельным source bundle. Fallback `0cc0795` содержит побайтово совпадающие source/runtime/CSS. Существующий общий `ujg.dashboardReleaseRef` имеет приоритет над fallback; этот кандидат не меняет property или другие виджеты.
+Публичный AMD: `_ujgTicketAssistant`; runtime AMD: `_ujgTicketAssistantRuntime`; корневой CSS: `.ujg-ticket-assistant`. При bootstrap CSS URL в настройках гаджета пуст: CSS загружает bootstrap. `ujg-ticket-assistant.js` остаётся отдельным source bundle. Fallback `a9c97fb` содержит побайтово совпадающие source/runtime/CSS. Существующий общий `ujg.dashboardReleaseRef` имеет приоритет над fallback; этот кандидат не меняет property или другие виджеты.
 
 Сборка только этого виджета и локальный offline preview:
 
 ```sh
-UJG_RELEASE_REF=0cc0795 node build-ticket-assistant.js
-NODE_PATH=/tmp/ujg-ticket-assistant-test/node_modules node tests/browser/ticket-assistant-preview-server.cjs
+UJG_RELEASE_REF=a9c97fb node build-ticket-assistant.js
+NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node tests/browser/ticket-assistant-preview-server.cjs
 ```
 
 Preview по умолчанию `http://127.0.0.1:4320/`; если порт занят, команда сообщает фактически выбранный свободный порт. Уже работающий preview достаточно перезагрузить. Все Jira/LLM вызовы, включая создание/вложения, в этом preview синтетические и выполняются в памяти. [Browser README](tests/browser/README.md) содержит команды acceptance без живых API.
