@@ -92,6 +92,7 @@ define('_ujgTA_draft', [], function() {
         var d = persistent(typeof json === 'string' ? JSON.parse(json) : json);
         d.checked = null;
         if (d.creation.status === 'submitting') d.creation.status = 'unknown';
+        d.attachments.forEach(function(a) {if (a.status === 'uploading') a.status = 'unknown';});
         return d;
     }
     function snapshot(d) {

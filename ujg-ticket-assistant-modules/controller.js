@@ -1,4 +1,4 @@
-define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields', '_ujgTA_validation'], function(drafts, profiles, fields, validation) {
+define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields', '_ujgTA_validation', '_ujgTA_creator'], function(drafts, profiles, fields, validation, creators) {
     'use strict';
 
     var messages = {
@@ -34,10 +34,22 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
             error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
         var explicitGeneration = null;
+        var creator = null, runtimeFiles = new Map(), fileSequence = 0;
+        function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
+        function durableGuard() {
+            if (!store || !state.draft) return false;
+            var saved = store.load(state.draft.projectKey), d = saved.draft;
+            var guarded = d && (d.creation.issueKey || ['submitting','unknown','created'].indexOf(d.creation.status) !== -1);
+            if (guarded && (d.id !== state.draft.id || JSON.stringify(d.creation) !== JSON.stringify(state.draft.creation))) {
+                state.error = errorState(null,'conflict');scopes[state.draft.projectKey].error=state.error;return true;
+            }
+            return false;
+        }
 
         function getState() {
             var result = Object.assign({}, state);
             result.draft = state.draft ? JSON.parse(drafts.serialize(state.draft)) : null;
+            if (result.draft) result.draft.attachments.forEach(function(a) {a.needsReselect = a.status !== 'uploaded' && !runtimeFiles.has(a.id);});
             return copy(result);
         }
         function emit() {
@@ -118,11 +130,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function save() {
             if (!store || !state.draft) return;
             remember();
+            if (locked()) return;
             var entry = scopes[state.draft.projectKey];
             try {
                 var result = store.save(state.draft.projectKey, { draft: state.draft, settings: state.settings }, entry.revision);
                 if (!result.ok) {
-                    entry.error = errorState(null, result.reason === 'conflict' ? 'conflict' : 'storage');
+                    entry.error = errorState(null, result.reason === 'conflict' || result.reason === 'creation-guard' ? 'conflict' : 'storage');
                     state.error = entry.error;
                     return;
                 }
@@ -130,6 +143,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             } catch (error) { entry.error = errorState(null, 'storage'); state.error = entry.error; }
         }
         function edited(next) {
+            if (locked() || durableGuard()) return emit();
+            if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
             stop(); state.draft = next; state.validation = null; state.routeCandidates = [];
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
@@ -151,7 +166,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var template = profile() && profile().templates.find(function(t) { return t.id === templateId; });
             return !!type && !!template && (template.issueTypeId === null || template.issueTypeId === typeId);
         }
-        async function metadata(run) {
+        async function metadata(run, readOnly) {
             var snapshot = drafts.snapshot(state.draft), key = state.draft.projectKey;
             stage(run, 'metadata');
             if (!current(run, snapshot)) return false;
@@ -164,14 +179,16 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var versions = await api.getVersions(key, request);
             if (!current(run, snapshot)) return false;
             state.meta = fields.normalizeMeta(raw, key, { components: components, versions: versions });
-            state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
-            state.validation = null; updateScope(); save();
+            if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
+            state.validation = null; updateScope();
+            if (readOnly) remember(); else save();
             return true;
         }
 
         async function init() {
             if (destroyed) return getState();
             var run = begin('init');
+            if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
                 error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
@@ -183,6 +200,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 var key = user && (typeof user.key === 'string' && user.key.trim() ? user.key : typeof user.name === 'string' && user.name.trim() ? user.name : null);
                 if (!key) { key = null; identityWarning = errorState(null, 'identity'); state.error = identityWarning; }
                 store = options.createStore(key);
+                creator = creators.create({api:api,store:store,now:options.now});
                 var projects = await api.getProjects({ signal: run.abort.signal });
                 if (!current(run)) return getState();
                 state.projects = projects.values.map(function(p) { return { id: String(p.id), key: String(p.key), name: String(p.name || p.key) }; });
@@ -209,7 +227,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 state.settings = entry.settings; state.meta = entry.meta; explicitGeneration = entry.generation;
                 state.validation = null; state.routeCandidates = []; state.error = entry.error || identityWarning;
                 updateScope();
-                if (await metadata(run)) finish(run);
+                if (await metadata(run, !!locked())) finish(run);
             } catch (error) { fail(run, error, 'metadata'); }
             return getState();
         }
@@ -233,7 +251,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             catch (error) { state.error = errorState(null, 'input'); return emit(); }
         }
         async function applySettings(settings) {
-            if (destroyed || !state.draft) return getState();
+            if (destroyed || !state.draft || locked()) return getState();
+            if (durableGuard()) return emit();
             var checked = profiles.validateSettings(settings);
             if (!checked.ok || state.settings.revision === Number.MAX_SAFE_INTEGER) { state.error = errorState(null, 'input'); return emit(); }
             checked.value.revision = state.settings.revision + 1;
@@ -255,6 +274,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         async function loadSavedSettings() {
             if (destroyed || !state.draft || !store) return getState();
+            if (locked()) return getState();if (durableGuard()) return emit();
             try {
                 var saved = store.load(state.draft.projectKey);
                 // Loading rules never replaces or persists this tab's draft, nor acknowledges the CAS conflict.
@@ -267,6 +287,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         async function resolveSettingsConflict(settings) {
             if (destroyed || !state.draft || !store) return getState();
+            if (locked()) return getState();if (durableGuard()) return emit();
             var checked = profiles.validateSettings(settings);
             if (!checked.ok) {state.error=errorState(null,'input');return emit();}
             try {
@@ -286,6 +307,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         async function setGenerationFields(ids) {
             if (destroyed || !state.draft) return getState();
+            if (locked() || durableGuard()) return emit();
             var available = eligible();
             if (!Array.isArray(ids) || ids.some(function(id, index) { return typeof id !== 'string' || ids.indexOf(id) !== index || available.indexOf(id) === -1; })) {
                 state.error = errorState(null, 'input'); return emit();
@@ -298,6 +320,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
 
         async function pipeline(kind) {
             if (destroyed || !state.draft) return getState();
+            if (locked() || durableGuard()) return emit();
             if (active && active.kind === kind) { await active.promise; return getState(); }
             var run = begin(kind);
             state.draft = Object.assign({}, state.draft, { checked: null });
@@ -364,11 +387,80 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         async function cancel() {
             if (destroyed) return getState();
+            if (locked()) return emit();
+            if (state.draft && state.draft.creation.status === 'preflight') {
+                return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
+            }
             stop(); state.stage = 'stopped'; return emit();
         }
         async function destroy() {
-            if (!destroyed) { stop(); destroyed = true; }
+            if (!destroyed) { stop(); destroyed = true; if (creator) creator.destroy();runtimeFiles.clear(); }
             return getState();
+        }
+        function creationUpdate(ownerScopes, draft, info) {
+            if (destroyed || scopes !== ownerScopes) return;
+            var entry = scopes[draft.projectKey];
+            if (!entry || entry.draft.id !== draft.id) return;
+            // Edits during preflight own their newer snapshot. Creator never resaves in this callback.
+            if (entry.draft.draftRevision !== draft.draftRevision && draft.creation.status === 'preflight') return;
+            entry.draft=draft;entry.revision=info.revision;
+            if (info.persistenceFailed) entry.error=errorState(null,'conflict');
+            if (info.meta) entry.meta=info.meta;
+            if (state.draft && state.draft.id === draft.id) {
+                state.draft=draft;if (info.meta) state.meta=info.meta;
+                if (info.fieldErrors && Object.keys(info.fieldErrors).length) state.validation={ok:false,fieldErrors:info.fieldErrors,warnings:[],unsupportedRequired:[]};
+                emit();
+            }
+        }
+        async function submit(submitOptions) {
+            if (destroyed || !state.draft || !creator || locked() || durableGuard()) return getState();
+            stop();state.stage='idle';remember();var owner=scopes;
+            await creator.submit({draft:state.draft,settings:state.settings,files:state.draft.attachments.map(function(a) {return {id:a.id,file:runtimeFiles.get(a.id)};}),
+                withoutAttachments:!!submitOptions && submitOptions.withoutAttachments===true},function(d,info) {creationUpdate(owner,d,info);});
+            return getState();
+        }
+        async function selectFiles(files) {
+            if (destroyed || !state.draft || ['submitting','unknown'].indexOf(state.draft.creation.status)!==-1 || durableGuard()) return getState();
+            var next=Object.assign({},state.draft,{attachments:state.draft.attachments.map(function(a) {return Object.assign({},a);})});
+            var added=false;
+            Array.from(files || []).forEach(function(file) {
+                var previous=next.attachments.find(function(a) {return a.status!=='uploaded' && !runtimeFiles.has(a.id) && a.name===file.name && a.size===file.size && a.type===file.type;});
+                var id=previous ? previous.id : next.id + '-file-' + (++fileSequence);
+                if (!previous && next.creation.issueKey) return;
+                runtimeFiles.set(id,file);
+                if (!previous) {added=true;next.attachments.push({id:id,name:file.name,size:file.size,type:file.type,lastModified:file.lastModified,status:'pending',attachmentId:null,error:null,needsReselect:false});}
+            });
+            if (added) return edited(Object.assign({},next,{draftRevision:next.draftRevision+1,checked:null}));
+            state.draft=next;remember();
+            // Reselecting bytes does not change issue content or the checked snapshot.
+            if (!locked()) save();return emit();
+        }
+        async function removeFile(id) {
+            if (destroyed || !state.draft || locked() || durableGuard()) return getState();
+            runtimeFiles.delete(id);return edited(Object.assign({},state.draft,{attachments:state.draft.attachments.filter(function(a) {return a.id!==id;}),draftRevision:state.draft.draftRevision+1,checked:null}));
+        }
+        async function retryAttachment(id) {
+            if (destroyed || !creator || !state.draft || durableGuard()) return getState();
+            remember();var owner=scopes;
+            await creator.retryAttachment({draft:state.draft,file:{id:id,file:runtimeFiles.get(id)}},function(d,info) {creationUpdate(owner,d,info);});return getState();
+        }
+        async function reconcileUnknown(resolution,key) {
+            if (destroyed || !creator || !state.draft || durableGuard()) return getState();
+            remember();var owner=scopes;
+            await creator.reconcileUnknown({draft:state.draft,resolution:resolution,issueKey:key},function(d,info) {creationUpdate(owner,d,info);});return getState();
+        }
+        async function newDraft() {
+            if (destroyed || !state.draft || durableGuard() || ['submitting','unknown','preflight'].indexOf(state.draft.creation.status)!==-1 || state.draft.attachments.some(function(a) {return a.status==='uploading';})) return getState();
+            var previous=state.draft,entry=scopes[previous.projectKey],next=drafts.createDraft({projectKey:previous.projectKey});
+            next=drafts.setSelection(next,{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+            var result=store.save(previous.projectKey,{draft:next,settings:state.settings},entry.revision,{newDraft:true,draftId:previous.id,attemptId:previous.creation.attemptId});
+            if (!result.ok) {state.error=errorState(null,'conflict');return emit();}
+            previous.attachments.forEach(function(a) {runtimeFiles.delete(a.id);});entry.revision=result.revision;state.draft=next;state.validation=null;state.error=identityWarning;remember();updateScope();
+            if (!state.meta) {
+                var run=begin('newDraft');
+                try {if(await metadata(run)) finish(run);} catch(error) {fail(run,error,'metadata');}
+            }
+            return emit();
         }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },
@@ -377,6 +469,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
             applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
+            submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,
             cancel: cancel, getState: getState, destroy: destroy };
     }
     return { create: create };

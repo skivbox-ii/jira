@@ -1,8 +1,16 @@
-/* Browser fixture: all API reads and AI transport stay in memory. No provider or POST. */
+/* Browser fixture: API writes and AI transport stay in memory. No HTTP writes/provider. */
 (function() {
     'use strict';
     var $ = window.jQuery, shared = window.taRequire('_ujgTA_llmClient');
     var records = {calls:[], pending:0}; window.taPreview = records;
+    var scenario='success', issueSequence=100, failedFiles=new Set();
+    var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
+    ['success','rejected','lostresponse','filefail'].forEach(function(value) {
+        controls.append($('<button type="button">').attr({'data-ta-preview-scenario':value,'aria-pressed':String(value===scenario)}).text(value).on('click',function() {
+            scenario=value;failedFiles.clear();controls.find('button').attr('aria-pressed','false');$(this).attr('aria-pressed','true');
+        }));
+    });
+    $('#ticket-assistant').before(controls);
     var rawFields = {
         summary:{name:'Тема', required:true, schema:{type:'string',system:'summary'}},
         description:{name:'Описание', schema:{type:'string',system:'description'}},
@@ -26,7 +34,24 @@
         ]}]});},
         getComponents:function(key) {return result('components',{values:[{id:'31',name:'API'},{id:'32',name:'Интерфейс'},{id:'33',name:'Инфраструктура'}],complete:true,projectKey:key});},
         getVersions:function(key) {return result('versions',{values:[{id:'41',name:'2026.10'},{id:'42',name:'2026.11'}],complete:true,projectKey:key});},
-        searchUsers:function(query) {return result('users',{values:[{name:'anna',displayName:'Анна Смирнова'},{name:'alex',displayName:'Алексей Петров'},{name:'irina',displayName:'Ирина Козлова'}].filter(function(u) {return (u.name+' '+u.displayName).toLowerCase().indexOf(query.toLowerCase()) !== -1;}),complete:false});}
+        searchUsers:function(query) {return result('users',{values:[{name:'anna',displayName:'Анна Смирнова'},{name:'alex',displayName:'Алексей Петров'},{name:'irina',displayName:'Ирина Козлова'}].filter(function(u) {return (u.name+' '+u.displayName).toLowerCase().indexOf(query.toLowerCase()) !== -1;}),complete:false});},
+        getAttachmentMeta:function() {return result('attachment-meta',{enabled:true,uploadLimit:10000000});},
+        createIssue:function(payload) {
+            records.calls.push('create');var mode=scenario;
+            return new Promise(function(resolve,reject) {setTimeout(function() {
+                if(mode==='rejected')reject({outcome:'rejected',fieldErrors:{summary:['Synthetic field rejection.']}});
+                else if(mode==='lostresponse')reject({outcome:'unknown'});
+                else resolve({id:String(++issueSequence),key:payload.fields.project.id==='102'?'APP-'+issueSequence:'DEMO-'+issueSequence});
+            },650);});
+        },
+        uploadAttachment:function(key,file) {
+            records.calls.push('upload:'+file.name);
+            return new Promise(function(resolve,reject) {setTimeout(function() {
+                if(scenario==='filefail' && /b\.txt$/.test(file.name) && !failedFiles.has(file.name)) {failedFiles.add(file.name);reject({outcome:'rejected'});}
+                else resolve({id:'synthetic-'+file.name,filename:file.name});
+            },350);});
+        },
+        getIssueAttachments:function() {return result('attachment-reconcile',[]);}
     };
     var llm = Object.assign({},shared,{requestText:function(config, request) {
         var input = JSON.parse(request.userPrompt); records.calls.push('ai:'+input.action); records.pending++;
@@ -51,7 +76,7 @@
     var instance = new Gadget({getGadgetContentEl:function() {return $('#ticket-assistant');}}, {api:api,ai:ai,baseUrl:'',storage:window.localStorage,
         createStore:function(userKey) {
             var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1',userKey:userKey});
-            return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft};
+            return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft,isPersistent:store.isPersistent};
         }});
     records.instance = instance;
     records.ready = instance.ready.then(function() {return instance.controller.selectProject('DEMO');}).then(function() {

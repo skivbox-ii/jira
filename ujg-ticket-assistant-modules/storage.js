@@ -56,7 +56,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                             var sameLiveDraft = previousDraft && JSON.stringify(previousDraft) === JSON.stringify(draft);
                             var recovered = drafts.restore(draft);
                             // A reread of this instance's unchanged draft is not a reload.
-                            if (sameLiveDraft) recovered.checked = draft.checked;
+                            if (sameLiveDraft) { recovered.checked = draft.checked; recovered.attachments = draft.attachments; }
                             recovered.creation = draft.creation;
                             draft = recovered;
                         }
@@ -78,10 +78,17 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             if (!memory[scope]) memory[scope] = empty();
             return clone(memory[scope]);
         }
-        function save(projectKey, value, expectedRevision) {
+        function save(projectKey, value, expectedRevision, transition) {
             // A fresh read detects other tabs; this is not an atomic cross-tab lock.
             var current = load(projectKey);
             if (current.revision !== expectedRevision) return { ok: false, revision: current.revision, reason: 'conflict' };
+            var previous = current.draft, creation = previous && previous.creation, nextDraft = value && value.draft;
+            if (creation && (creation.issueKey || ['submitting','unknown','created'].indexOf(creation.status) !== -1)) {
+                var sameOutcome = nextDraft && previous.id === nextDraft.id && JSON.stringify(creation) === JSON.stringify(nextDraft.creation);
+                var explicitTransition = transition && transition.draftId === previous.id && transition.attemptId === creation.attemptId &&
+                    (transition.creation === true && nextDraft && nextDraft.id === previous.id || transition.newDraft === true && creation.status === 'created');
+                if (!sameOutcome && !explicitTransition) return {ok:false,revision:current.revision,reason:'creation-guard'};
+            }
             var settings = profiles.validateSettings(value && value.settings);
             if (!settings.ok || current.revision === Number.MAX_SAFE_INTEGER) return { ok: false, revision: current.revision, reason: 'invalid' };
             var next;
@@ -102,7 +109,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             value.draft = null;
             return save(projectKey, value, expectedRevision);
         }
-        return { load: load, save: save, clearDraft: clearDraft };
+        return { load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
     }
 
     return { createStore: createStore };

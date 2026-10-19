@@ -46,7 +46,8 @@ function harness(options = {}) {
         async check(input, request) { calls.push(['check', input, request]); return { questions: [], warnings: ['Optional warning'], evidence: [] }; },
         ...options.ai
     };
-    const controller = loadUnit('controller', { _ujgTA_draft: drafts, _ujgTA_profiles: profiles, _ujgTA_fields: fields, _ujgTA_validation: validation }, { AbortController });
+    const creator = loadUnit('creator', {_ujgTA_draft:drafts,_ujgTA_fields:fields,_ujgTA_validation:validation});
+    const controller = loadUnit('controller', { _ujgTA_draft: drafts, _ujgTA_profiles: profiles, _ujgTA_fields: fields, _ujgTA_validation: validation, _ujgTA_creator:creator }, { AbortController });
     const c = controller.create({ api, ai, now: () => 1234, onChange: s => changes.push(s), createStore(key) {
         identities.push(key);
         const store = storage.createStore({ userKey: key, origin: 'https://jira.test', storage: localStorage });

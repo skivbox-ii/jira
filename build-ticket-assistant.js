@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 // AMD registers every definition before resolving main; storage depends on draft.
-const MODULE_ORDER = ['profiles.js', 'fields.js', 'validation.js', 'draft.js', 'storage.js', 'api.js', 'ai.js', 'controller.js', 'icons.js', 'field-ui.js', 'settings-ui.js', 'ui.js', 'main.js'];
+const MODULE_ORDER = ['profiles.js', 'fields.js', 'validation.js', 'draft.js', 'storage.js', 'api.js', 'ai.js', 'creator.js', 'controller.js', 'icons.js', 'field-ui.js', 'settings-ui.js', 'ui.js', 'main.js'];
 function build(options = {}) {
     const dir = options.modulesDir || path.join(__dirname, 'ujg-ticket-assistant-modules');
     const parts = MODULE_ORDER.map(file => {

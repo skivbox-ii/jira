@@ -153,25 +153,30 @@ test('live submitting attempt survives internal loads and saves but fresh stores
     }
     const done = a.load('DO');
     done.draft.creation.status = 'created';
-    assert.equal(a.save('DO', done, 4).ok, true);
+    assert.equal(a.save('DO', done, 4, {creation:true,draftId:'draft-1',attemptId:'active-attempt'}).ok, true);
     assert.equal(a.load('DO').draft.creation.status, 'created');
     assert.equal(store().load('DO').draft.creation.status, 'created');
 });
 
 test('same store recovers an external different attempt or draft as unknown', () => {
-    const { store } = fixture();
     for (const replacement of [
         { id: 'draft-1', attemptId: 'other-attempt' },
         { id: 'draft-2', attemptId: 'active-attempt' }
     ]) {
+        const { store, storage } = fixture();
         const a = store();
         const initial = a.load('DO');
         initial.draft = { id: 'draft-1', creation: { status: 'submitting', attemptId: 'active-attempt' } };
         const saved = a.save('DO', initial, initial.revision);
+        assert.equal(saved.ok,true);
         const b = store();
         const external = b.load('DO');
         external.draft = { id: replacement.id, creation: { status: 'submitting', attemptId: replacement.attemptId, issueKey: 'DO-43' } };
-        assert.equal(b.save('DO', external, saved.revision).ok, true);
+        assert.equal(b.save('DO', external, saved.revision).ok, false);
+        // Simulate a legacy/external writer bypassing this store's new creation guard.
+        const key=storage.key(0), envelope=JSON.parse(storage.getItem(key));
+        envelope.draft=external.draft;envelope.revision++;
+        storage.setItem(key,JSON.stringify(envelope));
         const recovered = a.load('DO');
         assert.equal(recovered.draft.creation.status, 'unknown');
         assert.equal(recovered.draft.creation.issueKey, 'DO-43');

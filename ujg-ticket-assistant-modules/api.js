@@ -72,6 +72,45 @@ define('_ujgTA_api', [], function() {
         }
 
         function projectPath(key, suffix) { return '/project/' + encodeURIComponent(String(key)) + suffix; }
+        function write(path, data, multipart, options) {
+            return new Promise(function(resolve, reject) {
+                var signal = options && options.signal, xhr, settled = false, sent = false;
+                function finish(error, value) {
+                    if (settled) return; settled = true;
+                    if (signal) signal.removeEventListener('abort', abort);
+                    if (error) reject(error); else resolve(value);
+                }
+                function fail(status) {
+                    var e = failure(status ? 'http' : 'network', status);
+                    e.outcome = !sent || status >= 400 && status < 500 && status !== 408 ? 'rejected' : 'unknown';
+                    // Server text may contain secrets. Report field identities with a fixed message.
+                    return e;
+                }
+                function abort() { finish(fail(0)); if (xhr && xhr.abort) xhr.abort(); }
+                if (signal && signal.aborted) { abort(); return; }
+                if (signal) signal.addEventListener('abort', abort, {once:true});
+                try {
+                    sent = true;
+                    xhr = config.ajax({url:base + '/rest/api/2' + path,type:'POST',dataType:'json',timeout:30000,
+                        data:multipart ? data : JSON.stringify(data),contentType:multipart ? false : 'application/json',
+                        processData:false,headers:multipart ? {'X-Atlassian-Token':'no-check'} : {}});
+                    Promise.resolve(xhr).then(function(raw) {
+                        var value = multipart && Array.isArray(raw) && raw.length === 1 ? raw[0] : raw;
+                        if (!value || typeof value.id !== 'string' || !value.id ||
+                            (multipart ? typeof value.filename !== 'string' : typeof value.key !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value.key))) {
+                            finish(fail(0)); return;
+                        }
+                        finish(null, multipart ? {id:value.id,filename:value.filename} : {id:value.id,key:value.key});
+                    }, function(error) {
+                        var result = fail(Number(error && error.status) || 0), errors = error && error.responseJSON && error.responseJSON.errors;
+                        if (result.outcome === 'rejected' && errors && typeof errors === 'object') Object.keys(errors).forEach(function(id) {
+                            if (/^[A-Za-z][A-Za-z0-9_]*$/.test(id) && ['constructor','prototype','__proto__'].indexOf(id) === -1) result.fieldErrors[id] = ['Jira rejected this field.'];
+                        });
+                        finish(result);
+                    });
+                } catch (ignore) { finish(fail(0)); }
+            });
+        }
         function projectCatalog(key, suffix, options) {
             return catalog(projectPath(key, suffix), {}, options).then(function(result) {
                 result.projectKey = String(key);
@@ -89,7 +128,18 @@ define('_ujgTA_api', [], function() {
             getComponents: function(key, options) { return projectCatalog(key, '/components', options); },
             getVersions: function(key, options) { return projectCatalog(key, '/versions', options); },
             searchUsers: function(query, options) { return catalog('/user/picker', { query: String(query || '') }, options, true); },
-            getAttachmentMeta: function(options) { return request('/attachment/meta', {}, options); }
+            getAttachmentMeta: function(options) { return request('/attachment/meta', {}, options); },
+            createIssue: function(payload, options) { return write('/issue', payload, false, options); },
+            uploadAttachment: function(key, file, options) {
+                var data = new FormData(); data.append('file', file);
+                return write('/issue/' + encodeURIComponent(key) + '/attachments', data, true, options);
+            },
+            getIssueAttachments: function(key, options) {
+                return request('/issue/' + encodeURIComponent(key), {fields:'attachment'}, options).then(function(raw) {
+                    if (!raw || !raw.fields || !Array.isArray(raw.fields.attachment)) throw failure('incomplete');
+                    return raw.fields.attachment.map(function(a) {return {id:String(a.id),filename:String(a.filename),size:a.size};});
+                });
+            }
         };
     }
 

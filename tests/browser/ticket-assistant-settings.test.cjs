@@ -12,7 +12,7 @@ async function setup(t, backend = memoryStorage(), searchUsers = async()=>({valu
     const {window} = dom, $ = jquery(window), root = window.document.querySelector('#root');
     const globals = {window, document:window.document, navigator:window.navigator, URL, AbortController, setInterval, clearInterval};
     const deps = {};
-    for (const name of ['profiles','draft','fields','validation','storage','controller','icons','field-ui','settings-ui','ui']) {
+    for (const name of ['profiles','draft','fields','validation','storage','creator','controller','icons','field-ui','settings-ui','ui']) {
         if (name === 'settings-ui' && !fs.existsSync(path.resolve(__dirname, '../../ujg-ticket-assistant-modules/settings-ui.js'))) continue;
         deps['_ujgTA_' + ({'field-ui':'fieldUi','settings-ui':'settingsUi'}[name] || name)] = loadUnit(name, deps, globals);
     }

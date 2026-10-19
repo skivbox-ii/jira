@@ -10,9 +10,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         }
         function textValue(value) { return value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
         function canEditField(id) {
+            if (writeLocked()) return false;
             var p=state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;});
             return id!=='assignee' || !!p && p.allowAssignee===true;
         }
+        function writeLocked() {var d=state && state.draft;return !!d && (!!d.creation.issueKey || ['submitting','unknown','created'].indexOf(d.creation.status)!==-1);}
         function invoke(name, argument) {
             lastOperation = {name:name, argument:argument};
             return argument === undefined ? c[name]() : c[name](argument);
@@ -45,6 +47,15 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root = $(el).addClass('ujg-ticket-assistant');
             root.append('<header class="ta-header"><h2>Помощник задач</h2><span data-ta-profile class="ta-muted"></span></header><div class="ta-selections"><div data-ta-project></div><div data-ta-template></div><div data-ta-type></div></div><div class="ta-workspace"><section class="ta-source-area"><h3>Исходные данные</h3><label class="ta-source-label">Запрос<textarea rows="12" data-ta-source></textarea></label><div class="ta-actions" data-ta-actions></div><div data-ta-progress class="ta-progress" hidden><span data-ta-stage></span><span data-ta-elapsed aria-live="off"></span></div><div data-ta-error class="ta-error" role="alert" hidden></div><div data-ta-stopped class="ta-warning" hidden></div><div data-ta-retry-host hidden></div><section class="ta-questions"><h3>Уточнения</h3><div data-ta-questions></div></section><details class="ta-scope"><summary>Поля генерации</summary><div data-ta-scope></div><p data-ta-omitted class="ta-muted"></p><p class="ta-muted">Текущие значения проверяются и вне области генерации. Пользователи не передаются AI.</p></details></section><section class="ta-draft-area"><div class="ta-draft-heading"><h3>Черновик Jira</h3><span data-ta-checked class="ta-result" hidden>Проверен</span></div><div data-ta-fields></div><div data-ta-routes></div><div data-ta-warnings class="ta-warning" hidden></div><div data-ta-evidence></div><div data-ta-fallback class="ta-warning" hidden></div><div class="ta-actions" data-ta-copy-actions></div><textarea data-ta-copy-text aria-label="Текст для копирования" rows="5" readonly hidden></textarea><p data-ta-copy-status class="ta-muted" role="status"></p><footer class="ta-footer"><button type="button" data-ta-create disabled>Создать задачу</button><span class="ta-muted">Создание пока недоступно</span></footer></section></div><div data-ta-settings hidden></div>');
             source = root.find('[data-ta-source]').on('input', function() {c.updateSource(source.val());});
+            root.find('.ta-footer').empty().append(
+                button('Создать задачу','Check',{'data-ta-create':''}).addClass('ta-primary').on('click',function() {c.submit();}),
+                button('Новая задача','Plus',{'data-ta-new-draft':''}).on('click',function() {c.newDraft();}));
+            root.find('.ta-footer').before('<section class="ta-attachments"><h3>Вложения</h3><label>Выбрать файлы<input type="file" multiple data-ta-files></label><div data-ta-file-list></div></section><div data-ta-creation role="status"></div><div data-ta-reconcile hidden><label>Ключ найденной задачи<input data-ta-found-key placeholder="DEMO-123"></label><label><input type="checkbox" data-ta-reconcile-confirm> Я сверил результат создания в Jira</label><div class="ta-actions" data-ta-reconcile-actions></div></div>');
+            root.find('[data-ta-files]').on('change',function() {c.selectFiles(this.files);this.value='';});
+            root.find('[data-ta-reconcile-actions]').append(
+                button('Задача найдена','Check',{'data-ta-found':''}).on('click',function() {if(root.find('[data-ta-reconcile-confirm]').prop('checked')) c.reconcileUnknown('found',root.find('[data-ta-found-key]').val());}),
+                button('Подтверждаю: задача не создана','RefreshCw',{'data-ta-not-created':''}).on('click',function() {if(root.find('[data-ta-reconcile-confirm]').prop('checked')) c.reconcileUnknown('confirmed-not-created');}));
+            root.find('[data-ta-reconcile-confirm]').on('change',function() {root.find('[data-ta-reconcile-actions] button').prop('disabled',!this.checked);});
             root.find('.ta-header').append(button('Настройки', 'Settings', {'data-ta-open-settings':''}).on('click',openSettings));
             project = makeSelection(root.find('[data-ta-project]'), 'project', 'Проект', 'selectProject');
             template = makeSelection(root.find('[data-ta-template]'), 'template', 'Шаблон', 'selectTemplate');
@@ -54,7 +65,9 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 button('Проверить', 'Check', {'data-ta-check':''}).on('click', function() {invoke('check');}),
                 button('Остановить', 'Square', {'data-ta-stop':''}).on('click', function() {c.cancel();}));
             root.find('[data-ta-retry-host]').append(button('Повторить', 'RefreshCw', {'data-ta-retry':''}).on('click', function() {
-                if (!state.draft) c.init(); else invoke(lastOperation.name, lastOperation.argument);
+                if (!state.draft) c.init();
+                else if (writeLocked() && !state.meta) c.selectProject(state.draft.projectKey);
+                else invoke(lastOperation.name, lastOperation.argument);
             }));
             root.find('[data-ta-copy-actions]').append(
                 button('Копировать тему', null, {'data-ta-copy':'summary'}).on('click', function() {copy('summary');}),
@@ -75,6 +88,16 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             }
         }
         function renderFields(d, busy) {
+            fieldsHost.children('[data-ta-recovery-value],[data-ta-recovery-note]').remove();
+            if (!state.meta && writeLocked()) {
+                fields.forEach(function(entry) {entry.view.destroy();entry.host.remove();});fields.clear();
+                fieldsHost.append($('<p class="ta-muted" data-ta-recovery-note>').text(state.stage==='metadata' ? 'Загрузка metadata Jira. Сохранённые значения доступны только для чтения.' : 'metadata Jira недоступны. Сохранённые значения доступны только для чтения; результат создания требует сверки.'));
+                var names={summary:'Тема',description:'Описание'};
+                Object.keys(d.fields).forEach(function(id) {
+                    fieldsHost.append($('<div data-ta-recovery-value>').append($('<strong>').text(names[id] || id),$('<p>').text(textValue(d.fields[id]))));
+                });
+                return;
+            }
             var issue = state.meta && state.meta.issueTypes.find(function(t) {return t.id === d.issueTypeId;});
             var list = issue ? issue.fields.filter(function(f) {return f.id !== 'project' && f.id !== 'issuetype';}) : [];
             // Reorder only this display projection; Meta and its signature remain exact.
@@ -100,7 +123,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 }
                 var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
                 entry.view.update({field:field, value:d.fields[field.id], errors:state.validation && state.validation.fieldErrors[field.id] || [],
-                    disabled:field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
+                    disabled:writeLocked() || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
                 entry.host.find('[data-ta-policy-block]').remove();
                 if (field.id === 'assignee' && (!profile || !profile.allowAssignee) && Object.prototype.hasOwnProperty.call(d.fields,field.id)) {
@@ -170,9 +193,36 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-stopped]').prop('hidden', state.stage !== 'stopped').text('Остановлено. Черновик сохранён.');
             root.find('[data-ta-retry-host]').prop('hidden', busy || (!state.error && state.stage !== 'stopped'));
             root.find('[data-ta-stop]').prop('hidden', !busy);
-            root.find('[data-ta-prepare]').prop('disabled', busy || !state.draft || !state.draft.source.trim());
-            root.find('[data-ta-check]').prop('disabled', busy || !state.draft || !state.draft.issueTypeId || !state.draft.templateId);
+            root.find('[data-ta-prepare]').prop('disabled', writeLocked() || busy || !state.draft || !state.draft.source.trim());
+            root.find('[data-ta-check]').prop('disabled', writeLocked() || busy || !state.draft || !state.draft.issueTypeId || !state.draft.templateId);
             root.find('[data-ta-checked]').prop('hidden', !state.draft || !state.draft.checked);
+        }
+        function renderCreation() {
+            var d=state.draft, creation=d && d.creation, status=creation && creation.status, locked=writeLocked();
+            root.find('[data-ta-create]').prop('disabled',!d || !d.checked || locked || status==='preflight' || !!stages[state.stage] || !!state.error);
+            root.find('[data-ta-new-draft]').prop('hidden',status!=='created').prop('disabled',d && d.attachments.some(function(a) {return a.status==='uploading';}));
+            var host=root.find('[data-ta-creation]').empty();
+            var labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Создание отправлено. Ожидаем результат; остановка не отменяет запись.',created:'Задача создана.',rejected:'Создание отклонено.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.'};
+            if (creation) {
+                if (labels[status]) host.append($('<p>').text(labels[status]));
+                if (creation.error) host.append($('<p class="ta-warning">').text(creation.error));
+                if (creation.issueKey && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(creation.issueKey)) host.append($('<a data-ta-issue-link target="_blank" rel="noopener">').attr('href',(options.baseUrl || '').replace(/\/+$/,'')+'/browse/'+encodeURIComponent(creation.issueKey)).text(creation.issueKey));
+                if (status==='idle' && creation.error && d.attachments.length) host.append(
+                    button('Повторить проверку файлов','RefreshCw',{'data-ta-files-check':''}).on('click',function() {c.submit();}),
+                    button('Создать без вложений','Check',{'data-ta-without-files':''}).on('click',function() {c.submit({withoutAttachments:true});}));
+            }
+            root.find('[data-ta-reconcile]').prop('hidden',status!=='unknown' || !!creation.issueKey);
+            root.find('[data-ta-reconcile-actions] button').prop('disabled',!root.find('[data-ta-reconcile-confirm]').prop('checked'));
+            root.find('[data-ta-files]').prop('disabled',!d || status==='submitting' || status==='unknown' || status==='preflight');
+            var list=root.find('[data-ta-file-list]').empty();
+            (d && d.attachments || []).forEach(function(a) {
+                var row=$('<div class="ta-file">').append($('<span>').text(a.name+' · '+a.size+' B · '+a.status+(a.needsReselect?' · выберите файл повторно':'')));
+                if(a.error)row.append($('<p class="ta-warning">').text(a.error));
+                if(!locked)row.append(button('Удалить файл','Trash2',{'data-ta-file-remove':a.id}).on('click',function() {c.removeFile(a.id);}));
+                if(creation.issueKey && ['pending','failed','unknown'].indexOf(a.status)!==-1) row.append(
+                    button(a.status==='unknown'?'Сверить вложения в Jira':'Повторить файл','RefreshCw',{'data-ta-file-retry':a.id}).on('click',function() {c.retryAttachment(a.id);}));
+                list.append(row);
+            });
         }
         function update(next) {
             if (dead || !root) return; state = next;
@@ -180,17 +230,19 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var key = d ? d.id : null;
             if (key !== selectionKey) {
                 fields.forEach(function(entry) {entry.view.destroy(); entry.host.remove();}); fields.clear();
+                fieldsHost.children('[data-ta-recovery-value],[data-ta-recovery-note]').remove();
                 questions.forEach(function(entry) {entry.host.remove();}); questions.clear(); selectionKey = key;
                 scope.forEach(function(entry) {entry.host.remove();}); scope.clear(); root.find('[data-ta-omitted]').text('');
                 root.find('[data-ta-copy-text]').val('').prop('hidden', true); root.find('[data-ta-copy-status]').text('');
+                root.find('[data-ta-found-key]').val('');root.find('[data-ta-reconcile-confirm]').prop('checked',false);
             }
-            if (source.val() !== (d ? d.source : '')) source.val(d ? d.source : ''); source.prop('disabled', !d);
+            if (source.val() !== (d ? d.source : '')) source.val(d ? d.source : ''); source.prop('disabled', !d || writeLocked());
             var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
-            root.find('[data-ta-open-settings]').prop('disabled',!state.settings);
+            root.find('[data-ta-open-settings]').prop('disabled',!state.settings || writeLocked());
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
-            updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d);
-            updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d);
+            updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d || writeLocked());
+            updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d || writeLocked());
             if (d) {renderFields(d, busy); renderQuestions(d); renderScope(d);}
             var routes = root.find('[data-ta-routes]').empty();
             (state.routeCandidates || []).forEach(function(pair) {
@@ -203,17 +255,18 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-warnings]').prop('hidden', !warnings.length).text(warnings.join('\n'));
             var evidence = root.find('[data-ta-evidence]').empty();
             (d && d.evidence || []).forEach(function(e) {evidence.append($('<p class="ta-muted">').text((e.kind === 'source' ? 'Из источника: ' : 'Предположение: ') + fieldName(e.fieldId) + ' — ' + e.quote));});
-            var blocked = state.validation && state.validation.unsupportedRequired || [];
+            var blocked = !writeLocked() && state.validation && state.validation.unsupportedRequired || [];
             var fallback = root.find('[data-ta-fallback]').empty().prop('hidden', !blocked.length);
             blocked.forEach(function(id) {fallback.append($('<p>').text(fieldName(id) + ': ' + ((state.validation.fieldErrors[id] || []).join(' ') || 'Обязательное поле не поддерживается.')));});
             if (blocked.length && d && state.meta) {
                 var href = (options.baseUrl || '').replace(/\/+$/, '') + '/secure/CreateIssue!default.jspa?pid=' + encodeURIComponent(state.meta.projectId) + '&issuetype=' + encodeURIComponent(d.issueTypeId || '');
                 fallback.append($('<a data-ta-jira-form target="_blank" rel="noopener">').attr('href', href).append(icon('ExternalLink'), $('<span>').text('Открыть форму Jira')));
             }
-            root.find('[data-ta-copy]').prop('disabled', !d); renderStatus();
+            root.find('[data-ta-copy]').prop('disabled', !d); renderStatus();renderCreation();
+            root.find('[data-ta-questions] textarea,[data-ta-questions] button,[data-ta-scope] input,[data-ta-accept],[data-ta-discard-field]').prop('disabled',!!writeLocked());
         }
         function openSettings() {
-            if (!state.settings) return;
+            if (!state.settings || writeLocked()) return;
             var host = root.find('[data-ta-settings]').prop('hidden', false);
             if (!settingsScope) settingsScope=state.draft.id;
             root.children().not(host).prop('inert',true);

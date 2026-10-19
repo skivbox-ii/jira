@@ -68,7 +68,8 @@ test('number editing preserves decimal representation on equivalent echoes and a
 test('real controller retries failed project metadata with empty source, second read succeeds without AI', async t => {
     const s=setup(); s.ui.destroy(); const drafts=loadUnit('draft'), profiles=loadUnit('profiles'), fields=loadUnit('fields');
     const validation=loadUnit('validation',{'_ujgTA_fields':fields});
-    const controllerModule=loadUnit('controller',{'_ujgTA_draft':drafts,'_ujgTA_profiles':profiles,'_ujgTA_fields':fields,'_ujgTA_validation':validation},{AbortController});
+    const creator=loadUnit('creator',{'_ujgTA_draft':drafts,'_ujgTA_fields':fields,'_ujgTA_validation':validation});
+    const controllerModule=loadUnit('controller',{'_ujgTA_draft':drafts,'_ujgTA_profiles':profiles,'_ujgTA_fields':fields,'_ujgTA_validation':validation,'_ujgTA_creator':creator},{AbortController});
     const storage=loadUnit('storage',{'_ujgTA_profiles':profiles,'_ujgTA_draft':drafts});
     let reads=0, aiCalls=0, ui;
     const c=controllerModule.create({api:{getCurrentUser:async()=>({key:'offline-test'}),getProjects:async()=>({values:[{id:'1',key:'DO',name:'Delivery'}]}),
@@ -259,6 +260,16 @@ test('unsupported/read-only current values and orphaned draft fields stay visibl
     assert.match(s.root.textContent,/Retained old value/);
     assert.equal(s.root.querySelector('[data-ta-field]')?.getAttribute('data-ta-field'),'summary');
 });
+test('unknown recovery without metadata shows saved values without suggesting ordinary creation',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.setState({...s.state,meta:null,draft:{...s.state.draft,creation:{status:'unknown',attemptId:'old',issueKey:null,error:null}}});
+    assert.match(s.root.textContent,/Manual title/);
+    assert.doesNotMatch(s.root.textContent,/нет в текущих metadata|используйте форму Jira/);
+    assert.match(s.root.textContent,/metadata.*недоступ|Загрузка.*metadata/);
+    assert.equal(s.root.querySelector('[data-ta-create]').disabled,true);
+    s.setState({...s.state,draft:null,settings:null,meta:null});
+    assert.doesNotMatch(s.root.textContent,/Manual title|Current description/);
+});
 
 test('main composes real controller, reinitializes identity, replaces prior instance and cancels reads on teardown', async () => {
     const fs = require('node:fs'), path = require('node:path');
@@ -350,7 +361,7 @@ test('generated runtime works in installed Chrome at desktop and mobile, without
             assert.equal(geometry.overflow,false);
             if (width === 1440) assert.ok(geometry.draft.x > geometry.source.x && Math.abs(geometry.draft.y-geometry.source.y)<2);
             else assert.ok(geometry.draft.y >= geometry.source.bottom);
-            assert.equal(await page.locator('[data-ta-create]').isDisabled(),true);
+            assert.equal(await page.locator('[data-ta-create]').isDisabled(),false);
             const components = page.locator('[data-ta-field="components"]');
             await components.locator('[data-ta-picker]').click();
             await components.locator('[data-ta-candidate]').filter({hasText:'API'}).click();
