@@ -1,14 +1,18 @@
-define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) {
+define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], function(fieldUi, icon, settingsUi) {
     'use strict';
     function create(options) {
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
         var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null;
-        var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null;
+        var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
         }
         function textValue(value) { return value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
+        function canEditField(id) {
+            var p=state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;});
+            return id!=='assignee' || !!p && p.allowAssignee===true;
+        }
         function invoke(name, argument) {
             lastOperation = {name:name, argument:argument};
             return argument === undefined ? c[name]() : c[name](argument);
@@ -41,6 +45,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             root = $(el).addClass('ujg-ticket-assistant');
             root.append('<header class="ta-header"><h2>Помощник задач</h2><span data-ta-profile class="ta-muted"></span></header><div class="ta-selections"><div data-ta-project></div><div data-ta-template></div><div data-ta-type></div></div><div class="ta-workspace"><section class="ta-source-area"><h3>Исходные данные</h3><label class="ta-source-label">Запрос<textarea rows="12" data-ta-source></textarea></label><div class="ta-actions" data-ta-actions></div><div data-ta-progress class="ta-progress" hidden><span data-ta-stage></span><span data-ta-elapsed aria-live="off"></span></div><div data-ta-error class="ta-error" role="alert" hidden></div><div data-ta-stopped class="ta-warning" hidden></div><div data-ta-retry-host hidden></div><section class="ta-questions"><h3>Уточнения</h3><div data-ta-questions></div></section><details class="ta-scope"><summary>Поля генерации</summary><div data-ta-scope></div><p data-ta-omitted class="ta-muted"></p><p class="ta-muted">Текущие значения проверяются и вне области генерации. Пользователи не передаются AI.</p></details></section><section class="ta-draft-area"><div class="ta-draft-heading"><h3>Черновик Jira</h3><span data-ta-checked class="ta-result" hidden>Проверен</span></div><div data-ta-fields></div><div data-ta-routes></div><div data-ta-warnings class="ta-warning" hidden></div><div data-ta-evidence></div><div data-ta-fallback class="ta-warning" hidden></div><div class="ta-actions" data-ta-copy-actions></div><textarea data-ta-copy-text aria-label="Текст для копирования" rows="5" readonly hidden></textarea><p data-ta-copy-status class="ta-muted" role="status"></p><footer class="ta-footer"><button type="button" data-ta-create disabled>Создать задачу</button><span class="ta-muted">Создание пока недоступно</span></footer></section></div><div data-ta-settings hidden></div>');
             source = root.find('[data-ta-source]').on('input', function() {c.updateSource(source.val());});
+            root.find('.ta-header').append(button('Настройки', 'Settings', {'data-ta-open-settings':''}).on('click',openSettings));
             project = makeSelection(root.find('[data-ta-project]'), 'project', 'Проект', 'selectProject');
             template = makeSelection(root.find('[data-ta-template]'), 'template', 'Шаблон', 'selectTemplate');
             type = makeSelection(root.find('[data-ta-type]'), 'issuetype', 'Тип Jira', 'selectIssueType');
@@ -86,12 +91,22 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
                 if (!entry) {
                     var host = $('<div>').attr('data-ta-field', field.id), pending = $('<div class="ta-pending" hidden>');
                     var editor = $('<div>'); host.append(editor, pending); fieldsHost.append(host);
-                    var view = fieldUi.create({$: $, onChange: function(id, value) {c.updateField(id, value);}, onSearch: options.onSearch});
+                    var view = fieldUi.create({$: $, onChange: function(id, value) {if(canEditField(id)) c.updateField(id, value);},
+                        onSearch:function(query,field,request){
+                            if(!canEditField(field.id) || !options.onSearch) return Promise.resolve({values:[]});
+                            return Promise.resolve(options.onSearch(query,field,request)).then(function(result){return canEditField(field.id)?result:{values:[]};});
+                        }});
                     view.mount(editor); entry = {host:host, view:view, pending:pending, pendingKey:null}; fields.set(field.id, entry);
                 }
                 var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
                 entry.view.update({field:field, value:d.fields[field.id], errors:state.validation && state.validation.fieldErrors[field.id] || [],
                     disabled:field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
+                if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
+                entry.host.find('[data-ta-policy-block]').remove();
+                if (field.id === 'assignee' && (!profile || !profile.allowAssignee) && Object.prototype.hasOwnProperty.call(d.fields,field.id)) {
+                    entry.host.append($('<div data-ta-policy-block class="ta-warning">').append($('<p>').text('Выбор исполнителя запрещён профилем. Сохранённое значение не будет отправлено без разрешения. Можно разрешить выбор в настройках или исключить поле.'),
+                        button('Не отправлять исполнителя','Trash2',{'data-ta-discard-field':field.id}).on('click',function(){c.discardField(field.id);} )));
+                }
                 var hasPending = Object.prototype.hasOwnProperty.call(d.pendingFields, field.id);
                 var pendingKey = hasPending ? JSON.stringify(d.pendingFields[field.id]) : null;
                 entry.pending.prop('hidden', !hasPending);
@@ -172,6 +187,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             if (source.val() !== (d ? d.source : '')) source.val(d ? d.source : ''); source.prop('disabled', !d);
             var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
+            root.find('[data-ta-open-settings]').prop('disabled',!state.settings);
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
             updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d);
             updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d);
@@ -197,9 +213,18 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             root.find('[data-ta-copy]').prop('disabled', !d); renderStatus();
         }
         function openSettings() {
+            if (!state.settings) return;
             var host = root.find('[data-ta-settings]').prop('hidden', false);
+            if (!settingsScope) settingsScope=state.draft.id;
+            root.children().not(host).prop('inert',true);
+            function settingsScopeError() {
+                return !state.draft || state.draft.id!==settingsScope ? {error:{code:'scope',message:'Изменилась область проекта или пользователя. Закройте окно и откройте настройки текущего проекта.'}} : null;
+            }
             if (options.createSettingsView && !settingsView) {settingsView = options.createSettingsView({$: $, controller:c}); settingsView.mount(host[0]);}
-            else if (!settingsView) host.text('Настройки пока недоступны.');
+            else if (!settingsView) settingsView = settingsUi.create({$: $,host:host,
+                onApply:function(settings,options){return settingsScopeError() || (options.resolveConflict ? c.resolveSettingsConflict(settings) : c.applySettings(settings));},
+                onLoadSaved:function(){return settingsScopeError() || c.loadSavedSettings();},onClose:function(){host.prop('hidden',true);root.children().prop('inert',false);settingsScope=null;root.find('[data-ta-open-settings]').trigger('focus');}});
+            if (settingsView.open) settingsView.open({settings:state.settings,meta:state.meta,conflict:state.error && state.error.code==='conflict',returnFocus:root.find('[data-ta-open-settings]')[0]});
             return host[0];
         }
         function destroy() {

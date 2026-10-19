@@ -10,18 +10,19 @@
         components:{name:'Компоненты',schema:{type:'array',items:'component',system:'components'}},
         fixVersions:{name:'Версии',schema:{type:'array',items:'version',system:'fixVersions'}},
         reporter:{name:'Автор',schema:{type:'user',system:'reporter'}},
+        assignee:{name:'Исполнитель',schema:{type:'user',system:'assignee'}},
         duedate:{name:'Срок',schema:{type:'date',system:'duedate'}},
         labels:{name:'Метки',schema:{type:'array',items:'string',system:'labels'}},
         customfield_1:{name:'Оценка',schema:{type:'number',custom:'com.atlassian.jira.plugin.system.customfieldtypes:float'}}
     };
     function result(name, value) {records.calls.push(name); return Promise.resolve(value);}
     var api = {
-        getCurrentUser:function() {return result('identity', {key:'offline-reviewer',name:'reviewer'});},
+        getCurrentUser:function() {return result('identity', {key:'synthetic-ticket-assistant-preview-v1',name:'preview'});},
         getProjects:function() {return result('projects',{values:[{id:'101',key:'DEMO',name:'Демонстрационный проект'},{id:'102',key:'APP',name:'Приложение'}],complete:true});},
         getCreateMeta:function(key) {return result('metadata',{projects:[{key:key,id:key === 'DEMO' ? '101':'102',issuetypes:[
-            {id:'10',name:'Задача',subtask:false,fields:rawFields},
-            {id:'11',name:'Ошибка',subtask:false,fields:rawFields},
-            {id:'12',name:'Согласование',subtask:false,fields:Object.assign({},rawFields,{customfield_99:{name:'Согласующий комитет',required:true,schema:{type:'string',custom:'fixture:unsupported'}}})}
+            {id:key==='APP'?'20':'10',name:'Задача',subtask:false,fields:rawFields},
+            {id:key==='APP'?'21':'11',name:'Ошибка',subtask:false,fields:rawFields},
+            {id:key==='APP'?'22':'12',name:'Согласование',subtask:false,fields:Object.assign({},rawFields,{customfield_99:{name:'Согласующий комитет',required:true,schema:{type:'string',custom:'fixture:unsupported'}}})}
         ]}]});},
         getComponents:function(key) {return result('components',{values:[{id:'31',name:'API'},{id:'32',name:'Интерфейс'},{id:'33',name:'Инфраструктура'}],complete:true,projectKey:key});},
         getVersions:function(key) {return result('versions',{values:[{id:'41',name:'2026.10'},{id:'42',name:'2026.11'}],complete:true,projectKey:key});},
@@ -47,11 +48,15 @@
     }});
     var ai = window.taRequire('_ujgTA_ai').createClient({llmClient:llm,readConfig:function() {return {apiKey:'offline-fixture-key'};},fetchImpl:function() {throw new Error('Offline preview prohibits fetch');}});
     var Gadget = window.taRequire('_ujgTicketAssistantRuntime');
-    var instance = new Gadget({getGadgetContentEl:function() {return $('#ticket-assistant');}}, {api:api,ai:ai,baseUrl:'',storage:null});
+    var instance = new Gadget({getGadgetContentEl:function() {return $('#ticket-assistant');}}, {api:api,ai:ai,baseUrl:'',storage:window.localStorage,
+        createStore:function(userKey) {
+            var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1',userKey:userKey});
+            return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft};
+        }});
     records.instance = instance;
     records.ready = instance.ready.then(function() {return instance.controller.selectProject('DEMO');}).then(function() {
-        return instance.controller.selectIssueType('10');
-    }).then(function() {return instance.controller.selectTemplate('task');}).then(function() {
+        if (!records.restored) return instance.controller.selectIssueType('10').then(function(){return instance.controller.selectTemplate('task');});
+    }).then(function() {
         document.documentElement.setAttribute('data-ta-preview-ready','true');
     });
 })();

@@ -51,6 +51,25 @@
 .ujg-ticket-assistant .ta-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 16px; margin-top: 20px; border-top: 1px solid #dce1e5; }
 .ujg-ticket-assistant a { display: inline-flex; align-items: center; gap: 6px; color: #1769c2; overflow-wrap: anywhere; }
 .ujg-ticket-assistant [data-empty]:empty::after { content: attr(data-empty); color: #59666f; }
+.ujg-ticket-assistant [data-ta-settings] { position: fixed; inset: 0; z-index: 1000; background: #172b4d55; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.ujg-ticket-assistant .ta-settings-dialog { display: flex; flex-direction: column; width: min(760px, 100%); max-height: calc(100dvh - 32px); min-width: 0; background: #fff; border: 1px solid #b7c1c9; border-radius: 6px; box-shadow: 0 12px 36px #172b4d40; }
+.ujg-ticket-assistant .ta-settings-header, .ujg-ticket-assistant .ta-settings-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 18px; flex-shrink: 0; }
+.ujg-ticket-assistant .ta-settings-header { border-bottom: 1px solid #dce1e5; }
+.ujg-ticket-assistant .ta-settings-header h3 { margin: 0; }
+.ujg-ticket-assistant .ta-settings-footer { justify-content: flex-end; border-top: 1px solid #dce1e5; }
+.ujg-ticket-assistant .ta-settings-body { padding: 0 18px 18px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.ujg-ticket-assistant .ta-settings-body label { margin: 12px 0; }
+.ujg-ticket-assistant .ta-settings-body h4 { margin: 18px 0 8px; font-size: 14px; }
+.ujg-ticket-assistant .ta-settings-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.ujg-ticket-assistant .ta-settings-list [aria-pressed="true"] { border-color: #1769c2; background: #eaf1f8; }
+.ujg-ticket-assistant .ta-settings-transfer { margin: 18px 0; border-top: 1px solid #dce1e5; padding-top: 14px; }
+.ujg-ticket-assistant .ta-settings-dialog > [data-ta-discard-confirm] { margin: 0 18px 12px; flex-shrink: 0; }
+@media (max-width: 680px) {
+    .ujg-ticket-assistant [data-ta-settings] { padding: 8px; }
+    .ujg-ticket-assistant .ta-settings-dialog { max-height: calc(100dvh - 16px); }
+    .ujg-ticket-assistant .ta-settings-header, .ujg-ticket-assistant .ta-settings-footer { padding: 10px 12px; }
+    .ujg-ticket-assistant .ta-settings-body { padding: 0 12px 12px; }
+}
 @media (max-width: 680px) {
     .ujg-ticket-assistant { padding: 12px; }
     .ujg-ticket-assistant .ta-selections, .ujg-ticket-assistant .ta-workspace { grid-template-columns: minmax(0, 1fr); gap: 14px; }

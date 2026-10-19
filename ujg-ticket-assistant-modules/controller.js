@@ -41,6 +41,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return copy(result);
         }
         function emit() {
+            var entry = state.draft && scopes[state.draft.projectKey];
+            if (entry && entry.error && entry.error.code === 'conflict') state.error = entry.error;
             if (!destroyed && typeof options.onChange === 'function') options.onChange(getState());
             return getState();
         }
@@ -235,8 +237,52 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var checked = profiles.validateSettings(settings);
             if (!checked.ok || state.settings.revision === Number.MAX_SAFE_INTEGER) { state.error = errorState(null, 'input'); return emit(); }
             checked.value.revision = state.settings.revision + 1;
-            state.settings = checked.value;
-            return edited(drafts.setSelection(state.draft, { settingsRevision: state.settings.revision }));
+            return installSettings(checked.value);
+        }
+        function settingsSelection(settings) {
+            var changedProfile = state.settings.activeProfileId !== settings.activeProfileId;
+            var p = settings.profiles.find(function(p) {return p.id === settings.activeProfileId;});
+            var selected = p.templates.find(function(t) {return t.id === state.draft.templateId;});
+            var selection = {settingsRevision:settings.revision};
+            if (changedProfile || !selected) selection.templateId = null;
+            if (state.draft.issueTypeId && (!state.meta || !state.meta.issueTypes.some(function(t) {return t.id === state.draft.issueTypeId && !t.subtask;}) ||
+                selected && selected.issueTypeId !== null && selected.issueTypeId !== state.draft.issueTypeId)) selection.issueTypeId = null;
+            return selection;
+        }
+        function installSettings(settings) {
+            var selection=settingsSelection(settings);state.settings=settings;
+            return edited(drafts.setSelection(state.draft, selection));
+        }
+        async function loadSavedSettings() {
+            if (destroyed || !state.draft || !store) return getState();
+            try {
+                var saved = store.load(state.draft.projectKey);
+                // Loading rules never replaces or persists this tab's draft, nor acknowledges the CAS conflict.
+                stop();var selection=settingsSelection(saved.settings);state.settings = saved.settings;
+                state.draft = drafts.setSelection(state.draft, selection);
+                state.draft = Object.assign({},state.draft,{checked:null});
+                state.validation = null; state.routeCandidates = [];state.stage='idle';updateScope();remember();
+            } catch (error) {state.error=errorState(null,'storage');}
+            return emit();
+        }
+        async function resolveSettingsConflict(settings) {
+            if (destroyed || !state.draft || !store) return getState();
+            var checked = profiles.validateSettings(settings);
+            if (!checked.ok) {state.error=errorState(null,'input');return emit();}
+            try {
+                var saved=store.load(state.draft.projectKey), revision=Math.max(saved.settings.revision,state.settings.revision);
+                if(revision===Number.MAX_SAFE_INTEGER) {state.error=errorState(null,'input');return emit();}
+                checked.value.revision=revision+1;
+                var entry=scopes[state.draft.projectKey];entry.revision=saved.revision;entry.error=null;
+                return installSettings(checked.value);
+            } catch(error) {state.error=errorState(null,'storage');return emit();}
+        }
+        async function discardField(id) {
+            if (destroyed || !state.draft || id !== 'assignee' || policy().allowAssignee) return getState();
+            var next=Object.assign({},state.draft,{fields:Object.assign({},state.draft.fields),protectedFields:Object.assign({},state.draft.protectedFields),pendingFields:Object.assign({},state.draft.pendingFields),
+                draftRevision:state.draft.draftRevision+1,checked:null});
+            delete next.fields[id];delete next.protectedFields[id];delete next.pendingFields[id];
+            return edited(next);
         }
         async function setGenerationFields(ids) {
             if (destroyed || !state.draft) return getState();
@@ -329,7 +375,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
             answer: function(answers) { return mutate(drafts.appendAnswers, [answers]); },
             acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
-            applySettings: applySettings, setGenerationFields: setGenerationFields,
+            applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
             cancel: cancel, getState: getState, destroy: destroy };
     }

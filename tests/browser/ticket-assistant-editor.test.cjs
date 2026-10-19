@@ -11,7 +11,8 @@ function setup() {
         setInterval, clearInterval, AbortController};
     const icons = loadUnit('icons', {}, globals);
     const fieldUi = loadUnit('field-ui', {'_ujgTA_icons': icons}, globals);
-    const uiModule = loadUnit('ui', {'_ujgTA_fieldUi': fieldUi, '_ujgTA_icons': icons}, globals);
+    const settingsUi = loadUnit('settings-ui', {'_ujgTA_profiles':loadUnit('profiles'),'_ujgTA_fieldUi':fieldUi,'_ujgTA_icons':icons},globals);
+    const uiModule = loadUnit('ui', {'_ujgTA_fieldUi': fieldUi, '_ujgTA_icons': icons, '_ujgTA_settingsUi':settingsUi}, globals);
     const drafts = loadUnit('draft');
     const draft = drafts.setSelection(drafts.createDraft({projectKey: 'DO'}), {issueTypeId: '10', templateId: 'task'});
     draft.source = 'Source text <img src=x onerror=alert(1)>';

@@ -1460,6 +1460,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return copy(result);
         }
         function emit() {
+            var entry = state.draft && scopes[state.draft.projectKey];
+            if (entry && entry.error && entry.error.code === 'conflict') state.error = entry.error;
             if (!destroyed && typeof options.onChange === 'function') options.onChange(getState());
             return getState();
         }
@@ -1654,8 +1656,52 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var checked = profiles.validateSettings(settings);
             if (!checked.ok || state.settings.revision === Number.MAX_SAFE_INTEGER) { state.error = errorState(null, 'input'); return emit(); }
             checked.value.revision = state.settings.revision + 1;
-            state.settings = checked.value;
-            return edited(drafts.setSelection(state.draft, { settingsRevision: state.settings.revision }));
+            return installSettings(checked.value);
+        }
+        function settingsSelection(settings) {
+            var changedProfile = state.settings.activeProfileId !== settings.activeProfileId;
+            var p = settings.profiles.find(function(p) {return p.id === settings.activeProfileId;});
+            var selected = p.templates.find(function(t) {return t.id === state.draft.templateId;});
+            var selection = {settingsRevision:settings.revision};
+            if (changedProfile || !selected) selection.templateId = null;
+            if (state.draft.issueTypeId && (!state.meta || !state.meta.issueTypes.some(function(t) {return t.id === state.draft.issueTypeId && !t.subtask;}) ||
+                selected && selected.issueTypeId !== null && selected.issueTypeId !== state.draft.issueTypeId)) selection.issueTypeId = null;
+            return selection;
+        }
+        function installSettings(settings) {
+            var selection=settingsSelection(settings);state.settings=settings;
+            return edited(drafts.setSelection(state.draft, selection));
+        }
+        async function loadSavedSettings() {
+            if (destroyed || !state.draft || !store) return getState();
+            try {
+                var saved = store.load(state.draft.projectKey);
+                // Loading rules never replaces or persists this tab's draft, nor acknowledges the CAS conflict.
+                stop();var selection=settingsSelection(saved.settings);state.settings = saved.settings;
+                state.draft = drafts.setSelection(state.draft, selection);
+                state.draft = Object.assign({},state.draft,{checked:null});
+                state.validation = null; state.routeCandidates = [];state.stage='idle';updateScope();remember();
+            } catch (error) {state.error=errorState(null,'storage');}
+            return emit();
+        }
+        async function resolveSettingsConflict(settings) {
+            if (destroyed || !state.draft || !store) return getState();
+            var checked = profiles.validateSettings(settings);
+            if (!checked.ok) {state.error=errorState(null,'input');return emit();}
+            try {
+                var saved=store.load(state.draft.projectKey), revision=Math.max(saved.settings.revision,state.settings.revision);
+                if(revision===Number.MAX_SAFE_INTEGER) {state.error=errorState(null,'input');return emit();}
+                checked.value.revision=revision+1;
+                var entry=scopes[state.draft.projectKey];entry.revision=saved.revision;entry.error=null;
+                return installSettings(checked.value);
+            } catch(error) {state.error=errorState(null,'storage');return emit();}
+        }
+        async function discardField(id) {
+            if (destroyed || !state.draft || id !== 'assignee' || policy().allowAssignee) return getState();
+            var next=Object.assign({},state.draft,{fields:Object.assign({},state.draft.fields),protectedFields:Object.assign({},state.draft.protectedFields),pendingFields:Object.assign({},state.draft.pendingFields),
+                draftRevision:state.draft.draftRevision+1,checked:null});
+            delete next.fields[id];delete next.protectedFields[id];delete next.pendingFields[id];
+            return edited(next);
         }
         async function setGenerationFields(ids) {
             if (destroyed || !state.draft) return getState();
@@ -1748,7 +1794,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
             answer: function(answers) { return mutate(drafts.appendAnswers, [answers]); },
             acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
-            applySettings: applySettings, setGenerationFields: setGenerationFields,
+            applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
             cancel: cancel, getState: getState, destroy: destroy };
     }
@@ -1760,6 +1806,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
 define('_ujgTA_icons', [], function() {
     'use strict';
     var nodes = {
+        Plus: [['path', {d:'M5 12h14'}], ['path', {d:'M12 5v14'}]],
+        Copy: [['rect', {width:'14',height:'14',x:'8',y:'8',rx:'2',ry:'2'}], ['path', {d:'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'}]],
+        Trash2: [['path', {d:'M10 11v6'}], ['path', {d:'M14 11v6'}], ['path', {d:'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6'}], ['path', {d:'M3 6h18'}], ['path', {d:'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'}]],
+        Upload: [['path', {d:'M12 3v12'}], ['path', {d:'m17 8-5-5-5 5'}], ['path', {d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'}]],
+        Download: [['path', {d:'M12 15V3'}], ['path', {d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'}], ['path', {d:'m7 10 5 5 5-5'}]],
+        Settings: [['path', {d:'M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915'}], ['circle', {cx:'12',cy:'12',r:'3'}]],
         ChevronDown: [['path', {d: 'm6 9 6 6 6-6'}]],
         X: [['path', {d: 'M18 6 6 18'}], ['path', {d: 'm6 6 12 12'}]],
         Check: [['path', {d: 'M20 6 9 17l-5-5'}]],
@@ -1949,18 +2001,169 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons'], function(icon) {
     return {create: create};
 });
 
+/* === Module: settings-ui.js === */
+define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'], function(profiles, fieldUi, icon) {
+    'use strict';
+    var sequence = 0;
+    function copy(value) {return JSON.parse(JSON.stringify(value));}
+    function create(options) {
+        var $ = options.$, host, root, local, baseline, meta, templateId, mapping, returnFocus, dead = false, busy = false;
+        var preview = null, conflict = false, applyAfterLoad = false, confirmation = null;
+        var uid = 'ta-settings-' + (++sequence);
+        function profile() {return local.profiles.find(function(p) {return p.id === local.activeProfileId;});}
+        function template() {return profile().templates.find(function(t) {return t.id === templateId;});}
+        function dirty() {return JSON.stringify(local) !== baseline;}
+        function button(label, name, attr, action) {
+            return $('<button type="button">').attr(attr).attr({title:label,'aria-label':label}).append(icon(name), $('<span>').text(label)).on('click', action);
+        }
+        function id(items, prefix) {var n=1;while(items.some(function(item) {return item.id === prefix+n;})) n++;return prefix+n;}
+        function closeNow() {
+            root.prop('hidden', true); host.prop('hidden', true); confirmation = null;
+            if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+            if (options.onClose) options.onClose();
+        }
+        function close() {
+            if (!root || root.prop('hidden') || busy) return;
+            if (dirty()) {confirmation='discard';root.find('[data-ta-discard-confirm]').prop('hidden',false);root.find('[data-ta-keep-editing]').trigger('focus');}
+            else closeNow();
+        }
+        function label(text, attr, multiline, changed) {
+            var input = multiline ? $('<textarea rows="6">') : $('<input type="text">'); input.attr(attr);
+            input.on('input', function() {changed(input.val()); refreshLists();});
+            return $('<label>').append($('<span>').text(text), input);
+        }
+        function refreshLists() {
+            var p = profile(), list = root.find('[data-ta-profile-list]').empty();
+            local.profiles.forEach(function(item) {
+                list.append($('<button type="button" data-ta-profile-row>').attr({'data-id':item.id,'aria-pressed':String(item.id===p.id)}).text(item.name || 'Без имени').on('click', function() {
+                    local.activeProfileId=item.id;templateId=item.templates[0] && item.templates[0].id;render();
+                }));
+            });
+            list = root.find('[data-ta-template-list]').empty();
+            p.templates.forEach(function(item) {
+                list.append($('<button type="button" data-ta-template-row>').attr({'data-id':item.id,'aria-pressed':String(item.id===templateId)}).text(item.name || 'Без имени').on('click', function() {templateId=item.id;renderTemplate();refreshLists();}));
+            });
+            root.find('[data-ta-profile-delete]').prop('disabled',local.profiles.length<=1);
+            root.find('[data-ta-template-delete]').prop('disabled',!template());
+            root.find('[data-ta-template-duplicate]').prop('disabled',!template());
+        }
+        function renderTemplate() {
+            var t=template();
+            root.find('[data-ta-template-editor]').prop('hidden',!t);if(!t)return;
+            root.find('[data-ta-template-name]').val(t.name);root.find('[data-ta-template-when]').val(t.whenToUse);root.find('[data-ta-template-instructions]').val(t.instructions);
+            var types=(meta && meta.issueTypes || []).filter(function(type) {return !type.subtask;});
+            var missing=t.issueTypeId!==null && !types.some(function(type) {return type.id===t.issueTypeId;});
+            root.find('[data-ta-mapping-warning]').text(missing ? 'Тип '+t.issueTypeId+' отсутствует в этом проекте. Выберите привязку; текст сохранён.' : '');
+            mapping.update({field:{id:'mapping',name:'Тип Jira',kind:'option',supported:true,writable:true,
+                allowedValues:types.map(function(type) {return {id:type.id,label:type.name};})},value:t.issueTypeId===null?null:{id:t.issueTypeId},errors:missing?['Нет привязки к доступному типу.']:[]});
+        }
+        function render() {
+            var p=profile();if(!p)return;
+            if(!template()) templateId=p.templates[0] && p.templates[0].id;
+            root.find('[data-ta-profile-name]').val(p.name);root.find('[data-ta-profile-instructions]').val(p.instructions);
+            root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);refreshLists();renderTemplate();
+        }
+        async function apply(resolve) {
+            if(busy)return;
+            var validated=profiles.validateSettings(local);
+            if(!validated.ok) {root.find('[data-ta-settings-error]').text(validated.errors.join('\n'));return;}
+            busy=true;root.find('[data-ta-settings-apply],[data-ta-conflict-reapply],[data-ta-conflict-load]').prop('disabled',true);
+            try {
+                var result=await options.onApply(copy(validated.value), {resolveConflict:resolve || applyAfterLoad});
+                if(dead)return;
+                if(result && result.error) {
+                    conflict=result.error.code==='conflict' || conflict;
+                    root.find('[data-ta-settings-error]').text(result.error.message);
+                    root.find('[data-ta-settings-conflict]').prop('hidden',!conflict);
+                } else {baseline=JSON.stringify(local);closeNow();}
+            } catch(ignored) {if(!dead)root.find('[data-ta-settings-error]').text('Не удалось применить настройки. Копия сохранена в окне.');}
+            finally {busy=false;if(!dead)root.find('[data-ta-settings-apply],[data-ta-conflict-reapply],[data-ta-conflict-load]').prop('disabled',false);}
+        }
+        function addTemplate(duplicate) {
+            var p=profile(), t=duplicate && template();
+            var next=t?copy(t):{name:'Новый шаблон',whenToUse:'',instructions:'',issueTypeId:null};
+            next.id=id(p.templates,'template-');if(t)next.name+=' (копия)';p.templates.push(next);templateId=next.id;render();
+        }
+        function addProfile(duplicate) {
+            var p=profile(), next=duplicate?copy(p):{name:'Новый профиль',instructions:'',allowAssignee:false,templates:[]};
+            next.id=id(local.profiles,'profile-');if(duplicate)next.name+=' (копия)';local.profiles.push(next);local.activeProfileId=next.id;templateId=null;render();
+        }
+        function mount() {
+            host=$(options.host);root=$('<section class="ta-settings-dialog" data-ta-settings-dialog role="dialog" aria-modal="true" hidden>').attr({'aria-labelledby':uid});host.append(root);
+            root.append($('<header class="ta-settings-header">').append($('<h3>').attr('id',uid).text('Промпт и шаблоны'),button('Закрыть','X',{'data-ta-settings-close':''},close)));
+            var body=$('<div class="ta-settings-body">');root.append(body);
+            body.append('<div data-ta-settings-error class="ta-errors" role="alert"></div><div data-ta-settings-conflict class="ta-warning" role="alert" hidden><p>В другой вкладке сохранены изменения. Локальная копия и черновик сохранены здесь.</p><p>Загрузить сохранённые правила заменит только правила в этом окне. Черновик останется локальным. Применить запишет выбранные правила и текущий локальный черновик этого проекта вместо сохранённого черновика.</p></div>');
+            body.find('[data-ta-settings-conflict]').append(button('Загрузить сохранённые правила','RefreshCw',{'data-ta-conflict-load':''},async function() {
+                if(busy || !options.onLoadSaved)return;
+                busy=true;
+                try {var result=await options.onLoadSaved();if(dead)return;if(result && result.settings) {local=copy(result.settings);applyAfterLoad=true;templateId=null;render();}else if(result && result.error)root.find('[data-ta-settings-error]').text(result.error.message);}
+                catch(ignored) {if(!dead)root.find('[data-ta-settings-error]').text('Не удалось загрузить правила.');}
+                finally {busy=false;}
+            }),button('Применить мою копию и черновик','Check',{'data-ta-conflict-reapply':''},function() {apply(true);}));
+            body.append('<h4>Профили</h4><div class="ta-settings-list" data-ta-profile-list></div><div class="ta-actions" data-ta-profile-actions></div>');
+            body.find('[data-ta-profile-actions]').append(button('Добавить профиль','Plus',{'data-ta-profile-add':''},function(){addProfile(false);}),button('Дублировать профиль','Copy',{'data-ta-profile-duplicate':''},function(){addProfile(true);}),button('Удалить профиль','Trash2',{'data-ta-profile-delete':''},function(){if(local.profiles.length>1){var index=local.profiles.indexOf(profile());local.profiles.splice(index,1);local.activeProfileId=local.profiles[Math.max(0,index-1)].id;templateId=null;render();}}));
+            body.append(label('Название профиля',{'data-ta-profile-name':''},false,function(v){profile().name=v;}),
+                label('Общий промпт',{'data-ta-profile-instructions':''},true,function(v){profile().instructions=v;}));
+            var allow=$('<input type="checkbox" data-ta-allow-assignee>').on('change',function(){profile().allowAssignee=allow.prop('checked');});
+            body.append($('<label class="ta-scope-option">').append(allow,$('<span>').text('Разрешить ручной выбор исполнителя')));
+            body.append('<h4>Шаблоны</h4><div class="ta-settings-list" data-ta-template-list></div><div class="ta-actions" data-ta-template-actions></div>');
+            body.find('[data-ta-template-actions]').append(button('Добавить шаблон','Plus',{'data-ta-template-add':''},function(){addTemplate(false);}),button('Дублировать шаблон','Copy',{'data-ta-template-duplicate':''},function(){addTemplate(true);}),button('Удалить шаблон','Trash2',{'data-ta-template-delete':''},function(){profile().templates=profile().templates.filter(function(t){return t.id!==templateId;});templateId=null;render();}));
+            var editor=$('<div data-ta-template-editor>');body.append(editor);
+            editor.append(label('Название шаблона',{'data-ta-template-name':''},false,function(v){template().name=v;}),label('Когда использовать',{'data-ta-template-when':''},false,function(v){template().whenToUse=v;}),label('Инструкции шаблона',{'data-ta-template-instructions':''},true,function(v){template().instructions=v;}),'<div data-ta-template-mapping></div><p data-ta-mapping-warning class="ta-errors"></p>');
+            mapping=fieldUi.create({$: $,onChange:function(unused,value){template().issueTypeId=value?value.id:null;renderTemplate();}});mapping.mount(editor.find('[data-ta-template-mapping]'));
+            body.append('<details class="ta-settings-transfer"><summary>Импорт и экспорт JSON</summary></details>');
+            var transfer=body.find('.ta-settings-transfer');
+            transfer.append(label('JSON настроек',{'data-ta-import-json':''},true,function(){preview=null;root.find('[data-ta-import-use]').prop('disabled',true);root.find('[data-ta-import-result]').empty();}),button('Предпросмотр импорта','Upload',{'data-ta-import-preview':''},function(){
+                var parsed=profiles.parseSettingsImport(root.find('[data-ta-import-json]').val());preview=parsed.ok?parsed.value:null;
+                root.find('[data-ta-import-result]').text(parsed.ok?parsed.preview.profiles.map(function(p){return p.name+': '+p.templates.map(function(t){return t.name+' → '+(t.issueTypeId===null?'без привязки':t.issueTypeId);}).join(', ');}).join('\n'):parsed.errors.join('\n'));
+                root.find('[data-ta-import-use]').prop('disabled',!parsed.ok);
+            }),'<p data-ta-import-result role="status"></p>',button('Использовать импорт в копии','Check',{'data-ta-import-use':'',disabled:true},function(){if(preview){local=copy(preview);templateId=null;render();}}),button('Экспорт JSON','Download',{'data-ta-export':''},function(){try{root.find('[data-ta-export-json]').val(profiles.exportSettings(local)).prop('hidden',false);}catch(ignored){root.find('[data-ta-settings-error]').text('Проверьте названия профилей и шаблонов.');}}),'<textarea rows="6" data-ta-export-json aria-label="Экспорт JSON" readonly hidden></textarea>');
+            body.append(button('Сбросить правила','RefreshCw',{'data-ta-reset':''},function(){root.find('[data-ta-reset-prompt]').prop('hidden',false);root.find('[data-ta-reset-confirm]').trigger('focus');}),'<div data-ta-reset-prompt class="ta-warning" hidden><p>Сбросить все профили и шаблоны в локальной копии? Исходные данные и поля останутся.</p></div>');
+            body.find('[data-ta-reset-prompt]').append(button('Сбросить','RefreshCw',{'data-ta-reset-confirm':''},function(){local=profiles.createDefaults();templateId=null;root.find('[data-ta-reset-prompt]').prop('hidden',true);render();}),button('Отмена','X',{},function(){root.find('[data-ta-reset-prompt]').prop('hidden',true);}));
+            root.append('<div data-ta-discard-confirm class="ta-warning" role="alertdialog" aria-label="Несохранённые изменения" hidden><p>Закрыть без применения изменений?</p></div>');
+            root.find('[data-ta-discard-confirm]').append(button('Продолжить редактирование','X',{'data-ta-keep-editing':''},function(){confirmation=null;root.find('[data-ta-discard-confirm]').prop('hidden',true);root.find('[data-ta-settings-close]').trigger('focus');}),button('Не сохранять и закрыть','Trash2',{'data-ta-discard-settings':''},closeNow));
+            root.append($('<footer class="ta-settings-footer">').append(button('Отмена','X',{'data-ta-settings-cancel':''},close),button('Применить','Check',{'data-ta-settings-apply':''},function(){apply(false);}).addClass('ta-primary')));
+            root.on('keydown',function(event){
+                if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(!confirmation)close();}
+                if(event.key==='Tab') {
+                    var controls=root.find('button,input,textarea,summary').toArray().filter(function(el){return !el.disabled && !$(el).closest('[hidden]').length && !$(el).parents('details:not([open])').length;});
+                    var first=controls[0],last=controls[controls.length-1];
+                    if(event.shiftKey && document.activeElement===first){event.preventDefault();last.focus();}
+                    else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
+                }
+            });
+        }
+        function open(value) {
+            if(dead)return;if(!root)mount();if(!root.prop('hidden'))return;
+            local=copy(value.settings);baseline=JSON.stringify(local);meta=value.meta;templateId=null;preview=null;conflict=!!value.conflict;applyAfterLoad=false;confirmation=null;
+            returnFocus=value.returnFocus || document.activeElement;host.prop('hidden',false);root.prop('hidden',false);
+            root.find('[data-ta-settings-error],[data-ta-import-result]').empty();root.find('[data-ta-import-json],[data-ta-export-json]').val('');
+            root.find('[data-ta-export-json],[data-ta-discard-confirm],[data-ta-reset-prompt]').prop('hidden',true);root.find('[data-ta-import-use]').prop('disabled',true);
+            root.find('.ta-settings-transfer').prop('open',false);root.find('.ta-settings-body').scrollTop(0);
+            root.find('[data-ta-settings-conflict]').prop('hidden',!conflict);render();root.find('[data-ta-profile-name]').trigger('focus');
+        }
+        function destroy(){dead=true;if(mapping)mapping.destroy();if(root)root.remove();}
+        return {open:open,close:close,destroy:destroy};
+    }
+    return {create:create};
+});
+
 /* === Module: ui.js === */
-define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) {
+define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], function(fieldUi, icon, settingsUi) {
     'use strict';
     function create(options) {
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
         var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null;
-        var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null;
+        var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
         }
         function textValue(value) { return value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
+        function canEditField(id) {
+            var p=state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;});
+            return id!=='assignee' || !!p && p.allowAssignee===true;
+        }
         function invoke(name, argument) {
             lastOperation = {name:name, argument:argument};
             return argument === undefined ? c[name]() : c[name](argument);
@@ -1993,6 +2196,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             root = $(el).addClass('ujg-ticket-assistant');
             root.append('<header class="ta-header"><h2>Помощник задач</h2><span data-ta-profile class="ta-muted"></span></header><div class="ta-selections"><div data-ta-project></div><div data-ta-template></div><div data-ta-type></div></div><div class="ta-workspace"><section class="ta-source-area"><h3>Исходные данные</h3><label class="ta-source-label">Запрос<textarea rows="12" data-ta-source></textarea></label><div class="ta-actions" data-ta-actions></div><div data-ta-progress class="ta-progress" hidden><span data-ta-stage></span><span data-ta-elapsed aria-live="off"></span></div><div data-ta-error class="ta-error" role="alert" hidden></div><div data-ta-stopped class="ta-warning" hidden></div><div data-ta-retry-host hidden></div><section class="ta-questions"><h3>Уточнения</h3><div data-ta-questions></div></section><details class="ta-scope"><summary>Поля генерации</summary><div data-ta-scope></div><p data-ta-omitted class="ta-muted"></p><p class="ta-muted">Текущие значения проверяются и вне области генерации. Пользователи не передаются AI.</p></details></section><section class="ta-draft-area"><div class="ta-draft-heading"><h3>Черновик Jira</h3><span data-ta-checked class="ta-result" hidden>Проверен</span></div><div data-ta-fields></div><div data-ta-routes></div><div data-ta-warnings class="ta-warning" hidden></div><div data-ta-evidence></div><div data-ta-fallback class="ta-warning" hidden></div><div class="ta-actions" data-ta-copy-actions></div><textarea data-ta-copy-text aria-label="Текст для копирования" rows="5" readonly hidden></textarea><p data-ta-copy-status class="ta-muted" role="status"></p><footer class="ta-footer"><button type="button" data-ta-create disabled>Создать задачу</button><span class="ta-muted">Создание пока недоступно</span></footer></section></div><div data-ta-settings hidden></div>');
             source = root.find('[data-ta-source]').on('input', function() {c.updateSource(source.val());});
+            root.find('.ta-header').append(button('Настройки', 'Settings', {'data-ta-open-settings':''}).on('click',openSettings));
             project = makeSelection(root.find('[data-ta-project]'), 'project', 'Проект', 'selectProject');
             template = makeSelection(root.find('[data-ta-template]'), 'template', 'Шаблон', 'selectTemplate');
             type = makeSelection(root.find('[data-ta-type]'), 'issuetype', 'Тип Jira', 'selectIssueType');
@@ -2038,12 +2242,22 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
                 if (!entry) {
                     var host = $('<div>').attr('data-ta-field', field.id), pending = $('<div class="ta-pending" hidden>');
                     var editor = $('<div>'); host.append(editor, pending); fieldsHost.append(host);
-                    var view = fieldUi.create({$: $, onChange: function(id, value) {c.updateField(id, value);}, onSearch: options.onSearch});
+                    var view = fieldUi.create({$: $, onChange: function(id, value) {if(canEditField(id)) c.updateField(id, value);},
+                        onSearch:function(query,field,request){
+                            if(!canEditField(field.id) || !options.onSearch) return Promise.resolve({values:[]});
+                            return Promise.resolve(options.onSearch(query,field,request)).then(function(result){return canEditField(field.id)?result:{values:[]};});
+                        }});
                     view.mount(editor); entry = {host:host, view:view, pending:pending, pendingKey:null}; fields.set(field.id, entry);
                 }
                 var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
                 entry.view.update({field:field, value:d.fields[field.id], errors:state.validation && state.validation.fieldErrors[field.id] || [],
                     disabled:field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
+                if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
+                entry.host.find('[data-ta-policy-block]').remove();
+                if (field.id === 'assignee' && (!profile || !profile.allowAssignee) && Object.prototype.hasOwnProperty.call(d.fields,field.id)) {
+                    entry.host.append($('<div data-ta-policy-block class="ta-warning">').append($('<p>').text('Выбор исполнителя запрещён профилем. Сохранённое значение не будет отправлено без разрешения. Можно разрешить выбор в настройках или исключить поле.'),
+                        button('Не отправлять исполнителя','Trash2',{'data-ta-discard-field':field.id}).on('click',function(){c.discardField(field.id);} )));
+                }
                 var hasPending = Object.prototype.hasOwnProperty.call(d.pendingFields, field.id);
                 var pendingKey = hasPending ? JSON.stringify(d.pendingFields[field.id]) : null;
                 entry.pending.prop('hidden', !hasPending);
@@ -2124,6 +2338,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             if (source.val() !== (d ? d.source : '')) source.val(d ? d.source : ''); source.prop('disabled', !d);
             var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
+            root.find('[data-ta-open-settings]').prop('disabled',!state.settings);
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
             updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d);
             updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d);
@@ -2149,9 +2364,18 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons'], function(fieldUi, icon) 
             root.find('[data-ta-copy]').prop('disabled', !d); renderStatus();
         }
         function openSettings() {
+            if (!state.settings) return;
             var host = root.find('[data-ta-settings]').prop('hidden', false);
+            if (!settingsScope) settingsScope=state.draft.id;
+            root.children().not(host).prop('inert',true);
+            function settingsScopeError() {
+                return !state.draft || state.draft.id!==settingsScope ? {error:{code:'scope',message:'Изменилась область проекта или пользователя. Закройте окно и откройте настройки текущего проекта.'}} : null;
+            }
             if (options.createSettingsView && !settingsView) {settingsView = options.createSettingsView({$: $, controller:c}); settingsView.mount(host[0]);}
-            else if (!settingsView) host.text('Настройки пока недоступны.');
+            else if (!settingsView) settingsView = settingsUi.create({$: $,host:host,
+                onApply:function(settings,options){return settingsScopeError() || (options.resolveConflict ? c.resolveSettingsConflict(settings) : c.applySettings(settings));},
+                onLoadSaved:function(){return settingsScopeError() || c.loadSavedSettings();},onClose:function(){host.prop('hidden',true);root.children().prop('inert',false);settingsScope=null;root.find('[data-ta-open-settings]').trigger('focus');}});
+            if (settingsView.open) settingsView.open({settings:state.settings,meta:state.meta,conflict:state.error && state.error.code==='conflict',returnFocus:root.find('[data-ta-open-settings]')[0]});
             return host[0];
         }
         function destroy() {
