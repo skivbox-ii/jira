@@ -27,3 +27,25 @@ Descriptions, user search and the explicit Jira-only view also use local fixture
 Column titles toggle sorting; the adjacent Excel-style dropdown filters values. Priority sorting uses severity for standard Russian/English names, with custom names and empty values after known priorities. Sorting and filtering retain parent/child groups. The status filter can exclude completed tasks while keeping a context parent for matching children. The plus action opens new-Story confirmation for uncreated remarks or child-only confirmation for an existing Story; no final creation is allowed by the preview API.
 
 The browser test uses installed Google Chrome, verifies automatic startup, tree expansion, header filters and manual upload, and checks desktop and mobile layouts. Screenshots go to `/tmp/ujg-import-registry-screenshots` (override with `IMPORT_SCREENSHOTS`). Repository tests remain dependency-free: `node --test tests/*.test.js`.
+
+## Ticket Assistant Acceptance
+
+Use the existing external dependencies; no repository install is needed. Verified runtime is `/Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`, with `NODE_PATH=/tmp/ujg-ticket-assistant-test/node_modules`.
+
+```sh
+export PATH=/Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH
+export NODE_PATH=/tmp/ujg-ticket-assistant-test/node_modules
+export UJG_RELEASE_REF=0cc0795
+node build-ticket-assistant.js
+node --test tests/ticket-assistant-*.test.js tests/browser/ticket-assistant-*.test.cjs tests/shared-llm-client.test.js tests/widget-bootstrap.test.js
+node tests/browser/ticket-assistant-acceptance.cjs
+node --test --test-concurrency=2 --test-reporter=tap tests/*.test.js tests/browser/*.test.cjs
+```
+
+The standalone acceptance runner is intentionally `.cjs`, outside the `*.test.cjs` glob. Run it explicitly. It loads the generated runtime, starts its own `startPreview({port:0})`, uses fresh Chrome contexts at 1440x900 and 390x844 with reduced motion, and closes its browser/context/server in `finally`. All API writes remain in fixture memory. Issue POST counters live in the Node fixture across page reloads; no actual HTTP POST is required. The fixture transports exercise the real AI JSON builder/parser, controller, personal store, creator and UI. Any external request or browser exception fails acceptance. No Jira or provider connection is used.
+
+Coverage includes all three templates plus a fourth, source answers/protected edits, two projects and identities, JSON transfer, unsupported required metadata, retry/cancel/late response, timer focus/caret/scroll, long content, known/unknown creation and partial attachment recovery after reload. Coexistence loads both generated AMD bundles in one duplicate-rejecting registry, resolves both constructors and compares computed styles on a synthetic importer-neighbor element with assistant CSS disabled/enabled. The importer constructor is not instantiated. This is an AMD definition/CSS probe, not two working gadgets together. Simultaneous lifecycle coverage remains a gap for parent final review; separate importer regressions do not close that gap.
+
+Full-page screenshots and exact viewport companions (`*-viewport.png`) are written outside git to `/tmp/ticket-assistant-20261019/`. This includes `answers-protected-{1440,390}`, `settings-fourth-{1440,390}`, `progress-{1440,390}`, `long-last-field-{1440,390}`, `unsupported-{1440,390}`, `creation-{success,rejected,lostresponse,filefail}`, `file-partial`, and `coexistence-1440`.
+
+For manual fixture-only use, `node tests/browser/ticket-assistant-preview-server.cjs` prints the local URL. Assistant preview 4320 needs no restart: preview-server code was not changed. The long-running importer 4317 fixture retains its startup date, which can make its existing startup test fail after midnight. Final execution on 20 October produced 1897/1898 in the single full run; an isolated repeat against 4317 failed, and the same unchanged test against a fresh ephemeral importer fixture passed 1/1. Both parent servers were preserved. Publication, CDN byte comparison, parent whole-branch review and Citrix acceptance remain pending; see [the acceptance report](../../docs/ticket-assistant-acceptance-2026-10-19.md).

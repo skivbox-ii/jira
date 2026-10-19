@@ -369,3 +369,28 @@ python3 jira_attach_latest_assets.py
 ```bash
 python3 jira_attach_latest_assets.py --dry-run
 ```
+
+## Помощник задач: локальный Release Candidate
+
+Отдельный гаджет с личными настройками по пользователю/проекту, тремя исходными шаблонами и пользовательскими шаблонами. Подготовка и проверка используют существующий LLM client; создание требует явной команды после проверки текущего черновика. Неизвестный результат блокирует повторное создание до ручной сверки. После reload файлы для повторной загрузки нужно выбрать заново.
+
+Реализовано локально: **да**. Опубликовано: **нет**. Приёмка в Citrix: **нет**. Родительский агент лично проверил runtime `0cc0795` 20 октября; финальное ревью всей ветки остаётся **pending**. Полный offline-прогон: 1897/1898, один importer fixture-тест после смены суток; отдельный повтор со свежей fixture 1/1. Фактические проверки и ограничения: [acceptance-report](docs/ticket-assistant-acceptance-2026-10-19.md).
+
+Будущие URL после отдельно согласованной публикации:
+
+```text
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-ticket-assistant.bootstrap.js
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@0cc0795/ujg-ticket-assistant.runtime.js
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@0cc0795/ujg-ticket-assistant.css
+```
+
+Публичный AMD: `_ujgTicketAssistant`; runtime AMD: `_ujgTicketAssistantRuntime`; корневой CSS: `.ujg-ticket-assistant`. При bootstrap CSS URL в настройках гаджета пуст: CSS загружает bootstrap. `ujg-ticket-assistant.js` остаётся отдельным source bundle. Fallback `0cc0795` содержит побайтово совпадающие source/runtime/CSS. Существующий общий `ujg.dashboardReleaseRef` имеет приоритет над fallback; этот кандидат не меняет property или другие виджеты.
+
+Сборка только этого виджета и локальный offline preview:
+
+```sh
+UJG_RELEASE_REF=0cc0795 node build-ticket-assistant.js
+NODE_PATH=/tmp/ujg-ticket-assistant-test/node_modules node tests/browser/ticket-assistant-preview-server.cjs
+```
+
+Preview по умолчанию `http://127.0.0.1:4320/`; если порт занят, команда сообщает фактически выбранный свободный порт. Уже работающий preview достаточно перезагрузить. Все Jira/LLM вызовы, включая создание/вложения, в этом preview синтетические и выполняются в памяти. [Browser README](tests/browser/README.md) содержит команды acceptance без живых API.
