@@ -139,6 +139,16 @@ define('_ujgTA_draft', [], function() {
         delete next.pendingFields[id];
         return next;
     }
+    function hasAnswerBlock(source, block) {
+        var boundary = '\n\nQuestion: ';
+        var index = source.indexOf(block);
+        while (index !== -1) {
+            var end = index + block.length;
+            if (end === source.length || source.slice(end, end + boundary.length) === boundary) return true;
+            index = source.indexOf(block, index + 1);
+        }
+        return false;
+    }
     function appendAnswers(d, answersById) {
         var source = d.source;
         d.questions.forEach(function(q) {
@@ -146,7 +156,7 @@ define('_ujgTA_draft', [], function() {
             var answer = answersById[q.id];
             if (typeof answer !== 'string' || !answer.trim()) return;
             var block = '\n\nQuestion: ' + q.text + '\nAnswer: ' + answer;
-            if (source.split('\n\nQuestion: ').slice(1).indexOf(q.text + '\nAnswer: ' + answer) === -1) source += block;
+            if (!hasAnswerBlock(source, block)) source += block;
         });
         return setSource(d, source);
     }

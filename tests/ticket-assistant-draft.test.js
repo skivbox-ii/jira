@@ -169,3 +169,25 @@ test('saving a shorter answer after a longer one still appends its visible text'
     d = api.appendAnswers(d, { q: 'TEST' });
     assert.match(d.source, /Answer: TEST$/);
 });
+
+test('multiline answers containing literal question delimiters remain idempotent at any block position', () => {
+    const api = draft();
+    let d = api.setSource(api.createDraft({ projectKey: 'DO' }), 'Original');
+    d.questions = [
+        { id: 'q', text: 'Environment?', required: true },
+        { id: 'other', text: 'Version?', required: true }
+    ];
+    const answers = { q: 'First line\n\nQuestion: literal answer text\nAnswer: still answer\nLast line' };
+    d = api.appendAnswers(d, answers);
+    const first = d;
+    d = api.appendAnswers(d, answers);
+    assert.equal(d.source, first.source);
+    assert.equal(d.sourceRevision, first.sourceRevision);
+    assert.equal(d.draftRevision, first.draftRevision);
+    d = api.appendAnswers(d, { other: '1.0' });
+    const followed = d;
+    d = api.appendAnswers(d, answers);
+    assert.equal(d.source, followed.source);
+    assert.equal(d.sourceRevision, followed.sourceRevision);
+    assert.equal(d.draftRevision, followed.draftRevision);
+});
