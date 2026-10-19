@@ -25,10 +25,19 @@ var WIDGETS = {
   userActivity: "ujg-user-activity",
   dailyDiligence: "ujg-daily-diligence",
   storyBrowser: "ujg-story-browser",
-  excelStoryImporter: "ujg-excel-story-importer"
+  excelStoryImporter: "ujg-excel-story-importer",
+  ticketAssistant: "ujg-ticket-assistant"
 };
 
 var WIDGET_SPECS = {
+  "ujg-ticket-assistant": {
+    fileKey: "ujg-ticket-assistant",
+    publicAmd: "_ujgTicketAssistant",
+    runtimeAmd: "_ujgTicketAssistantRuntime",
+    sharedJsFiles: [],
+    embeddedJsFiles: ["ujg-shared-modules/llm-client.js"],
+    embeddedAmdRenames: { "_ujgShared_llmClient": "_ujgTA_llmClient" }
+  },
   "ujg-sprint-health": {
     fileKey: "ujg-sprint-health",
     publicAmd: "_ujgSprintHealth",

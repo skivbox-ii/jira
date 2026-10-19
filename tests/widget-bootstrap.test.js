@@ -6,6 +6,14 @@ const vm = require("node:vm");
 
 const MOD_PATH = path.join(__dirname, "..", "build-widget-bootstrap-assets.js");
 
+test('ticket assistant registration has isolated assets and no external shared script', () => {
+  const before = fs.readFileSync(path.join(__dirname, '..', 'ujg-excel-story-importer.bootstrap.js'), 'utf8');
+  const assets = require(MOD_PATH).buildAssets({widgets: ['ujg-ticket-assistant'], releaseRef: 'task6'});
+  assert.match(assets['ujg-ticket-assistant.bootstrap.js'], /var sharedJsFiles = \[\];/);
+  assert.match(assets['ujg-ticket-assistant.bootstrap.js'], /_ujgTicketAssistantRuntime/);
+  assert.equal(fs.readFileSync(path.join(__dirname, '..', 'ujg-excel-story-importer.bootstrap.js'), 'utf8'), before);
+});
+
 function escapeForRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -255,6 +263,12 @@ test("re-running bootstrap generator produces the committed assets byte-for-byte
     assetBaseUrl: baseUrl,
     widgets: mod.allWidgetIds()
   });
+  // The new widget has its own release pin; legacy URLs keep the canonical pin.
+  Object.assign(generated, mod.buildAssets({
+    releaseRef: releaseRefFromBootstrapSource(fs.readFileSync(path.join(root, 'ujg-ticket-assistant.bootstrap.js'), 'utf8')),
+    assetBaseUrl: baseUrl,
+    widgets: ['ujg-ticket-assistant']
+  }));
   var names = Object.keys(generated).sort();
   names.forEach(function(name) {
     var committed = mod.normalizeTextNewlines(

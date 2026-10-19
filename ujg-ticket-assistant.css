@@ -1,0 +1,59 @@
+.ujg-ticket-assistant { color: #263238; background: #fff; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; padding: 20px; }
+.ujg-ticket-assistant *, .ujg-ticket-assistant *::before, .ujg-ticket-assistant *::after { box-sizing: border-box; letter-spacing: 0; }
+.ujg-ticket-assistant [hidden] { display: none !important; }
+.ujg-ticket-assistant .ta-header { display: flex; align-items: baseline; gap: 16px; border-bottom: 1px solid #dce1e5; padding-bottom: 14px; margin-bottom: 18px; }
+.ujg-ticket-assistant h2 { font-size: 18px; margin: 0; font-weight: 650; }
+.ujg-ticket-assistant h3 { font-size: 16px; margin: 0 0 12px; font-weight: 600; }
+.ujg-ticket-assistant p { margin: 6px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ujg-ticket-assistant button, .ujg-ticket-assistant input, .ujg-ticket-assistant textarea { font: inherit; color: inherit; }
+.ujg-ticket-assistant button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid #b7c1c9; border-radius: 4px; background: #fff; padding: 7px 11px; min-height: 36px; cursor: pointer; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.ujg-ticket-assistant button:hover { background: #f2f5f7; }
+.ujg-ticket-assistant button:disabled { opacity: .55; cursor: default; }
+.ujg-ticket-assistant svg { flex: 0 0 16px; }
+.ujg-ticket-assistant :focus-visible { outline: 2px solid #1769c2; outline-offset: 2px; }
+.ujg-ticket-assistant .ta-primary { color: #fff; background: #1769c2; border-color: #1769c2; }
+.ujg-ticket-assistant .ta-primary:hover { background: #12559e; }
+.ujg-ticket-assistant input:not([type="checkbox"]), .ujg-ticket-assistant textarea { display: block; width: 100%; min-width: 0; border: 1px solid #b7c1c9; border-radius: 4px; padding: 8px 10px; background: #fff; }
+.ujg-ticket-assistant textarea { resize: vertical; min-height: 76px; line-height: 1.55; }
+.ujg-ticket-assistant textarea[data-ta-source] { min-height: 280px; }
+.ujg-ticket-assistant label { display: block; font-weight: 500; }
+.ujg-ticket-assistant label > textarea, .ujg-ticket-assistant .ta-field-body { margin-top: 5px; }
+.ujg-ticket-assistant .ta-selections { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.ujg-ticket-assistant .ta-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.ujg-ticket-assistant .ta-source-area, .ujg-ticket-assistant .ta-draft-area { min-width: 0; }
+.ujg-ticket-assistant .ta-draft-area { border-left: 1px solid #dce1e5; padding-left: 28px; }
+.ujg-ticket-assistant .ta-field { margin-bottom: 14px; min-width: 0; }
+.ujg-ticket-assistant .ta-picker { width: 100%; justify-content: space-between; }
+.ujg-ticket-assistant .ta-picker span { min-width: 0; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-field-body { position: relative; }
+.ujg-ticket-assistant .ta-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: 100%; min-width: 0; background: #fff; border: 1px solid #b7c1c9; box-shadow: 0 4px 12px #172b4d26; border-radius: 4px; padding: 10px; }
+.ujg-ticket-assistant .ta-candidates { max-height: 230px; overflow-y: auto; margin-top: 8px; }
+.ujg-ticket-assistant .ta-candidates button { display: flex; width: 100%; border: 0; justify-content: flex-start; border-radius: 2px; }
+.ujg-ticket-assistant .ta-candidates img { object-fit: contain; flex: 0 0 16px; }
+.ujg-ticket-assistant .ta-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ujg-ticket-assistant .ta-chip { display: inline-flex; align-items: center; gap: 6px; background: #eaf1f8; border-radius: 4px; padding-left: 7px; margin-bottom: 8px; max-width: 100%; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-chip button { padding: 4px; min-height: 28px; border: 0; background: transparent; }
+.ujg-ticket-assistant .ta-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.ujg-ticket-assistant .ta-errors { color: #b42318; font-size: 14px; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-error { color: #9f2119; border-left: 3px solid #c53428; background: #fff2f0; padding: 8px 12px; margin: 12px 0; }
+.ujg-ticket-assistant .ta-warning, .ujg-ticket-assistant .ta-pending { border-left: 3px solid #cc9318; background: #fff9e9; padding: 8px 12px; margin: 12px 0; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-warning:empty { display: none; }
+.ujg-ticket-assistant .ta-muted { color: #59666f; font-weight: 400; }
+.ujg-ticket-assistant .ta-progress { display: flex; gap: 12px; color: #36556d; min-height: 24px; }
+.ujg-ticket-assistant .ta-questions, .ujg-ticket-assistant .ta-scope { border-top: 1px solid #dce1e5; margin-top: 22px; padding-top: 16px; }
+.ujg-ticket-assistant .ta-question { margin-bottom: 18px; }
+.ujg-ticket-assistant .ta-question button { margin-top: 6px; }
+.ujg-ticket-assistant summary { cursor: pointer; font-weight: 600; }
+.ujg-ticket-assistant .ta-scope-option { display: flex; align-items: start; gap: 8px; margin-top: 8px; font-weight: 400; overflow-wrap: anywhere; }
+.ujg-ticket-assistant input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; margin-top: 3px; accent-color: #1769c2; }
+.ujg-ticket-assistant .ta-draft-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ujg-ticket-assistant .ta-result { color: #207243; font-weight: 600; }
+.ujg-ticket-assistant .ta-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 16px; margin-top: 20px; border-top: 1px solid #dce1e5; }
+.ujg-ticket-assistant a { display: inline-flex; align-items: center; gap: 6px; color: #1769c2; overflow-wrap: anywhere; }
+.ujg-ticket-assistant [data-empty]:empty::after { content: attr(data-empty); color: #59666f; }
+@media (max-width: 680px) {
+    .ujg-ticket-assistant { padding: 12px; }
+    .ujg-ticket-assistant .ta-selections, .ujg-ticket-assistant .ta-workspace { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+    .ujg-ticket-assistant .ta-draft-area { border-left: 0; border-top: 1px solid #dce1e5; padding-left: 0; padding-top: 18px; }
+    .ujg-ticket-assistant .ta-header { flex-wrap: wrap; gap: 4px 12px; }
+}
