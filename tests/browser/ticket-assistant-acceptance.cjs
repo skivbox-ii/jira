@@ -305,16 +305,11 @@ for (const scenario of ['success','rejected','lostresponse','filefail']) {
     });
 }
 
-test('importer and assistant generated AMD registries coexist and CSS stays scoped', async () => {
+test('actual importer registry and assistant coexist with isolated AMD CSS and assistant destruction', async () => {
     await session(1440, async (page,url) => {
         await page.evaluate(() => {
-            const host=document.createElement('section'); host.id='importer-neighbor'; host.className='ujg-excel-story-importer';
-            host.innerHTML='<h2>Importer neighbor</h2><button class="ta-primary">Importer control</button><input value="Importer value">';
-            document.body.append(host);
-        });
-        const styles = () => page.evaluate(() => {
-            const el=document.querySelector('#importer-neighbor button'),s=getComputedStyle(el);
-            return {color:s.color,background:s.backgroundColor,font:s.font,border:s.border,padding:s.padding};
+            const host=document.createElement('section'); host.id='importer-neighbor';
+            document.querySelector('.ta-preview-scenarios').after(host);
         });
         await page.addScriptTag({url:url+'acceptance-importer.js'});
         assert.equal(await page.evaluate(() => typeof window.taRequire('_ujgExcelStoryImporterRuntime')),'function');
@@ -323,6 +318,60 @@ test('importer and assistant generated AMD registries coexist and CSS stays scop
         const assistantBefore=await assistantButton.evaluate(el=>({color:getComputedStyle(el).color,padding:getComputedStyle(el).padding}));
         await page.addStyleTag({url:url+'acceptance-importer.css'});
         assert.deepEqual(await assistantButton.evaluate(el=>({color:getComputedStyle(el).color,padding:getComputedStyle(el).padding})),assistantBefore,'importer CSS cannot restyle assistant');
+
+        await page.evaluate(() => {
+            const api=window.taRequire('_ujgESI_api'),config=window.taRequire('_ujgESI_config');
+            const calls=[];window.coexistImporter={calls,writes:0};
+            // Same API boundary as import-preview.html: real main/rendering/grid,
+            // in-memory Jira reads, and no possible provider or write transport.
+            Object.keys(api).forEach(key=>{
+                if(typeof api[key]==='function') api[key]=()=>{window.coexistImporter.writes++;throw new Error('Unexpected importer API: '+key);};
+            });
+            const read=(name,value)=>{calls.push(name);return Promise.resolve(value);};
+            function issue(key,summary,status) {
+                return {key,fields:{summary,description:'Fixture description for '+key.replace('-',' '),
+                    project:{id:'101',key:'DEMO'},issuetype:{name:'Story'},
+                    status:{id:status==='Done'?'3':'1',name:status,statusCategory:{key:status==='Done'?'done':'new'}},
+                    assignee:{name:'fixture-reader',displayName:'Fixture Reader'},creator:{name:'fixture-reader',displayName:'Fixture Reader'},
+                    priority:{name:'Medium'},components:[],created:'2026-10-19T09:00:00Z',updated:'2026-10-19T10:00:00Z',issuelinks:[]},
+                    changelog:{startAt:0,total:0,histories:[]}};
+            }
+            const issues=[issue('DEMO-201','API read-only registry','Open'),issue('DEMO-202','UI read-only registry','Done')];
+            Object.assign(api,{
+                baseUrl:location.origin,
+                getProjects:()=>read('projects',[{key:'DEMO',name:'Fixture project'}]),
+                getProjectEpics:()=>read('epics',{issues:[]}),
+                getProjectCreateMeta:()=>read('metadata',{projects:[]}),
+                getProjectComponents:()=>read('components',[]),
+                searchUsers:()=>read('users',{users:[]}),
+                getProjectIssues:()=>read('stories',{issues}),
+                getIssuesByKeys:keys=>read('linked',{issues:issues.filter(issue=>keys.includes(issue.key))})
+            });
+            config.STORAGE_KEY='ujg-acceptance-importer-coexist';
+            localStorage.setItem(config.STORAGE_KEY,JSON.stringify({projectKey:'DEMO'}));
+            // A stray ajax/fetch from either gadget must fail, even before CSP.
+            window.jQuery.ajax=()=>{throw new Error('Unexpected HTTP API transport in coexistence');};
+            window.fetch=()=>{throw new Error('Unexpected fetch transport in coexistence');};
+            const Importer=window.taRequire('_ujgExcelStoryImporterRuntime');
+            window.coexistImporter.instance=new Importer({getGadgetContentEl:()=>window.jQuery('#importer-neighbor')});
+            window.coexistImporter.shared=window.taRequire('_ujgShared_llmClient');
+        });
+        const importer=page.locator('#importer-neighbor');
+        await importer.locator('[aria-label="Режим Jira"]').click();
+        await importer.locator('[aria-label="Загрузить замечания из Jira"]').click();
+        await page.waitForFunction(()=>document.querySelectorAll('#importer-neighbor .ujg-esi-parent-row').length===2);
+        assert.match(await importer.textContent(),/API read-only registry/);
+        assert.match(await importer.textContent(),/UI read-only registry/);
+        await importer.locator('[data-sort="summary"]').click();
+        assert.equal(await importer.locator('th[data-column="summary"]').getAttribute('aria-sort'),'ascending');
+        assert.match(await importer.locator('.ujg-esi-parent-row').first().textContent(),/API read-only registry/);
+        await importer.locator('tr[data-key="DEMO-201"] .ujg-esi-issue-summary-text').focus();
+        assert.match(await importer.locator('.ujg-esi-description-popover').textContent(),/Fixture description for DEMO 201/);
+        await page.keyboard.press('Escape');
+
+        const styles=()=>importer.locator('[data-sort="summary"]').evaluate(el=>{
+            const s=getComputedStyle(el);return {color:s.color,background:s.backgroundColor,font:s.font,border:s.border,padding:s.padding};
+        });
         const assistantStyle=await page.$('link[href="/ujg-ticket-assistant.css"]');
         await assistantStyle.evaluate(el=>{el.disabled=true;});
         const withImporter = await styles();
@@ -330,10 +379,30 @@ test('importer and assistant generated AMD registries coexist and CSS stays scop
         await page.addStyleTag({url:url+'ujg-ticket-assistant.css'});
         assert.deepEqual(await styles(),withImporter,'assistant CSS cannot restyle importer');
         assert.deepEqual(await assistantButton.evaluate(el=>({color:getComputedStyle(el).color,padding:getComputedStyle(el).padding})),assistantBefore);
+        await page.evaluate(()=>{window.coexistImporter.table=document.querySelector('#importer-neighbor .ujg-esi-registry-table');});
         await page.locator('[data-ta-source]').fill('AMD coexistence');
         await page.locator('[data-ta-prepare]').click(); await idle(page);
         assert.equal(await page.locator('[data-ta-field="summary"] input').inputValue(),'Уточнить обработку ошибок API');
-        assert.equal(await page.locator('#importer-neighbor input').inputValue(),'Importer value');
+        assert.equal(await page.evaluate(()=>window.coexistImporter.table===document.querySelector('#importer-neighbor .ujg-esi-registry-table')),true,'assistant render preserves importer table');
+        assert.equal(await importer.locator('.ujg-esi-parent-row').count(),2);
+        await page.evaluate(()=>window.scrollTo(0,0));
         await capture(page,'coexistence-1440');
+        await page.evaluate(()=>{window.taAcceptance.mode='slow';});
+        await page.locator('[data-ta-prepare]').click();
+        await page.waitForFunction(()=>window.taPreview.instance.controller.getState().stage==='preparing');
+        await page.evaluate(()=>{window.taPreview.instance.destroy();window.taPreview.instance.destroy();});
+        assert.equal(await page.locator('[data-ta-source]').count(),0,'real assistant destruction clears its UI');
+        await importer.locator('[data-sort="summary"]').click();
+        assert.equal(await importer.locator('th[data-column="summary"]').getAttribute('aria-sort'),'descending');
+        assert.match(await importer.locator('.ujg-esi-parent-row').first().textContent(),/UI read-only registry/);
+        await page.waitForTimeout(2800);
+        assert.equal(await page.locator('[data-ta-source]').count(),0,'late assistant completion stays destroyed');
+        assert.equal(await importer.locator('.ujg-esi-parent-row').count(),2,'importer remains mounted after assistant destroy');
+        assert.equal(await page.evaluate(()=>window.coexistImporter.shared===window.taRequire('_ujgShared_llmClient')),true);
+        assert.equal(await page.evaluate(()=>window.coexistImporter.shared===window.taRequire('_ujgTA_llmClient')),false,'independent shared-client AMD identities');
+        assert.deepEqual(await page.evaluate(()=>window.coexistImporter.calls.filter(call=>call==='stories')),['stories']);
+        assert.equal(await page.evaluate(()=>window.coexistImporter.writes),0);
+        await page.evaluate(()=>window.scrollTo(0,0));
+        await capture(page,'coexistence-destroy-1440');
     });
 });
