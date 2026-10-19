@@ -55,9 +55,17 @@ define('_ujgTA_storage', ['_ujgTA_profiles'], function(profiles) {
                     else {
                         var parsed = JSON.parse(text);
                         var settings = profiles.validateSettings(parsed.settings);
-                        if (!settings.ok || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0 || settings.value.revision !== parsed.revision) throw new Error('Invalid stored settings');
+                        if (!settings.ok || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0) throw new Error('Invalid stored settings');
                         var draft = copyDraft(parsed.draft);
-                        if (draft && draft.creation && draft.creation.status === 'submitting') draft.creation.status = 'unknown';
+                        if (draft && draft.creation && draft.creation.status === 'submitting') {
+                            var previousDraft = memory[scope] && memory[scope].draft;
+                            var previousCreation = previousDraft && previousDraft.creation;
+                            // Only this store's matching live attempt survives a persistent reread.
+                            var live = previousCreation && previousCreation.status === 'submitting' &&
+                                typeof draft.creation.attemptId === 'string' && !!draft.creation.attemptId &&
+                                previousCreation.attemptId === draft.creation.attemptId && previousDraft.id === draft.id;
+                            if (!live) draft.creation.status = 'unknown';
+                        }
                         memory[scope] = { revision: parsed.revision, settings: settings.value, draft: draft };
                     }
                 } catch (error) {
@@ -77,7 +85,6 @@ define('_ujgTA_storage', ['_ujgTA_profiles'], function(profiles) {
             var next;
             try { next = { revision: current.revision + 1, settings: settings.value, draft: copyDraft(value.draft) }; }
             catch (error) { return { ok: false, revision: current.revision, reason: 'invalid' }; }
-            next.settings.revision = next.revision;
             memory[key(projectKey)] = next;
             if (persistent) {
                 try { options.storage.setItem(key(projectKey), JSON.stringify(next)); }

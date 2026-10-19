@@ -46,6 +46,41 @@ test('stale writes and clearDraft conflict without overwriting another tab', () 
     assert.equal(b.load('DO').revision, 3);
 });
 
+test('draft saves and clear preserve settings revision independently of the CAS counter', () => {
+    const { store } = fixture();
+    const a = store();
+    const value = a.load('DO');
+    value.settings.revision = 7;
+    value.draft = {
+        source: 'checked draft', settingsRevision: 7,
+        checked: { sourceRevision: 1, settingsRevision: 7, draftRevision: 2, metaSignature: 'meta' }
+    };
+    assert.equal(a.save('DO', value, 0).revision, 1);
+    for (let revision = 1; revision <= 3; revision++) {
+        const loaded = a.load('DO');
+        assert.equal(loaded.revision, revision);
+        assert.equal(loaded.settings.revision, 7);
+        assert.equal(loaded.draft.settingsRevision, 7);
+        assert.equal(loaded.draft.checked.settingsRevision, loaded.settings.revision);
+        const restored = store().load('DO');
+        assert.equal(restored.settings.revision, 7);
+        assert.equal(restored.draft.checked.settingsRevision, restored.settings.revision);
+        assert.equal(a.save('DO', loaded, revision).revision, revision + 1);
+    }
+    assert.equal(a.clearDraft('DO', 4).revision, 5);
+    const cleared = store().load('DO');
+    assert.equal(cleared.revision, 5);
+    assert.equal(cleared.settings.revision, 7);
+    assert.equal(cleared.draft, null);
+    cleared.settings.revision = 11;
+    cleared.settings.profiles[0].instructions = 'Updated rules';
+    assert.equal(a.save('DO', cleared, 5).revision, 6);
+    const updated = store().load('DO');
+    assert.equal(updated.revision, 6);
+    assert.equal(updated.settings.revision, 11);
+    assert.equal(updated.settings.profiles[0].instructions, 'Updated rules');
+});
+
 test('unknown identity stays in memory and never writes an anonymous key', () => {
     const { store, storage } = fixture();
     for (const userKey of [null, undefined, '', '   ']) {
@@ -92,6 +127,53 @@ test('quota and security exceptions preserve memory and warn', () => {
         assert.equal(a.save('DO', value, 0).ok, true);
         assert.equal(a.load('DO').draft.source, 'retain me');
         assert.ok(warnings.length > 0);
+    }
+});
+
+test('live submitting attempt survives internal loads and saves but fresh stores recover unknown', () => {
+    const { store } = fixture();
+    const a = store();
+    const value = a.load('DO');
+    value.draft = { id: 'draft-1', creation: { status: 'submitting', issueKey: 'DO-42', attemptId: 'active-attempt' } };
+    assert.equal(a.save('DO', value, 0).ok, true);
+    const recovered = store();
+    for (let revision = 1; revision <= 3; revision++) {
+        const live = a.load('DO');
+        assert.equal(live.draft.creation.status, 'submitting');
+        assert.equal(a.load('DO').draft.creation.status, 'submitting');
+        assert.equal(live.draft.creation.attemptId, 'active-attempt');
+        const restored = recovered.load('DO');
+        assert.equal(restored.draft.creation.status, 'unknown');
+        assert.equal(restored.draft.creation.issueKey, 'DO-42');
+        assert.equal(restored.draft.creation.attemptId, 'active-attempt');
+        live.settings.profiles[0].instructions = 'Rules saved during submission ' + revision;
+        assert.equal(a.save('DO', live, revision).ok, true);
+    }
+    const done = a.load('DO');
+    done.draft.creation.status = 'created';
+    assert.equal(a.save('DO', done, 4).ok, true);
+    assert.equal(a.load('DO').draft.creation.status, 'created');
+    assert.equal(store().load('DO').draft.creation.status, 'created');
+});
+
+test('same store recovers an external different attempt or draft as unknown', () => {
+    const { store } = fixture();
+    for (const replacement of [
+        { id: 'draft-1', attemptId: 'other-attempt' },
+        { id: 'draft-2', attemptId: 'active-attempt' }
+    ]) {
+        const a = store();
+        const initial = a.load('DO');
+        initial.draft = { id: 'draft-1', creation: { status: 'submitting', attemptId: 'active-attempt' } };
+        const saved = a.save('DO', initial, initial.revision);
+        const b = store();
+        const external = b.load('DO');
+        external.draft = { id: replacement.id, creation: { status: 'submitting', attemptId: replacement.attemptId, issueKey: 'DO-43' } };
+        assert.equal(b.save('DO', external, saved.revision).ok, true);
+        const recovered = a.load('DO');
+        assert.equal(recovered.draft.creation.status, 'unknown');
+        assert.equal(recovered.draft.creation.issueKey, 'DO-43');
+        assert.equal(recovered.draft.creation.attemptId, replacement.attemptId);
     }
 });
 
