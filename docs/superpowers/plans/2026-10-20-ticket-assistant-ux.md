@@ -67,5 +67,5 @@
 - [x] Independent Sol 6.1 spec/quality review per task, then whole-change review. Resolve findings before publication.
 - [x] Parent rebuilds only Ticket Assistant assets and runs full suite: node --test --test-concurrency=2 --test-reporter=tap tests/*.test.js tests/browser/*.test.cjs, plus dedicated browser acceptance.
 - [x] Parent personally exercises the offline UI, including Apply/Reject, edit-in-flight, catalog selection, fullscreen, tokens, required/optional fields, desktop/mobile and synthetic create. Capture screenshots; do not call a live model or create another real issue.
-- [ ] Commit only scoped files; fetch/check remote, push through existing main release flow, then pin bootstrap to verified code commit and check build tests/CDN byte equality. No force push.
-- [ ] Update acceptance/setup docs with actual commits, tests, limitations and Citrix pending status. Return concise result and unchanged dashboard URL.
+- [x] Commit only scoped files; fetch/check remote, push through existing main release flow, then pin bootstrap to verified code commit and check build tests/CDN byte equality. No force push.
+- [x] Update acceptance/setup docs with actual commits, tests, limitations and Citrix pending status. Return concise result and unchanged dashboard URL.

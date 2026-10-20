@@ -8,8 +8,8 @@
 Дополнительно: выбор Epic и Sprint по фактической схеме Jira, ручной ввод
 числовых оценок. Исходная версия: `7a005ea`.
 
-Статус на 21.10.2026: реализовано, проверено локально и независимо
-отревьюено. Публикация ещё выполняется; новая форма в Citrix не принята.
+Статус на 21.10.2026: реализовано, проверено локально, независимо
+отревьюено и опубликовано в `main`. Новая форма в Citrix не принята.
 
 ## Проверки
 
@@ -88,6 +88,34 @@ NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node --te
 (`mobile-proposal.png`, `mobile-tokens.png`, `desktop-catalog-proposal.png`,
 `synthetic-created.png`, `final-editor.png`). Скриптовые ответы заглушки не являются оценкой
 качества живой модели и намеренно воспроизводят заданные тестовые состояния.
+
+## Публикация
+
+- Исходники, тесты и сборка: `5febb7494d086815c3d647589311a6c6814eac8f`.
+- Bootstrap с закреплением на этот код: `8ed86a9110b4da0e839a0830666574a045e53f80`.
+- Оба коммита обычным push отправлены в `skivbox-ii/jira`, ветка `main`.
+- После закрепления пересборка изменила только bootstrap; проверки
+  сборки и загрузчика: **46/46**, лог `/tmp/ticket-assistant-ux-publish-pin.log`.
+- Commit-pinned CDN и стабильный `@main` bootstrap проверены после
+  очистки кэша jsDelivr. Все ответы HTTP 200; содержимое совпало побайтово.
+
+| Файл | Ref | Байт | SHA-256 |
+| --- | --- | ---: | --- |
+| `ujg-ticket-assistant.js` | `5febb74` | 252800 | `787058f5b60628745ee5c09babf7bda6881d38321610350afd6ae8bd91552062` |
+| `ujg-ticket-assistant.runtime.js` | `5febb74` | 279119 | `d296f72984654cbd72bd1a66db5d103babd90ffcd86d078512453e4a71a55b88` |
+| `ujg-ticket-assistant.css` | `5febb74` | 13097 | `7d353bd6f1504bf117f913a5cabbbf227e2d3646c1a5c63fc480ca52e9132af5` |
+| `ujg-ticket-assistant.bootstrap.js` | `8ed86a9` и `main` | 20046 | `a979135f878ff50427af18bbf7dc35cdea7784a325e3e288e78a676b2e9f8c9d` |
+
+Копии логов, личных снимков и author/reviewer-отчётов сохранены вне Git:
+`/Users/skivbox/.cache/ujg-ticket-assistant-acceptance/2026-10-21-guided-editing/`.
+
+Адрес подключения не изменился:
+`https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-ticket-assistant.bootstrap.js`.
+Для уже настроенного дашборда помощника следующий шаг пользователя:
+«Обновить версию». Простая перезагрузка не отменяет сохранённый
+`ujg.dashboardReleaseRef`. Публикация не меняла настройки дашборда или
+задачи Jira. Следующий шаг приёмки: свежий экран Citrix и проверка новой
+формы, реальных каталогов/прав и полей; живой AI только по явному действию.
 
 ## Ограничения
 
