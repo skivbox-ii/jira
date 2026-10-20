@@ -374,7 +374,7 @@ python3 jira_attach_latest_assets.py --dry-run
 
 Отдельный гаджет с личными настройками по пользователю/проекту, тремя исходными шаблонами и пользовательскими шаблонами. Подготовка и проверка используют существующий LLM client; создание требует явной команды после проверки текущего черновика. Неизвестный результат блокирует повторное создание до ручной сверки. После reload файлы для повторной загрузки нужно выбрать заново.
 
-Реализовано и проверено локально: **да**. Опубликовано: **да, 20.10.2026, push `7dcb5eb` в `main`**. В Citrix лично проверены видимость формы и список проектов; полная приёмка сценариев ещё не завершена. После публикации исправлена нулевая высота контейнера UJG: добавлен жизненный цикл `API.resize()` (`76532c7`, bootstrap `7dcb5eb`). Независимое ревью без открытых замечаний; финальные проверки **9/9** сквозных и **1923/1923** полного регресса. История предрелизных исправлений, личных проверок, ограничения и сохранённые материалы: [acceptance-report](docs/ticket-assistant-acceptance-2026-10-19.md).
+Реализовано и проверено локально: **да**. Опубликовано: **да, 20.10.2026, push `364e118` в `main`**, исходный код `21238c2`. В настройках промпта появились локальный бюджет в токенах и резерв ответа; перед отправкой показана приблизительная оценка и состав контекста. Запрос помощника не обрезается по прежнему байтовому пределу. Независимое Sol 6.1 ревью без открытых замечаний; финальные проверки **9/9** сквозных и **1936/1936** полного регресса, desktop/mobile. [Проверки и ограничения бюджета](docs/ticket-assistant-token-budget-acceptance-2026-10-20.md). Ранее в Citrix лично проверены видимость формы и список проектов после исправления высоты UJG; новая версия бюджета в Citrix ещё не принята. [История приёмки](docs/ticket-assistant-acceptance-2026-10-19.md).
 
 Опубликованные URL:
 
@@ -385,16 +385,16 @@ python3 jira_attach_latest_assets.py --dry-run
 
 ```text
 https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-ticket-assistant.bootstrap.js
-https://cdn.jsdelivr.net/gh/skivbox-ii/jira@76532c7cf390a70da20afb053d19675bff88d3e6/ujg-ticket-assistant.runtime.js
-https://cdn.jsdelivr.net/gh/skivbox-ii/jira@76532c7cf390a70da20afb053d19675bff88d3e6/ujg-ticket-assistant.css
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@21238c243d5babb961440aefe38a856f204c80f0/ujg-ticket-assistant.runtime.js
+https://cdn.jsdelivr.net/gh/skivbox-ii/jira@21238c243d5babb961440aefe38a856f204c80f0/ujg-ticket-assistant.css
 ```
 
-Публичный AMD: `_ujgTicketAssistant`; runtime AMD: `_ujgTicketAssistantRuntime`; корневой CSS: `.ujg-ticket-assistant`. При bootstrap CSS URL в настройках гаджета пуст: CSS загружает bootstrap. `ujg-ticket-assistant.js` остаётся отдельным source bundle. Fallback `76532c7cf390a70da20afb053d19675bff88d3e6` содержит побайтово совпадающие source/runtime/CSS. Существующий общий `ujg.dashboardReleaseRef` имеет приоритет над fallback; этот кандидат не меняет property или другие виджеты.
+Публичный AMD: `_ujgTicketAssistant`; runtime AMD: `_ujgTicketAssistantRuntime`; корневой CSS: `.ujg-ticket-assistant`. При bootstrap CSS URL в настройках гаджета пуст: CSS загружает bootstrap. `ujg-ticket-assistant.js` остаётся отдельным source bundle. Fallback `21238c243d5babb961440aefe38a856f204c80f0` содержит проверенные source/runtime/CSS. Существующий общий `ujg.dashboardReleaseRef` имеет приоритет над fallback; для ранее закреплённой версии используйте «Обновить версию» на отдельном дашборде помощника. Агент property не менял. В сгенерированных bundles других виджетов синхронизирован только общий клиент; его прежние настройки по умолчанию сохранены.
 
 Сборка только этого виджета и локальный offline preview:
 
 ```sh
-UJG_RELEASE_REF=76532c7cf390a70da20afb053d19675bff88d3e6 node build-ticket-assistant.js
+UJG_RELEASE_REF=21238c243d5babb961440aefe38a856f204c80f0 node build-ticket-assistant.js
 NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node tests/browser/ticket-assistant-preview-server.cjs
 ```
 

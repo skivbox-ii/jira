@@ -2,7 +2,7 @@
 
 Planned task/report date: 19 October 2026. Final acceptance and full regression executed/completed **20 October 2026, Europe/Moscow**. Initial source/TDD checks began on 19 October. Worktree: `/Users/skivbox/.codex/worktrees/ticket-assistant/jira` only. Base: `95f54f6`.
 
-Current source/runtime: **76532c7cf390a70da20afb053d19675bff88d3e6**; bootstrap packaging **7dcb5eb** pins that full SHA. Published: **YES, 20 October 2026, `7dcb5eb` pushed to `main`**. Citrix startup/visibility and project list: **personally verified**; full workflow acceptance: **NO**. The user initially deferred publication, then explicitly requested commit/push so the CDN URL would work in Citrix. Final host-sizing regression: **1923/1923**, zero failures or skips; standalone acceptance **9/9**. Historical local acceptance and pre-release review follow the publication record.
+Current source/runtime: **21238c243d5babb961440aefe38a856f204c80f0**; bootstrap packaging **364e118** pins that full SHA. Published: **YES, 20 October 2026, `364e118` pushed to `main`**. Configurable token budgets: full regression **1936/1936**, standalone **9/9**, independent review and personal local UI checks; [current acceptance record](ticket-assistant-token-budget-acceptance-2026-10-20.md). Citrix startup/visibility and project list were personally verified on the previous host-sizing release; token-budget Citrix acceptance and full live workflow acceptance remain **NO**. Historical local acceptance and pre-release review follow below.
 
 ## Publication: 20 October
 
