@@ -2,7 +2,89 @@
 
 Planned task/report date: 19 October 2026. Final acceptance and full regression executed/completed **20 October 2026, Europe/Moscow**. Initial source/TDD checks began on 19 October. Worktree: `/Users/skivbox/.codex/worktrees/ticket-assistant/jira` only. Base: `95f54f6`.
 
-Current candidate source/runtime: **a9c97fb4eade9629720cdf2d728394cb9e1ab7b6**, fallback **a9c97fb**; packaging **6963255**. Local implementation and acceptance: **complete**. Published: **NO**. Citrix accepted: **NO**. Whole-branch review found four P2 issues; all four and the coexistence gap are closed by the final independent scoped review. Fresh parent full regression: **1908/1908**, zero failures or skips. Initial Task 9 result at `edd6605` was complete with concerns; the original failed run remains recorded below.
+Current candidate source/runtime: **5ee9a0f3d4fc310e0d81d4f23a46ad5225244767**; bootstrap packaging **746e5cf** pins that full SHA. Published: **NO**. Citrix accepted: **NO**. The user explicitly deferred publication and Citrix on 20 October, requesting only local commits and dashboard setup instructions. Fresh parent full regression: **1919/1919**, zero failures or skips; standalone acceptance **9/9**. The initial local acceptance and its four closed findings are historical evidence below; the subsequent pre-release review is recorded next.
+
+## Pre-release Review: 20 October
+
+Sol 6.1 / medium Reviewer Hilbert inspected the deployment boundary, production
+versus fixture dependencies, hardcoded values and existing UI patterns.
+Two findings were confirmed and assigned to Sol 6.1 / medium Author McClintock:
+
+- P2: a new browser could not configure the shared LLM connection from this
+  standalone gadget. `f634887` adds an explicit connection dialog following
+  the existing Timesheet pattern, using the same shared reader/writer and
+  `ujg-shared-llm-config` key. It preserves the existing base prompt/protocol,
+  masks and clears the credential input on close, requires explicit Save,
+  verifies durable read-back, handles storage failure and invalidates the
+  current checked draft. Saving never calls the model.
+- P3: removing the selected project chip sent `null` to a controller that
+  requires a project. Removal is now hidden only for that mandatory picker;
+  project switching and removable optional/user selections remain available.
+
+The review found no production fixture transports or hardcoded project/type
+IDs. Projects/catalogs use Jira API; DEVOPS is an editable policy preset;
+CDN repository and release pin are delivery configuration. No importer,
+shared-client source or other-widget assets were changed.
+
+Fresh author regression: RED **0/8**, GREEN **8/8**, profile **222/222**,
+build/bootstrap **46/46**. Fresh parent full-suite command uses the executable
+and dependency prefix below, arguments `--test --test-concurrency=2
+--test-reporter=tap tests/*.test.js tests/browser/*.test.cjs`:
+**1916/1916**, exit 0, no failed/cancelled/skipped/todo, 76982.1375 ms.
+Fresh standalone `tests/browser/ticket-assistant-acceptance.cjs`: **9/9**,
+exit 0, no failures/skips, 61897.321917 ms.
+
+Parent independently verified in-memory rebuild parity and `git show` byte
+parity for source/runtime/CSS at the full `f634887` pin. Fresh desktop/mobile
+acceptance screenshots were inspected; this is visual inspection of automated
+evidence, not a claim of personal interaction with the new connection dialog.
+Its new eight regressions run against the actual modules in JSDOM with
+synthetic storage and AI transport. No real credentials or live AI calls
+were used.
+
+Hilbert's scoped re-review of `5f66187..49bb457` marked both findings
+**ADDRESSED**, then identified one further P2: changing the shared connection
+left a checked draft in another cached project valid. Author reproduced
+the A -> B -> connection change -> A sequence before fixing it in `5ee9a0f`.
+All editable cached drafts now lose only their stale check result.
+Contents, settings and storage revisions remain intact; `preflight`,
+`submitting`, `unknown`, `created` and drafts with an issue key retain their
+creation guards. Bootstrap commit `746e5cf` pins this final source commit.
+
+Final author checks: connection **11/11**, profile **225/225**,
+build/bootstrap **46/46**. Parent repeated the full suite on the final
+candidate: **1919/1919**, no failed/cancelled/skipped/todo, 83214.541583 ms.
+Final standalone acceptance: **9/9**, no failures/skips, 62210.26225 ms.
+Both runs completed; no test runner remained active. Parent rechecked
+in-memory source/runtime/bootstrap rebuild and pinned source/runtime/CSS
+byte parity, and inspected the regenerated 1440/390 px screenshots.
+
+Hilbert independently reviewed only `49bb457..746e5cf`, reran the three
+new regressions (**3/3**) and checked build/pin parity. Verdict: cached-check
+P2 **ADDRESSED**, no new findings in scope. The new connection dialog has
+automated module coverage, not personal interactive acceptance or Citrix
+acceptance.
+
+Logs: `/tmp/ticket-assistant-review-fixes-profile.tap`,
+`/tmp/ticket-assistant-review-fixes-build.tap`,
+`/tmp/ticket-assistant-predeploy-full-20261020.tap`,
+`/tmp/ticket-assistant-predeploy-final-acceptance-20261020.tap`.
+Final logs: `/tmp/ticket-assistant-cached-connection-red.tap`,
+`/tmp/ticket-assistant-cached-connection-profile.tap`,
+`/tmp/ticket-assistant-cached-connection-build.tap`,
+`/tmp/ticket-assistant-final-full-20261020.tap`,
+`/tmp/ticket-assistant-final-acceptance-20261020.tap`.
+Final logs and the regenerated desktop/mobile screenshots are retained at
+`/Users/skivbox/.cache/ujg-ticket-assistant-acceptance/2026-10-20-5ee9a0f/`.
+The dependency prefix remains
+`NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules`
+with `/Users/skivbox/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`.
+
+Only a fresh Citrix screenshot was obtained before the user's deferral:
+Outlook was visible instead of Jira; no clicks or typing followed.
+No push, CDN publication, dashboard property changes or production issue
+writes occurred. Installation fields are in
+[dashboard setup](ticket-assistant-dashboard-setup.md).
 
 **Artifact retention:** the app/OS restart cleared `/tmp`, including every log/screenshot referenced in the historical sections before the final-fix appendix. Those counts describe actual earlier runs, but the old files are no longer available. Fresh evidence was recreated on 20 October with the restored dependency path and is listed in the final appendix. Do not treat historical logs as currently readable artifacts.
 
