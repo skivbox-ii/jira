@@ -3,7 +3,7 @@
     'use strict';
     var $ = window.jQuery, shared = window.taRequire('_ujgTA_llmClient');
     var review=new URLSearchParams(window.location.search).get('review');
-    if(['obsolete','catalog','storage'].indexOf(review)===-1)review='';
+    if(['obsolete','catalog','storage','response'].indexOf(review)===-1)review='';
     var records = {calls:[], pending:0}; window.taPreview = records;
     var scenario='success', issueSequence=100, failedFiles=new Set();
     var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
@@ -73,6 +73,8 @@
                     fields:fields,questions:[{id:'release',text:'В какой версии нужно проверить результат?',reason:'Версия не указана в исходном запросе.',required:false}],
                     warnings:['Критерии приёмки предложены для ручной проверки.'],evidence:[]};
             }
+            if(review==='response' && input.action==='check') response.warnings=['Synthetic optional warning'];
+            if(review==='response' && input.action==='prepare') response.fields.components=records.responseMode==='malformed'?[31]:['31'];
             resolve({text:JSON.stringify(response)});
         },1100);});
     }});

@@ -16,9 +16,29 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         network: 'Не удалось получить данные Jira. Повторите действие вручную.'
     };
     function copy(value) { return JSON.parse(JSON.stringify(value)); }
-    function errorState(error, fallback) {
+    var responseReasons = {
+        json: 'Ответ не является допустимым JSON. Повторите подготовку вручную или заполните поля.',
+        contract: 'Неверная структура ответа JSONv1. Повторите действие вручную.',
+        questions: 'Неверный формат уточняющих вопросов. Повторите действие вручную.',
+        warnings: 'Неверный формат предупреждений. Повторите действие вручную.',
+        evidence: 'Неверный формат или неподтверждённая цитата в обосновании. Проверьте исходник и повторите действие вручную.',
+        selection: 'Ответ изменяет выбранный тип или шаблон либо содержит недопустимый выбор. Проверьте выбор и повторите действие вручную.',
+        scope: 'Ответ содержит поле вне разрешённой области. Проверьте область генерации и повторите действие вручную.',
+        shape: 'Неверный формат значения поля. Выберите значение вручную или повторите подготовку.',
+        value: 'Значение поля не прошло проверку metadata или каталога. Обновите поля и выберите значение вручную.'
+    };
+    function errorState(error, fallback, meta, typeId) {
         var code = error && Object.prototype.hasOwnProperty.call(messages, error.code) ? error.code : fallback;
         var result = { code: code, message: messages[code] };
+        if (code === 'response' && error && error.details && typeof error.details.reason === 'string' && Object.prototype.hasOwnProperty.call(responseReasons, error.details.reason)) {
+            var reason = error.details.reason, fieldId = error.details.fieldId;
+            result.details = {reason: reason};
+            result.message += ' ' + responseReasons[reason];
+            if (typeof fieldId === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(fieldId) && meta && fields.getField(meta, typeId, fieldId)) {
+                result.details.fieldId = fieldId;
+                result.message += ' Поле: ' + fieldId + '.';
+            }
+        }
         if (code === 'limit' && error && error.details) {
             var keys = ['instructions', 'source', 'metadata', 'input', 'context', 'reserve', 'available'];
             if (keys.every(function(k) { return Number.isSafeInteger(error.details[k]) && error.details[k] >= 0; })) {
@@ -104,7 +124,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!current(run)) return;
             active = null; state.startedAt = null;
             if (error && (error.code === 'abort' || error.kind === 'abort' || error.name === 'AbortError')) state.stage = 'stopped';
-            else { state.stage = 'error'; state.error = errorState(error, fallback); }
+            else { state.stage = 'error'; state.error = errorState(error, fallback, state.meta, state.draft && state.draft.issueTypeId); }
             emit();
         }
         function profile() {

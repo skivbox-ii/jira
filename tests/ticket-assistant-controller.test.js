@@ -332,6 +332,20 @@ test('manual user policy survives reload and cannot derive from an AI response',
     assert.equal(forged.c.getState().draft.fields.assignee, undefined);
 });
 
+test('response errors retain allowlisted reasons and current metadata field IDs only', async () => {
+    const h=harness();await h.ready();await h.c.updateField('summary','Keep');
+    for(const details of [{reason:'shape',fieldId:'components',raw:'SECRET'}, {reason:'SECRET',fieldId:'components'},
+        {reason:'value',fieldId:'SECRET/path'}, {reason:'constructor',fieldId:'components'},
+        {reason:{toString(){return 'shape';},raw:'SECRET'},fieldId:'components'}, {reason:['shape'],fieldId:'components'}]) {
+        h.ai.prepare=async()=>{throw Object.assign(new Error('SECRET raw'),{code:'response',details});};
+        await h.c.prepare();const state=h.c.getState();
+        assert.ok(!JSON.stringify(state.error).includes('SECRET'));
+        if(typeof details.reason!=='string') assert.equal(state.error.details,undefined);
+        if(details.reason==='shape') {assert.match(state.error.message,/components/);assert.match(state.error.message,/формат/i);}
+        assert.equal(state.draft.fields.summary,'Keep');assert.equal(state.draft.checked,null);
+    }
+});
+
 test('safe errors preserve only numeric prompt details and edits; returned and notified state is detached', async () => {
     const details = { instructions:2000,source:30000,metadata:1000,input:33000,context:32768,reserve:4096,available:28672 };
     const h = harness({ ai: { async prepare() { throw Object.assign(new Error('SECRET raw body'), { code: 'limit', details: { ...details, body: 'SECRET' }, token: 'SECRET' }); } } });

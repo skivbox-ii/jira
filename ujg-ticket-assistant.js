@@ -800,8 +800,13 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
     function fail(code, details) {
         var error = new Error(messages[code]);
         error.code = code;
-        if (code === 'limit' && details) error.details = details;
+        if ((code === 'limit' || code === 'response') && details) error.details = details;
         throw error;
+    }
+    function responseFailure(reason, field) {
+        var details = {reason: reason || 'contract'};
+        if (field && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(field.id)) details.fieldId = field.id;
+        fail('response', details);
     }
     function record(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
     function id(value) { return typeof value === 'string' && !!value.trim() && value.trim() === value; }
@@ -886,7 +891,7 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
         'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype or user values. Humans select users explicitly.',
         'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
-        'Fields use normalized strings/numbers/null, options {id}, arrays of {id}, or string arrays. No names as option IDs, HTML execution or nested commands.'
+        'Field shapes by kind: string/textarea/date/datetime -> string; number -> finite number; option -> {"id":"literal catalog ID"}; multioption/components/versions -> [{"id":"literal catalog ID"}]; labels -> string[]. Null is allowed. Never return labels or names in place of IDs, numeric IDs, extra object keys, HTML execution or nested commands.'
     ].join('\n');
     function rejectSecrets(value) {
         // Reject recognizable credentials instead of silently rewriting source evidence.
@@ -939,23 +944,26 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
     function parseResponse(kind, raw, input) {
         var ctx = context(kind, input), result;
         // JSON resource safety bound, not a token/context limit.
-        try { if (typeof raw !== 'string' || !raw.trim() || shared.utf8ByteLength(raw) > 2 * 1024 * 1024) fail('response'); result = JSON.parse(raw); }
-        catch (ignored) { fail('response'); }
+        if (typeof raw !== 'string' || !raw.trim() || shared.utf8ByteLength(raw) > 2 * 1024 * 1024) responseFailure('json');
+        try { result = JSON.parse(raw); }
+        catch (ignored) { responseFailure('json'); }
         rejectSecrets(raw);
         var expected = kind === 'prepare' ? 'draft' : kind;
         var allowed = kind === 'route' ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'candidates', 'questions'] :
             kind === 'prepare' ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'fields', 'questions', 'warnings', 'evidence'] : ['schemaVersion', 'kind', 'questions', 'warnings', 'evidence'];
-        if (!keys(result, allowed) || !tree(result, 0) || result.schemaVersion !== 1 || result.kind !== expected || !validQuestions(result.questions)) fail('response');
+        if (!keys(result, allowed) || !tree(result, 0) || result.schemaVersion !== 1 || result.kind !== expected) responseFailure('contract');
+        if (!validQuestions(result.questions)) responseFailure('questions');
         if (kind === 'route') {
             if (!Array.isArray(result.candidates) || !unique(result.candidates, function(c) { return JSON.stringify([c.issueTypeId, c.templateId]); }) || !result.candidates.every(function(c) {
                 return keys(c, ['issueTypeId', 'templateId', 'reason']) && pairAllowed(ctx, c.issueTypeId, c.templateId) && typeof c.reason === 'string';
-            })) fail('response');
+            })) responseFailure('selection');
             var undecided = result.issueTypeId === null && result.templateId === null;
             if (undecided ? !result.candidates.length : !pairAllowed(ctx, result.issueTypeId, result.templateId) || result.candidates.length > 1 ||
-                (result.candidates.length === 1 && (result.candidates[0].issueTypeId !== result.issueTypeId || result.candidates[0].templateId !== result.templateId))) fail('response');
+                (result.candidates.length === 1 && (result.candidates[0].issueTypeId !== result.issueTypeId || result.candidates[0].templateId !== result.templateId))) responseFailure('selection');
             return result;
         }
-        if (!Array.isArray(result.warnings) || !result.warnings.every(function(w) { return typeof w === 'string'; }) || !Array.isArray(result.evidence)) fail('response');
+        if (!Array.isArray(result.warnings) || !result.warnings.every(function(w) { return typeof w === 'string'; })) responseFailure('warnings');
+        if (!Array.isArray(result.evidence)) responseFailure('evidence');
         var type = ctx.types[0];
         var current = kind === 'check' ? draftFields(input, ctx) : {};
         if (!result.evidence.every(function(e) {
@@ -963,17 +971,26 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
                 return f.id === e.fieldId && (generated(f) && input.allowFieldIds.indexOf(f.id) !== -1 || kind === 'check' && currentField(f) && own(current, f.id));
             }) &&
                 typeof e.quote === 'string' && !!e.quote.trim() && (e.kind === 'suggestion' || e.kind === 'source' && input.source.indexOf(e.quote) !== -1);
-        })) fail('response');
+        })) responseFailure('evidence');
         var values = draftFields(input, ctx, true);
         if (kind === 'prepare') {
-            if (result.issueTypeId !== ctx.typeId || result.templateId !== ctx.templateId || !record(result.fields)) fail('response');
+            if (result.issueTypeId !== ctx.typeId || result.templateId !== ctx.templateId) responseFailure('selection');
+            if (!record(result.fields)) responseFailure('contract');
             Object.keys(result.fields).forEach(function(fieldId) {
                 var field = type.fields.find(function(f) { return f.id === fieldId; });
-                if (!field || !generated(field) || input.allowFieldIds.indexOf(fieldId) === -1 || !normalizedValue(field, result.fields[fieldId])) fail('response');
+                if (!field || !generated(field) || input.allowFieldIds.indexOf(fieldId) === -1) responseFailure('scope', field);
+                var value = result.fields[fieldId];
+                // Wrap literal IDs only; catalog validation below still authorizes every item.
+                if (['multioption', 'components', 'versions'].indexOf(field.kind) !== -1 && Array.isArray(value)) {
+                    value = value.map(function(item) { return id(item) ? {id: item} : item; });
+                }
+                if (!normalizedValue(field, value)) responseFailure('shape', field);
+                result.fields[fieldId] = value;
             });
             // Validate proposal values independently; omissions remain questions, not invented facts.
             var partialMeta = {projectId: ctx.meta.projectId, issueTypes: [{id: type.id, subtask: false, fields: type.fields.map(function(f) { return Object.assign({}, f, {required: false}); })}]};
-            if (!validation.validateFields(partialMeta, type.id, result.fields).ok) fail('response');
+            var checked = validation.validateFields(partialMeta, type.id, result.fields);
+            if (!checked.ok) responseFailure('value', type.fields.find(function(f) { return own(checked.fieldErrors, f.id); }));
             values = Object.assign(values, result.fields);
         }
         var local = validation.validateFields(ctx.meta, type.id, values, {allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields});
@@ -1222,9 +1239,29 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         network: 'Не удалось получить данные Jira. Повторите действие вручную.'
     };
     function copy(value) { return JSON.parse(JSON.stringify(value)); }
-    function errorState(error, fallback) {
+    var responseReasons = {
+        json: 'Ответ не является допустимым JSON. Повторите подготовку вручную или заполните поля.',
+        contract: 'Неверная структура ответа JSONv1. Повторите действие вручную.',
+        questions: 'Неверный формат уточняющих вопросов. Повторите действие вручную.',
+        warnings: 'Неверный формат предупреждений. Повторите действие вручную.',
+        evidence: 'Неверный формат или неподтверждённая цитата в обосновании. Проверьте исходник и повторите действие вручную.',
+        selection: 'Ответ изменяет выбранный тип или шаблон либо содержит недопустимый выбор. Проверьте выбор и повторите действие вручную.',
+        scope: 'Ответ содержит поле вне разрешённой области. Проверьте область генерации и повторите действие вручную.',
+        shape: 'Неверный формат значения поля. Выберите значение вручную или повторите подготовку.',
+        value: 'Значение поля не прошло проверку metadata или каталога. Обновите поля и выберите значение вручную.'
+    };
+    function errorState(error, fallback, meta, typeId) {
         var code = error && Object.prototype.hasOwnProperty.call(messages, error.code) ? error.code : fallback;
         var result = { code: code, message: messages[code] };
+        if (code === 'response' && error && error.details && typeof error.details.reason === 'string' && Object.prototype.hasOwnProperty.call(responseReasons, error.details.reason)) {
+            var reason = error.details.reason, fieldId = error.details.fieldId;
+            result.details = {reason: reason};
+            result.message += ' ' + responseReasons[reason];
+            if (typeof fieldId === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(fieldId) && meta && fields.getField(meta, typeId, fieldId)) {
+                result.details.fieldId = fieldId;
+                result.message += ' Поле: ' + fieldId + '.';
+            }
+        }
         if (code === 'limit' && error && error.details) {
             var keys = ['instructions', 'source', 'metadata', 'input', 'context', 'reserve', 'available'];
             if (keys.every(function(k) { return Number.isSafeInteger(error.details[k]) && error.details[k] >= 0; })) {
@@ -1310,7 +1347,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!current(run)) return;
             active = null; state.startedAt = null;
             if (error && (error.code === 'abort' || error.kind === 'abort' || error.name === 'AbortError')) state.stage = 'stopped';
-            else { state.stage = 'error'; state.error = errorState(error, fallback); }
+            else { state.stage = 'error'; state.error = errorState(error, fallback, state.meta, state.draft && state.draft.issueTypeId); }
             emit();
         }
         function profile() {
@@ -2478,7 +2515,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 routes.append($('<p>').text((issue ? issue.name : pair.issueTypeId) + ' / ' + (tmpl ? tmpl.name : pair.templateId) + ': ' + pair.reason),
                     button('Выбрать вариант', 'Check').on('click', function() {c.selectIssueType(pair.issueTypeId).then(function() {return c.selectTemplate(pair.templateId);});}));
             });
-            var warnings = d ? d.warnings.concat(state.validation && state.validation.warnings || []) : [];
+            var warnings = d ? d.warnings.concat(state.validation && state.validation.warnings || []).filter(function(w, index, all) { return all.indexOf(w) === index; }) : [];
             root.find('[data-ta-warnings]').prop('hidden', !warnings.length).text(warnings.join('\n'));
             var evidence = root.find('[data-ta-evidence]').empty();
             (d && d.evidence || []).forEach(function(e) {evidence.append($('<p class="ta-muted">').text((e.kind === 'source' ? 'Из источника: ' : 'Предположение: ') + fieldName(e.fieldId) + ' — ' + e.quote));});

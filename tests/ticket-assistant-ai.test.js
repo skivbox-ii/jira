@@ -22,6 +22,74 @@ function response(kind = 'draft', extra = {}) {
 function parse(kind, body, value = input()) { return ai().parseResponse(kind, typeof body === 'string' ? body : JSON.stringify(body), value); }
 const config = {apiBase: 'https://stub.invalid', apiKey: 'KEY_SECRET', model: 'stub', basePrompt: 'unchanged'};
 
+test('literal catalog ID arrays normalize losslessly and preserve valid text', () => {
+    const i = input(); i.allowFieldIds.push('components', 'fixVersions', 'customfield_3', 'labels');
+    const result = parse('prepare', response('draft', {fields: {summary: 'Keep text', description: 'Keep details',
+        components: ['DO-9', {id: 'DO-9'}], fixVersions: ['DO-v1'], customfield_3: ['DO-3'], labels: ['literal label']}}), i);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.fields)), {summary: 'Keep text', description: 'Keep details',
+        components: [{id: 'DO-9'}, {id: 'DO-9'}], fixVersions: [{id: 'DO-v1'}], customfield_3: [{id: 'DO-3'}], labels: ['literal label']});
+});
+
+test('ID array compatibility never guesses, trims, drops bad items or bypasses scope/catalog checks', () => {
+    for (const value of [['Backend'], ['APP-9'], [' DO-9'], [9], [null], [{id: 'DO-9', extra: 'private'}], ['DO-9', 'unknown'], 'DO-9']) {
+        const i = input(); i.allowFieldIds.push('components');
+        assert.throws(() => parse('prepare', response('draft', {fields: {summary: 'Valid', components: value}}), i), e => e.code === 'response');
+    }
+    for (const change of [i => {}, i => {i.allowFieldIds.push('components');i.meta.issueTypes[0].fields.find(f=>f.id==='components').writable=false;},
+        i => {i.allowFieldIds.push('components');i.meta.issueTypes[0].fields.find(f=>f.id==='components').allowedValues=[];}]) {
+        const i=input();change(i);
+        assert.throws(()=>parse('prepare',response('draft',{fields:{components:['DO-9']}}),i));
+    }
+});
+
+test('response diagnostics identify fixed reasons and trusted fields without raw values or paths', () => {
+    const i=input();i.allowFieldIds.push('components');
+    for (const [body, reason, fieldId] of [
+        ['{PRIVATE', 'json', undefined],
+        [response('draft',{schemaVersion:2}),'contract',undefined],
+        [response('draft',{templateId:'PRIVATE'}),'selection',undefined],
+        [response('draft',{warnings:[{raw:'PRIVATE'}]}),'warnings',undefined],
+        [response('draft',{questions:[{id:'q',text:'PRIVATE',required:true}]}),'questions',undefined],
+        [response('draft',{fields:{components:[3]}}),'shape','components'],
+        [response('draft',{fields:{components:['PRIVATE_UNKNOWN']}}),'value','components'],
+        [response('draft',{fields:{'PRIVATE/path':3}}),'scope',undefined],
+        [response('draft',{evidence:[{fieldId:'summary',kind:'source',quote:'PRIVATE'}]}),'evidence',undefined]
+    ]) {
+        assert.throws(()=>parse('prepare',body,i),e=>{
+            assert.equal(e.code,'response');assert.equal(e.details.reason,reason);assert.equal(e.details.fieldId,fieldId);
+            assert.ok(!JSON.stringify(e).includes('PRIVATE'));return true;
+        });
+    }
+});
+
+test('excluded catalogs permit valid text drafts but never excuse malformed remaining option fields', () => {
+    const i=input();
+    for(const id of ['components','fixVersions']) i.meta.issueTypes[0].fields.find(f=>f.id===id).required=true;
+    const result=parse('prepare',response('draft',{fields:{summary:'Valid title',description:'Valid details'}}),i);
+    assert.equal(result.fields.description,'Valid details');
+    assert.deepEqual(result.questions.map(q=>q.id),['required:components','required:fixVersions']);
+    for(const [value,reason] of [['TEST','shape'],[{id:'TEST'},'value'],[{id:'DO-1',raw:'PRIVATE'},'shape'],[42,'shape']]) {
+        assert.throws(()=>parse('prepare',response('draft',{fields:{summary:'Valid',customfield_2:value}}),i),e=>
+            e.code==='response' && e.details.reason===reason && e.details.fieldId==='customfield_2' && !JSON.stringify(e).includes('PRIVATE'));
+    }
+    assert.throws(()=>parse('prepare',response('draft',{fields:{summary:'Valid',components:['DO-9']}}),i),e=>e.details.reason==='scope');
+});
+
+test('strict questions/evidence diagnostics reject malformed entries, duplicates, extra keys and invented quotes', () => {
+    for(const questions of [null,[null],[{id:'q',text:'?',reason:'why',required:'true'}],
+        [{id:'q',text:'?',reason:'why',required:true,extra:'PRIVATE'}],
+        [{id:'q',text:'?',reason:'',required:true},{id:'q',text:'?',reason:'',required:false}]]) {
+        assert.throws(()=>parse('prepare',response('draft',{questions})),e=>e.code==='response' && e.details.reason==='questions');
+    }
+    for(const evidence of [null,[null],[{fieldId:'summary',kind:'source',quote:'PRIVATE'}],
+        [{fieldId:'assignee',kind:'suggestion',quote:'PRIVATE'}],[{fieldId:'summary',kind:'suggestion',quote:''}],
+        [{fieldId:'summary',kind:'suggestion',quote:'PRIVATE',extra:true}]]) {
+        assert.throws(()=>parse('prepare',response('draft',{evidence})),e=>e.code==='response' && e.details.reason==='evidence' && !JSON.stringify(e).includes('PRIVATE'));
+    }
+    const unsafe=JSON.stringify(response('draft',{fields:{components:[{id:'DO-9'}]}})).replace('"id":"DO-9"','"id":"DO-9","__proto__":{}');
+    assert.throws(()=>parse('prepare',unsafe),e=>e.code==='response' && e.details.reason==='contract');
+});
+
 test('configured budget admits large prompts and shared transport preserves every character', async () => {
     const i = input(); i.tokenBudget = {context: 100000, reserve: 4096};
     i.source = '  начало\n\n' + 'я x  '.repeat(11000) + '\t конец  ';

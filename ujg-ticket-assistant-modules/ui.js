@@ -360,7 +360,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 routes.append($('<p>').text((issue ? issue.name : pair.issueTypeId) + ' / ' + (tmpl ? tmpl.name : pair.templateId) + ': ' + pair.reason),
                     button('Выбрать вариант', 'Check').on('click', function() {c.selectIssueType(pair.issueTypeId).then(function() {return c.selectTemplate(pair.templateId);});}));
             });
-            var warnings = d ? d.warnings.concat(state.validation && state.validation.warnings || []) : [];
+            var warnings = d ? d.warnings.concat(state.validation && state.validation.warnings || []).filter(function(w, index, all) { return all.indexOf(w) === index; }) : [];
             root.find('[data-ta-warnings]').prop('hidden', !warnings.length).text(warnings.join('\n'));
             var evidence = root.find('[data-ta-evidence]').empty();
             (d && d.evidence || []).forEach(function(e) {evidence.append($('<p class="ta-muted">').text((e.kind === 'source' ? 'Из источника: ' : 'Предположение: ') + fieldName(e.fieldId) + ' — ' + e.quote));});
