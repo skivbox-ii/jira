@@ -23,11 +23,11 @@ test('offline response UI preserves normalized drafts, shows warnings once and a
         assert.equal(await page.locator('[data-ta-warnings]').textContent(),'Synthetic optional warning');
         await page.goto(server.url+'?review=response&responseMode=malformed');await page.waitForSelector('html[data-ta-preview-ready="true"]');
         await page.locator('[data-ta-prepare]').click();await page.waitForSelector('[data-ta-error]:not([hidden])');
-        assert.match(await page.locator('[data-ta-error]').textContent(),/components/);
+        assert.match(await page.locator('[data-ta-error]').textContent(),/Поле: Компоненты/);
         assert.match(await page.locator('[data-ta-error]').textContent(),/формат/i);
         assert.equal(await page.locator('[data-ta-create]').isDisabled(),true);
         assert.equal(await page.locator('[data-ta-source]').inputValue(),'Synthetic bug');
-        for(const [mode,reason] of [['json',/допустимым JSON/],['contract',/структура/i],['questions',/вопрос/i],['evidence',/цитата|обоснован/i]]) {
+        for(const [mode,reason] of [['json',/прочитать ответ/],['contract',/структура/i],['questions',/вопрос/i],['evidence',/цитата|обоснован/i]]) {
             await page.goto(server.url+'?review=response&responseMode='+mode);await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-prepare]').click();await page.waitForSelector('[data-ta-error]:not([hidden])');
             const message=await page.locator('[data-ta-error]').textContent();assert.match(message,reason);assert.ok(!message.includes('PRIVATE'));

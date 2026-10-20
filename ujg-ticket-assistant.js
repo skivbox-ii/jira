@@ -1233,22 +1233,27 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         safety: 'Контекст превышает защитный предел размера передачи 4 МиБ. Сократите контекст явно.',
         secret: 'Контекст содержит возможные секреты. Удалите их перед отправкой.',
         config: 'Проверьте настройки подключения AI.',
-        response: 'AI вернул ответ вне контракта. Проверьте данные вручную.',
+        response: 'Не удалось применить ответ AI. Проверьте поля и повторите действие вручную.',
         transport: 'Не удалось получить ответ AI. Повторите действие вручную.',
-        metadata: 'Не удалось обновить metadata Jira. Повторите действие вручную.',
+        metadata: 'Не удалось обновить данные Jira. Повторите действие вручную.',
         network: 'Не удалось получить данные Jira. Повторите действие вручную.'
     };
     function copy(value) { return JSON.parse(JSON.stringify(value)); }
     var responseReasons = {
-        json: 'Ответ не является допустимым JSON. Повторите подготовку вручную или заполните поля.',
-        contract: 'Неверная структура ответа JSONv1. Повторите действие вручную.',
-        questions: 'Неверный формат уточняющих вопросов. Повторите действие вручную.',
-        warnings: 'Неверный формат предупреждений. Повторите действие вручную.',
-        evidence: 'Неверный формат или неподтверждённая цитата в обосновании. Проверьте исходник и повторите действие вручную.',
-        selection: 'Ответ изменяет выбранный тип или шаблон либо содержит недопустимый выбор. Проверьте выбор и повторите действие вручную.',
-        scope: 'Ответ содержит поле вне разрешённой области. Проверьте область генерации и повторите действие вручную.',
-        shape: 'Неверный формат значения поля. Выберите значение вручную или повторите подготовку.',
-        value: 'Значение поля не прошло проверку metadata или каталога. Обновите поля и выберите значение вручную.'
+        json: 'не удалось прочитать ответ. Повторите подготовку вручную или заполните поля.',
+        contract: 'неверная структура ответа. Повторите действие вручную.',
+        questions: 'неверный формат уточняющих вопросов. Повторите действие вручную.',
+        warnings: 'неверный формат предупреждений. Повторите действие вручную.',
+        evidence: 'неверное обоснование или цитата отсутствует в исходнике. Проверьте исходник и повторите действие вручную.',
+        selection: 'ответ меняет выбранный тип задачи или шаблон либо предлагает недоступный вариант. Проверьте выбор и повторите действие вручную.',
+        scope: 'ответ содержит поле, которое не разрешено заполнять. Проверьте выбранные поля генерации и повторите действие вручную.',
+        shape: 'неверный формат значения поля. Выберите значение вручную или повторите подготовку.',
+        value: 'значение поля не соответствует данным Jira или списку допустимых значений. Обновите данные Jira и выберите значение вручную.'
+    };
+    var responseFieldLabels = {
+        summary: 'Тема', description: 'Описание', components: 'Компоненты', fixVersions: 'Исправить в версиях',
+        versions: 'Затронутые версии', priority: 'Приоритет', labels: 'Метки', duedate: 'Срок исполнения',
+        assignee: 'Исполнитель', reporter: 'Автор', environment: 'Окружение', project: 'Проект', issuetype: 'Тип задачи'
     };
     function errorState(error, fallback, meta, typeId) {
         var code = error && Object.prototype.hasOwnProperty.call(messages, error.code) ? error.code : fallback;
@@ -1256,10 +1261,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         if (code === 'response' && error && error.details && typeof error.details.reason === 'string' && Object.prototype.hasOwnProperty.call(responseReasons, error.details.reason)) {
             var reason = error.details.reason, fieldId = error.details.fieldId;
             result.details = {reason: reason};
-            result.message += ' ' + responseReasons[reason];
+            result.message = 'Не удалось применить ответ AI: ' + responseReasons[reason];
             if (typeof fieldId === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(fieldId) && meta && fields.getField(meta, typeId, fieldId)) {
                 result.details.fieldId = fieldId;
-                result.message += ' Поле: ' + fieldId + '.';
+                var label = Object.prototype.hasOwnProperty.call(responseFieldLabels, fieldId) ? responseFieldLabels[fieldId] + ' (' + fieldId + ')' : fieldId;
+                result.message += ' Поле: ' + label + '.';
             }
         }
         if (code === 'limit' && error && error.details) {

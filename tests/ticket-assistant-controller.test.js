@@ -346,6 +346,25 @@ test('response errors retain allowlisted reasons and current metadata field IDs 
     }
 });
 
+test('response copy explains failures in plain Russian with fixed labels and no metadata/model text',async()=>{
+    const h=harness({api:{async getCreateMeta(key){const raw=rawMeta(key);for(const type of raw.projects[0].issuetypes){
+        type.fields.components.name='PRIVATE metadata label';
+        type.fields.customfield_2.name='PRIVATE custom label';
+        type.fields.fixVersions={name:'PRIVATE version label',schema:{type:'array',items:'version',system:'fixVersions'}};
+    }return raw;}}});await h.ready();
+    for(const reason of ['json','contract','questions','warnings','evidence','selection','scope','shape','value']) {
+        for(const [fieldId,label] of [['components','Компоненты'],['fixVersions','Исправить в версиях'],['customfield_2','customfield_2']]) {
+            h.ai.prepare=async()=>{throw Object.assign(new Error('PRIVATE model text'),{code:'response',details:{reason,fieldId}});};
+            await h.c.prepare();const error=h.c.getState().error;
+            assert.match(error.message,/^Не удалось применить ответ AI:/);
+            assert.ok(error.message.includes('Поле: '+label));
+            assert.doesNotMatch(error.message,/PRIVATE|контракт|metadata|JSONv1|JSON/);
+            if(reason==='value') assert.match(error.message,/данным Jira|списку допустимых значений/);
+            assert.equal(error.details.fieldId,fieldId);
+        }
+    }
+});
+
 test('safe errors preserve only numeric prompt details and edits; returned and notified state is detached', async () => {
     const details = { instructions:2000,source:30000,metadata:1000,input:33000,context:32768,reserve:4096,available:28672 };
     const h = harness({ ai: { async prepare() { throw Object.assign(new Error('SECRET raw body'), { code: 'limit', details: { ...details, body: 'SECRET' }, token: 'SECRET' }); } } });
