@@ -1,9 +1,10 @@
 define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], function(fieldUi, icon, settingsUi) {
     'use strict';
+    var connectionSequence = 0;
     function create(options) {
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
         var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null, discardId = null;
-        var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null;
+        var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null, connectionHost = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
@@ -15,6 +16,73 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             return id!=='assignee' || !!p && p.allowAssignee===true;
         }
         function writeLocked() {var d=state && state.draft;return !!d && (!!d.creation.issueKey || ['submitting','unknown','created'].indexOf(d.creation.status)!==-1);}
+        function connectionLocked() {return !!stages[state.stage] || writeLocked() || !!state.draft && state.draft.creation.status==='preflight';}
+        function closeConnection() {
+            if (!connectionHost) return;
+            connectionHost.find('input').val('');connectionHost.prop('hidden',true);
+            connectionHost.find('[data-ta-connection-dialog]').prop('hidden',true);
+            root.children().prop('inert',false);root.find('[data-ta-open-connection]').trigger('focus');
+        }
+        function openConnection() {
+            if (connectionLocked() || !options.connection) return;
+            var shared=options.connection.shared, storage=options.connection.storage, existing;
+            try {existing=shared.readStoredConfig(storage) || {};} catch (ignored) {existing={};}
+            if (!connectionHost) {
+                var uid='ta-connection-'+(++connectionSequence);
+                connectionHost=$('<div data-ta-connection hidden>');root.append(connectionHost);
+                var dialog=$('<section class="ta-settings-dialog ta-connection-dialog" data-ta-connection-dialog role="dialog" aria-modal="true" hidden>').attr('aria-labelledby',uid);
+                connectionHost.append(dialog);
+                dialog.append($('<header class="ta-settings-header">').append($('<h3>').attr('id',uid).text('Подключение AI'),button('Закрыть','X',{'data-ta-connection-close':''}).on('click',closeConnection)));
+                var body=$('<div class="ta-settings-body">').append($('<p class="ta-muted">').text('Подключение общее с другими виджетами в этом браузере.'));
+                [['API Base URL','base','text'],['Модель','model','text'],['API key','key','password']].forEach(function(field) {
+                    var input=$('<input>').attr({type:field[2],autocomplete:'off',spellcheck:'false'}).attr('data-ta-connection-'+field[1],'');
+                    body.append($('<label>').append($('<span>').text(field[0]),input));
+                });
+                body.append($('<label class="ta-connection-protocol">').append($('<input type="checkbox" data-ta-connection-legacy>'),$('<span>').text('Legacy /completions')),
+                    $('<p class="ta-errors" data-ta-connection-error role="alert">'));
+                dialog.append(body,$('<footer class="ta-settings-footer">').append(
+                    button('Отмена','X',{'data-ta-connection-cancel':''}).on('click',closeConnection),
+                    button('Сохранить','Check',{'data-ta-connection-save':''}).addClass('ta-primary').on('click',saveConnection)));
+                dialog.on('keydown',function(event) {
+                    if (event.key==='Escape') {event.preventDefault();event.stopPropagation();closeConnection();}
+                    if (event.key==='Tab') {
+                        var controls=dialog.find('button,input').filter(function() {return !this.disabled;}).toArray();
+                        var first=controls[0],last=controls[controls.length-1];
+                        if (event.shiftKey && document.activeElement===first) {event.preventDefault();last.focus();}
+                        else if (!event.shiftKey && document.activeElement===last) {event.preventDefault();first.focus();}
+                    }
+                });
+            }
+            connectionHost.find('[data-ta-connection-base]').val(existing.apiBase || '');
+            connectionHost.find('[data-ta-connection-model]').val(existing.model || '');
+            connectionHost.find('[data-ta-connection-key]').val(existing.apiKey || '');
+            connectionHost.find('[data-ta-connection-legacy]').prop('checked',!!existing.useLegacyCompletionsEndpoint);
+            connectionHost.find('[data-ta-connection-error]').empty();
+            root.children().not(connectionHost).prop('inert',true);
+            connectionHost.prop('hidden',false).find('[data-ta-connection-dialog]').prop('hidden',false);
+            connectionHost.find('[data-ta-connection-base]').trigger('focus');
+        }
+        function saveConnection() {
+            if (connectionLocked() || !options.connection) return;
+            var shared=options.connection.shared, storage=options.connection.storage, config;
+            var error=connectionHost.find('[data-ta-connection-error]');
+            try {
+                var previous=shared.readStoredConfig(storage) || {};
+                config=shared.normalizeConfig({apiBase:connectionHost.find('[data-ta-connection-base]').val(),
+                    model:connectionHost.find('[data-ta-connection-model]').val(),apiKey:connectionHost.find('[data-ta-connection-key]').val(),
+                    basePrompt:previous.basePrompt || '',useLegacyCompletionsEndpoint:connectionHost.find('[data-ta-connection-legacy]').prop('checked')});
+                if (!config) throw new Error('invalid');
+                var url=new URL(config.apiBase);
+                if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('invalid');
+            } catch (ignored) {error.text('Заполните корректный API Base URL (http/https), модель и ключ.');return;}
+            try {
+                if (!storage || typeof storage.setItem!=='function' || typeof storage.getItem!=='function') throw new Error('storage');
+                shared.writeStoredConfig(storage,config);
+                // Shared writer also accepts missing storage; confirm durable read-back here.
+                if (JSON.stringify(shared.readStoredConfig(storage))!==JSON.stringify(config)) throw new Error('storage');
+            } catch (ignored) {error.text('Не удалось сохранить подключение: хранилище браузера недоступно.');return;}
+            c.connectionChanged();closeConnection();
+        }
         function invoke(name, argument) {
             lastOperation = {name:name, argument:argument};
             return argument === undefined ? c[name]() : c[name](argument);
@@ -41,7 +109,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             view.mount(host); return {view: view, id: id, name: name};
         }
         function updateSelection(selection, values, value, disabled) {
-            selection.view.update({field: {id: selection.id, name: selection.name, kind:'option', supported:true, writable:true, allowedValues:values}, value: value ? {id:value} : null, errors:[], disabled:disabled});
+            selection.view.update({field: {id: selection.id, name: selection.name, kind:'option', supported:true, writable:true, allowedValues:values}, value: value ? {id:value} : null, errors:[], disabled:disabled, removable:selection.id!=='project'});
         }
         function mount(el) {
             root = $(el).addClass('ujg-ticket-assistant');
@@ -67,6 +135,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 button('Подтверждаю: задача не создана','RefreshCw',{'data-ta-not-created':''}).on('click',function() {if(root.find('[data-ta-reconcile-confirm]').prop('checked')) c.reconcileUnknown('confirmed-not-created');}));
             root.find('[data-ta-reconcile-confirm]').on('change',function() {root.find('[data-ta-reconcile-actions] button').prop('disabled',!this.checked);});
             root.find('.ta-header').append(button('Настройки', 'Settings', {'data-ta-open-settings':''}).on('click',openSettings));
+            root.find('.ta-header').append(button('Подключение AI','Settings',{'data-ta-open-connection':''}).on('click',openConnection));
             project = makeSelection(root.find('[data-ta-project]'), 'project', 'Проект', 'selectProject');
             template = makeSelection(root.find('[data-ta-template]'), 'template', 'Шаблон', 'selectTemplate');
             type = makeSelection(root.find('[data-ta-type]'), 'issuetype', 'Тип Jira', 'selectIssueType');
@@ -261,6 +330,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
             root.find('[data-ta-open-settings]').prop('disabled',!state.settings || writeLocked());
+            root.find('[data-ta-open-connection]').prop('disabled',connectionLocked() || !options.connection);
+            if (connectionHost) connectionHost.find('input,[data-ta-connection-save]').prop('disabled',connectionLocked());
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
             updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d || writeLocked());
             updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d || writeLocked());

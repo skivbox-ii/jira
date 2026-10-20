@@ -17,7 +17,8 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         var storage;
         try {storage = deps.storage !== undefined ? deps.storage : window.localStorage;} catch (ignored) {storage = null;}
         var controller = controllerModule.create({api:api,
-            ai:deps.ai || aiModule.createClient({llmClient:shared, fetchImpl:deps.fetchImpl || function(url, config) {return window.fetch(url, config);}, readConfig:deps.readConfig}),
+            ai:deps.ai || aiModule.createClient({llmClient:shared, fetchImpl:deps.fetchImpl || function(url, config) {return window.fetch(url, config);},
+                readConfig:deps.readConfig || function() {return shared.readStoredConfig(storage);}}),
             createStore:deps.createStore || function(userKey) {
                 var personalStore = storageModule.createStore({origin:window.location.origin, userKey:userKey, storage:storage,
                     onWarning:function() {
@@ -37,7 +38,8 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                 searches.delete(aborter); if (signal) signal.removeEventListener('abort', abort);
             });
         }
-        ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView});
+        ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView,
+            connection:{shared:shared,storage:storage}});
         ui.mount(root[0]);
         var warningHost = $('<p class="ta-warning" data-ta-storage-warning hidden>');
         root.prepend(warningHost);

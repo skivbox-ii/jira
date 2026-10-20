@@ -29,7 +29,8 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 remove.prop('disabled', current.disabled === true).on('click', function() {
                     var rest = values.filter(function(v) {return key(v) !== key(value);}); setValue(multi() ? rest : null);
                 });
-                chip.append(remove); chips.append(chip);
+                if (current.removable !== false) chip.append(remove);
+                chips.append(chip);
             });
             var list = user() ? userOptions : current.field.allowedValues || [];
             list.forEach(function(value) {

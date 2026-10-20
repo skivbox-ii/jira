@@ -494,7 +494,13 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 remember();updateScope();return emit();
             } catch(error) {state.error=errorState(null,'storage');return emit();}
         }
+        function connectionChanged() {
+            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
+            if (!state.draft) return getState();
+            return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
+        }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
+            connectionChanged:connectionChanged,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
             answer: function(answers) { return mutate(drafts.appendAnswers, [answers]); },
