@@ -2,7 +2,32 @@
 
 Planned task/report date: 19 October 2026. Final acceptance and full regression executed/completed **20 October 2026, Europe/Moscow**. Initial source/TDD checks began on 19 October. Worktree: `/Users/skivbox/.codex/worktrees/ticket-assistant/jira` only. Base: `95f54f6`.
 
-Current candidate source/runtime: **5ee9a0f3d4fc310e0d81d4f23a46ad5225244767**; bootstrap packaging **746e5cf** pins that full SHA. Published: **NO**. Citrix accepted: **NO**. The user explicitly deferred publication and Citrix on 20 October, requesting only local commits and dashboard setup instructions. Fresh parent full regression: **1919/1919**, zero failures or skips; standalone acceptance **9/9**. The initial local acceptance and its four closed findings are historical evidence below; the subsequent pre-release review is recorded next.
+Current source/runtime: **5ee9a0f3d4fc310e0d81d4f23a46ad5225244767**; bootstrap packaging **746e5cf** pins that full SHA. Published: **YES, 20 October 2026, `7d40fd3` pushed to `main`**. Citrix accepted: **NO**. The user initially deferred publication, then explicitly requested commit/push so the CDN URL would work in Citrix. Candidate full regression: **1919/1919**, zero failures or skips; standalone acceptance **9/9**. Historical local acceptance and pre-release review follow the publication record.
+
+## Publication: 20 October
+
+The clean reviewed worktree fast-forwarded `origin/main` from `9ea7554` to
+`7d40fd3` with `git push origin HEAD:main`, exit 0, no force push. Only the
+Ticket Assistant, its build registration, tests and documentation changed.
+Before pushing, parent reran build/bootstrap/connection tests: **57/57**,
+exit 0, no failures or skips. In-memory rebuild and pinned asset parity
+also passed.
+
+The first CDN request for `@main/ujg-ticket-assistant.bootstrap.js` returned
+the previous 404. A targeted jsDelivr purge completed successfully; the
+unchanged URL then returned HTTP 200. Downloaded bytes matched local files:
+
+| Asset | Ref | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| Bootstrap | `main` | 20046 | `ad254d5e789e3e95d05c3e45e4fe6c1d467bfba2a8a6e65125f26cdc118d36a7` |
+| Runtime | `5ee9a0f3d4fc310e0d81d4f23a46ad5225244767` | 219514 | `84adc626cd50b6d8b243629466b7ab5edb836739272f4dcf19e19957dfd4ed97` |
+| CSS | `5ee9a0f3d4fc310e0d81d4f23a46ad5225244767` | 8647 | `bba299667470d3edc916db2f58845db4318c1946bcdfaa5134077afe0879e5cb` |
+
+No Citrix interaction, Jira issue writes, dashboard property changes or
+live model requests were made in this publication step. CDN delivery does
+not establish production UI acceptance. Next: use the existing setup
+instructions on the separate dashboard and perform the agreed read-only
+Citrix acceptance when the screen is available.
 
 ## Pre-release Review: 20 October
 
