@@ -2938,6 +2938,14 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         // Constructing the read adapter also validates the trusted context path for UI links.
         var readApi = apiModule.createApi({baseUrl:baseUrl, ajax:deps.ajax || function(config) {return $.ajax(config);}});
         var api = deps.api || readApi, ui, dead = false, warning = null;
+        var resizeTimer = null, layoutObserver = null, mutationObserver = null;
+        function scheduleResize() {
+            if (dead || typeof API.resize !== 'function' || resizeTimer !== null) return;
+            resizeTimer = window.setTimeout(function() {
+                resizeTimer = null;
+                if (!dead) API.resize();
+            }, 16);
+        }
         var storage;
         try {storage = deps.storage !== undefined ? deps.storage : window.localStorage;} catch (ignored) {storage = null;}
         var controller = controllerModule.create({api:api,
@@ -2952,7 +2960,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                     }});
                 return personalStore;
             },
-            onChange:function(state) {if (!dead && ui) ui.update(state);}, now:deps.now});
+            onChange:function(state) {if (!dead && ui) {ui.update(state); scheduleResize();}}, now:deps.now});
         var searches = new Set();
         function searchUsers(query, field, options) {
             var aborter = new AbortController(), signal = options && options.signal;
@@ -2967,17 +2975,33 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         ui.mount(root[0]);
         var warningHost = $('<p class="ta-warning" data-ta-storage-warning hidden>');
         root.prepend(warningHost);
+        if (typeof API.resize === 'function') {
+            if (typeof window.ResizeObserver === 'function') {
+                layoutObserver = new window.ResizeObserver(scheduleResize);
+                layoutObserver.observe(root[0]);
+            }
+            // Popovers and fixed dialogs can change without resizing the root box.
+            if (typeof window.MutationObserver === 'function') {
+                mutationObserver = new window.MutationObserver(scheduleResize);
+                mutationObserver.observe(root[0], {subtree:true, childList:true, attributes:true, characterData:true});
+            }
+        }
+        scheduleResize();
         function showStorageWarning() {
-            if (!dead && warningHost && warning) warningHost.text(warning).prop('hidden',false);
+            if (!dead && warningHost && warning) {warningHost.text(warning).prop('hidden',false); scheduleResize();}
         }
         var instance = this;
         this.controller = controller;
         this.init = function() {return controller.init().then(function(state) {
             showStorageWarning(); return state;
         });};
-        this.openSettings = function() {return ui.openSettings();};
+        this.openSettings = function() {if (dead) return; var result = ui.openSettings(); scheduleResize(); return result;};
         this.destroy = function() {
-            if (dead) return; dead = true; controller.destroy(); searches.forEach(function(aborter) {aborter.abort();}); searches.clear(); ui.destroy();
+            if (dead) return; dead = true;
+            if (layoutObserver) layoutObserver.disconnect();
+            if (mutationObserver) mutationObserver.disconnect();
+            if (resizeTimer !== null) {window.clearTimeout(resizeTimer); resizeTimer = null;}
+            controller.destroy(); searches.forEach(function(aborter) {aborter.abort();}); searches.clear(); ui.destroy();
             if (root.data('ta-instance') === instance) root.removeData('ta-instance');
         };
         root.data('ta-instance', this);
