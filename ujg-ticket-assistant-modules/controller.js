@@ -6,7 +6,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         identity: 'Пользователь недоступен. Используется временное хранилище в памяти.',
         conflict: 'Черновик изменён в другой вкладке. Текущий ввод сохранён в памяти; разрешите конфликт перед сохранением.',
         storage: 'Не удалось сохранить данные. Текущий ввод сохранён в памяти.',
-        limit: 'Превышен лимит UTF-8 промпта. Сократите текст или явно выберите поля.',
+        limit: 'Приблизительная оценка контекста превышает локальный бюджет. Откройте настройки бюджета или явно сократите контекст.',
+        safety: 'Контекст превышает защитный предел размера передачи 4 МиБ. Сократите контекст явно.',
         secret: 'Контекст содержит возможные секреты. Удалите их перед отправкой.',
         config: 'Проверьте настройки подключения AI.',
         response: 'AI вернул ответ вне контракта. Проверьте данные вручную.',
@@ -19,7 +20,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var code = error && Object.prototype.hasOwnProperty.call(messages, error.code) ? error.code : fallback;
         var result = { code: code, message: messages[code] };
         if (code === 'limit' && error && error.details) {
-            var keys = ['systemBytes', 'userBytes', 'systemLimit', 'userLimit'];
+            var keys = ['instructions', 'source', 'metadata', 'input', 'context', 'reserve', 'available'];
             if (keys.every(function(k) { return Number.isSafeInteger(error.details[k]) && error.details[k] >= 0; })) {
                 result.details = {};
                 keys.forEach(function(k) { result.details[k] = error.details[k]; });
@@ -35,6 +36,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
+        var budgetCache = null, providerUsage = null;
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
         function durableGuard() {
             if (!store || !state.draft) return false;
@@ -48,6 +50,17 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
 
         function getState() {
             var result = Object.assign({}, state);
+            result.tokenPreflight = null;
+            if (state.draft && state.meta && state.settings && typeof ai.preflight === 'function') {
+                if (!budgetCache || budgetCache.draft!==state.draft || budgetCache.meta!==state.meta ||
+                    budgetCache.settings!==state.settings || budgetCache.generation!==state.generationFieldIds) {
+                    var estimate=null;
+                    try {estimate=ai.preflight(state.draft.issueTypeId && state.draft.templateId ? 'prepare' : 'route', input());} catch (ignored) { /* Selection may still be incomplete. */ }
+                    budgetCache={draft:state.draft,meta:state.meta,settings:state.settings,generation:state.generationFieldIds,value:estimate};
+                }
+                result.tokenPreflight=budgetCache.value;
+            }
+            result.providerUsage=providerUsage;
             result.draft = state.draft ? JSON.parse(drafts.serialize(state.draft)) : null;
             if (result.draft) result.draft.attachments.forEach(function(a) {a.needsReselect = a.status !== 'uploaded' && !runtimeFiles.has(a.id);});
             return copy(result);
@@ -146,6 +159,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (locked() || durableGuard()) return emit();
             if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
             stop(); state.draft = next; state.validation = null; state.routeCandidates = [];
+            providerUsage=null;
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
         }
@@ -158,7 +172,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
-                templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds,
+                templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds, tokenBudget:state.settings.tokenBudget,
                 draft: { fields: state.draft.fields }, explicitUserFields: policy().explicitUserFields });
         }
         function compatible(typeId, templateId) {
@@ -190,6 +204,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
+            budgetCache=null;providerUsage=null;
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
                 error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
             emit();
@@ -225,6 +240,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 }
                 state.draft = drafts.setSelection(entry.draft, { settingsRevision: entry.settings.revision });
                 state.settings = entry.settings; state.meta = entry.meta; explicitGeneration = entry.generation;
+                providerUsage=null;
                 state.validation = null; state.routeCandidates = []; state.error = entry.error || identityWarning;
                 updateScope();
                 if (await metadata(run, !!locked())) finish(run);
@@ -269,7 +285,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return selection;
         }
         function installSettings(settings) {
-            var selection=settingsSelection(settings);state.settings=settings;
+            var selection=settingsSelection(settings), previous=state.settings.tokenBudget;
+            if (previous.context!==settings.tokenBudget.context || previous.reserve!==settings.tokenBudget.reserve) invalidateCachedChecks();
+            state.settings=settings;
             return edited(drafts.setSelection(state.draft, selection));
         }
         async function loadSavedSettings() {
@@ -278,7 +296,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             try {
                 var saved = store.load(state.draft.projectKey);
                 // Loading rules never replaces or persists this tab's draft, nor acknowledges the CAS conflict.
-                stop();var selection=settingsSelection(saved.settings);state.settings = saved.settings;
+                stop();var selection=settingsSelection(saved.settings), previous=state.settings.tokenBudget;
+                if (previous.context!==saved.settings.tokenBudget.context || previous.reserve!==saved.settings.tokenBudget.reserve) invalidateCachedChecks();
+                state.settings = saved.settings;providerUsage=null;
                 state.draft = drafts.setSelection(state.draft, selection);
                 state.draft = Object.assign({},state.draft,{checked:null});
                 state.validation = null; state.routeCandidates = [];state.stage='idle';updateScope();remember();
@@ -349,6 +369,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                         if (!current(run, routeSnapshot)) return;
                         var route = await ai.route(routeInput, { signal: run.abort.signal });
                         if (!current(run, routeSnapshot)) return;
+                        providerUsage=route.usage || null;
                         state.routeCandidates = copy(route.candidates || []).map(function(c) { return { issueTypeId: c.issueTypeId, templateId: c.templateId, reason: c.reason }; });
                         var typeId = state.draft.issueTypeId || route.issueTypeId;
                         var templateId = state.draft.templateId || route.templateId;
@@ -380,6 +401,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     if (!current(run, snapshot)) return;
                     var result = await ai[kind](requestInput, { signal: run.abort.signal });
                     if (!current(run, snapshot)) return;
+                    providerUsage=result.usage || null;
                     if (kind === 'prepare') {
                         var generated = {};
                         state.generationFieldIds.forEach(function(id) {
@@ -494,9 +516,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 remember();updateScope();return emit();
             } catch(error) {state.error=errorState(null,'storage');return emit();}
         }
-        function connectionChanged() {
-            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
-            if (!state.draft) return getState();
+        function invalidateCachedChecks() {
             Object.keys(scopes).forEach(function(key) {
                 var entry=scopes[key], draft=entry.draft;
                 if (key===state.draft.projectKey || !draft || !draft.checked || draft.creation.issueKey ||
@@ -504,6 +524,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 // Inactive scopes save on selection; retain their storage revision and creation outcome.
                 entry.draft=Object.assign({},draft,{checked:null,draftRevision:draft.draftRevision+1});
             });
+        }
+        function connectionChanged() {
+            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
+            if (!state.draft) return getState();
+            invalidateCachedChecks();
             return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
         }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,

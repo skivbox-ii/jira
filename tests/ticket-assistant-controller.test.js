@@ -62,6 +62,44 @@ function harness(options = {}) {
     return { c, api, ai, calls, changes, identities, stores, localStorage, ready, setUser(value) { user = value; } };
 }
 
+test('budget edits cancel in-flight checks and retain budget when revisiting cached projects', async()=>{
+    const pending=deferred();let captured,signal;
+    const h=harness();await h.ready();await h.c.updateField('summary','Manual');await h.c.check();
+    assert.ok(h.c.getState().draft.checked);
+    const settings=h.c.getState().settings;settings.tokenBudget={context:65536,reserve:8192};
+    await h.c.applySettings(settings);assert.equal(h.c.getState().draft.checked,null);
+    h.ai.check=async(i,o)=>{captured=i;signal=o.signal;return pending.promise;};
+    const checking=h.c.check();await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(plain(captured.tokenBudget),{context:65536,reserve:8192});
+    settings.tokenBudget.reserve=4096;await h.c.applySettings(settings);assert.equal(signal.aborted,true);
+    pending.resolve({questions:[],warnings:[],evidence:[]});await checking;assert.equal(h.c.getState().draft.checked,null);
+    await h.c.selectProject('APP');await h.c.selectProject('DO');
+    assert.equal(h.c.getState().settings.tokenBudget.reserve,4096);assert.equal(h.c.getState().draft.checked,null);
+    assert.equal(h.c.getState().draft.fields.summary,'Manual');
+});
+
+test('budget configuration invalidates inactive checked projects without changing their rules or text',async()=>{
+    for(const mode of ['apply','load']) {
+    const h=harness();await h.ready();await h.c.updateField('summary','DO manual');await h.c.check();
+    assert.ok(h.c.getState().draft.checked);
+    await h.c.selectProject('APP');const settings=h.c.getState().settings;
+    settings.tokenBudget={context:65536,reserve:8192};
+    if(mode==='apply')await h.c.applySettings(settings);
+    else {const saved=h.stores[0].load('APP');settings.revision++;saved.settings=settings;h.stores[0].save('APP',saved,saved.revision);await h.c.loadSavedSettings();}
+    await h.c.selectProject('DO');assert.equal(h.c.getState().draft.checked,null);
+    assert.equal(h.c.getState().draft.fields.summary,'DO manual');assert.equal(h.c.getState().settings.tokenBudget.context,32768);
+    }
+});
+
+test('preflight cache avoids repeated catalogs on unchanged status reads and resets provider usage on identity init',async()=>{
+    let estimates=0;const h=harness({ai:{preflight(){estimates++;return {input:100};},async check(){return {questions:[],warnings:[],evidence:[],usage:{inputTokens:123,outputTokens:4,totalTokens:127,source:'provider'}};}}});
+    await h.ready();const initial=estimates;
+    for(let n=0;n<5;n++)h.c.getState();assert.equal(estimates,initial);
+    await h.c.updateSource('Changed');assert.ok(estimates>initial);
+    await h.c.updateField('summary','Manual');await h.c.check();assert.equal(h.c.getState().providerUsage.inputTokens,123);
+    await h.c.init();assert.equal(h.c.getState().providerUsage,null);
+});
+
 test('obsolete field exclusion preserves manual text and removes only the explicit blocker', async () => {
     const h=harness({api:{getCreateMeta:async key=>{const raw=rawMeta(key);raw.projects[0].issuetypes[0].fields.customfield_10={name:'Task recovery notes',schema:{type:'string',custom:'com.atlassian.jira.plugin.system.customfieldtypes:textarea'}};return raw;}}});
     await h.ready();await h.c.updateField('summary','Manual title');await h.c.updateField('customfield_10','Keep this\nmanual note');
@@ -295,7 +333,7 @@ test('manual user policy survives reload and cannot derive from an AI response',
 });
 
 test('safe errors preserve only numeric prompt details and edits; returned and notified state is detached', async () => {
-    const details = { systemBytes: 6001, userBytes: 43000, systemLimit: 6000, userLimit: 42000 };
+    const details = { instructions:2000,source:30000,metadata:1000,input:33000,context:32768,reserve:4096,available:28672 };
     const h = harness({ ai: { async prepare() { throw Object.assign(new Error('SECRET raw body'), { code: 'limit', details: { ...details, body: 'SECRET' }, token: 'SECRET' }); } } });
     await h.ready(); await h.c.updateField('summary', 'Keep'); await h.c.prepare();
     assert.equal(h.c.getState().error.code, 'limit'); assert.deepEqual(plain(h.c.getState().error.details), details);

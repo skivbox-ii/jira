@@ -39,6 +39,11 @@
 .ujg-ticket-assistant .ta-warning, .ujg-ticket-assistant .ta-pending { border-left: 3px solid #cc9318; background: #fff9e9; padding: 8px 12px; margin: 12px 0; overflow-wrap: anywhere; }
 .ujg-ticket-assistant .ta-warning:empty { display: none; }
 .ujg-ticket-assistant .ta-muted { color: #59666f; font-weight: 400; }
+.ujg-ticket-assistant .ta-token-preflight { margin-top: 8px; font-size: 12px; border-left: 2px solid #b7c1c9; padding-left: 10px; }
+.ujg-ticket-assistant .ta-token-preflight button { min-height: 28px; padding: 3px 7px; font-size: 12px; }
+.ujg-ticket-assistant .ta-budget-over { border-color: #c53428; }
+.ujg-ticket-assistant .ta-budget-over [data-ta-token-summary] { color: #9f2119; }
+.ujg-ticket-assistant .ta-budget-settings { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
 .ujg-ticket-assistant .ta-progress { display: flex; gap: 12px; color: #36556d; min-height: 24px; }
 .ujg-ticket-assistant .ta-questions, .ujg-ticket-assistant .ta-scope { border-top: 1px solid #dce1e5; margin-top: 22px; padding-top: 16px; }
 .ujg-ticket-assistant .ta-question { margin-bottom: 18px; }
@@ -69,6 +74,7 @@
 .ujg-ticket-assistant .ta-settings-transfer { margin: 18px 0; border-top: 1px solid #dce1e5; padding-top: 14px; }
 .ujg-ticket-assistant .ta-settings-dialog > [data-ta-discard-confirm] { margin: 0 18px 12px; flex-shrink: 0; }
 @media (max-width: 680px) {
+    .ujg-ticket-assistant .ta-budget-settings { grid-template-columns: minmax(0,1fr); gap: 0; }
     .ujg-ticket-assistant [data-ta-settings] { padding: 8px; }
     .ujg-ticket-assistant .ta-settings-dialog { max-height: calc(100dvh - 16px); }
     .ujg-ticket-assistant .ta-settings-header, .ujg-ticket-assistant .ta-settings-footer { padding: 10px 12px; }

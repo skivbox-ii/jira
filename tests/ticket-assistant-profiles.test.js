@@ -2,6 +2,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { loadUnit } = require('./helpers/ticket-assistant-fixture');
 
+test('old settings migrate budget and explicit budgets roundtrip with editable prompts', () => {
+    const p=loadUnit('profiles'), old=p.createDefaults(); delete old.tokenBudget;
+    const migrated=p.parseSettingsImport(JSON.stringify(old));
+    assert.deepEqual(JSON.parse(JSON.stringify(migrated.value.tokenBudget)),{context:32768,reserve:4096});
+    migrated.value.tokenBudget={context:65536,reserve:8192};
+    migrated.value.profiles[0].instructions='  editable\n\n';
+    const imported=p.parseSettingsImport(p.exportSettings(migrated.value));
+    assert.deepEqual(JSON.parse(JSON.stringify(imported.value.tokenBudget)),{context:65536,reserve:8192});
+    assert.equal(imported.value.profiles[0].instructions,'  editable\n\n');
+    for (const budget of [null,{}, {context:0,reserve:1},{context:10,reserve:10},{context:10,reserve:-1},{context:10,reserve:1.1},{context:Infinity,reserve:1},{context:'20',reserve:1}]) {
+        const settings=p.createDefaults();settings.tokenBudget=budget;assert.equal(p.validateSettings(settings).ok,false);
+    }
+});
+
 test('defaults are independent and have three editable templates', () => {
     const profiles = loadUnit('profiles');
     const a = profiles.createDefaults(), b = profiles.createDefaults();

@@ -22,6 +22,57 @@ function response(kind = 'draft', extra = {}) {
 function parse(kind, body, value = input()) { return ai().parseResponse(kind, typeof body === 'string' ? body : JSON.stringify(body), value); }
 const config = {apiBase: 'https://stub.invalid', apiKey: 'KEY_SECRET', model: 'stub', basePrompt: 'unchanged'};
 
+test('configured budget admits large prompts and shared transport preserves every character', async () => {
+    const i = input(); i.tokenBudget = {context: 100000, reserve: 4096};
+    i.source = '  начало\n\n' + 'я x  '.repeat(11000) + '\t конец  ';
+    i.profile.instructions = '  rule\n\n'.repeat(1000);
+    const request = ai().buildRequest('prepare', i);
+    assert.ok(shared.utf8ByteLength(request.userPrompt) > 42000);
+    for (const legacy of [false, true]) {
+        const body = shared.buildRequestBody({...config, useLegacyCompletionsEndpoint: legacy}, request);
+        if (legacy) assert.equal(body.prompt, request.systemPrompt + '\n\n' + request.userPrompt);
+        else {assert.equal(body.messages[0].role,'user');assert.equal(body.messages[1].role,'user');assert.equal(body.messages[0].content,request.systemPrompt);assert.equal(body.messages[1].content,request.userPrompt);}
+        assert.equal(body.max_tokens, undefined);
+    }
+    let sent;
+    const client = ai().createClient({readConfig: () => config, fetchImpl: async (url, options) => {
+        sent = JSON.parse(options.body);
+        return {ok:true,text:async()=>JSON.stringify({choices:[{message:{content:JSON.stringify(response())}}],usage:{prompt_tokens:123,completion_tokens:45,total_tokens:168}})};
+    }});
+    const result = await client.prepare(i);
+    assert.equal(sent.messages[0].content, request.systemPrompt);
+    assert.equal(sent.messages[1].content, request.userPrompt);
+    assert.deepEqual({...result.usage}, {inputTokens:123,outputTokens:45,totalTokens:168,source:'provider'});
+});
+
+test('preflight estimates unicode and empty text, accounts for reserve and blocks before network', async () => {
+    const i=input(); i.source='';
+    const empty=ai().preflight('prepare', i);
+    assert.equal(empty.source, 0);
+    assert.ok(empty.instructions > 0 && empty.metadata > 0);
+    assert.equal(empty.input, empty.instructions + empty.source + empty.metadata);
+    i.source='😀漢я'.repeat(100);
+    const unicode=ai().preflight('prepare',i);
+    assert.ok(unicode.source >= 300 && unicode.source < shared.utf8ByteLength(JSON.stringify(i.source)));
+    i.tokenBudget={context:unicode.input+100,reserve:100};
+    assert.equal(ai().preflight('prepare',i).fits,true);
+    i.tokenBudget.reserve=101;
+    const over=ai().preflight('prepare',i); assert.equal(over.fits,false);
+    let calls=0;
+    const client=ai().createClient({readConfig:()=>config,fetchImpl:async()=>{calls++;}});
+    await assert.rejects(client.prepare(i),e=>e.code==='limit' && e.details.input===over.input && !/UTF-8/.test(e.message));
+    assert.equal(calls,0);
+    for (const budget of [{context:0,reserve:1},{context:10,reserve:10},{context:20,reserve:NaN},{context:Infinity,reserve:1},{context:20,reserve:1.5}]) {
+        i.tokenBudget=budget;
+        assert.throws(()=>ai().buildRequest('prepare',i),e=>e.code==='config');
+    }
+});
+
+test('response JSON above former byte cap is accepted with a separate bounded safety cap', () => {
+    assert.equal(parse('check',response('check',{warnings:['я'.repeat(30000)]})).warnings[0].length,30000);
+    assert.throws(()=>parse('check',response('check',{warnings:['x'.repeat(2*1024*1024)]})),e=>e.code==='response');
+});
+
 test('missing custom fields ask using current metadata names and keep machine IDs stable', () => {
     const i=input(), field=i.meta.issueTypes[0].fields.find(f=>f.id==='customfield_2');
     field.required=true; field.name='Контур проверки';
@@ -112,48 +163,30 @@ test('prompts whitelist context, preserve editable instructions and disallow fal
     i.source = 'Authorization: Bearer TOP_SECRET';
     assert.throws(() => ai().buildRequest('prepare', i), e => !e.message.includes('TOP_SECRET'));
 });
-test('final system and user prompts accept exact UTF8 boundaries and reject next byte', () => {
-    for (const [property, limit, edit] of [
-        ['systemPrompt', 6000, (i, s) => {i.profile.instructions = s;}],
-        ['userPrompt', 42000, (i, s) => {i.source = s;}]
-    ]) {
-        const i = input(); edit(i, '');
-        const remaining = limit - shared.utf8ByteLength(ai().buildRequest('prepare', i)[property]);
-        const padding = 'я'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2);
-        edit(i, padding);
-        const atLimit = ai().buildRequest('prepare', i);
-        assert.equal(shared.utf8ByteLength(atLimit[property]), limit);
-        edit(i, padding + 'x');
-        assert.throws(() => ai().buildRequest('prepare', i), error => {
-            assert.equal(error.code, 'limit');
-            assert.deepEqual({...error.details}, {
-                systemBytes: shared.utf8ByteLength(atLimit.systemPrompt) + (property === 'systemPrompt' ? 1 : 0),
-                userBytes: shared.utf8ByteLength(atLimit.userPrompt) + (property === 'userPrompt' ? 1 : 0),
-                systemLimit: 6000, userLimit: 42000
-            });
-            assert.deepEqual(Object.keys(error).sort(), ['code', 'details']);
-            return true;
-        });
+test('editable instructions and full JSON input both count against the same local budget', () => {
+    for (const edit of [(i)=>{i.profile.instructions+='я';},(i)=>{i.source+='я';}]) {
+        const i=input(),estimate=ai().preflight('prepare',i);
+        i.tokenBudget={context:estimate.input+100,reserve:100};
+        assert.ok(ai().buildRequest('prepare',i));edit(i);
+        assert.throws(()=>ai().buildRequest('prepare',i),e=>e.code==='limit' && e.details.input===estimate.input+1);
     }
 });
-test('oversize UTF-8 input is rejected before shared client truncation', async () => {
+test('over-budget input is rejected before transport', async () => {
     let calls = 0;
     const client = ai().createClient({llmClient: {...shared, requestText() {calls++;}}, fetchImpl() {}, readConfig: () => config});
-    await assert.rejects(client.prepare({...input(), source: 'я'.repeat(42001)}, {}), /лимит/i);
+    await assert.rejects(client.prepare({...input(), source: 'я'.repeat(42001)}, {}), /бюджет/i);
     assert.equal(calls, 0);
 });
-test('client limit rejection retains only numeric sizes for both final prompts', async () => {
+test('client limit rejection retains only safe budget accounting and no request content', async () => {
     const i = input(); i.profile.instructions = 'я'.repeat(4000); i.source = 'x'.repeat(43000) + 'PRIVATE_BODY';
+    i.tokenBudget={context:1000,reserve:100};
     let calls = 0;
     const client = ai().createClient({llmClient: {...shared, requestText() {calls++;}}, readConfig: () => config, fetchImpl() {}});
     await assert.rejects(client.check(i), error => {
         assert.equal(error.code, 'limit');
-        assert.deepEqual(Object.keys(error.details).sort(), ['systemBytes', 'systemLimit', 'userBytes', 'userLimit']);
-        assert.ok(Object.values(error.details).every(Number.isInteger));
-        assert.ok(error.details.systemBytes > error.details.systemLimit);
-        assert.ok(error.details.userBytes > error.details.userLimit);
-        assert.equal(error.details.systemLimit, 6000);
-        assert.equal(error.details.userLimit, 42000);
+        assert.ok(error.details.input > error.details.available);
+        assert.equal(error.details.context,1000);assert.equal(error.details.reserve,100);
+        assert.equal(error.details.input,error.details.instructions+error.details.source+error.details.metadata);
         assert.ok(!JSON.stringify(error).includes('PRIVATE_BODY') && !JSON.stringify(error).includes('KEY_SECRET'));
         return true;
     });
@@ -189,7 +222,7 @@ test('check retains populated excluded fields with minimal context while omittin
 test('oversized catalogs require explicit field selection without silent truncation', () => {
     const i = input(); i.meta.issueTypes[0].fields.find(f => f.id === 'customfield_2').allowedValues =
         Array.from({length: 2000}, (_, n) => ({id: String(n), label: 'Каталог ' + n}));
-    assert.throws(() => ai().buildRequest('prepare', i), /лимит.*выбор|выбор.*лимит/i);
+    assert.throws(() => ai().buildRequest('prepare', i), e=>e.code==='limit');
     i.allowFieldIds = ['summary'];
     assert.ok(ai().buildRequest('prepare', i).userPrompt);
 });

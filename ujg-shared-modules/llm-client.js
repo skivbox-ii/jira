@@ -7,6 +7,34 @@ define("_ujgShared_llmClient", [], function() {
   var CHAT_COMPLETIONS_PATH = "/chat/completions";
   var LEGACY_COMPLETIONS_PATH = "/completions";
   var TRIM_SUFFIX = "\n...[trimmed]";
+  // Resource protection only, independent of model context capacity.
+  var MAX_PRESERVED_PROMPT_BYTES = 4 * 1024 * 1024;
+
+  function validateTokenBudget(value) {
+    if (!value || !Number.isSafeInteger(value.context) || !Number.isSafeInteger(value.reserve) ||
+        value.context <= 0 || value.reserve <= 0 || value.reserve >= value.context) throw new Error("Invalid local token budget");
+    return {context:value.context,reserve:value.reserve};
+  }
+
+  function estimateTokens(value) {
+    // Conservative heuristic for unknown tokenizers: ASCII / 3, other code points / 1.
+    // This is approximate, not a guarantee for an arbitrary provider/model.
+    var ascii=0, other=0;
+    Array.from(value).forEach(function(ch) {if(ch.charCodeAt(0)<128)ascii++;else other++;});
+    return Math.ceil(ascii / 3) + other;
+  }
+
+  function requestPrompts(request) {
+    if (!request || request.preservePrompt !== true) return {
+      system:sanitizePrompt(request && request.systemPrompt, MAX_BASE_PROMPT_BYTES),
+      user:sanitizePrompt(request && request.userPrompt, MAX_USER_PROMPT_BYTES)
+    };
+    var budget=validateTokenBudget(request.tokenBudget), system=request.systemPrompt, user=request.userPrompt;
+    if (typeof system !== "string" || typeof user !== "string" || !system.trim() || !user.trim()) throw new Error("AI prompt is empty");
+    if (utf8ByteLength(system)+utf8ByteLength(user)>MAX_PRESERVED_PROMPT_BYTES) throw new Error("Prompt exceeds transport safety size");
+    if (estimateTokens(system)+estimateTokens(user)+32>budget.context-budget.reserve) throw new Error("Local token budget exceeded");
+    return {system:system,user:user};
+  }
 
   function trimString(value) {
     return String(value == null ? "" : value).trim();
@@ -170,8 +198,9 @@ define("_ujgShared_llmClient", [], function() {
 
   function buildRequestBody(config, request, forceLegacy) {
     var normalized = normalizeConfig(config);
-    var systemPrompt = sanitizePrompt(request && request.systemPrompt, MAX_BASE_PROMPT_BYTES);
-    var userPrompt = sanitizePrompt(request && request.userPrompt, MAX_USER_PROMPT_BYTES);
+    var prompts = requestPrompts(request);
+    var systemPrompt = prompts.system;
+    var userPrompt = prompts.user;
     var useLegacy;
     if (!normalized) throw new Error("AI config is invalid");
     if (!systemPrompt) throw new Error("AI prompt is empty");
@@ -356,8 +385,9 @@ define("_ujgShared_llmClient", [], function() {
       stage:stage,
       prepared:function(url,body,request) {
         requestUrl=url;trace.request.url=safeUrl(url);trace.request.model=cleanText(config.model);bodyPreview(trace.request,body);
-        trace.request.systemBytes=utf8ByteLength(sanitizePrompt(request && request.systemPrompt,MAX_BASE_PROMPT_BYTES));
-        trace.request.userBytes=utf8ByteLength(sanitizePrompt(request && request.userPrompt,MAX_USER_PROMPT_BYTES));
+        var prompts=requestPrompts(request);
+        trace.request.systemBytes=utf8ByteLength(prompts.system);
+        trace.request.userBytes=utf8ByteLength(prompts.user);
       },
       notSent:function(request) {
         trace.request.headers={};trace.request.credentials=null;
@@ -456,6 +486,9 @@ define("_ujgShared_llmClient", [], function() {
     DEFAULT_STORAGE_KEY: DEFAULT_STORAGE_KEY,
     MAX_BASE_PROMPT_BYTES: MAX_BASE_PROMPT_BYTES,
     MAX_USER_PROMPT_BYTES: MAX_USER_PROMPT_BYTES,
+    MAX_PRESERVED_PROMPT_BYTES: MAX_PRESERVED_PROMPT_BYTES,
+    validateTokenBudget: validateTokenBudget,
+    estimateTokens: estimateTokens,
     trimString: trimString,
     utf8ByteLength: utf8ByteLength,
     truncateByBytes: truncateByBytes,

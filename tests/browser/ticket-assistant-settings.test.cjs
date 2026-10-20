@@ -60,6 +60,20 @@ for (const [kind,id] of [['profile','devops'],['template','bug']]) {
     });
 }
 
+test('budget inputs validate locally; cancelling preserves checked draft and apply persists through reload', async t=>{
+    const s=await setup(t);await s.click('[data-ta-check]');
+    await s.click('[data-ta-open-settings]');
+    s.input('[data-ta-context-budget]','65536');s.input('[data-ta-response-reserve]','65536');
+    await s.click('[data-ta-settings-apply]');assert.equal(s.q('[data-ta-settings-dialog]').hidden,false);
+    assert.match(s.q('[data-ta-settings-error]').textContent,/резерв/i);assert.ok(s.c.getState().draft.checked);
+    await s.click('[data-ta-settings-cancel]');await s.click('[data-ta-discard-settings]');
+    assert.equal(s.c.getState().settings.tokenBudget.context,32768);assert.ok(s.c.getState().draft.checked);
+    await s.click('[data-ta-open-settings]');s.input('[data-ta-context-budget]','65536');s.input('[data-ta-response-reserve]','8192');
+    await s.click('[data-ta-settings-apply]');assert.equal(s.c.getState().draft.checked,null);
+    const reloaded=await setup(t,s.backend);assert.equal(reloaded.c.getState().settings.tokenBudget.context,65536);
+    assert.equal(reloaded.c.getState().settings.tokenBudget.reserve,8192);
+});
+
 test('settings editing is local until Apply; cancel confirmation, Escape and focus preserve source and fields', async t=>{
     const s=await setup(t);await s.click('[data-ta-check]');assert.ok(s.c.getState().draft.checked);
     const revision=s.c.getState().settings.revision;

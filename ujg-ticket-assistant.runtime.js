@@ -7,6 +7,34 @@ define("_ujgTA_llmClient", [], function() {
   var CHAT_COMPLETIONS_PATH = "/chat/completions";
   var LEGACY_COMPLETIONS_PATH = "/completions";
   var TRIM_SUFFIX = "\n...[trimmed]";
+  // Resource protection only, independent of model context capacity.
+  var MAX_PRESERVED_PROMPT_BYTES = 4 * 1024 * 1024;
+
+  function validateTokenBudget(value) {
+    if (!value || !Number.isSafeInteger(value.context) || !Number.isSafeInteger(value.reserve) ||
+        value.context <= 0 || value.reserve <= 0 || value.reserve >= value.context) throw new Error("Invalid local token budget");
+    return {context:value.context,reserve:value.reserve};
+  }
+
+  function estimateTokens(value) {
+    // Conservative heuristic for unknown tokenizers: ASCII / 3, other code points / 1.
+    // This is approximate, not a guarantee for an arbitrary provider/model.
+    var ascii=0, other=0;
+    Array.from(value).forEach(function(ch) {if(ch.charCodeAt(0)<128)ascii++;else other++;});
+    return Math.ceil(ascii / 3) + other;
+  }
+
+  function requestPrompts(request) {
+    if (!request || request.preservePrompt !== true) return {
+      system:sanitizePrompt(request && request.systemPrompt, MAX_BASE_PROMPT_BYTES),
+      user:sanitizePrompt(request && request.userPrompt, MAX_USER_PROMPT_BYTES)
+    };
+    var budget=validateTokenBudget(request.tokenBudget), system=request.systemPrompt, user=request.userPrompt;
+    if (typeof system !== "string" || typeof user !== "string" || !system.trim() || !user.trim()) throw new Error("AI prompt is empty");
+    if (utf8ByteLength(system)+utf8ByteLength(user)>MAX_PRESERVED_PROMPT_BYTES) throw new Error("Prompt exceeds transport safety size");
+    if (estimateTokens(system)+estimateTokens(user)+32>budget.context-budget.reserve) throw new Error("Local token budget exceeded");
+    return {system:system,user:user};
+  }
 
   function trimString(value) {
     return String(value == null ? "" : value).trim();
@@ -170,8 +198,9 @@ define("_ujgTA_llmClient", [], function() {
 
   function buildRequestBody(config, request, forceLegacy) {
     var normalized = normalizeConfig(config);
-    var systemPrompt = sanitizePrompt(request && request.systemPrompt, MAX_BASE_PROMPT_BYTES);
-    var userPrompt = sanitizePrompt(request && request.userPrompt, MAX_USER_PROMPT_BYTES);
+    var prompts = requestPrompts(request);
+    var systemPrompt = prompts.system;
+    var userPrompt = prompts.user;
     var useLegacy;
     if (!normalized) throw new Error("AI config is invalid");
     if (!systemPrompt) throw new Error("AI prompt is empty");
@@ -356,8 +385,9 @@ define("_ujgTA_llmClient", [], function() {
       stage:stage,
       prepared:function(url,body,request) {
         requestUrl=url;trace.request.url=safeUrl(url);trace.request.model=cleanText(config.model);bodyPreview(trace.request,body);
-        trace.request.systemBytes=utf8ByteLength(sanitizePrompt(request && request.systemPrompt,MAX_BASE_PROMPT_BYTES));
-        trace.request.userBytes=utf8ByteLength(sanitizePrompt(request && request.userPrompt,MAX_USER_PROMPT_BYTES));
+        var prompts=requestPrompts(request);
+        trace.request.systemBytes=utf8ByteLength(prompts.system);
+        trace.request.userBytes=utf8ByteLength(prompts.user);
       },
       notSent:function(request) {
         trace.request.headers={};trace.request.credentials=null;
@@ -456,6 +486,9 @@ define("_ujgTA_llmClient", [], function() {
     DEFAULT_STORAGE_KEY: DEFAULT_STORAGE_KEY,
     MAX_BASE_PROMPT_BYTES: MAX_BASE_PROMPT_BYTES,
     MAX_USER_PROMPT_BYTES: MAX_USER_PROMPT_BYTES,
+    MAX_PRESERVED_PROMPT_BYTES: MAX_PRESERVED_PROMPT_BYTES,
+    validateTokenBudget: validateTokenBudget,
+    estimateTokens: estimateTokens,
     trimString: trimString,
     utf8ByteLength: utf8ByteLength,
     truncateByBytes: truncateByBytes,
@@ -486,7 +519,7 @@ define('_ujgTA_profiles', [], function() {
             ];
         }
         return {
-            schemaVersion: 1, revision: 0, activeProfileId: 'universal',
+            schemaVersion: 1, revision: 0, activeProfileId: 'universal', tokenBudget: {context:32768,reserve:4096},
             profiles: [
                 { id: 'universal', name: 'Универсальный', allowAssignee: false, instructions: 'Пиши по-русски. Сформулируй содержательную тему с действием или сбоем и местом. Описывай только известные факты, цель и критерии приёмки. Сохрани предоставленные ссылки. Уточняй недостающие сведения. Не назначай исполнителя самостоятельно.', templates: templates() },
                 { id: 'devops', name: 'DEVOPS', allowAssignee: false, instructions: 'Пиши по-русски. Тема должна быть содержательной: действие или сбой и место. Обязательны критерии приёмки и ссылки; запроси их, если они отсутствуют. Не назначай инженера вручную. Связь с историей желательна, но её отсутствие не блокирует разовую задачу. Для ошибки «с поля» без доступных логов запроси конфигурацию, версию, условия и явную причину отсутствия логов. Для развёртывания укажи среду DEV/TEST/PREPROD, версию/артефакт, состав, порядок действий, окно, проверку результата и кто проверяет. Не выдумывай недостающие сведения.', templates: templates() }
@@ -530,6 +563,10 @@ define('_ujgTA_profiles', [], function() {
             record(input);
             if (input.schemaVersion !== 1) throw new Error('Unsupported schemaVersion');
             if (!Number.isSafeInteger(input.revision) || input.revision < 0) throw new Error('Invalid revision');
+            var budget = input.tokenBudget === undefined ? {context:32768,reserve:4096} : input.tokenBudget;
+            if (!budget || !Number.isSafeInteger(budget.context) || !Number.isSafeInteger(budget.reserve) ||
+                budget.context <= 0 || budget.reserve <= 0 || budget.reserve >= budget.context)
+                throw new Error('Бюджет и резерв должны быть положительными целыми числами; резерв меньше бюджета.');
             value = { schemaVersion: 1, revision: input.revision, activeProfileId: string(input.activeProfileId, true), profiles: unique(input.profiles, function(profile) {
                 if (typeof profile.allowAssignee !== 'boolean') throw new Error('Invalid allowAssignee');
                 return { id: string(profile.id, true), name: string(profile.name, true), instructions: string(profile.instructions), allowAssignee: profile.allowAssignee, templates: unique(profile.templates, function(template) {
@@ -537,6 +574,7 @@ define('_ujgTA_profiles', [], function() {
                     return { id: string(template.id, true), name: string(template.name, true), whenToUse: string(template.whenToUse), instructions: string(template.instructions), issueTypeId: template.issueTypeId };
                 }) };
             }) };
+            value.tokenBudget = {context:budget.context,reserve:budget.reserve};
             if (!value.profiles.some(function(profile) { return profile.id === value.activeProfileId; })) throw new Error('Unknown activeProfileId');
         } catch (error) {
             errors.push(error.message);
@@ -1259,7 +1297,8 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
     var messages = {
         input: 'Некорректный контекст AI. Обновите metadata и явно выберите область полей.',
         response: 'AI вернул ответ вне контракта JSONv1. Проверьте данные вручную.',
-        limit: 'Превышен лимит UTF-8 промпта. Сократите текст или сделайте явный выбор полей каталога.',
+        limit: 'Приблизительная оценка контекста превышает локальный бюджет. Откройте настройки бюджета или явно сократите контекст.',
+        safety: 'Контекст превышает защитный предел размера передачи 4 МиБ. Сократите контекст явно.',
         secret: 'Контекст содержит возможные секреты. Удалите их перед отправкой.',
         config: 'Проверьте настройки подключения AI.',
         transport: 'Не удалось получить ответ AI. Повторите действие вручную.',
@@ -1268,10 +1307,7 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
     function fail(code, details) {
         var error = new Error(messages[code]);
         error.code = code;
-        if (code === 'limit' && details) error.details = {
-            systemBytes: details.systemBytes, userBytes: details.userBytes,
-            systemLimit: details.systemLimit, userLimit: details.userLimit
-        };
+        if (code === 'limit' && details) error.details = details;
         throw error;
     }
     function record(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
@@ -1364,7 +1400,7 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
         value = value.replace(/\\+["']/g, '"');
         if (/\b(?:Bearer|Basic)\s+\S+|\b(?:authorization|cookie|set-cookie|api[-_]?key|password|passwd|token|access[-_]?token|refresh[-_]?token|secret|credentials|sessionid)\s*["']?\s*[:=]|-----BEGIN [A-Z ]*PRIVATE KEY-----|https?:\/\/[^\s/]+:[^\s/]+@/i.test(value)) fail('secret');
     }
-    function buildRequest(kind, input) {
+    function buildRequest(kind, input, preview) {
         var ctx = context(kind, input);
         var current = draftFields(input, ctx);
         var editable = {profileInstructions: text(ctx.profile.instructions), templates: ctx.templates.map(function(t) {
@@ -1386,12 +1422,22 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
             }), fields: current, currentFieldContext: ctx.typeId === null ? [] : ctx.types[0].fields.filter(function(f) {
                 return own(current, f.id) && input.allowFieldIds.indexOf(f.id) === -1;
             }).map(function(f) { return {id: f.id, name: text(f.name), kind: f.kind}; })});
-        var sizes = {systemBytes: shared.utf8ByteLength(systemPrompt), userBytes: shared.utf8ByteLength(userPrompt),
-            systemLimit: shared.MAX_BASE_PROMPT_BYTES, userLimit: shared.MAX_USER_PROMPT_BYTES};
-        if (sizes.systemBytes > sizes.systemLimit || sizes.userBytes > sizes.userLimit) fail('limit', sizes);
+        var budget;
+        try { budget=shared.validateTokenBudget(input.tokenBudget === undefined ? {context:32768,reserve:4096} : input.tokenBudget); }
+        catch (ignored) {fail('config');}
+        var instructions=shared.estimateTokens(systemPrompt), source=shared.estimateTokens(JSON.stringify(input.source).slice(1,-1));
+        var userTokens=shared.estimateTokens(userPrompt);
+        var sizes={instructions:instructions,source:source,metadata:userTokens-source+32,
+            input:instructions+userTokens+32,context:budget.context,reserve:budget.reserve,available:budget.context-budget.reserve};
+        sizes.fits=sizes.input<=sizes.available;
+        sizes.safetyFits=shared.utf8ByteLength(systemPrompt)+shared.utf8ByteLength(userPrompt)<=shared.MAX_PRESERVED_PROMPT_BYTES;
+        if (preview) return sizes;
+        if (!sizes.safetyFits) fail('safety');
+        if (!sizes.fits) fail('limit', sizes);
         rejectSecrets(systemPrompt); rejectSecrets(userPrompt);
-        return {systemPrompt: systemPrompt, userPrompt: userPrompt, allowProtocolFallback: false};
+        return {systemPrompt: systemPrompt, userPrompt: userPrompt, allowProtocolFallback: false, preservePrompt:true, tokenBudget:budget};
     }
+    function preflight(kind, input) {return buildRequest(kind,input,true);}
     function validQuestions(items) {
         return Array.isArray(items) && unique(items, function(q) { return q.id; }) && items.every(function(q) {
             return keys(q, ['id', 'text', 'reason', 'required']) && typeof q.text === 'string' && !!q.text.trim() && typeof q.reason === 'string' && typeof q.required === 'boolean';
@@ -1399,7 +1445,8 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
     }
     function parseResponse(kind, raw, input) {
         var ctx = context(kind, input), result;
-        try { if (typeof raw !== 'string' || !raw.trim() || shared.utf8ByteLength(raw) > shared.MAX_USER_PROMPT_BYTES) fail('response'); result = JSON.parse(raw); }
+        // JSON resource safety bound, not a token/context limit.
+        try { if (typeof raw !== 'string' || !raw.trim() || shared.utf8ByteLength(raw) > 2 * 1024 * 1024) fail('response'); result = JSON.parse(raw); }
         catch (ignored) { fail('response'); }
         rejectSecrets(raw);
         var expected = kind === 'prepare' ? 'draft' : kind;
@@ -1457,10 +1504,11 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
             var connectionKey;
             return Promise.resolve().then(function() {
                 abort(options.signal);
-                var request = buildRequest(kind, input), config;
+                var config;
                 try { config = deps.readConfig ? deps.readConfig() : llm.readStoredConfig(typeof localStorage !== 'undefined' ? localStorage : null); }
                 catch (ignored) { fail('config'); }
                 if (!config) fail('config');
+                var request = buildRequest(kind, input);
                 connectionKey = typeof config.apiKey === 'string' ? config.apiKey : '';
                 if (typeof config.apiKey === 'string' && config.apiKey && (request.systemPrompt.indexOf(config.apiKey) !== -1 || request.userPrompt.indexOf(config.apiKey) !== -1)) fail('secret');
                 // No diagnostics callback or fallback: shared raw failures stay inside this boundary.
@@ -1475,14 +1523,21 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
                 abort(options.signal);
                 var result = parseResponse(kind, response && response.text, input);
                 if (connectionKey && JSON.stringify(result).indexOf(connectionKey) !== -1) fail('secret');
+                var usage=response && response.payload && response.payload.usage;
+                function count(value) {return Number.isSafeInteger(value) && value>=0 ? value : null;}
+                if (usage) {
+                    var measured={inputTokens:count(usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens),
+                        outputTokens:count(usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens),totalTokens:count(usage.total_tokens),source:'provider'};
+                    if (measured.inputTokens!==null || measured.outputTokens!==null || measured.totalTokens!==null) result.usage=measured;
+                }
                 return result;
             });
         }
-        return {route: function(input, options) { return run('route', input, options); },
+        return {preflight:preflight, route: function(input, options) { return run('route', input, options); },
             prepare: function(input, options) { return run('prepare', input, options); },
             check: function(input, options) { return run('check', input, options); }};
     }
-    return {createClient: createClient, buildRequest: buildRequest, parseResponse: parseResponse};
+    return {createClient: createClient, buildRequest: buildRequest, preflight:preflight, parseResponse: parseResponse};
 });
 
 /* === Module: creator.js === */
@@ -1664,7 +1719,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         identity: 'Пользователь недоступен. Используется временное хранилище в памяти.',
         conflict: 'Черновик изменён в другой вкладке. Текущий ввод сохранён в памяти; разрешите конфликт перед сохранением.',
         storage: 'Не удалось сохранить данные. Текущий ввод сохранён в памяти.',
-        limit: 'Превышен лимит UTF-8 промпта. Сократите текст или явно выберите поля.',
+        limit: 'Приблизительная оценка контекста превышает локальный бюджет. Откройте настройки бюджета или явно сократите контекст.',
+        safety: 'Контекст превышает защитный предел размера передачи 4 МиБ. Сократите контекст явно.',
         secret: 'Контекст содержит возможные секреты. Удалите их перед отправкой.',
         config: 'Проверьте настройки подключения AI.',
         response: 'AI вернул ответ вне контракта. Проверьте данные вручную.',
@@ -1677,7 +1733,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var code = error && Object.prototype.hasOwnProperty.call(messages, error.code) ? error.code : fallback;
         var result = { code: code, message: messages[code] };
         if (code === 'limit' && error && error.details) {
-            var keys = ['systemBytes', 'userBytes', 'systemLimit', 'userLimit'];
+            var keys = ['instructions', 'source', 'metadata', 'input', 'context', 'reserve', 'available'];
             if (keys.every(function(k) { return Number.isSafeInteger(error.details[k]) && error.details[k] >= 0; })) {
                 result.details = {};
                 keys.forEach(function(k) { result.details[k] = error.details[k]; });
@@ -1693,6 +1749,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
+        var budgetCache = null, providerUsage = null;
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
         function durableGuard() {
             if (!store || !state.draft) return false;
@@ -1706,6 +1763,17 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
 
         function getState() {
             var result = Object.assign({}, state);
+            result.tokenPreflight = null;
+            if (state.draft && state.meta && state.settings && typeof ai.preflight === 'function') {
+                if (!budgetCache || budgetCache.draft!==state.draft || budgetCache.meta!==state.meta ||
+                    budgetCache.settings!==state.settings || budgetCache.generation!==state.generationFieldIds) {
+                    var estimate=null;
+                    try {estimate=ai.preflight(state.draft.issueTypeId && state.draft.templateId ? 'prepare' : 'route', input());} catch (ignored) { /* Selection may still be incomplete. */ }
+                    budgetCache={draft:state.draft,meta:state.meta,settings:state.settings,generation:state.generationFieldIds,value:estimate};
+                }
+                result.tokenPreflight=budgetCache.value;
+            }
+            result.providerUsage=providerUsage;
             result.draft = state.draft ? JSON.parse(drafts.serialize(state.draft)) : null;
             if (result.draft) result.draft.attachments.forEach(function(a) {a.needsReselect = a.status !== 'uploaded' && !runtimeFiles.has(a.id);});
             return copy(result);
@@ -1804,6 +1872,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (locked() || durableGuard()) return emit();
             if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
             stop(); state.draft = next; state.validation = null; state.routeCandidates = [];
+            providerUsage=null;
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
         }
@@ -1816,7 +1885,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
-                templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds,
+                templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds, tokenBudget:state.settings.tokenBudget,
                 draft: { fields: state.draft.fields }, explicitUserFields: policy().explicitUserFields });
         }
         function compatible(typeId, templateId) {
@@ -1848,6 +1917,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
+            budgetCache=null;providerUsage=null;
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
                 error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
             emit();
@@ -1883,6 +1953,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 }
                 state.draft = drafts.setSelection(entry.draft, { settingsRevision: entry.settings.revision });
                 state.settings = entry.settings; state.meta = entry.meta; explicitGeneration = entry.generation;
+                providerUsage=null;
                 state.validation = null; state.routeCandidates = []; state.error = entry.error || identityWarning;
                 updateScope();
                 if (await metadata(run, !!locked())) finish(run);
@@ -1927,7 +1998,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return selection;
         }
         function installSettings(settings) {
-            var selection=settingsSelection(settings);state.settings=settings;
+            var selection=settingsSelection(settings), previous=state.settings.tokenBudget;
+            if (previous.context!==settings.tokenBudget.context || previous.reserve!==settings.tokenBudget.reserve) invalidateCachedChecks();
+            state.settings=settings;
             return edited(drafts.setSelection(state.draft, selection));
         }
         async function loadSavedSettings() {
@@ -1936,7 +2009,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             try {
                 var saved = store.load(state.draft.projectKey);
                 // Loading rules never replaces or persists this tab's draft, nor acknowledges the CAS conflict.
-                stop();var selection=settingsSelection(saved.settings);state.settings = saved.settings;
+                stop();var selection=settingsSelection(saved.settings), previous=state.settings.tokenBudget;
+                if (previous.context!==saved.settings.tokenBudget.context || previous.reserve!==saved.settings.tokenBudget.reserve) invalidateCachedChecks();
+                state.settings = saved.settings;providerUsage=null;
                 state.draft = drafts.setSelection(state.draft, selection);
                 state.draft = Object.assign({},state.draft,{checked:null});
                 state.validation = null; state.routeCandidates = [];state.stage='idle';updateScope();remember();
@@ -2007,6 +2082,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                         if (!current(run, routeSnapshot)) return;
                         var route = await ai.route(routeInput, { signal: run.abort.signal });
                         if (!current(run, routeSnapshot)) return;
+                        providerUsage=route.usage || null;
                         state.routeCandidates = copy(route.candidates || []).map(function(c) { return { issueTypeId: c.issueTypeId, templateId: c.templateId, reason: c.reason }; });
                         var typeId = state.draft.issueTypeId || route.issueTypeId;
                         var templateId = state.draft.templateId || route.templateId;
@@ -2038,6 +2114,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     if (!current(run, snapshot)) return;
                     var result = await ai[kind](requestInput, { signal: run.abort.signal });
                     if (!current(run, snapshot)) return;
+                    providerUsage=result.usage || null;
                     if (kind === 'prepare') {
                         var generated = {};
                         state.generationFieldIds.forEach(function(id) {
@@ -2152,9 +2229,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 remember();updateScope();return emit();
             } catch(error) {state.error=errorState(null,'storage');return emit();}
         }
-        function connectionChanged() {
-            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
-            if (!state.draft) return getState();
+        function invalidateCachedChecks() {
             Object.keys(scopes).forEach(function(key) {
                 var entry=scopes[key], draft=entry.draft;
                 if (key===state.draft.projectKey || !draft || !draft.checked || draft.creation.issueKey ||
@@ -2162,6 +2237,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 // Inactive scopes save on selection; retain their storage revision and creation outcome.
                 entry.draft=Object.assign({},draft,{checked:null,draftRevision:draft.draftRevision+1});
             });
+        }
+        function connectionChanged() {
+            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
+            if (!state.draft) return getState();
+            invalidateCachedChecks();
             return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
         }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
@@ -2448,6 +2528,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             var p=profile();if(!p)return;
             if(!template()) templateId=p.templates[0] && p.templates[0].id;
             root.find('[data-ta-profile-name]').val(p.name);root.find('[data-ta-profile-instructions]').val(p.instructions);
+            root.find('[data-ta-context-budget]').val(local.tokenBudget.context);root.find('[data-ta-response-reserve]').val(local.tokenBudget.reserve);
             root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);refreshLists();renderTemplate();
         }
         async function apply(resolve) {
@@ -2479,6 +2560,12 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             host=$(options.host);root=$('<section class="ta-settings-dialog" data-ta-settings-dialog role="dialog" aria-modal="true" hidden>').attr({'aria-labelledby':uid});host.append(root);
             root.append($('<header class="ta-settings-header">').append($('<h3>').attr('id',uid).text('Промпт и шаблоны'),button('Закрыть','X',{'data-ta-settings-close':''},close)));
             var body=$('<div class="ta-settings-body">');root.append(body);
+            var budgets=$('<div class="ta-budget-settings">');
+            [['Локальный бюджет контекста, токены','data-ta-context-budget','context'],['Резерв ответа, токены','data-ta-response-reserve','reserve']].forEach(function(spec) {
+                var control=$('<input type="number" min="1" step="1" inputmode="numeric">').attr(spec[1],'').on('input',function(){local.tokenBudget[spec[2]]=control.val()==='' ? null : Number(control.val());});
+                budgets.append($('<label>').append($('<span>').text(spec[0]),control));
+            });
+            body.append(budgets,$('<p class="ta-muted">').attr('title','Консервативная эвристика: ASCII / 3, остальные кодовые точки / 1; учитываются весь JSON и 32 условных токена на framing. Токенизатор модели неизвестен; оценка может отличаться от фактического расхода.').text('Оценка токенов приблизительная. Бюджет задаётся локально, а не определяется по модели. Резерв уменьшает доступный вход и не передаётся провайдеру.'));
             body.append('<div data-ta-settings-error class="ta-errors" role="alert"></div><div data-ta-settings-conflict class="ta-warning" role="alert" hidden><p>В другой вкладке сохранены изменения. Локальная копия и черновик сохранены здесь.</p><p>Загрузить сохранённые правила заменит только правила в этом окне. Черновик останется локальным. Применить запишет выбранные правила и текущий локальный черновик этого проекта вместо сохранённого черновика.</p></div>');
             body.find('[data-ta-settings-conflict]').append(button('Загрузить сохранённые правила','RefreshCw',{'data-ta-conflict-load':''},async function() {
                 if(busy || !options.onLoadSaved)return;
@@ -2653,6 +2740,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root = $(el).addClass('ujg-ticket-assistant');
             root.append('<header class="ta-header"><h2>Помощник задач</h2><span data-ta-profile class="ta-muted"></span></header><div class="ta-selections"><div data-ta-project></div><div data-ta-template></div><div data-ta-type></div></div><div class="ta-workspace"><section class="ta-source-area"><h3>Исходные данные</h3><label class="ta-source-label">Запрос<textarea rows="12" data-ta-source></textarea></label><div class="ta-actions" data-ta-actions></div><div data-ta-progress class="ta-progress" hidden><span data-ta-stage></span><span data-ta-elapsed aria-live="off"></span></div><div data-ta-error class="ta-error" role="alert" hidden></div><div data-ta-stopped class="ta-warning" hidden></div><div data-ta-retry-host hidden></div><section class="ta-questions"><h3>Уточнения</h3><div data-ta-questions></div></section><details class="ta-scope"><summary>Поля генерации</summary><div data-ta-scope></div><p data-ta-omitted class="ta-muted"></p><p class="ta-muted">Текущие значения проверяются и вне области генерации. Пользователи не передаются AI.</p></details></section><section class="ta-draft-area"><div class="ta-draft-heading"><h3>Черновик Jira</h3><span data-ta-checked class="ta-result" hidden>Проверен</span></div><div data-ta-fields></div><div data-ta-routes></div><div data-ta-warnings class="ta-warning" hidden></div><div data-ta-evidence></div><div data-ta-fallback class="ta-warning" hidden></div><div class="ta-actions" data-ta-copy-actions></div><textarea data-ta-copy-text aria-label="Текст для копирования" rows="5" readonly hidden></textarea><p data-ta-copy-status class="ta-muted" role="status"></p><footer class="ta-footer"><button type="button" data-ta-create disabled>Создать задачу</button><span class="ta-muted">Создание пока недоступно</span></footer></section></div><div data-ta-settings hidden></div>');
             source = root.find('[data-ta-source]').on('input', function() {c.updateSource(source.val());});
+            $('<div class="ta-token-preflight" data-ta-token-preflight role="status" hidden>').append(
+                '<p data-ta-token-summary></p><p class="ta-muted" data-ta-token-breakdown></p><p class="ta-muted" data-ta-token-usage hidden></p>',
+                button('Бюджет контекста','Settings',{'data-ta-budget-settings':''}).on('click',openSettings)
+            ).insertAfter(root.find('.ta-source-label'));
             root.find('.ta-footer').empty().append(
                 button('Создать задачу','Check',{'data-ta-create':''}).addClass('ta-primary').on('click',function() {c.submit();}),
                 button('Новая задача','Plus',{'data-ta-new-draft':''}).on('click',function() {c.newDraft();}));
@@ -2809,8 +2900,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (state.error) {
                 error.append($('<p>').text(state.error.message));
                 var detail = state.error.details;
-                if (state.error.code === 'limit' && detail && ['systemBytes','systemLimit','userBytes','userLimit'].every(function(k) {return Number.isSafeInteger(detail[k]) && detail[k] >= 0;}))
-                    error.append($('<p>').text('UTF-8: system ' + detail.systemBytes + ' / ' + detail.systemLimit + ' байт; user ' + detail.userBytes + ' / ' + detail.userLimit + ' байт.'));
+                if (state.error.code === 'limit') {
+                    if (detail && ['input','available','reserve'].every(function(k) {return Number.isSafeInteger(detail[k]) && detail[k] >= 0;}))
+                        error.append($('<p>').text('Приблизительно ' + detail.input + ' токенов / ' + detail.available + ' на вход; резерв ответа ' + detail.reserve + '.'));
+                    error.append(button('Открыть бюджет контекста','Settings',{'data-ta-error-budget':''}).on('click',openSettings));
+                }
             }
             root.find('[data-ta-stopped]').prop('hidden', state.stage !== 'stopped').text('Остановлено. Черновик сохранён.');
             root.find('[data-ta-retry-host]').prop('hidden', busy || (!state.error && state.stage !== 'stopped'));
@@ -2868,6 +2962,16 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
             root.find('[data-ta-open-settings]').prop('disabled',!state.settings || writeLocked());
+            root.find('[data-ta-budget-settings],[data-ta-error-budget]').prop('disabled',!state.settings || writeLocked());
+            var estimate=state.tokenPreflight, counter=root.find('[data-ta-token-preflight]');
+            counter.prop('hidden',!estimate);
+            if (estimate) {
+                counter.toggleClass('ta-budget-over',!estimate.fits || !estimate.safetyFits);
+                root.find('[data-ta-token-summary]').text('Приблизительно ' + estimate.input + ' / ' + estimate.available + ' токенов на вход' + (!estimate.fits ? ' · Бюджет превышен' : '') + (!estimate.safetyFits ? ' · Превышен защитный размер передачи 4 МиБ' : ''));
+                root.find('[data-ta-token-breakdown]').text('Инструкции ' + estimate.instructions + ' · Текст ' + estimate.source + ' · Поля Jira и служебные данные ' + estimate.metadata + ' · Резерв ответа ' + estimate.reserve + '. Консервативная оценка; токенизатор неизвестен.');
+                var usage=state.providerUsage;
+                root.find('[data-ta-token-usage]').prop('hidden',!usage).text(usage ? 'Последний запрос · Точно по usage провайдера: вход ' + (usage.inputTokens===null ? 'нет данных' : usage.inputTokens) + ', ответ ' + (usage.outputTokens===null ? 'нет данных' : usage.outputTokens) + ', всего ' + (usage.totalTokens===null ? 'нет данных' : usage.totalTokens) + '.' : '');
+            }
             root.find('[data-ta-open-connection]').prop('disabled',connectionLocked() || !options.connection);
             if (connectionHost) connectionHost.find('input,[data-ta-connection-save]').prop('disabled',connectionLocked());
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);

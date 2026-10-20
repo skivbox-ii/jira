@@ -115,6 +115,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root = $(el).addClass('ujg-ticket-assistant');
             root.append('<header class="ta-header"><h2>Помощник задач</h2><span data-ta-profile class="ta-muted"></span></header><div class="ta-selections"><div data-ta-project></div><div data-ta-template></div><div data-ta-type></div></div><div class="ta-workspace"><section class="ta-source-area"><h3>Исходные данные</h3><label class="ta-source-label">Запрос<textarea rows="12" data-ta-source></textarea></label><div class="ta-actions" data-ta-actions></div><div data-ta-progress class="ta-progress" hidden><span data-ta-stage></span><span data-ta-elapsed aria-live="off"></span></div><div data-ta-error class="ta-error" role="alert" hidden></div><div data-ta-stopped class="ta-warning" hidden></div><div data-ta-retry-host hidden></div><section class="ta-questions"><h3>Уточнения</h3><div data-ta-questions></div></section><details class="ta-scope"><summary>Поля генерации</summary><div data-ta-scope></div><p data-ta-omitted class="ta-muted"></p><p class="ta-muted">Текущие значения проверяются и вне области генерации. Пользователи не передаются AI.</p></details></section><section class="ta-draft-area"><div class="ta-draft-heading"><h3>Черновик Jira</h3><span data-ta-checked class="ta-result" hidden>Проверен</span></div><div data-ta-fields></div><div data-ta-routes></div><div data-ta-warnings class="ta-warning" hidden></div><div data-ta-evidence></div><div data-ta-fallback class="ta-warning" hidden></div><div class="ta-actions" data-ta-copy-actions></div><textarea data-ta-copy-text aria-label="Текст для копирования" rows="5" readonly hidden></textarea><p data-ta-copy-status class="ta-muted" role="status"></p><footer class="ta-footer"><button type="button" data-ta-create disabled>Создать задачу</button><span class="ta-muted">Создание пока недоступно</span></footer></section></div><div data-ta-settings hidden></div>');
             source = root.find('[data-ta-source]').on('input', function() {c.updateSource(source.val());});
+            $('<div class="ta-token-preflight" data-ta-token-preflight role="status" hidden>').append(
+                '<p data-ta-token-summary></p><p class="ta-muted" data-ta-token-breakdown></p><p class="ta-muted" data-ta-token-usage hidden></p>',
+                button('Бюджет контекста','Settings',{'data-ta-budget-settings':''}).on('click',openSettings)
+            ).insertAfter(root.find('.ta-source-label'));
             root.find('.ta-footer').empty().append(
                 button('Создать задачу','Check',{'data-ta-create':''}).addClass('ta-primary').on('click',function() {c.submit();}),
                 button('Новая задача','Plus',{'data-ta-new-draft':''}).on('click',function() {c.newDraft();}));
@@ -271,8 +275,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (state.error) {
                 error.append($('<p>').text(state.error.message));
                 var detail = state.error.details;
-                if (state.error.code === 'limit' && detail && ['systemBytes','systemLimit','userBytes','userLimit'].every(function(k) {return Number.isSafeInteger(detail[k]) && detail[k] >= 0;}))
-                    error.append($('<p>').text('UTF-8: system ' + detail.systemBytes + ' / ' + detail.systemLimit + ' байт; user ' + detail.userBytes + ' / ' + detail.userLimit + ' байт.'));
+                if (state.error.code === 'limit') {
+                    if (detail && ['input','available','reserve'].every(function(k) {return Number.isSafeInteger(detail[k]) && detail[k] >= 0;}))
+                        error.append($('<p>').text('Приблизительно ' + detail.input + ' токенов / ' + detail.available + ' на вход; резерв ответа ' + detail.reserve + '.'));
+                    error.append(button('Открыть бюджет контекста','Settings',{'data-ta-error-budget':''}).on('click',openSettings));
+                }
             }
             root.find('[data-ta-stopped]').prop('hidden', state.stage !== 'stopped').text('Остановлено. Черновик сохранён.');
             root.find('[data-ta-retry-host]').prop('hidden', busy || (!state.error && state.stage !== 'stopped'));
@@ -330,6 +337,16 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
             root.find('[data-ta-open-settings]').prop('disabled',!state.settings || writeLocked());
+            root.find('[data-ta-budget-settings],[data-ta-error-budget]').prop('disabled',!state.settings || writeLocked());
+            var estimate=state.tokenPreflight, counter=root.find('[data-ta-token-preflight]');
+            counter.prop('hidden',!estimate);
+            if (estimate) {
+                counter.toggleClass('ta-budget-over',!estimate.fits || !estimate.safetyFits);
+                root.find('[data-ta-token-summary]').text('Приблизительно ' + estimate.input + ' / ' + estimate.available + ' токенов на вход' + (!estimate.fits ? ' · Бюджет превышен' : '') + (!estimate.safetyFits ? ' · Превышен защитный размер передачи 4 МиБ' : ''));
+                root.find('[data-ta-token-breakdown]').text('Инструкции ' + estimate.instructions + ' · Текст ' + estimate.source + ' · Поля Jira и служебные данные ' + estimate.metadata + ' · Резерв ответа ' + estimate.reserve + '. Консервативная оценка; токенизатор неизвестен.');
+                var usage=state.providerUsage;
+                root.find('[data-ta-token-usage]').prop('hidden',!usage).text(usage ? 'Последний запрос · Точно по usage провайдера: вход ' + (usage.inputTokens===null ? 'нет данных' : usage.inputTokens) + ', ответ ' + (usage.outputTokens===null ? 'нет данных' : usage.outputTokens) + ', всего ' + (usage.totalTokens===null ? 'нет данных' : usage.totalTokens) + '.' : '');
+            }
             root.find('[data-ta-open-connection]').prop('disabled',connectionLocked() || !options.connection);
             if (connectionHost) connectionHost.find('input,[data-ta-connection-save]').prop('disabled',connectionLocked());
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);

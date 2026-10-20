@@ -66,6 +66,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             var p=profile();if(!p)return;
             if(!template()) templateId=p.templates[0] && p.templates[0].id;
             root.find('[data-ta-profile-name]').val(p.name);root.find('[data-ta-profile-instructions]').val(p.instructions);
+            root.find('[data-ta-context-budget]').val(local.tokenBudget.context);root.find('[data-ta-response-reserve]').val(local.tokenBudget.reserve);
             root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);refreshLists();renderTemplate();
         }
         async function apply(resolve) {
@@ -97,6 +98,12 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             host=$(options.host);root=$('<section class="ta-settings-dialog" data-ta-settings-dialog role="dialog" aria-modal="true" hidden>').attr({'aria-labelledby':uid});host.append(root);
             root.append($('<header class="ta-settings-header">').append($('<h3>').attr('id',uid).text('Промпт и шаблоны'),button('Закрыть','X',{'data-ta-settings-close':''},close)));
             var body=$('<div class="ta-settings-body">');root.append(body);
+            var budgets=$('<div class="ta-budget-settings">');
+            [['Локальный бюджет контекста, токены','data-ta-context-budget','context'],['Резерв ответа, токены','data-ta-response-reserve','reserve']].forEach(function(spec) {
+                var control=$('<input type="number" min="1" step="1" inputmode="numeric">').attr(spec[1],'').on('input',function(){local.tokenBudget[spec[2]]=control.val()==='' ? null : Number(control.val());});
+                budgets.append($('<label>').append($('<span>').text(spec[0]),control));
+            });
+            body.append(budgets,$('<p class="ta-muted">').attr('title','Консервативная эвристика: ASCII / 3, остальные кодовые точки / 1; учитываются весь JSON и 32 условных токена на framing. Токенизатор модели неизвестен; оценка может отличаться от фактического расхода.').text('Оценка токенов приблизительная. Бюджет задаётся локально, а не определяется по модели. Резерв уменьшает доступный вход и не передаётся провайдеру.'));
             body.append('<div data-ta-settings-error class="ta-errors" role="alert"></div><div data-ta-settings-conflict class="ta-warning" role="alert" hidden><p>В другой вкладке сохранены изменения. Локальная копия и черновик сохранены здесь.</p><p>Загрузить сохранённые правила заменит только правила в этом окне. Черновик останется локальным. Применить запишет выбранные правила и текущий локальный черновик этого проекта вместо сохранённого черновика.</p></div>');
             body.find('[data-ta-settings-conflict]').append(button('Загрузить сохранённые правила','RefreshCw',{'data-ta-conflict-load':''},async function() {
                 if(busy || !options.onLoadSaved)return;

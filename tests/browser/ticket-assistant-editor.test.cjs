@@ -199,11 +199,21 @@ test('scope is explicit, omissions visible, safe numeric limits and persistent r
     assert.equal(scope.checked, true); scope.click();
     assert.equal(s.calls.at(-1)[0], 'setGenerationFields');
     assert.ok(!s.calls.at(-1)[1].includes('summary'));
-    s.setState({...s.state, stage: 'error', error: {code: 'limit', message: 'Too large', details: {systemBytes: 6001, systemLimit: 6000, userBytes: 43000, userLimit: 42000, raw: '<secret>'}}});
-    assert.match(s.root.querySelector('[data-ta-error]').textContent, /6001.*6000/);
-    assert.match(s.root.querySelector('[data-ta-error]').textContent, /43000.*42000/);
+    s.setState({...s.state, stage: 'error', error: {code: 'limit', message: 'Too large', details: {input:33000,available:28672,reserve:4096,raw:'<secret>'}}});
+    assert.match(s.root.querySelector('[data-ta-error]').textContent, /33000.*28672/);
+    assert.ok(s.root.querySelector('[data-ta-error-budget]'));
     assert.doesNotMatch(s.root.textContent, /secret/);
     s.root.querySelector('[data-ta-retry]').click(); assert.equal(s.calls.at(-1)[0], 'prepare');
+});
+
+test('preflight estimate and exact provider usage are displayed separately and missing usage stays unknown',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    const estimate={input:100,available:200,instructions:40,source:30,metadata:30,reserve:20,fits:true,safetyFits:true};
+    s.setState({...s.state,tokenPreflight:estimate,providerUsage:{inputTokens:123,outputTokens:45,totalTokens:168,source:'provider'}});
+    assert.match(s.root.querySelector('[data-ta-token-summary]').textContent,/Приблизительно 100/);
+    assert.match(s.root.querySelector('[data-ta-token-usage]').textContent,/Точно.*123.*45.*168/);
+    s.setState({...s.state,tokenPreflight:estimate,providerUsage:null});
+    assert.equal(s.root.querySelector('[data-ta-token-usage]').hidden,true);
 });
 
 test('required unsupported fallback preserves draft, links ordinary form, only explicitly copies', t => {

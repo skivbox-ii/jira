@@ -9,6 +9,23 @@ function loadLlmClient(extraGlobals) {
 }
 
 const traceConfig={apiBase:"https://llm.example/v1",model:"m",apiKey:"private-trace-key"};
+test('preservation requires a valid budget and never changes default truncation or whitespace handling', () => {
+  const shared=loadLlmClient(),request={systemPrompt:'  rules\n\n'+ 's'.repeat(7000),userPrompt:'  text\r\n\t'+ 'u'.repeat(50000)};
+  const ordinary=shared.buildRequestBody(traceConfig,request);
+  assert.equal(ordinary.messages[0].content,shared.sanitizePrompt(request.systemPrompt,6000));
+  assert.equal(ordinary.messages[1].content,shared.sanitizePrompt(request.userPrompt,42000));
+  for(const budget of [undefined,null,{context:10,reserve:1},{context:1e5,reserve:0},{context:Infinity,reserve:1}])
+    assert.throws(()=>shared.buildRequestBody(traceConfig,{...request,preservePrompt:true,tokenBudget:budget}));
+  assert.throws(()=>shared.buildRequestBody(traceConfig,{...request,systemPrompt:'x'.repeat(4*1024*1024),preservePrompt:true,tokenBudget:{context:1e7,reserve:1}}),/safety/);
+});
+
+test('preserved diagnostic sizes describe the actual sent prompts', async()=>{
+  const request={systemPrompt:'  rules\n\n'+'s'.repeat(7000),userPrompt:'  text\r\n\t'+'я'.repeat(25000),preservePrompt:true,tokenBudget:{context:100000,reserve:4096},allowProtocolFallback:false};
+  const x=await traced(async()=>response(JSON.stringify({choices:[{message:{content:'ok'}}]})),request);
+  assert.equal(x.error,undefined);
+  assert.equal(x.trace.request.systemBytes,Buffer.byteLength(request.systemPrompt));
+  assert.equal(x.trace.request.userBytes,Buffer.byteLength(request.userPrompt));
+});
 const traceRequest={systemPrompt:"Правила",userPrompt:"Факты",allowProtocolFallback:false};
 function response(body,status=200,extra={}) {
   return {ok:status>=200 && status<300,status,statusText:"",text:async()=>body,...extra};

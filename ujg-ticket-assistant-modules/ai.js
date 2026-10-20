@@ -5,7 +5,8 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
     var messages = {
         input: 'Некорректный контекст AI. Обновите metadata и явно выберите область полей.',
         response: 'AI вернул ответ вне контракта JSONv1. Проверьте данные вручную.',
-        limit: 'Превышен лимит UTF-8 промпта. Сократите текст или сделайте явный выбор полей каталога.',
+        limit: 'Приблизительная оценка контекста превышает локальный бюджет. Откройте настройки бюджета или явно сократите контекст.',
+        safety: 'Контекст превышает защитный предел размера передачи 4 МиБ. Сократите контекст явно.',
         secret: 'Контекст содержит возможные секреты. Удалите их перед отправкой.',
         config: 'Проверьте настройки подключения AI.',
         transport: 'Не удалось получить ответ AI. Повторите действие вручную.',
@@ -14,10 +15,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
     function fail(code, details) {
         var error = new Error(messages[code]);
         error.code = code;
-        if (code === 'limit' && details) error.details = {
-            systemBytes: details.systemBytes, userBytes: details.userBytes,
-            systemLimit: details.systemLimit, userLimit: details.userLimit
-        };
+        if (code === 'limit' && details) error.details = details;
         throw error;
     }
     function record(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
@@ -110,7 +108,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         value = value.replace(/\\+["']/g, '"');
         if (/\b(?:Bearer|Basic)\s+\S+|\b(?:authorization|cookie|set-cookie|api[-_]?key|password|passwd|token|access[-_]?token|refresh[-_]?token|secret|credentials|sessionid)\s*["']?\s*[:=]|-----BEGIN [A-Z ]*PRIVATE KEY-----|https?:\/\/[^\s/]+:[^\s/]+@/i.test(value)) fail('secret');
     }
-    function buildRequest(kind, input) {
+    function buildRequest(kind, input, preview) {
         var ctx = context(kind, input);
         var current = draftFields(input, ctx);
         var editable = {profileInstructions: text(ctx.profile.instructions), templates: ctx.templates.map(function(t) {
@@ -132,12 +130,22 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             }), fields: current, currentFieldContext: ctx.typeId === null ? [] : ctx.types[0].fields.filter(function(f) {
                 return own(current, f.id) && input.allowFieldIds.indexOf(f.id) === -1;
             }).map(function(f) { return {id: f.id, name: text(f.name), kind: f.kind}; })});
-        var sizes = {systemBytes: shared.utf8ByteLength(systemPrompt), userBytes: shared.utf8ByteLength(userPrompt),
-            systemLimit: shared.MAX_BASE_PROMPT_BYTES, userLimit: shared.MAX_USER_PROMPT_BYTES};
-        if (sizes.systemBytes > sizes.systemLimit || sizes.userBytes > sizes.userLimit) fail('limit', sizes);
+        var budget;
+        try { budget=shared.validateTokenBudget(input.tokenBudget === undefined ? {context:32768,reserve:4096} : input.tokenBudget); }
+        catch (ignored) {fail('config');}
+        var instructions=shared.estimateTokens(systemPrompt), source=shared.estimateTokens(JSON.stringify(input.source).slice(1,-1));
+        var userTokens=shared.estimateTokens(userPrompt);
+        var sizes={instructions:instructions,source:source,metadata:userTokens-source+32,
+            input:instructions+userTokens+32,context:budget.context,reserve:budget.reserve,available:budget.context-budget.reserve};
+        sizes.fits=sizes.input<=sizes.available;
+        sizes.safetyFits=shared.utf8ByteLength(systemPrompt)+shared.utf8ByteLength(userPrompt)<=shared.MAX_PRESERVED_PROMPT_BYTES;
+        if (preview) return sizes;
+        if (!sizes.safetyFits) fail('safety');
+        if (!sizes.fits) fail('limit', sizes);
         rejectSecrets(systemPrompt); rejectSecrets(userPrompt);
-        return {systemPrompt: systemPrompt, userPrompt: userPrompt, allowProtocolFallback: false};
+        return {systemPrompt: systemPrompt, userPrompt: userPrompt, allowProtocolFallback: false, preservePrompt:true, tokenBudget:budget};
     }
+    function preflight(kind, input) {return buildRequest(kind,input,true);}
     function validQuestions(items) {
         return Array.isArray(items) && unique(items, function(q) { return q.id; }) && items.every(function(q) {
             return keys(q, ['id', 'text', 'reason', 'required']) && typeof q.text === 'string' && !!q.text.trim() && typeof q.reason === 'string' && typeof q.required === 'boolean';
@@ -145,7 +153,8 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
     }
     function parseResponse(kind, raw, input) {
         var ctx = context(kind, input), result;
-        try { if (typeof raw !== 'string' || !raw.trim() || shared.utf8ByteLength(raw) > shared.MAX_USER_PROMPT_BYTES) fail('response'); result = JSON.parse(raw); }
+        // JSON resource safety bound, not a token/context limit.
+        try { if (typeof raw !== 'string' || !raw.trim() || shared.utf8ByteLength(raw) > 2 * 1024 * 1024) fail('response'); result = JSON.parse(raw); }
         catch (ignored) { fail('response'); }
         rejectSecrets(raw);
         var expected = kind === 'prepare' ? 'draft' : kind;
@@ -203,10 +212,11 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             var connectionKey;
             return Promise.resolve().then(function() {
                 abort(options.signal);
-                var request = buildRequest(kind, input), config;
+                var config;
                 try { config = deps.readConfig ? deps.readConfig() : llm.readStoredConfig(typeof localStorage !== 'undefined' ? localStorage : null); }
                 catch (ignored) { fail('config'); }
                 if (!config) fail('config');
+                var request = buildRequest(kind, input);
                 connectionKey = typeof config.apiKey === 'string' ? config.apiKey : '';
                 if (typeof config.apiKey === 'string' && config.apiKey && (request.systemPrompt.indexOf(config.apiKey) !== -1 || request.userPrompt.indexOf(config.apiKey) !== -1)) fail('secret');
                 // No diagnostics callback or fallback: shared raw failures stay inside this boundary.
@@ -221,12 +231,19 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                 abort(options.signal);
                 var result = parseResponse(kind, response && response.text, input);
                 if (connectionKey && JSON.stringify(result).indexOf(connectionKey) !== -1) fail('secret');
+                var usage=response && response.payload && response.payload.usage;
+                function count(value) {return Number.isSafeInteger(value) && value>=0 ? value : null;}
+                if (usage) {
+                    var measured={inputTokens:count(usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens),
+                        outputTokens:count(usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens),totalTokens:count(usage.total_tokens),source:'provider'};
+                    if (measured.inputTokens!==null || measured.outputTokens!==null || measured.totalTokens!==null) result.usage=measured;
+                }
                 return result;
             });
         }
-        return {route: function(input, options) { return run('route', input, options); },
+        return {preflight:preflight, route: function(input, options) { return run('route', input, options); },
             prepare: function(input, options) { return run('prepare', input, options); },
             check: function(input, options) { return run('check', input, options); }};
     }
-    return {createClient: createClient, buildRequest: buildRequest, parseResponse: parseResponse};
+    return {createClient: createClient, buildRequest: buildRequest, preflight:preflight, parseResponse: parseResponse};
 });

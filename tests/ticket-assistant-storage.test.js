@@ -8,6 +8,17 @@ function fixture(storage = memoryStorage(), globals = {}) {
     return { profiles, storage, store: options => unit.createStore({ storage, origin: 'https://jira.example', userKey: 'Alice', ...options }) };
 }
 
+test('stored v1 settings migrate missing token budget in place and persist explicit edits',()=>{
+    const f=fixture(),store=f.store(),settings=f.profiles.createDefaults();delete settings.tokenBudget;
+    settings.profiles[0].instructions='  Preserve rules\n';
+    f.storage.setItem('ujg-ticket-assistant:v1:https%3A%2F%2Fjira.example:Alice:DO',JSON.stringify({revision:7,settings,draft:null}));
+    const value=store.load('DO');assert.equal(store.isPersistent(),true);assert.equal(value.revision,7);
+    assert.equal(value.settings.tokenBudget.context,32768);assert.equal(value.settings.tokenBudget.reserve,4096);
+    value.settings.tokenBudget={context:65536,reserve:8192};assert.equal(store.save('DO',value,7).ok,true);
+    const restored=f.store().load('DO');assert.equal(restored.settings.tokenBudget.reserve,8192);
+    assert.equal(restored.settings.profiles[0].instructions,'  Preserve rules\n');assert.equal(restored.revision,8);
+});
+
 test('personal project and origin boundaries use encoded keys and detached snapshots', () => {
     const { store, storage } = fixture();
     const alice = store();
