@@ -2,9 +2,67 @@
 
 Planned task/report date: 19 October 2026. Final acceptance and full regression executed/completed **20 October 2026, Europe/Moscow**. Initial source/TDD checks began on 19 October. Worktree: `/Users/skivbox/.codex/worktrees/ticket-assistant/jira` only. Base: `95f54f6`.
 
-Current source/runtime: **5ee9a0f3d4fc310e0d81d4f23a46ad5225244767**; bootstrap packaging **746e5cf** pins that full SHA. Published: **YES, 20 October 2026, `7d40fd3` pushed to `main`**. Citrix accepted: **NO**. The user initially deferred publication, then explicitly requested commit/push so the CDN URL would work in Citrix. Candidate full regression: **1919/1919**, zero failures or skips; standalone acceptance **9/9**. Historical local acceptance and pre-release review follow the publication record.
+Current source/runtime: **76532c7cf390a70da20afb053d19675bff88d3e6**; bootstrap packaging **7dcb5eb** pins that full SHA. Published: **YES, 20 October 2026, `7dcb5eb` pushed to `main`**. Citrix startup/visibility and project list: **personally verified**; full workflow acceptance: **NO**. The user initially deferred publication, then explicitly requested commit/push so the CDN URL would work in Citrix. Final host-sizing regression: **1923/1923**, zero failures or skips; standalone acceptance **9/9**. Historical local acceptance and pre-release review follow the publication record.
 
 ## Publication: 20 October
+
+### Follow-up: Blank Gadget In Citrix
+
+Status: **Fixed, published and personally verified in Citrix**. After publication, the user reported that the gadget
+was blank. Personal read-only inspection in Citrix confirmed the runtime
+module resolves and `.ta-header` exists, but the UJG host
+`div#gadget-15253.gadget-inline` has inline `height: 0px`.
+The assistant never calls `API.resize()`, unlike the existing importer and
+Timesheet. The earlier preview mounted into an unconstrained page and did
+not cover this host sizing contract.
+
+Evidence: session `ticket-assistant-blank-20261020`, initial blank screenshot
+`inspect-20261020-143254-25823.png`, DOM/height screenshot
+`inspect-20261020-143908-28711.png` under
+`/Users/skivbox/.codex/citrix-prod-runs/ticket-assistant-blank-20261020/screenshots/`.
+No ticket, credential, dashboard property or live model changes were made.
+
+Sol 6.1 Author Euclid added coalesced host resize on mount, controller
+updates and observed layout changes, with observer/callback teardown on
+destroy. Source commit `76532c7`; bootstrap pin `7dcb5eb`. Only assistant
+main/source/runtime/bootstrap and the new
+`tests/browser/ticket-assistant-host-sizing.test.cjs` changed.
+Real-browser RED reproduced the zero-height host at 1440/390; GREEN also
+covers layout expansion, settings/connection/pickers, settling and cleanup.
+Author scoped tests **215/215**, post-pin checks **50/50**.
+
+Sol 6.1 Reviewer Ptolemy independently checked the narrow diff, burst
+coalescing, idempotent teardown, stale callbacks and generated asset parity:
+no actionable findings. Parent final full suite **1923/1923**, exit 0,
+94959.087083 ms; standalone acceptance **9/9**, exit 0, 65221.365167 ms.
+Parent independently verified rebuild/pin parity and inspected regenerated
+browser screenshots.
+
+Push `2da8bb8..7dcb5eb` succeeded without force. After targeted CDN purge,
+the unchanged `@main` bootstrap and both source-pinned assets returned 200
+and matched local bytes; runtime at the published packaging SHA also
+matched. Bootstrap SHA-256:
+`89ea3a6d75ba7bda1b576791881eee61612854d11f51a453e290ec9270a47275`;
+runtime:
+`f87022c94d2114567db4fdd8b31385bc77885ecd3791e9162c5503661088aac4`.
+CSS is unchanged.
+
+At 14:47 MSK parent refreshed the same Citrix dashboard via its visible
+browser reload button. Screenshot `inspect-20261020-144703-20334.png`
+shows the full assistant, not a zero-height host. Opening the Project
+picker showed real Jira projects without clipping in
+`inspect-20261020-144733-02549.png`. The picker was dismissed without
+selecting a project. No source text, settings, model requests or issue
+creation were submitted. This closes the blank startup defect, not the
+remaining real-data/LLM/creation workflow acceptance.
+
+Artifacts retained outside the repository:
+`/Users/skivbox/.cache/ujg-ticket-assistant-acceptance/2026-10-20-76532c7/`.
+Final logs originated at `/tmp/ticket-assistant-host-sizing-full-20261020.tap`
+and `/tmp/ticket-assistant-host-sizing-acceptance-20261020.tap`;
+browser/TDD artifacts at `/tmp/ticket-assistant-host-sizing-20261020/`.
+
+### Initial Delivery
 
 The clean reviewed worktree fast-forwarded `origin/main` from `9ea7554` to
 `7d40fd3` with `git push origin HEAD:main`, exit 0, no force push. Only the
