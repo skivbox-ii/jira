@@ -5,6 +5,7 @@
     var review=new URLSearchParams(window.location.search).get('review');
     if(['obsolete','catalog','storage','response'].indexOf(review)===-1)review='';
     var records = {calls:[], pending:0}; window.taPreview = records;
+    if(review==='response') records.responseMode=new URLSearchParams(window.location.search).get('responseMode');
     var scenario='success', issueSequence=100, failedFiles=new Set();
     var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
     ['success','rejected','lostresponse','filefail'].forEach(function(value) {
@@ -75,6 +76,12 @@
             }
             if(review==='response' && input.action==='check') response.warnings=['Synthetic optional warning'];
             if(review==='response' && input.action==='prepare') response.fields.components=records.responseMode==='malformed'?[31]:['31'];
+            if(review==='response' && input.action==='prepare') {
+                if(records.responseMode==='json') {resolve({text:'{PRIVATE'});return;}
+                if(records.responseMode==='contract') response.extra='PRIVATE';
+                if(records.responseMode==='questions') response.questions=[{id:'q',text:'PRIVATE',required:true}];
+                if(records.responseMode==='evidence') response.evidence=[{fieldId:'summary',kind:'source',quote:'PRIVATE'}];
+            }
             resolve({text:JSON.stringify(response)});
         },1100);});
     }});
