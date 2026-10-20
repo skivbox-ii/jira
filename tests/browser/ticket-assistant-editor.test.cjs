@@ -170,6 +170,10 @@ test('restored fields refresh helper accessible names and titles when metadata a
         assert.equal(helper.getAttribute('aria-label'),'Помощь AI: '+field.name);
         assert.equal(helper.title,'Помощь AI: '+field.name);
         assert.doesNotMatch(helper.outerHTML,/нет в текущих metadata/);
+        const primary=s.root.querySelector('[data-ta-field="'+id+'"] [data-ta-assist-primary]');
+        assert.equal(primary.getAttribute('aria-label'),'Сгенерировать: '+field.name);
+        assert.equal(primary.title,'Сгенерировать: '+field.name);
+        assert.equal(primary.disabled,false);
     }
     const helper=s.root.querySelector('[data-ta-field="summary"] [data-ta-assist-menu]');
     meta.issueTypes[0].fields.find(f=>f.id==='summary').name='Новая тема';s.state.stage='metadata';s.ui.update(s.state);

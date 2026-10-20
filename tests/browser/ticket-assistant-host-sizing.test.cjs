@@ -99,8 +99,12 @@ for (const width of [1440,390]) {
         await page.screenshot({path:path.join(artifacts,width+'-connection.png'),fullPage:true});
         await resizedAfter(page,() => page.locator('[data-ta-connection-cancel]').click());
         // Native ResizeObserver must also catch layout changes without controller updates.
-        await page.addStyleTag({content:'.ujg-ticket-assistant textarea[data-ta-source] { height:900px; }'});
-        if(width===1440)assert.equal(await page.locator('.ta-source-area').evaluate(el=>el.scrollHeight>el.clientHeight),true,'bounded source region scrolls');
+        await resizedAfter(page,() => page.addStyleTag({content:'.ujg-ticket-assistant textarea[data-ta-source] { height:900px; }'}));
+        assert.equal(await page.locator('.ta-source-area').evaluate(el=>getComputedStyle(el).overflowY==='visible' && el.clientHeight>=900),true,'source expands in normal document flow');
+        assert.equal(await page.locator('.ta-primary-actions').evaluate(el=>{
+            const workspace=el.previousElementSibling;
+            return getComputedStyle(el).position==='static' && el.getBoundingClientRect().top>=workspace.getBoundingClientRect().bottom;
+        }),true,'actions follow the complete workspace');
         await page.waitForFunction(() => document.querySelector('.gadget-inline').clientHeight >= document.querySelector('#content').offsetHeight);
         await page.screenshot({path:path.join(artifacts,width+'-expanded.png'),fullPage:true});
         await page.waitForTimeout(100);

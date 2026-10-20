@@ -18,9 +18,10 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         if ((code === 'limit' || code === 'response') && details) error.details = details;
         throw error;
     }
-    function responseFailure(reason, field) {
+    function responseFailure(reason, field, length) {
         var details = {reason: reason || 'contract'};
         if (field && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(field.id)) details.fieldId = field.id;
+        if (reason === 'maxLength') {details.maxLength = field.maxLength; details.length = length;}
         fail('response', details);
     }
     function record(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
@@ -114,6 +115,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         'Questions always contain {id,text,reason,required:boolean}; warnings contain strings; evidence contains {fieldId,kind:"source"|"suggestion",quote:string}.',
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
         'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype, user values, numeric estimates, Epic or Sprint relations. Humans enter estimates and select relations explicitly.',
+        'Respect each field maxLength exactly. Produce a short Summary within its maxLength; never copy the entire source into Summary. Do not truncate source or current values.',
         'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
         'Field shapes by kind: string/textarea/date/datetime -> string; number -> finite number; option -> {"id":"literal catalog ID"}; multioption/components/versions -> [{"id":"literal catalog ID"}]; labels -> string[]. Null is allowed. Never return labels or names in place of IDs, numeric IDs, extra object keys, HTML execution or nested commands.'
     ].join('\n');
@@ -213,6 +215,8 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                     value = value.map(function(item) { return id(item) ? {id: item} : item; });
                 }
                 if (!normalizedValue(field, value)) responseFailure('shape', field);
+                if (['string','textarea'].indexOf(field.kind) !== -1 && typeof value === 'string' && field.maxLength && value.length > field.maxLength)
+                    responseFailure('maxLength', field, value.length);
                 if (kind === 'assist' && value !== null && value !== '' && ['date', 'datetime'].indexOf(field.kind) !== -1) {
                     if (input.source.split(/\s+/).indexOf(value) === -1) responseFailure('value', field);
                 }

@@ -1451,9 +1451,10 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
         if ((code === 'limit' || code === 'response') && details) error.details = details;
         throw error;
     }
-    function responseFailure(reason, field) {
+    function responseFailure(reason, field, length) {
         var details = {reason: reason || 'contract'};
         if (field && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(field.id)) details.fieldId = field.id;
+        if (reason === 'maxLength') {details.maxLength = field.maxLength; details.length = length;}
         fail('response', details);
     }
     function record(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
@@ -1547,6 +1548,7 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
         'Questions always contain {id,text,reason,required:boolean}; warnings contain strings; evidence contains {fieldId,kind:"source"|"suggestion",quote:string}.',
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
         'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype, user values, numeric estimates, Epic or Sprint relations. Humans enter estimates and select relations explicitly.',
+        'Respect each field maxLength exactly. Produce a short Summary within its maxLength; never copy the entire source into Summary. Do not truncate source or current values.',
         'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
         'Field shapes by kind: string/textarea/date/datetime -> string; number -> finite number; option -> {"id":"literal catalog ID"}; multioption/components/versions -> [{"id":"literal catalog ID"}]; labels -> string[]. Null is allowed. Never return labels or names in place of IDs, numeric IDs, extra object keys, HTML execution or nested commands.'
     ].join('\n');
@@ -1646,6 +1648,8 @@ define('_ujgTA_ai', ["_ujgTA_llmClient", '_ujgTA_validation'], function(shared, 
                     value = value.map(function(item) { return id(item) ? {id: item} : item; });
                 }
                 if (!normalizedValue(field, value)) responseFailure('shape', field);
+                if (['string','textarea'].indexOf(field.kind) !== -1 && typeof value === 'string' && field.maxLength && value.length > field.maxLength)
+                    responseFailure('maxLength', field, value.length);
                 if (kind === 'assist' && value !== null && value !== '' && ['date', 'datetime'].indexOf(field.kind) !== -1) {
                     if (input.source.split(/\s+/).indexOf(value) === -1) responseFailure('value', field);
                 }
@@ -1918,7 +1922,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         selection: 'ответ меняет выбранный тип задачи или шаблон либо предлагает недоступный вариант. Проверьте выбор и повторите действие вручную.',
         scope: 'ответ содержит поле, которое не разрешено заполнять. Проверьте выбранные поля генерации и повторите действие вручную.',
         shape: 'неверный формат значения поля. Выберите значение вручную или повторите подготовку.',
-        value: 'значение поля не соответствует данным Jira или списку допустимых значений. Обновите данные Jira и выберите значение вручную.'
+        value: 'значение поля не соответствует данным Jira или списку допустимых значений. Обновите данные Jira и выберите значение вручную.',
+        maxLength: 'текст превышает допустимую длину поля. Сократите предложение вручную или явно запросите новое.'
     };
     var responseFieldLabels = {
         summary: 'Тема', description: 'Описание', components: 'Компоненты', fixVersions: 'Исправить в версиях',
@@ -1936,6 +1941,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 result.details.fieldId = fieldId;
                 var label = Object.prototype.hasOwnProperty.call(responseFieldLabels, fieldId) ? responseFieldLabels[fieldId] + ' (' + fieldId + ')' : fieldId;
                 result.message += ' Поле: ' + label + '.';
+                var spec=fields.getField(meta,typeId,fieldId);
+                if (reason==='maxLength' && Number.isSafeInteger(spec.maxLength) && spec.maxLength>0 &&
+                    error.details.maxLength===spec.maxLength && Number.isSafeInteger(error.details.length) && error.details.length>spec.maxLength) {
+                    result.details.maxLength=spec.maxLength;result.details.length=error.details.length;
+                    result.message+=' Длина: '+error.details.length+'; максимум: '+spec.maxLength+'.';
+                }
             }
         }
         if (code === 'limit' && error && error.details) {
@@ -2690,7 +2701,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text(needsBoard ? 'Выберите доску' : fields.catalogUnavailable(current.field) ? 'Каталог вариантов недоступен. Используйте форму Jira.' : 'Нет вариантов'));
                 if (relation() && partial && !needsBoard) candidates.append($('<p class="ta-muted" data-ta-partial>').text('Неполные результаты. Уточните поиск или введите ключ задачи.'));
             }
-            toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : 'Выбрать');
+            toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : current.placeholder || 'Выбрать');
         }
         function runSearch() {
             query = search.val(); cancelSearch();
@@ -2792,6 +2803,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 ['option', 'multioption', 'components', 'versions', 'user', 'epic', 'sprint'].indexOf(current.field.kind) !== -1 ? 'picker' : current.field.kind;
             if (mode !== kind) {body.off('.taPicker'); mode = kind; build(kind);}
             label.text(current.field.name + (current.field.required ? ' *' : ''));
+            label.toggleClass('ta-visually-hidden',current.hideLabel===true);
             var messages = current.errors || []; errors.text(messages.join(' '));
             control.attr({'aria-describedby': uid + '-errors', 'aria-invalid': String(messages.length > 0)}).prop('disabled', current.disabled === true);
             if (kind === 'picker') renderChoices();
@@ -3007,6 +3019,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null, discardId = null;
         var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null, connectionHost = null;
         var fullscreen = null, tokenOpen = false, activeMenu = null, fieldsQueued = false, pointerHeld = false, pointerTimer = null;
+        var workspace, divider, sourceWidth = null, resizeObserver = null, dragPointer = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', assisting:'Подготовка предложения', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
@@ -3016,6 +3029,24 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         function closeMenu() {
             if (!activeMenu) return;
             activeMenu.menu.prop('hidden',true);activeMenu.toggle.attr('aria-expanded','false');activeMenu=null;
+        }
+        function resizeColumns(width) {
+            if (dead || !workspace) return;
+            var total=workspace[0].getBoundingClientRect().width, maximum=Math.max(220,Math.floor(total-352));
+            if (total<760) {stopDrag();return;}
+            sourceWidth=Math.round(Math.max(220,Math.min(maximum,width == null ? sourceWidth == null ? (total-12)*0.32 : sourceWidth : width)));
+            workspace[0].style.setProperty('--ta-source-width',sourceWidth+'px');
+            divider.attr({'aria-valuemin':220,'aria-valuemax':Math.floor(maximum),'aria-valuenow':sourceWidth});
+        }
+        function dragColumns(event) {
+            if (dragPointer===null || event.pointerId!==dragPointer) return;
+            resizeColumns(event.clientX-workspace[0].getBoundingClientRect().left);
+        }
+        function stopDrag() {
+            dragPointer=null;
+            document.removeEventListener('pointermove',dragColumns);
+            document.removeEventListener('pointerup',stopDrag);
+            document.removeEventListener('pointercancel',stopDrag);
         }
         function closeTokens(focus) {
             tokenOpen=false;root.find('[data-ta-token-preflight]').prop('hidden',true);
@@ -3174,11 +3205,28 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             view.mount(host); return {view: view, id: id, name: name};
         }
         function updateSelection(selection, values, value, disabled) {
-            selection.view.update({field: {id: selection.id, name: selection.name, kind:'option', supported:true, writable:true, allowedValues:values}, value: value ? {id:value} : null, errors:[], disabled:disabled, removable:selection.id!=='project'});
+            selection.view.update({field: {id: selection.id, name: selection.name, kind:'option', supported:true, writable:true, allowedValues:values}, value: value ? {id:value} : null, errors:[], disabled:disabled, removable:selection.id!=='project',hideLabel:true,placeholder:selection.name});
         }
         function mount(el) {
             root = $(el).addClass('ujg-ticket-assistant');
             root.append('<header class="ta-header"><h2>Помощник задач</h2><span data-ta-profile class="ta-muted"></span></header><div class="ta-selections"><div data-ta-project></div><div data-ta-template></div><div data-ta-type></div></div><div class="ta-workspace"><section class="ta-source-area"><h3>Исходные данные</h3><label class="ta-source-label">Запрос<textarea rows="12" data-ta-source></textarea></label><div class="ta-actions" data-ta-actions></div><div data-ta-progress class="ta-progress" hidden><span data-ta-stage></span><span data-ta-elapsed aria-live="off"></span></div><div data-ta-error class="ta-error" role="alert" hidden></div><div data-ta-stopped class="ta-warning" hidden></div><div data-ta-retry-host hidden></div><section class="ta-questions"><h3>Уточнения</h3><div data-ta-questions></div></section><details class="ta-scope"><summary>Поля генерации</summary><div data-ta-scope></div><p data-ta-omitted class="ta-muted"></p><p class="ta-muted">Текущие значения проверяются и вне области генерации. Пользователи не передаются AI.</p></details></section><section class="ta-draft-area"><div class="ta-draft-heading"><h3>Черновик Jira</h3><span data-ta-checked class="ta-result" hidden>Проверен</span></div><div data-ta-fields></div><div data-ta-routes></div><div data-ta-warnings class="ta-warning" hidden></div><div data-ta-evidence></div><div data-ta-fallback class="ta-warning" hidden></div><div class="ta-actions" data-ta-copy-actions></div><textarea data-ta-copy-text aria-label="Текст для копирования" rows="5" readonly hidden></textarea><p data-ta-copy-status class="ta-muted" role="status"></p><footer class="ta-footer"><button type="button" data-ta-create disabled>Создать задачу</button><span class="ta-muted">Создание пока недоступно</span></footer></section></div><div data-ta-settings hidden></div>');
+            workspace=root.find('.ta-workspace');
+            divider=$('<div class="ta-divider" data-ta-divider role="separator" tabindex="0" aria-orientation="vertical" aria-label="Ширина исходных данных">').insertAfter(root.find('.ta-source-area'));
+            divider.on('pointerdown',function(event) {
+                if (event.button!==0 || workspace[0].getBoundingClientRect().width<760) return;
+                event.preventDefault();stopDrag();divider.trigger('focus');
+                dragPointer=event.originalEvent.pointerId;
+                document.addEventListener('pointermove',dragColumns);
+                document.addEventListener('pointerup',stopDrag);
+                document.addEventListener('pointercancel',stopDrag);
+            }).on('keydown',function(event) {
+                if (['ArrowLeft','ArrowRight','Home','End'].indexOf(event.key)===-1) return;
+                event.preventDefault();resizeColumns();
+                resizeColumns(event.key==='Home'?220:event.key==='End'?Infinity:sourceWidth+(event.key==='ArrowRight'?20:-20));
+            });
+            if (typeof window.ResizeObserver==='function') {resizeObserver=new window.ResizeObserver(function(){resizeColumns();});resizeObserver.observe(workspace[0]);}
+            window.addEventListener('resize',refreshColumns);
+            resizeColumns();
             source = root.find('[data-ta-source]').on('input', function() {c.updateSource(source.val());});
             $('<div class="ta-token-preflight" data-ta-token-preflight role="status" hidden>').append(
                 '<p data-ta-token-summary></p><p class="ta-muted" data-ta-token-breakdown></p><p class="ta-muted" data-ta-token-usage hidden></p>',
@@ -3268,6 +3316,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 }
             });
             root.find('[data-ta-omitted]').insertAfter(root.find('.ta-scope'));
+            // Keep fixed dialogs outside container containment so they retain viewport geometry.
+            $('<div class="ta-layout">').prependTo(root).append(root.children('.ta-header,.ta-workspace,.ta-primary-actions'));
             update(c.getState());
         }
         function copy(id) {
@@ -3317,8 +3367,9 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     view.mount(editor); entry = {host:host, view:view, pending:pending, pendingKey:null}; fields.set(field.id, entry);
                     entry.help=$('<p class="ta-muted" data-ta-field-help hidden>').insertAfter(editor);
                     entry.helper=$('<div class="ta-field-helper">').prependTo(host);
-                    entry.toggle=iconButton('Помощь AI: '+field.name,'WandSparkles',{'data-ta-assist-menu':field.id,'aria-expanded':'false','aria-haspopup':'menu'});
-                    entry.menu=$('<div class="ta-helper-menu" role="menu" hidden>');entry.helper.append(entry.toggle,entry.menu);
+                    entry.primary=iconButton('Сгенерировать: '+field.name,'WandSparkles',{'data-ta-assist-primary':field.id});
+                    entry.toggle=iconButton('Действия AI: '+field.name,'ChevronDown',{'data-ta-assist-menu':field.id,'aria-expanded':'false','aria-haspopup':'menu'});
+                    entry.menu=$('<div class="ta-helper-menu" role="menu" hidden>');entry.helper.append(entry.primary,entry.toggle,entry.menu);
                     entry.menu.on('keydown',function(event) {
                         var controls=entry.menu.find('button').filter(function(){return !this.hidden && !this.disabled;}).toArray();
                         var index=controls.indexOf(document.activeElement),next;
@@ -3328,9 +3379,17 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                         if(next!==undefined && controls[next]) {event.preventDefault();controls[next].focus();}
                         if(event.key==='Tab') {closeMenu();entry.toggle.trigger('focus');}
                     });
-                    entry.toggle.on('click',function() {
-                        var open=entry.menu.prop('hidden');closeMenu();
+                    function openHelper(event) {
+                        if (entry.primary.prop('disabled')) return;
+                        if(event)event.preventDefault();
+                        var open=entry.menu.prop('hidden') || event && event.type!=='click';closeMenu();
                         if(open) {entry.menu.prop('hidden',false);entry.toggle.attr('aria-expanded','true');activeMenu={host:entry.helper,menu:entry.menu,toggle:entry.toggle};entry.menu.find('button').first().trigger('focus');}
+                    }
+                    entry.toggle.on('click',openHelper);
+                    entry.primary.on('click',function() {
+                        closeMenu();lastOperation={name:'assistField',argument:field.id,action:'generate'};c.assistField(field.id,'generate');
+                    }).on('contextmenu',openHelper).on('keydown',function(event) {
+                        if(event.key==='ContextMenu' || event.shiftKey && event.key==='F10' || event.key==='ArrowDown')openHelper(event);
                     });
                     [['generate','Сгенерировать'],['improve','Улучшить'],['shorten','Сократить']].forEach(function(action) {
                         entry.menu.append(button(action[1],null,{'data-ta-assist':action[0],role:'menuitem'}).on('click',function() {
@@ -3358,6 +3417,9 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 var helperLabel='Помощь AI: '+field.name;
                 entry.toggle.prop('disabled',helperBlocked).attr({'aria-label':helperLabel,title:helperBlocked?helperLabel+'. Недоступна: проверьте исходник, шаблон, область генерации и каталог.':helperLabel});
                 entry.toggle.children('span').text(helperLabel);
+                var generateLabel='Сгенерировать: '+field.name;
+                entry.primary.prop('disabled',helperBlocked).attr({'aria-label':generateLabel,title:helperBlocked?generateLabel+'. Недоступна: проверьте исходник, шаблон, область генерации и каталог.':generateLabel});
+                entry.primary.children('span').text(generateLabel);
                 entry.menu.find('[data-ta-assist="shorten"]').prop('hidden',['string','textarea'].indexOf(field.kind)===-1);
                 entry.menu.find('button').prop('disabled',helperBlocked);
                 if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
@@ -3382,8 +3444,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                         var match=(field.allowedValues || []).find(function(v){return v.id===id;});
                         return match?match.label:textValue(value);
                     }
-                    if (hasPending) entry.pending.append($('<p>').text('Сейчас: ' + display(d.fields[field.id])),
-                        $('<p>').text('Предложение: ' + display(d.pendingFields[field.id])),
+                    if (hasPending) entry.pending.append($('<p class="ta-comparison-value" data-ta-comparison-value tabindex="0" role="region">').attr('aria-label','Текущее значение: '+field.name).text('Сейчас: ' + display(d.fields[field.id])),
+                        $('<p class="ta-comparison-value" data-ta-comparison-value tabindex="0" role="region">').attr('aria-label','Предложение: '+field.name).text('Предложение: ' + display(d.pendingFields[field.id])),
                         button('Применить', 'Check', {'data-ta-accept':field.id}).on('click', function() {c.acceptField(field.id);}),
                         button('Отклонить', 'X', {'data-ta-reject':field.id}).on('click', function() {c.rejectField(field.id);}));
                 }
@@ -3580,12 +3642,14 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         function destroy() {
             if(fullscreen)toggleFullscreen();
             if (dead) return; dead = true; if (timer) clearInterval(timer); timer = null;
+            stopDrag();if(resizeObserver)resizeObserver.disconnect();window.removeEventListener('resize',refreshColumns);
             if(pointerTimer!==null)window.clearTimeout(pointerTimer);pointerTimer=null;
             document.removeEventListener('click',finishPointer);document.removeEventListener('pointerup',finishPointer);document.removeEventListener('pointercancel',finishPointer);
             [project, template, type].forEach(function(s) {if (s) s.view.destroy();});
             fields.forEach(function(entry) {entry.view.destroy();}); fields.clear();
             if (settingsView) settingsView.destroy(); if (root) {root[0].removeEventListener('keydown',escapeOverlay,true);root.off('.taGuided').empty();}
         }
+        function refreshColumns() {resizeColumns();}
         return {mount:mount, update:update, openSettings:openSettings, destroy:destroy};
     }
     return {create:create};

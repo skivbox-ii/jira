@@ -22,6 +22,18 @@ function response(kind = 'draft', extra = {}) {
 function parse(kind, body, value = input()) { return ai().parseResponse(kind, typeof body === 'string' ? body : JSON.stringify(body), value); }
 const config = {apiBase: 'https://stub.invalid', apiKey: 'KEY_SECRET', model: 'stub', basePrompt: 'unchanged'};
 
+test('oversized summary reports only trusted id and numerical lengths without truncation', () => {
+    const i=assisted('summary'), value='PRIVATE_RESPONSE '.repeat(30);
+    assert.throws(()=>parse('assist',response('draft',{fields:{summary:value}}),i),error=>{
+        assert.deepEqual(plainAssist(error.details),{reason:'maxLength',fieldId:'summary',maxLength:255,length:value.length});
+        assert.ok(!JSON.stringify(error).includes('PRIVATE_RESPONSE'));return true;
+    });
+    const exact='x'.repeat(255);
+    assert.equal(parse('assist',response('draft',{fields:{summary:exact}}),i).fields.summary,exact);
+    assert.match(ai().buildRequest('assist',i).systemPrompt,/respect.*maxLength/i);
+    assert.match(ai().buildRequest('assist',i).systemPrompt,/short Summary/i);
+});
+
 test('Prepare cannot generate estimates or relations but retains their manual current values for review',()=>{
     const i=input();i.meta.issueTypes[0].fields.push({id:'epic',name:'Epic',kind:'epic',supported:true,writable:true,allowedValues:[],optionsComplete:false});
     i.draft.fields.customfield_1=3.5;i.draft.fields.epic='DO-42';

@@ -96,7 +96,7 @@
                     warnings:['Критерии приёмки предложены для ручной проверки.'],evidence:[]};
             }
             if(input.action==='assist') {
-                response.fields={};response.fields[input.targetFieldId]=mode==='null'?null:input.targetFieldId==='components'?[{id:mode==='foreign'?'99999':'31'}]:'Предложение для поля: '+input.source;
+                response.fields={};response.fields[input.targetFieldId]=mode==='null'?null:input.targetFieldId==='components'?[{id:mode==='foreign'?'99999':'31'}]:input.targetFieldId==='summary'?'Уточнить обработку ошибок API':'Предложение для поля: '+input.source;
                 response.questions=mode==='null'?[{id:'target-fact',text:'Уточните недостающий факт для поля.',reason:'В исходнике нет ответа.',required:true}]:[];
                 response.warnings=['Проверьте предложение перед применением.'];
             }

@@ -25,7 +25,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         selection: 'ответ меняет выбранный тип задачи или шаблон либо предлагает недоступный вариант. Проверьте выбор и повторите действие вручную.',
         scope: 'ответ содержит поле, которое не разрешено заполнять. Проверьте выбранные поля генерации и повторите действие вручную.',
         shape: 'неверный формат значения поля. Выберите значение вручную или повторите подготовку.',
-        value: 'значение поля не соответствует данным Jira или списку допустимых значений. Обновите данные Jira и выберите значение вручную.'
+        value: 'значение поля не соответствует данным Jira или списку допустимых значений. Обновите данные Jira и выберите значение вручную.',
+        maxLength: 'текст превышает допустимую длину поля. Сократите предложение вручную или явно запросите новое.'
     };
     var responseFieldLabels = {
         summary: 'Тема', description: 'Описание', components: 'Компоненты', fixVersions: 'Исправить в версиях',
@@ -43,6 +44,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 result.details.fieldId = fieldId;
                 var label = Object.prototype.hasOwnProperty.call(responseFieldLabels, fieldId) ? responseFieldLabels[fieldId] + ' (' + fieldId + ')' : fieldId;
                 result.message += ' Поле: ' + label + '.';
+                var spec=fields.getField(meta,typeId,fieldId);
+                if (reason==='maxLength' && Number.isSafeInteger(spec.maxLength) && spec.maxLength>0 &&
+                    error.details.maxLength===spec.maxLength && Number.isSafeInteger(error.details.length) && error.details.length>spec.maxLength) {
+                    result.details.maxLength=spec.maxLength;result.details.length=error.details.length;
+                    result.message+=' Длина: '+error.details.length+'; максимум: '+spec.maxLength+'.';
+                }
             }
         }
         if (code === 'limit' && error && error.details) {

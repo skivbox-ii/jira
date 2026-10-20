@@ -7,6 +7,7 @@ const {startPreview}=require('./ticket-assistant-preview-server.cjs');
 const artifacts=path.resolve(__dirname,'../../.superpowers/sdd/2026-10-20-ticket-assistant-ux/task-3-visuals');
 
 async function assist(page,action='generate') {
+    if(action==='generate') return page.locator('[data-ta-field="description"] [data-ta-assist-primary]').click();
     await page.locator('[data-ta-field="description"] [data-ta-assist-menu]').click();
     await page.locator('[data-ta-field="description"] [data-ta-assist="'+action+'"]').click();
 }
@@ -49,7 +50,9 @@ for(const width of [1440,390]) test('guided source UI offline at '+width,async()
         await additional.locator('summary').first().click();assert.equal(await labels.isVisible(),true);
         if(width===1440) {
             const left=await page.locator('.ta-source-area').boundingBox(),right=await page.locator('.ta-draft-area').boundingBox(),create=await page.locator('[data-ta-create]').boundingBox();
-            assert.ok(right.width>left.width*1.7);assert.ok(create.y+create.height<=900);
+            assert.ok(right.width>left.width*1.7);
+            const workspace=await page.locator('.ta-workspace').boundingBox();
+            assert.ok(create.y>=workspace.y+workspace.height,'create follows complete content in document flow');
         }
         await assist(page);await page.waitForSelector('[data-ta-accept="description"]');
         assert.equal(await description.inputValue(),'');
@@ -109,4 +112,73 @@ for(const width of [1440,390]) test('guided source UI offline at '+width,async()
         await page.screenshot({path:path.join(artifacts,'manual-'+width+'.png')});
         assert.deepEqual(faults,[]);assert.deepEqual(external,[]);
     } finally {await context.close();await browser.close();await server.close();}
+});
+
+test('guided editor responds to embedded width, keeps complete comparisons and scrolls fullscreen as one page',async()=>{
+    const server=await startPreview({port:0,sourceAssets:true}),browser=await chromium.launch({channel:'chrome',headless:true});
+    const page=await browser.newPage({viewport:{width:1440,height:900}});
+    async function expectProposal(fieldId) {
+        await settled(page);
+        const snapshot=await page.evaluate(fieldId=>{
+            const state=window.taPreview.instance.controller.getState();
+            return {stage:state.stage,error:state.error && {code:state.error.code,details:state.error.details},
+                pending:Object.prototype.hasOwnProperty.call(state.draft.pendingFields,fieldId)};
+        },fieldId);
+        assert.equal(snapshot.error,null,fieldId+' assistance settled: '+JSON.stringify(snapshot));
+        assert.equal(snapshot.stage,'idle',fieldId+' assistance did not finish idle');
+        assert.equal(snapshot.pending,true,fieldId+' assistance has no staged proposal');
+        await page.locator('[data-ta-accept="'+fieldId+'"]').waitFor();
+    }
+    await page.route('**/*',route=>route.request().url().startsWith(server.url) && route.request().method()==='GET'?route.continue():route.abort());
+    try {
+        await page.goto(server.url+'?review=guided');await page.waitForSelector('html[data-ta-preview-ready="true"]');
+        const root=page.locator('.ujg-ticket-assistant'),divider=page.locator('[data-ta-divider]');
+        await root.evaluate(el=>el.style.width='600px');
+        assert.equal(await divider.isVisible(),false);
+        const source=await page.locator('.ta-source-area').boundingBox(),draft=await page.locator('.ta-draft-area').boundingBox();
+        assert.ok(draft.y>=source.y+source.height);
+        for(const id of ['project','template','type']) {
+            const picker=page.locator('[data-ta-'+id+'] [data-ta-picker]');
+            assert.ok(await picker.evaluate(el=>Array.from(el.labels || []).map(label=>label.textContent).join(' ').trim()));
+            await picker.click();
+            assert.equal(await root.evaluate(el=>el.scrollWidth<=el.clientWidth),true,'600px embedded header/popover fits on wide viewport');
+            await page.keyboard.press('Escape');
+        }
+        await root.evaluate(el=>el.style.width='');
+        await divider.focus();await page.keyboard.press('Home');
+        assert.equal(await divider.getAttribute('aria-valuenow'),'220');
+        await page.keyboard.press('End');
+        assert.ok((await page.locator('.ta-draft-area').boundingBox()).width>=340);
+        const box=await divider.boundingBox();
+        await page.mouse.move(box.x+box.width/2,box.y+20);await page.mouse.down();await page.mouse.move(100,box.y+20);await page.mouse.up();
+        assert.equal(await divider.getAttribute('aria-valuenow'),'220');
+        const long='Полный текст для проверки. '.repeat(120);
+        await page.locator('[data-ta-source]').fill(long);
+        await page.locator('[data-ta-field="summary"] [data-ta-assist-primary]').click();
+        await expectProposal('summary');
+        assert.ok((await page.evaluate(()=>window.taPreview.instance.controller.getState().draft.pendingFields.summary)).length<=255);
+        await page.locator('[data-ta-accept="summary"]').click();
+        const description=page.locator('[data-ta-field="description"] textarea');await description.fill(long);
+        const primary=page.locator('[data-ta-field="description"] [data-ta-assist-primary]');
+        const before=await page.evaluate(()=>window.taPreview.calls.filter(call=>call==='ai:assist').length);
+        await primary.click({button:'right'});
+        assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(call=>call==='ai:assist').length),before);
+        await page.locator('[data-ta-field="description"] [data-ta-assist="improve"]').click();
+        await expectProposal('description');
+        const values=page.locator('[data-ta-field="description"] [data-ta-comparison-value]');
+        for(let i=0;i<2;i++) {
+            assert.equal(await values.nth(i).evaluate(el=>el.scrollHeight>el.clientHeight && el.clientHeight<=180),true);
+            await values.nth(i).focus();await page.keyboard.press('End');
+        }
+        assert.equal(await values.first().textContent(),'Сейчас: '+long);
+        assert.equal(await values.nth(1).textContent(),'Предложение: Предложение для поля: '+long);
+        await page.locator('[data-ta-fullscreen]').click();
+        assert.equal(await root.evaluate(el=>getComputedStyle(el).overflowY==='auto' && el.scrollHeight>el.clientHeight),true);
+        await page.locator('[data-ta-reject="description"]').click();
+        await page.locator('[data-ta-create]').scrollIntoViewIfNeeded();
+        assert.equal(await page.locator('.ta-primary-actions').evaluate(el=>getComputedStyle(el).position==='static'),true);
+        await page.locator('[data-ta-source]').focus();await page.keyboard.press('Escape');
+        assert.equal(await page.locator('[data-ta-source]').inputValue(),long);
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    } finally {await browser.close();await server.close();}
 });

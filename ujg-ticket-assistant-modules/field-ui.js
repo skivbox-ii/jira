@@ -73,7 +73,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text(needsBoard ? 'Выберите доску' : fields.catalogUnavailable(current.field) ? 'Каталог вариантов недоступен. Используйте форму Jira.' : 'Нет вариантов'));
                 if (relation() && partial && !needsBoard) candidates.append($('<p class="ta-muted" data-ta-partial>').text('Неполные результаты. Уточните поиск или введите ключ задачи.'));
             }
-            toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : 'Выбрать');
+            toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : current.placeholder || 'Выбрать');
         }
         function runSearch() {
             query = search.val(); cancelSearch();
@@ -175,6 +175,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 ['option', 'multioption', 'components', 'versions', 'user', 'epic', 'sprint'].indexOf(current.field.kind) !== -1 ? 'picker' : current.field.kind;
             if (mode !== kind) {body.off('.taPicker'); mode = kind; build(kind);}
             label.text(current.field.name + (current.field.required ? ' *' : ''));
+            label.toggleClass('ta-visually-hidden',current.hideLabel===true);
             var messages = current.errors || []; errors.text(messages.join(' '));
             control.attr({'aria-describedby': uid + '-errors', 'aria-invalid': String(messages.length > 0)}).prop('disabled', current.disabled === true);
             if (kind === 'picker') renderChoices();

@@ -3,6 +3,25 @@ const assert = require('node:assert/strict');
 const { loadUnit, memoryStorage, metadataFixture } = require('./helpers/ticket-assistant-fixture');
 
 const plain = value => JSON.parse(JSON.stringify(value));
+
+test('oversized response diagnostics retain only trusted metadata limits and numeric lengths',async()=>{
+    const h=harness();await h.ready();
+    for(const details of [
+        {reason:'maxLength',fieldId:'summary',maxLength:255,length:510,raw:'PRIVATE'},
+        {reason:'maxLength',fieldId:'summary',maxLength:255,length:'PRIVATE'},
+        {reason:'maxLength',fieldId:'summary',maxLength:999,length:1000},
+        {reason:'maxLength',fieldId:'foreign',maxLength:255,length:510}
+    ]) {
+        h.ai.prepare=async()=>{throw {code:'response',details};};await h.c.prepare();
+        const error=h.c.getState().error;
+        assert.equal(error.details.reason,'maxLength');assert.ok(!JSON.stringify(error).includes('PRIVATE'));
+        assert.doesNotMatch(error.message,/каталог|Обновите данные Jira/);
+        if(details.fieldId==='summary' && details.length===510) {
+            assert.deepEqual(error.details,{reason:'maxLength',fieldId:'summary',maxLength:255,length:510});
+            assert.match(error.message,/510.*255/);
+        } else {assert.equal(error.details.length,undefined);assert.equal(error.details.maxLength,undefined);}
+    }
+});
 function deferred() {
     let resolve, reject;
     const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
