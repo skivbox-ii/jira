@@ -42,6 +42,17 @@ test('lost create response cannot lead to a second POST, including a reloaded st
     const restored=h.drafts.restore(h.store.load('DO').draft);
     await h.creator.submit({...h,draft:restored},h.capture); assert.equal(h.posts.length,1);
 });
+test('creation refreshes relation identity after Check and keeps numeric sprint payload canonical',async()=>{
+    for(const forbidden of [false,true]) {
+        const h=setup();h.raw.projects[0].issuetypes[0].fields.customfield_847={schema:{type:'array',items:'string',custom:'com.pyxis.greenhopper.jira:gh-sprint'}};
+        const fields=loadUnit('fields');const meta=fields.normalizeMeta(h.raw,'DO',{components:h.catalog,versions:{projectKey:'DO',values:[],complete:true}});
+        h.draft=h.drafts.setSelection(h.draft,{metaSignature:meta.signature});h.draft=h.drafts.editField(h.draft,'customfield_847',73);
+        h.draft=h.drafts.markChecked(h.draft,{ok:true,fieldErrors:{},warnings:[],unsupportedRequired:[]},[],h.drafts.snapshot(h.draft));h.persist(h.draft);
+        let reads=0;h.api.getSprint=async()=>{reads++;if(forbidden)throw {kind:'forbidden'};return {id:'73'};};
+        await h.creator.submit(h,h.capture);assert.equal(reads,1);assert.equal(h.posts.length,forbidden?0:1);
+        if(!forbidden)assert.equal(h.posts[0].fields.customfield_847,73);
+    }
+});
 test('fresh metadata and catalogs invalidate a changed checked signature without POST',async()=>{
     for(const change of ['required','component']) {
         const h=setup();

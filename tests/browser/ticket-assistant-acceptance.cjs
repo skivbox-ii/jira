@@ -75,7 +75,7 @@ async function session(width, run) {
     const issuePosts = new Map();
     const fixture = {issuePostCount:id => issuePosts.get(id) || 0};
     try {
-        server = await startPreview({port:0});
+        server = await startPreview({port:0,sourceAssets:false});
         browser = await chromium.launch({channel:'chrome',headless:true});
         context = await browser.newContext({viewport:{width,height:width === 390 ? 844 : 900},reducedMotion:'reduce'});
         await context.exposeBinding('taRecordIssue', (source, event) => {issuePosts.set(event.draftId,fixture.issuePostCount(event.draftId)+1);});
@@ -227,6 +227,7 @@ for (const width of [1440,390]) {
             await question.fill('Длинный видимый ответ. '.repeat(30));
             await question.press('Tab'); await page.keyboard.press('Enter');
             assert.match(await input.inputValue(),/Длинный видимый ответ/);
+            await page.locator('[data-ta-additional]').evaluate(el=>{el.open=true;});
             const last = page.locator('[data-ta-field]').last(); await last.scrollIntoViewIfNeeded();
             const box = await last.boundingBox();
             assert.ok(box.y>=0 && box.y < (width===390?844:900),'last field reachable');
@@ -373,6 +374,7 @@ test('actual importer registry and assistant coexist with isolated AMD CSS and a
             const s=getComputedStyle(el);return {color:s.color,background:s.backgroundColor,font:s.font,border:s.border,padding:s.padding};
         });
         const assistantStyle=await page.$('link[href="/ujg-ticket-assistant.css"]');
+        await page.mouse.move(0,0);
         await assistantStyle.evaluate(el=>{el.disabled=true;});
         const withImporter = await styles();
         await assistantStyle.evaluate(el=>{el.disabled=false;});

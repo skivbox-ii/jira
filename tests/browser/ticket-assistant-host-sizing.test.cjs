@@ -35,7 +35,7 @@ async function setup(t, width, options = {}) {
             };
         }
     }, options);
-    await page.addScriptTag({path:path.join(root,'ujg-ticket-assistant.runtime.js')});
+    await page.addScriptTag({content:require('./ticket-assistant-preview-server.cjs').buildPreviewAssets()['ujg-ticket-assistant.runtime.js']});
     await page.evaluate(options => {
         const $ = window.jQuery, records = window.hostSizing;
         const api = {
@@ -99,7 +99,8 @@ for (const width of [1440,390]) {
         await page.screenshot({path:path.join(artifacts,width+'-connection.png'),fullPage:true});
         await resizedAfter(page,() => page.locator('[data-ta-connection-cancel]').click());
         // Native ResizeObserver must also catch layout changes without controller updates.
-        await resizedAfter(page,() => page.addStyleTag({content:'[data-ta-source] { height:900px; }'}));
+        await page.addStyleTag({content:'.ujg-ticket-assistant textarea[data-ta-source] { height:900px; }'});
+        if(width===1440)assert.equal(await page.locator('.ta-source-area').evaluate(el=>el.scrollHeight>el.clientHeight),true,'bounded source region scrolls');
         await page.waitForFunction(() => document.querySelector('.gadget-inline').clientHeight >= document.querySelector('#content').offsetHeight);
         await page.screenshot({path:path.join(artifacts,width+'-expanded.png'),fullPage:true});
         await page.waitForTimeout(100);

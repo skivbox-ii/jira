@@ -39,6 +39,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
             onChange:function(state) {if (!dead && ui) {ui.update(state); scheduleResize();}}, now:deps.now});
         var searches = new Set();
         function searchUsers(query, field, options) {
+            if (field && (field.kind === 'epic' || field.kind === 'sprint')) return controller.searchRelation(query,field,options);
             var aborter = new AbortController(), signal = options && options.signal;
             function abort() {aborter.abort();} if (signal) {if (signal.aborted) abort(); else signal.addEventListener('abort', abort, {once:true});}
             searches.add(aborter);

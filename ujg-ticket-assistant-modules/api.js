@@ -14,8 +14,9 @@ define('_ujgTA_api', [], function() {
             base = parsed.pathname;
         } else if (base && base[0] !== '/') throw new Error('Jira base URL must be a context path');
         base = base.replace(/\/+$/, '');
+        var sprintBoardHints = new Map();
 
-        function request(path, data, options) {
+        function request(path, data, options, agile) {
             return new Promise(function(resolve, reject) {
                 var signal = options && options.signal, xhr, settled = false;
                 function finish(error, value) {
@@ -31,7 +32,7 @@ define('_ujgTA_api', [], function() {
                 if (signal && signal.aborted) { abort(); return; }
                 if (signal) signal.addEventListener('abort', abort, { once: true });
                 try {
-                    xhr = config.ajax({ url: base + '/rest/api/2' + path, type: 'GET', dataType: 'json', timeout: 30000, data: data || {} });
+                    xhr = config.ajax({ url: base + (agile ? '/rest/agile/1.0' : '/rest/api/2') + path, type: 'GET', dataType: 'json', timeout: 30000, data: data || {} });
                     Promise.resolve(xhr).then(function(value) { finish(null, value); }, function(error) {
                         var status = Number(error && error.status) || 0;
                         var kinds = { 401: 'unauthorized', 403: 'forbidden', 404: 'not-found', 429: 'rate-limit' };
@@ -42,10 +43,11 @@ define('_ujgTA_api', [], function() {
             });
         }
 
-        function catalog(path, data, options, picker, collectionKey) {
+        function catalog(path, data, options, picker, collectionKey, agile) {
             var collected = [], expectedTotal = null, seen = Object.create(null);
             function page(startAt) {
-                return request(path, Object.assign({}, data, { startAt: startAt, maxResults: 1000 }), options).then(function(raw) {
+                if (startAt >= 10000) return Promise.reject(failure('incomplete'));
+                return request(path, Object.assign({}, data, { startAt: startAt, maxResults: 1000 }), options, agile).then(function(raw) {
                     var values = Array.isArray(raw) ? raw : raw && raw[collectionKey || (picker ? 'users' : 'values')];
                     if (!Array.isArray(values)) throw failure('incomplete');
                     var total = raw && raw.total;
@@ -117,7 +119,79 @@ define('_ujgTA_api', [], function() {
                 return result;
             });
         }
+        function numericId(value) {return /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value));}
+        function issueKey(value) {return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value);}
+        function getBoards(project, options) {
+            return catalog('/board',{projectKeyOrId:String(project),type:'scrum'},options,false,null,true).then(function(result) {
+                if (!result.values.every(function(v) {return numericId(v.id) && typeof v.name === 'string';})) throw failure('incomplete');
+                return {values:result.values.map(function(v) {return {id:String(v.id),label:v.name};}),complete:result.complete,projectKey:String(project)};
+            });
+        }
+        function getSprints(project, board, options) {
+            if (!numericId(board)) return Promise.reject(failure('input'));
+            return catalog('/board/'+String(board)+'/sprint',{state:'active,future'},options,false,null,true).then(function(result) {
+                if (!result.values.every(function(v) {return numericId(v.id) && typeof v.name === 'string' && ['active','future'].indexOf(v.state)!==-1;})) throw failure('incomplete');
+                result.values.forEach(function(v) {sprintBoardHints.set(String(project)+'/'+String(v.id),String(board));});
+                return {values:result.values.map(function(v) {return {id:String(v.id),label:v.name,state:v.state,boardId:String(board)};}),complete:result.complete,projectKey:String(project),boardId:String(board)};
+            });
+        }
+        async function getEpic(project, key, options) {
+            if (!issueKey(key)) throw failure('input');
+            var epic=await request('/epic/'+encodeURIComponent(key),{},options,true);
+            var issue=await request('/issue/'+encodeURIComponent(key),{fields:'project'},options);
+            if (!epic || !numericId(epic.id) || !issue || String(issue.id)!==String(epic.id) || issue.key!==key || !issue.fields || !issue.fields.project || issue.fields.project.key!==project) throw failure('relation');
+            return {id:key,label:String(epic.name || key)};
+        }
+        async function getSprint(project, id, options) {
+            if (!numericId(id)) throw failure('input');
+            var sprint=await request('/sprint/'+String(id),{},options,true);
+            if (!sprint || sprint.id!==Number(id) || ['active','future'].indexOf(sprint.state)===-1) throw failure('relation');
+            var boards=await getBoards(project,options);
+            if (!boards.complete) throw failure('incomplete');
+            var hint=sprintBoardHints.get(String(project)+'/'+String(id));
+            var ordered=boards.values.slice().sort(function(a,b) {
+                function rank(board) {return board.id===hint ? 0 : board.id===String(sprint.originBoardId) ? 1 : 2;}
+                return rank(a)-rank(b);
+            });
+            var denied=null;
+            // Discovery is chosen-board-only. Reload/preflight may confirm an
+            // existing numeric value against at most 50 relevant boards.
+            for(var board of ordered.slice(0,50)) {
+                try {
+                    var choices=await getSprints(project,board.id,options);
+                    var match=choices.values.find(function(s) {return s.id===String(id);});
+                    if (!choices.complete) throw failure('incomplete');
+                    if(match) return match;
+                } catch(error) {
+                    if(!error || ['forbidden','not-found'].indexOf(error.kind)===-1) throw error;
+                    denied=error;
+                }
+            }
+            if(ordered.length>50) throw failure('incomplete');
+            throw denied || failure('relation');
+        }
+        async function searchEpics(project, query, options) {
+            function quote(value) {return '"'+String(value).replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"';}
+            var term=String(query || '');
+            if (term.length>200) throw failure('input');
+            if (issueKey(term)) return {values:[await getEpic(project,term,options)],complete:false,projectKey:String(project)};
+            var allFields=await request('/field',{},options);
+            if(!Array.isArray(allFields)) throw failure('incomplete');
+            var epicNames=allFields.filter(function(f) {return f && f.schema && f.schema.custom==='com.pyxis.greenhopper.jira:gh-epic-label';});
+            if(epicNames.length!==1 || !/^customfield_[1-9]\d*$/.test(epicNames[0].id)) throw failure('incomplete');
+            var customId=epicNames[0].id.slice('customfield_'.length);
+            var jql='project = '+quote(project)+' AND cf['+customId+'] IS NOT EMPTY'+(term ? ' AND text ~ '+quote(term) : '')+' ORDER BY updated DESC';
+            var raw=await request('/search',{jql:jql,fields:'project,summary',startAt:0,maxResults:20},options);
+            if (!raw || !Array.isArray(raw.issues) || raw.issues.length>20) throw failure('incomplete');
+            var values=[];
+            for (var issue of raw.issues) {
+                if (!issue || !issueKey(issue.key) || !issue.fields || !issue.fields.project || issue.fields.project.key!==project) throw failure('incomplete');
+                values.push({id:issue.key,label:typeof issue.fields.summary==='string' ? issue.fields.summary : issue.key});
+            }
+            return {values:values,complete:false,projectKey:String(project)};
+        }
         return {
+            getBoards:getBoards, getSprints:getSprints, getEpic:getEpic, getSprint:getSprint, searchEpics:searchEpics,
             getProjects: function(options) { return catalog('/project', {}, options); },
             getCurrentUser: function(options) { return request('/myself', {}, options); },
             getCreateMeta: function(projectKey, issueTypeId, options) {

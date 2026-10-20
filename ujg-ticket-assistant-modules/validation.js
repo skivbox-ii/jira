@@ -37,6 +37,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if (field.kind === 'user' && ((field.id === 'assignee' && policy.allowAssignee !== true) || !Array.isArray(policy.explicitUserFields) || policy.explicitUserFields.indexOf(field.id) === -1)) return { ok: false, error: 'Explicit user selection and policy approval required' };
         if (value === null) return { ok: true, value: null };
         var kind = field.kind;
+        if (kind === 'epic' || kind === 'sprint') return {ok:fields.relationAllowed(field,value) && !!policy.relations &&
+            Object.prototype.hasOwnProperty.call(policy.relations,field.id) && policy.relations[field.id] === value, value:value,
+            error:'Confirm the selected Jira relation again'};
         if (kind === 'string' || kind === 'textarea') return { ok: typeof value === 'string' && (!field.maxLength || value.length <= field.maxLength), value: value };
         if (kind === 'number') return { ok: typeof value === 'number' && isFinite(value), value: value };
         if (kind === 'date' || kind === 'datetime') return { ok: kind === 'date' ? calendar(value) : datetime(value), value: value };

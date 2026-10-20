@@ -62,6 +62,186 @@ function harness(options = {}) {
     return { c, api, ai, calls, changes, identities, stores, localStorage, ready, setUser(value) { user = value; } };
 }
 
+function relationHarness(extra={}) {
+    return harness({api:{async getCreateMeta(key) {const raw=rawMeta(key);for(const t of raw.projects[0].issuetypes) {
+        t.fields.customfield_923={schema:{type:'any',custom:'com.pyxis.greenhopper.jira:gh-epic-link'}};
+        t.fields.customfield_847={schema:{type:'array',items:'string',custom:'com.pyxis.greenhopper.jira:gh-sprint'}};
+        t.fields.customfield_123={schema:{type:'number',custom:'com.atlassian.jira.plugin.system.customfieldtypes:float'}};
+    }return raw;},getBoards:async()=>({values:[{id:'12',label:'A'},{id:'13',label:'B'}],complete:true}),
+    getSprints:async(project,board)=>({values:[{id:'73',label:'Sprint',boardId:board}],complete:true}),
+    getSprint:async(project,id)=>({id:String(id),label:'Sprint'}),getEpic:async(project,key)=>({id:key,label:'Epic'}),
+    searchEpics:async()=>({values:[{id:'DO-42',label:'Epic'}],complete:false}),...extra}});
+}
+test('relations are searched in selected scope and require an explicit known board',async()=>{
+    const h=relationHarness();await h.ready();
+    assert.ok(!h.c.getState().generationFieldIds.includes('customfield_123'));
+    assert.ok(!h.c.getState().generationFieldIds.includes('customfield_847'));
+    let result=await h.c.searchRelation('',{id:'customfield_847'},{});
+    assert.equal(result.needsBoard,true);assert.equal(result.boards.length,2);assert.deepEqual(result.values,[]);
+    result=await h.c.searchRelation('',{id:'customfield_847'},{boardId:'12'});assert.equal(result.values[0].id,'73');
+    await assert.rejects(h.c.searchRelation('',{id:'customfield_847'},{boardId:'99'}));
+    await h.c.updateField('customfield_923','DO-42');await h.c.updateField('customfield_847',73);await h.c.updateField('customfield_123',0.5);
+    await h.c.updateField('summary','Manual');await h.c.check();assert.ok(h.c.getState().draft.checked);
+    assert.equal(h.calls.at(-1)[1].draft.fields.customfield_123,0.5);
+    h.api.getSprint=async()=>{throw {kind:'forbidden'};};await h.c.check();assert.equal(h.c.getState().draft.checked,null);
+    assert.equal(h.c.getState().draft.fields.customfield_847,73);
+});
+test('project switch and cancel abort relation lookup and reject its stale result',async()=>{
+    for(const change of [c=>c.selectProject('APP'),c=>c.cancel(),c=>c.selectIssueType('11'),c=>c.destroy()]) {
+        const wait=deferred();let signal;
+        const h=relationHarness({searchEpics:(p,q,o)=>{signal=o.signal;return wait.promise;}});await h.ready();
+        const pending=h.c.searchRelation('',{id:'customfield_923'},{});
+        await new Promise(r=>setImmediate(r));await change(h.c);assert.equal(signal.aborted,true);
+        wait.resolve({values:[{id:'DO-42',label:'Late'}],complete:false});await assert.rejects(pending,e=>e.kind==='abort');
+    }
+});
+
+test('individual helpers stage only the target and require explicit Apply or Reject', async () => {
+    const h = harness({ai: {async assist(i) {return {fields: {[i.targetFieldId]: 'Suggested'}, questions: [], warnings: [], evidence: []};}}});
+    await h.ready(); await h.c.updateField('summary', 'Manual');
+    let s = await h.c.assistField('description', 'generate');
+    assert.deepEqual(s.draft.fields, {summary: 'Manual'});
+    assert.deepEqual(s.draft.pendingFields, {description: 'Suggested'});
+    assert.equal(s.assistance.status, 'ready'); assert.equal(s.assistance.fieldId, 'description');
+    s = await h.c.rejectField('description'); assert.deepEqual(s.draft.pendingFields, {});
+    await h.c.assistField('description', 'improve'); s = await h.c.acceptField('description');
+    assert.equal(s.draft.fields.description, 'Suggested'); assert.equal(s.draft.fields.summary, 'Manual');
+    await h.c.setGenerationFields(['summary']); s = await h.c.assistField('description', 'generate');
+    assert.equal(s.error.code, 'input'); assert.deepEqual(s.draft.pendingFields, {});
+});
+test('individual helper stop, edit, settings and connection changes discard late responses', async () => {
+    for (const change of [c => c.cancel(), c => c.updateSource('Changed'), c => c.updateField('summary', 'Manual'),
+        c => c.selectIssueType('11'), c => c.selectProject('APP'), c => c.setGenerationFields(['summary']),
+        c => c.applySettings(c.getState().settings), c => c.connectionChanged(), c => c.destroy()]) {
+        const pending = deferred(); let signal;
+        const h = harness({ai: {async assist(i, o) {signal = o.signal; return pending.promise;}}});
+        await h.ready(); const running = h.c.assistField('description', 'generate');
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(h.c.getState().assistance.status, 'running');
+        await change(h.c); assert.equal(signal.aborted, true);
+        pending.resolve({fields: {description: 'Late'}, questions: [], warnings: [], evidence: []}); await running;
+        assert.deepEqual(h.c.getState().draft.pendingFields, {});
+    }
+});
+test('ready individual proposals cannot be applied after edits, settings or scope changes', async () => {
+    for (const change of [c => c.updateSource('Changed'), c => c.updateField('summary', 'Manual'),
+        c => c.selectIssueType('11'), c => c.setGenerationFields(['summary']), c => c.applySettings(c.getState().settings), c => c.cancel()]) {
+        const h = harness({ai: {async assist() {return {fields: {description: 'Old'}, questions: [], warnings: [], evidence: []};}}});
+        await h.ready(); await h.c.assistField('description', 'generate'); await change(h.c);
+        const s = await h.c.acceptField('description');
+        assert.equal(s.draft.fields.description, undefined); assert.deepEqual(s.draft.pendingFields, {});
+        assert.equal(h.stores[0].load('DO').draft.pendingAssistance, null);
+    }
+});
+test('a durable creation lock acquired during assistance prevents staging its response', async () => {
+    const pending = deferred();
+    const h = harness({ai: {async assist() {return pending.promise;}}}); await h.ready();
+    const running = h.c.assistField('description', 'generate');
+    await new Promise(resolve => setImmediate(resolve));
+    const saved = h.stores[0].load('DO');
+    saved.draft.creation = {status: 'unknown', issueKey: null, attemptId: 'other-tab', error: null};
+    h.stores[0].save('DO', saved, saved.revision);
+    pending.resolve({fields: {description: 'Late'}, questions: [], warnings: [], evidence: []});
+    const s = await running;
+    assert.deepEqual(s.draft.pendingFields, {}); assert.equal(s.error.code, 'conflict');
+    assert.equal(s.assistance.status, 'error');
+});
+test('individual proposals survive scoped storage reload but expire when refreshed metadata changes', async () => {
+    const h = harness({ai: {async assist() {return {fields: {description: 'Saved proposal'}, questions: [], warnings: [], evidence: []};}}});
+    await h.ready(); await h.c.assistField('description', 'generate');
+    assert.deepEqual(plain(h.stores[0].load('DO').draft.pendingFields), {description: 'Saved proposal'});
+    const reloaded = harness({storage: h.localStorage});
+    await reloaded.c.init(); let s = await reloaded.c.selectProject('DO');
+    assert.equal(s.assistance.status, 'ready'); assert.equal(s.assistance.fieldId, 'description');
+    assert.equal(s.draft.fields.description, undefined);
+    const changed = harness({storage: h.localStorage, api: {async getCreateMeta(key) {
+        const raw = rawMeta(key); raw.projects[0].issuetypes[0].fields.description.name = 'Updated description'; return raw;
+    }}});
+    await changed.c.init(); s = await changed.c.selectProject('DO');
+    assert.deepEqual(s.draft.pendingFields, {}); assert.equal(s.assistance, null);
+});
+test('Apply during restored metadata refresh cannot write stale fields or abort the refresh', async () => {
+    const h = harness({ai: {async assist() {return {fields: {description: 'OLD'}, questions: [], warnings: [], evidence: []};}}});
+    await h.ready(); await h.c.assistField('description', 'generate');
+    const pending = deferred(); let signal;
+    const reloaded = harness({storage: h.localStorage, api: {async getCreateMeta(key, type, request) {
+        signal = request.signal; return pending.promise;
+    }}});
+    await reloaded.c.init(); const selecting = reloaded.c.selectProject('DO');
+    await new Promise(resolve => setImmediate(resolve));
+    const before = reloaded.c.getState();
+    const after = await reloaded.c.acceptField('description');
+    const raw = rawMeta('DO'); delete raw.projects[0].issuetypes[0].fields.description;
+    pending.resolve(raw); const finished = await selecting;
+    assert.notEqual(before.assistance && before.assistance.status, 'ready');
+    assert.equal(after.draft.fields.description, undefined);
+    assert.equal(after.stage, 'metadata'); assert.equal(signal.aborted, false);
+    assert.ok(finished.meta); assert.deepEqual(finished.draft.pendingFields, {});
+});
+test('Apply after a failed restored metadata refresh preserves pending value and metadata error', async () => {
+    const h = harness({ai: {async assist() {return {fields: {description: 'OLD'}, questions: [], warnings: [], evidence: []};}}});
+    await h.ready(); await h.c.assistField('description', 'generate');
+    const reloaded = harness({storage: h.localStorage, api: {async getCreateMeta() {throw new Error('offline');}}});
+    await reloaded.c.init(); await reloaded.c.selectProject('DO');
+    const s = await reloaded.c.acceptField('description');
+    assert.equal(s.draft.fields.description, undefined); assert.equal(s.draft.pendingFields.description, 'OLD');
+    assert.equal(s.error.code, 'metadata'); assert.notEqual(s.assistance && s.assistance.status, 'ready');
+});
+test('Apply revalidates restored pending values against writable metadata and exact catalog IDs', async () => {
+    for (const [id, value] of [['customfield_2', {id: 'APP-1'}], ['description', {id: 'invalid-shape'}]]) {
+        const h = harness(); await h.ready();
+        const store = h.stores[0], saved = store.load('DO');
+        saved.draft.pendingFields = {[id]: value};
+        saved.draft.pendingAssistance = {fieldId: id, action: 'generate'};
+        store.save('DO', saved, saved.revision);
+        const reloaded = harness({storage: h.localStorage}); await reloaded.c.init(); await reloaded.c.selectProject('DO');
+        const s = await reloaded.c.acceptField(id);
+        assert.equal(s.draft.fields[id], undefined); assert.equal(s.error.code, 'response');
+        assert.notEqual(s.assistance && s.assistance.status, 'ready');
+    }
+    const h = harness(); await h.ready();
+    const store = h.stores[0], saved = store.load('DO'); saved.draft.pendingFields = {description: 'OLD'};
+    store.save('DO', saved, saved.revision);
+    const reloaded = harness({storage: h.localStorage, api: {async getCreateMeta(key) {
+        const raw = rawMeta(key); raw.projects[0].issuetypes[0].fields.description.operations = ['add']; return raw;
+    }}});
+    await reloaded.c.init(); await reloaded.c.selectProject('DO');
+    const s = await reloaded.c.acceptField('description');
+    assert.equal(s.draft.fields.description, undefined); assert.equal(s.error.code, 'response');
+});
+test('numeric helpers and restored individual numeric proposals require manual input', async () => {
+    let calls = 0;
+    const rawWithNumber = key => {
+        const raw = rawMeta(key);
+        raw.projects[0].issuetypes[0].fields.effort = {name: 'Effort', schema: {type: 'number', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:float'}};
+        return raw;
+    };
+    const h = harness({api: {async getCreateMeta(key) {return rawWithNumber(key);}},
+        ai: {async assist() {calls++; return {fields: {effort: 8}, questions: [], warnings: [], evidence: []};}}});
+    await h.ready(); await h.c.updateSource('Effort: 8 story points');
+    assert.equal(h.c.getState().meta.issueTypes[0].fields.find(f => f.id === 'effort').kind, 'number');
+    let s = await h.c.assistField('effort', 'generate');
+    assert.equal(s.error.code, 'input'); assert.equal(calls, 0);
+    const store = h.stores[0], saved = store.load('DO');
+    saved.draft.pendingFields = {effort: 8}; saved.draft.pendingAssistance = {fieldId: 'effort', action: 'generate'};
+    store.save('DO', saved, saved.revision);
+    const reloaded = harness({storage: h.localStorage, api: {async getCreateMeta(key) {return rawWithNumber(key);}}});
+    await reloaded.c.init(); await reloaded.c.selectProject('DO'); s = await reloaded.c.acceptField('effort');
+    assert.equal(s.draft.fields.effort, undefined); assert.equal(s.error.code, 'response');
+    s = await reloaded.c.updateField('effort', 8); assert.equal(s.draft.fields.effort, 8);
+});
+test('individual helper failures expose safe field feedback and respect durable creation locks', async () => {
+    const h = harness({ai: {async assist() {throw {code: 'transport', message: 'PRIVATE'};}}});
+    await h.ready(); let s = await h.c.assistField('description', 'generate');
+    assert.equal(s.assistance.status, 'error'); assert.equal(s.assistance.error.code, 'transport');
+    assert.ok(!JSON.stringify(s.assistance).includes('PRIVATE'));
+    const store = h.stores[0], saved = store.load('DO');
+    saved.draft.creation = {status: 'unknown', issueKey: null, attemptId: 'a', error: null};
+    store.save('DO', saved, saved.revision);
+    s = await h.c.assistField('summary', 'generate'); assert.equal(s.error.code, 'conflict');
+    assert.deepEqual(s.draft.fields, {});
+});
+
 test('budget edits cancel in-flight checks and retain budget when revisiting cached projects', async()=>{
     const pending=deferred();let captured,signal;
     const h=harness();await h.ready();await h.c.updateField('summary','Manual');await h.c.check();

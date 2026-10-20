@@ -3,7 +3,7 @@
     'use strict';
     var $ = window.jQuery, shared = window.taRequire('_ujgTA_llmClient');
     var review=new URLSearchParams(window.location.search).get('review');
-    if(['obsolete','catalog','storage','response'].indexOf(review)===-1)review='';
+    if(['obsolete','catalog','storage','response','guided'].indexOf(review)===-1)review='';
     var records = {calls:[], pending:0}; window.taPreview = records;
     if(review==='response') records.responseMode=new URLSearchParams(window.location.search).get('responseMode');
     var scenario='success', issueSequence=100, failedFiles=new Set();
@@ -28,6 +28,21 @@
         labels:{name:'Метки',schema:{type:'array',items:'string',system:'labels'}},
         customfield_1:{name:'Оценка',schema:{type:'number',custom:'com.atlassian.jira.plugin.system.customfieldtypes:float'}}
     };
+    if(review==='guided') {
+        rawFields.environment={name:'Окружение',schema:{type:'string',system:'environment'}};
+        rawFields.customfield_71={name:'Epic',schema:{type:'any',custom:'com.pyxis.greenhopper.jira:gh-epic-link'}};
+        rawFields.customfield_72={name:'Sprint',schema:{type:'array',items:'string',custom:'com.pyxis.greenhopper.jira:gh-sprint'}};
+        rawFields.customfield_73={name:'Неизвестное поле',schema:{type:'any',custom:'fixture:unsupported'}};
+        records.assistMode='normal';
+        var assistControls=$('<fieldset>').append($('<legend>').text('Offline AI'));
+        ['normal','null','error','slow','foreign'].forEach(function(mode) {
+            assistControls.append($('<button type="button">').attr({'data-ta-preview-assist':mode,'aria-pressed':String(mode==='normal')}).text(mode).on('click',function() {
+                records.assistMode=mode;assistControls.find('button').attr('aria-pressed','false');$(this).attr('aria-pressed','true');
+            }));
+        });
+        assistControls.append($('<label>').append($('<input type="checkbox" data-ta-preview-lookup-denied>').on('change',function(){records.lookupDenied=this.checked;}),' lookup denied'));
+        controls.append(assistControls);
+    }
     if(review==='catalog') rawFields.customfield_50={name:'Контур приёмки',required:true,schema:{type:'option',custom:'com.atlassian.jira.plugin.system.customfieldtypes:select'},allowedValues:[],autoCompleteUrl:'https://never-follow.invalid/catalog'};
     function result(name, value) {records.calls.push(name); return Promise.resolve(value);}
     var api = {
@@ -38,8 +53,13 @@
             {id:key==='APP'?'21':'11',name:'Ошибка',subtask:false,fields:rawFields},
             {id:key==='APP'?'22':'12',name:'Согласование',subtask:false,fields:Object.assign({},rawFields,{customfield_99:{name:'Согласующий комитет',required:true,schema:{type:'string',custom:'fixture:unsupported'}}})}
         ]}]});},
-        getComponents:function(key) {return result('components',{values:[{id:'31',name:'API'},{id:'32',name:'Интерфейс'},{id:'33',name:'Инфраструктура'}],complete:true,projectKey:key});},
+        getComponents:function(key) {return result('components',{values:[{id:'31',name:'API'},{id:'32',name:'Интерфейс'},{id:'33',name:'Инфраструктура'}].concat(review==='guided'?Array.from({length:180},function(unused,index){return {id:String(100+index),name:'Компонент тестовой системы '+index};}):[]),complete:true,projectKey:key});},
         getVersions:function(key) {return result('versions',{values:[{id:'41',name:'2026.10'},{id:'42',name:'2026.11'}],complete:true,projectKey:key});},
+        searchEpics:function(key,query) {return records.lookupDenied?Promise.reject({kind:'forbidden'}):result('epics',{values:query==='none'?[]:[{id:key+'-42',label:'Работа с ошибками API'}],complete:false,projectKey:key});},
+        getBoards:function(key) {return records.lookupDenied?Promise.reject({kind:'forbidden'}):result('boards',{values:[{id:'12',label:'Команда API'},{id:'13',label:'Команда UI'}],complete:true,projectKey:key});},
+        getSprints:function(key,board) {return result('sprints',{values:[{id:'73',label:'Итерация приёмки',state:'active',boardId:board}],complete:true,projectKey:key,boardId:board});},
+        getEpic:function(key,id) {return result('epic',{id:id,label:'Работа с ошибками API'});},
+        getSprint:function(key,id) {return result('sprint',{id:String(id),label:'Итерация приёмки',state:'active',boardId:'12'});},
         searchUsers:function(query) {return result('users',{values:[{name:'anna',displayName:'Анна Смирнова'},{name:'alex',displayName:'Алексей Петров'},{name:'irina',displayName:'Ирина Козлова'}].filter(function(u) {return (u.name+' '+u.displayName).toLowerCase().indexOf(query.toLowerCase()) !== -1;}),complete:false});},
         getAttachmentMeta:function() {return result('attachment-meta',{enabled:true,uploadLimit:10000000});},
         createIssue:function(payload) {
@@ -61,8 +81,9 @@
     };
     var llm = Object.assign({},shared,{requestText:function(config, request) {
         var input = JSON.parse(request.userPrompt); records.calls.push('ai:'+input.action); records.pending++;
-        return new Promise(function(resolve) {setTimeout(function() {
+        return new Promise(function(resolve,reject) {var mode=records.assistMode;setTimeout(function() {
             records.pending--;
+            if(input.action==='assist' && mode==='error') {reject({code:'transport'});return;}
             var response;
             if (input.action === 'route') response = {schemaVersion:1,kind:'route',issueTypeId:null,templateId:null,candidates:input.candidatePairs.map(function(pair) {return Object.assign({reason:'Выберите подходящий вариант'},pair);}),questions:[]};
             else if (input.action === 'check') response = {schemaVersion:1,kind:'check',questions:[],warnings:[],evidence:[]};
@@ -74,6 +95,11 @@
                     fields:fields,questions:[{id:'release',text:'В какой версии нужно проверить результат?',reason:'Версия не указана в исходном запросе.',required:false}],
                     warnings:['Критерии приёмки предложены для ручной проверки.'],evidence:[]};
             }
+            if(input.action==='assist') {
+                response.fields={};response.fields[input.targetFieldId]=mode==='null'?null:input.targetFieldId==='components'?[{id:mode==='foreign'?'99999':'31'}]:'Предложение для поля: '+input.source;
+                response.questions=mode==='null'?[{id:'target-fact',text:'Уточните недостающий факт для поля.',reason:'В исходнике нет ответа.',required:true}]:[];
+                response.warnings=['Проверьте предложение перед применением.'];
+            }
             if(review==='response' && input.action==='check') response.warnings=['Synthetic optional warning'];
             if(review==='response' && input.action==='prepare') response.fields.components=records.responseMode==='malformed'?[31]:['31'];
             if(review==='response' && input.action==='prepare') {
@@ -83,7 +109,7 @@
                 if(records.responseMode==='evidence') response.evidence=[{fieldId:'summary',kind:'source',quote:'PRIVATE'}];
             }
             resolve({text:JSON.stringify(response)});
-        },1100);});
+        },records.assistMode==='slow'?2200:1100);});
     }});
     var ai = window.taRequire('_ujgTA_ai').createClient({llmClient:llm,readConfig:function() {return {apiKey:'offline-fixture-key'};},fetchImpl:function() {throw new Error('Offline preview prohibits fetch');}});
     var Gadget = window.taRequire('_ujgTicketAssistantRuntime');

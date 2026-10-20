@@ -16,7 +16,20 @@ const amd = `(() => {
         return entry.value;
     };
 })();`;
-async function startPreview({port = 4320} = {}) {
+function buildPreviewAssets() {
+        const source=require('../../build-ticket-assistant').build({write:false});
+        // Supply the public source in memory to the existing asset builder.
+        const builderPath=path.join(root,'build-widget-bootstrap-assets.js'),module={exports:{}};
+        const memoryFs=Object.assign({},fs,{readFileSync(file,...args) {
+            return path.resolve(file)===path.join(root,'ujg-ticket-assistant.js')?source:fs.readFileSync(file,...args);
+        }});
+        require('node:vm').runInNewContext(fs.readFileSync(builderPath,'utf8'),{
+            require:name=>['fs','node:fs'].includes(name)?memoryFs:require(name),module,exports:module.exports,__dirname:root,process,console
+        },{filename:builderPath});
+        return module.exports.buildAssets({widgets:['ujg-ticket-assistant'],releaseRef:'offline-task-3'});
+}
+async function startPreview({port = 4320, sourceAssets = true} = {}) {
+    const assets=sourceAssets?buildPreviewAssets():null;
     const files = new Map([
         ['/', [path.join(__dirname, 'ticket-assistant-preview.html'), 'text/html; charset=utf-8']],
         ['/jquery.js', [require.resolve('jquery/dist/jquery.js'), 'text/javascript; charset=utf-8']],
@@ -31,6 +44,7 @@ async function startPreview({port = 4320} = {}) {
         const route = new URL(req.url, 'http://127.0.0.1').pathname;
         if (route === '/favicon.ico') {res.writeHead(204); res.end(); return;}
         if (route === '/amd.js') {res.setHeader('Content-Type', 'text/javascript'); res.end(req.method === 'HEAD' ? '' : amd); return;}
+        if (assets && route === '/ujg-ticket-assistant.runtime.js') {res.setHeader('Content-Type','text/javascript');res.end(req.method === 'HEAD' ? '' : assets['ujg-ticket-assistant.runtime.js']);return;}
         const entry = files.get(route);
         if (!entry) {res.writeHead(404); res.end(); return;}
         try {const content = fs.readFileSync(entry[0]); res.setHeader('Content-Type', entry[1]); res.end(req.method === 'HEAD' ? '' : content);}
@@ -47,4 +61,4 @@ async function startPreview({port = 4320} = {}) {
     return {url:'http://127.0.0.1:' + server.address().port + '/', close:() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))};
 }
 if (require.main === module) startPreview().then(preview => {console.log('Ticket assistant offline preview: ' + preview.url);}, error => {console.error(error); process.exitCode = 1;});
-module.exports = {startPreview};
+module.exports = {startPreview,buildPreviewAssets};

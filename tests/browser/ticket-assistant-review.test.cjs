@@ -19,6 +19,7 @@ test('final review fixtures expose obsolete recovery catalog fallback live quota
                 await page.goto(server.url+'?review='+(scenario==='discard'?'obsolete':scenario));await page.waitForSelector('html[data-ta-preview-ready="true"]');
                 const source=page.locator('[data-ta-source]');await source.fill('Review '+scenario);await page.locator('[data-ta-field="summary"] input').fill('Manual review title');
                 if(scenario==='obsolete') {
+                    await page.locator('[data-ta-additional] > summary').click();
                     await page.locator('[data-ta-field="customfield_10"] textarea').fill('Manual recovery value');
                     await page.locator('[data-ta-type] [data-ta-picker]').click();await page.locator('[data-ta-type] [data-ta-search]').fill('11');await page.locator('[data-ta-type] [data-ta-candidate]').click();
                     await page.screenshot({path:artifacts+'/review-obsolete-before.png',fullPage:true});

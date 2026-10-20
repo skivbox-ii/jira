@@ -25,7 +25,7 @@ function setup() {
         generationFieldIds: ['summary', 'description'], contextScope: {excludedFieldIds: ['customfield_2']}, routeCandidates: []};
     const calls = [];
     const controller = {getState: () => state};
-    for (const name of ['updateSource','updateField','prepare','check','cancel','answer','acceptField','setGenerationFields','selectProject','selectTemplate','selectIssueType','discardField','discardDraft']) {
+    for (const name of ['updateSource','updateField','prepare','check','cancel','answer','acceptField','rejectField','assistField','setGenerationFields','selectProject','selectTemplate','selectIssueType','discardField','discardDraft']) {
         controller[name] = (...args) => { calls.push([name, ...args]); return Promise.resolve(state); };
     }
     const root = window.document.querySelector('#root');
@@ -33,6 +33,192 @@ function setup() {
     ui.mount(root); ui.update(state);
     return {dom, $, window, root, ui, uiModule, fieldUi, calls, state, setState(next) { state = next; ui.update(next); }};
 }
+
+test('guided header, token disclosure and fullscreen preserve draft and nested Escape', t => {
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.setState({...s.state,tokenPreflight:{input:10,available:100,instructions:2,source:4,metadata:4,reserve:20,fits:true,safetyFits:true}});
+    assert.ok(s.root.querySelector('.ta-header [data-ta-project]'));
+    const tokens=s.root.querySelector('[data-ta-token-preflight]'),toggle=s.root.querySelector('[data-ta-tokens]');
+    assert.equal(tokens.hidden,true);toggle.click();assert.equal(tokens.hidden,false);
+    s.root.querySelector('[data-ta-fullscreen]').click();assert.ok(s.root.classList.contains('ta-fullscreen'));
+    tokens.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(tokens.hidden,true);assert.ok(s.root.classList.contains('ta-fullscreen'));
+    s.root.querySelector('[data-ta-project] [data-ta-picker]').click();
+    s.root.querySelector('[data-ta-project] [data-ta-search]').dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.ok(s.root.classList.contains('ta-fullscreen'));
+    s.root.querySelector('[data-ta-project] [data-ta-picker]').dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(s.root.classList.contains('ta-fullscreen'),false);
+    assert.equal(s.root.querySelector('[data-ta-source]').value,s.state.draft.source);
+    s.setState({...s.state,tokenPreflight:{input:101,available:100,instructions:2,source:95,metadata:4,reserve:20,fits:false,safetyFits:true}});
+    assert.equal(tokens.hidden,true);assert.equal(s.root.querySelector('[data-ta-budget-warning]').hidden,false);
+    assert.ok(s.root.querySelector('[data-ta-budget-warning] button'));
+});
+
+test('optional disclosure keeps pending and invalid fields visible and active editor stable',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    const optional={id:'extra',name:'Extra',kind:'string',supported:true,writable:true,required:false,allowedValues:[]};
+    s.state.meta.issueTypes[0].fields.push(optional);s.setState(s.state);
+    const details=s.root.querySelector('[data-ta-additional]'),host=s.root.querySelector('[data-ta-field="extra"]');
+    assert.ok(details.contains(host));assert.equal(details.open,false);details.open=true;
+    const input=host.querySelector('input');input.focus();input.value='typed';input.setSelectionRange(2,2);
+    s.state.draft.fields.extra='typed';s.setState(s.state);
+    assert.equal(s.window.document.activeElement,input);assert.equal(input.selectionStart,2);assert.ok(details.contains(host));
+    input.blur();s.state.validation.fieldErrors.extra=['Invalid'];s.setState(s.state);
+    assert.equal(details.contains(host),false);
+    delete s.state.validation.fieldErrors.extra;delete s.state.draft.fields.extra;s.state.draft.pendingFields.extra='proposal';s.setState(s.state);
+    assert.equal(details.contains(host),false);
+});
+
+test('filled optional field promotes after blur and collapse without another state emission or caret movement',async t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.state.meta.issueTypes[0].fields.push({id:'extra',name:'Extra',kind:'string',supported:true,writable:true,required:false,allowedValues:[]});s.setState(s.state);
+    const details=s.root.querySelector('[data-ta-additional]'),host=s.root.querySelector('[data-ta-field="extra"]'),input=host.querySelector('input');
+    details.open=true;input.focus();input.value='typed';input.setSelectionRange(2,2);
+    s.state.draft.fields.extra='typed';s.setState(s.state);
+    assert.ok(details.contains(host));assert.equal(s.window.document.activeElement,input);assert.equal(input.selectionStart,2);
+    const next=s.root.querySelector('[data-ta-field="description"] textarea');next.focus();next.setSelectionRange(1,4);details.open=false;
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(details.contains(host),false);assert.equal(s.root.querySelector('[data-ta-fields]').contains(host),true);
+    assert.equal(s.window.document.activeElement,next);assert.equal(next.selectionStart,1);assert.equal(next.selectionEnd,4);
+    assert.equal(input.value,'typed');assert.equal(s.calls.length,0,'presentation reconciliation emits no controller mutation');
+});
+
+test('pointer focus keeps optional layout stable until the next picker click completes',async t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.state.meta.issueTypes[0].fields.push({id:'extra',name:'Extra',kind:'string',supported:true,writable:true,allowedValues:[]},
+        {id:'next',name:'Next',kind:'option',supported:true,writable:true,allowedValues:[{id:'1',label:'One'}]});s.setState(s.state);
+    const details=s.root.querySelector('[data-ta-additional]'),host=s.root.querySelector('[data-ta-field="extra"]'),input=host.querySelector('input');
+    details.open=true;input.focus();input.value='typed';s.state.draft.fields.extra='typed';s.setState(s.state);
+    const picker=s.root.querySelector('[data-ta-field="next"] [data-ta-picker]');
+    picker.dispatchEvent(new s.window.MouseEvent('pointerdown',{bubbles:true}));picker.focus();await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(details.contains(host),'pointer target must not shift before click');
+    picker.click();await new Promise(resolve=>setImmediate(resolve));assert.equal(details.contains(host),false);
+    assert.equal(s.root.querySelector('[data-ta-field="next"] [data-ta-popover]').hidden,false);
+    assert.equal(s.window.document.activeElement,s.root.querySelector('[data-ta-field="next"] [data-ta-search]'));
+});
+
+test('Escape from outside an open picker closes only the picker before fullscreen',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.root.querySelector('[data-ta-fullscreen]').click();const picker=s.root.querySelector('[data-ta-type] [data-ta-picker]'),panel=s.root.querySelector('[data-ta-type] [data-ta-popover]');
+    picker.click();const source=s.root.querySelector('[data-ta-source]');source.focus();
+    source.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(panel.hidden,true);assert.equal(picker.getAttribute('aria-expanded'),'false');assert.equal(s.window.document.activeElement,picker);
+    assert.equal(s.root.classList.contains('ta-fullscreen'),true);
+    picker.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(s.root.classList.contains('ta-fullscreen'),false);
+});
+
+test('Escape cancels draft deletion with focus restoration before leaving fullscreen',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.root.querySelector('[data-ta-fullscreen]').click();s.root.querySelector('[data-ta-discard-draft]').click();
+    s.window.document.activeElement.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(s.root.querySelector('[data-ta-discard-dialog]').hidden,true);assert.equal(s.root.classList.contains('ta-fullscreen'),true);
+    assert.equal(s.window.document.activeElement,s.root.querySelector('[data-ta-discard-draft]'));assert.equal(s.calls.length,0);
+    s.window.document.activeElement.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(s.root.classList.contains('ta-fullscreen'),false);
+});
+
+test('settings picker and unsaved confirmation each consume Escape before their dialog and fullscreen',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.root.querySelector('[data-ta-fullscreen]').click();s.root.querySelector('[data-ta-open-settings]').click();
+    const picker=s.root.querySelector('[data-ta-template-mapping] [data-ta-picker]');picker.click();
+    const instructions=s.root.querySelector('[data-ta-profile-instructions]');instructions.focus();
+    instructions.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(s.root.querySelector('[data-ta-template-mapping] [data-ta-popover]').hidden,true);
+    assert.equal(s.root.querySelector('[data-ta-settings]').hidden,false);assert.equal(s.root.classList.contains('ta-fullscreen'),true);
+    instructions.value='Changed';instructions.dispatchEvent(new s.window.Event('input',{bubbles:true}));s.root.querySelector('[data-ta-settings-close]').click();
+    assert.equal(s.root.querySelector('[data-ta-discard-confirm]').hidden,false);
+    s.window.document.activeElement.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(s.root.querySelector('[data-ta-discard-confirm]').hidden,true);assert.equal(s.root.querySelector('[data-ta-settings]').hidden,false);
+    assert.equal(s.root.classList.contains('ta-fullscreen'),true);
+    s.root.querySelector('[data-ta-settings-close]').click();s.root.querySelector('[data-ta-discard-settings]').click();
+    assert.equal(s.root.querySelector('[data-ta-settings]').hidden,true);
+    s.root.querySelector('[data-ta-fullscreen]').dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert.equal(s.root.classList.contains('ta-fullscreen'),false,'hidden confirmation cannot consume later Escape');
+});
+
+test('empty disabled assignee and manual numbers expose concise accessible field help',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    s.state.meta.issueTypes[0].fields.push({id:'points',name:'Story Points',kind:'number',supported:true,writable:true,allowedValues:[]});s.setState(s.state);
+    const assignee=s.root.querySelector('[data-ta-field="assignee"]'),points=s.root.querySelector('[data-ta-field="points"]');
+    assert.equal(assignee.querySelector('[data-ta-picker]').disabled,true);
+    assert.match(assignee.querySelector('[data-ta-field-help]').textContent,/профил.*настройках.*Jira/);
+    assert.match(points.querySelector('[data-ta-field-help]').textContent,/вручную.*AI/);
+    for(const host of [assignee,points])assert.ok(host.querySelector('input,[data-ta-picker]').getAttribute('aria-describedby').split(' ').includes(host.querySelector('[data-ta-field-help]').id));
+    s.state.settings.profiles.find(p=>p.id===s.state.settings.activeProfileId).allowAssignee=true;s.setState(s.state);
+    assert.equal(assignee.querySelector('[data-ta-field-help]').hidden,true);assert.equal(assignee.querySelector('[data-ta-picker]').disabled,false);
+});
+
+test('already mounted description is reordered after summary metadata arrives',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    const list=s.state.meta.issueTypes[0].fields,summary=list.find(f=>f.id==='summary');
+    s.state.meta.issueTypes[0].fields=list.filter(f=>f!==summary);delete s.state.draft.fields.summary;delete s.state.draft.pendingFields.summary;s.setState(s.state);
+    s.state.meta.issueTypes[0].fields.push(summary);s.setState(s.state);
+    assert.deepEqual([...s.root.querySelector('[data-ta-fields]').children].filter(el=>el.hasAttribute('data-ta-field')).slice(0,2).map(el=>el.dataset.taField),['summary','description']);
+});
+
+test('restored fields refresh helper accessible names and titles when metadata arrives',t=>{
+    const s=setup();s.ui.destroy();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    const meta=s.state.meta;
+    meta.issueTypes[0].fields.push({id:'environment',name:'Окружение',kind:'textarea',supported:true,writable:true,allowedValues:[]});
+    s.state.draft.fields.environment='TEST';s.state.draft.fields.components=[{id:'DO-9'}];
+    s.state.generationFieldIds=['summary','description','environment','components'];s.state.meta=null;s.state.stage='metadata';
+    s.ui=s.uiModule.create({$:s.$,controller:{getState:()=>s.state}});s.ui.mount(s.root);
+    assert.match(s.root.querySelector('[data-ta-field="summary"]').textContent,/нет в текущих metadata/);
+    s.state.meta=meta;s.state.stage='idle';s.ui.update(s.state);
+    for(const id of ['summary','description','environment','components']) {
+        const field=meta.issueTypes[0].fields.find(f=>f.id===id),helper=s.root.querySelector('[data-ta-field="'+id+'"] [data-ta-assist-menu]');
+        assert.equal(helper.disabled,false);
+        assert.equal(helper.getAttribute('aria-label'),'Помощь AI: '+field.name);
+        assert.equal(helper.title,'Помощь AI: '+field.name);
+        assert.doesNotMatch(helper.outerHTML,/нет в текущих metadata/);
+    }
+    const helper=s.root.querySelector('[data-ta-field="summary"] [data-ta-assist-menu]');
+    meta.issueTypes[0].fields.find(f=>f.id==='summary').name='Новая тема';s.state.stage='metadata';s.ui.update(s.state);
+    assert.equal(helper.getAttribute('aria-label'),'Помощь AI: Новая тема');assert.match(helper.title,/Новая тема.*[Нн]едоступна/);
+    assert.equal(helper.disabled,true);assert.equal(s.state.draft.fields.summary,'Manual title');
+});
+
+test('target helper stages explicit comparison, gates Apply, keeps null questions and manual kinds',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    const host=s.root.querySelector('[data-ta-field="description"]');
+    host.querySelector('[data-ta-assist-menu]').click();host.querySelector('[data-ta-assist="improve"]').click();
+    assert.deepEqual(s.calls.pop(),['assistField','description','improve']);
+    s.state.draft.pendingFields={description:null};s.state.draft.pendingAssistance={fieldId:'description',action:'improve'};
+    s.state.assistance=null;s.setState(s.state);assert.equal(host.querySelector('[data-ta-accept]').disabled,true);
+    s.state.assistance={fieldId:'description',status:'ready',questions:s.state.draft.questions,warnings:[]};s.setState(s.state);
+    assert.match(host.querySelector('.ta-pending').textContent,/Current description/);
+    assert.equal(host.querySelector('[data-ta-accept]').disabled,false);
+    assert.match(s.root.querySelector('[data-ta-feedback]').textContent,/Which release/);
+    host.querySelector('[data-ta-reject]').click();assert.deepEqual(s.calls.pop(),['rejectField','description']);
+    assert.equal(host.querySelector('textarea').value,'Current description');
+    for(const kind of ['number','epic','sprint','user']) {
+        s.state.meta.issueTypes[0].fields.push({id:kind,name:kind,kind,supported:true,writable:true,allowedValues:[]});
+    }
+    s.setState(s.state);
+    for(const kind of ['number','epic','sprint','user'])assert.equal(s.root.querySelector('[data-ta-field="'+kind+'"] [data-ta-assist-menu]'),null);
+});
+
+test('field helper menu supports arrow navigation and skips unavailable text actions',t=>{
+    const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});
+    const host=s.root.querySelector('[data-ta-field="description"]');host.querySelector('[data-ta-assist-menu]').click();
+    host.querySelector('[data-ta-assist="generate"]').dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));
+    assert.equal(s.window.document.activeElement,host.querySelector('[data-ta-assist="improve"]'));
+    s.window.document.activeElement.dispatchEvent(new s.window.KeyboardEvent('keydown',{key:'End',bubbles:true}));
+    assert.equal(s.window.document.activeElement,host.querySelector('[data-ta-assist="shorten"]'));
+});
+
+test('UI metadata signature change resets relation candidates and aborts current lookup',async t=>{
+    const s=setup();s.ui.destroy();const reads=[];
+    s.state.meta.issueTypes[0].fields.push({id:'epic',name:'Epic',kind:'epic',supported:true,writable:true,allowedValues:[]});
+    const ui=s.uiModule.create({$:s.$,controller:{getState:()=>s.state},onSearch:(query,field,options)=>new Promise(resolve=>reads.push({query,options,resolve}))});
+    ui.mount(s.root);t.after(()=>{ui.destroy();s.dom.window.close();});
+    s.root.querySelector('[data-ta-additional]').open=true;
+    s.root.querySelector('[data-ta-field="epic"] [data-ta-picker]').click();
+    await new Promise(resolve=>setTimeout(resolve,280));assert.equal(reads.length,1);
+    s.state.meta.signature='changed-signature';ui.update(s.state);
+    assert.equal(reads[0].options.signal.aborted,true);
+    reads[0].resolve({values:[{id:'DO-42',label:'Stale Epic'}],complete:false});await new Promise(resolve=>setImmediate(resolve));
+    assert.doesNotMatch(s.root.querySelector('[data-ta-field="epic"]').textContent,/Stale Epic/);
+});
 
 test('obsolete metadata values expose explicit recover-and-exclude action', t=>{
     const s=setup();t.after(()=>{s.ui.destroy();s.dom.window.close();});s.state.draft.fields.customfield_10='Visible recovery';s.setState(s.state);
@@ -60,7 +246,7 @@ test('main shows quota fallback after init without replacing editor or caret', a
     const fs=require('node:fs'),path=require('node:path');
     for(const trigger of ['project','edit']) {
         const dom=new JSDOM('<div id="root"></div>',{url:'http://localhost/jira',runScripts:'outside-only'}),$=jquery(dom.window),registry=new Map([['jquery',{value:$}]]);
-        dom.window.define=(name,deps,factory)=>registry.set(name,{deps,factory});dom.window.eval(fs.readFileSync(path.resolve(__dirname,'../../ujg-ticket-assistant.runtime.js'),'utf8'));
+        dom.window.define=(name,deps,factory)=>registry.set(name,{deps,factory});dom.window.eval(require('./ticket-assistant-preview-server.cjs').buildPreviewAssets()['ujg-ticket-assistant.runtime.js']);
         function resolve(name){const item=registry.get(name);if(!('value'in item))item.value=item.factory(...item.deps.map(resolve));return item.value;}
         let fail=false;const memory=new Map(),storage={getItem:key=>memory.get(key)??null,setItem:(key,value)=>{if(fail)throw Error('quota');memory.set(key,value);}};
         const api={getCurrentUser:async()=>({key:'quota-user'}),getProjects:async()=>({values:[{key:'DO',id:'1',name:'Delivery'}]}),
@@ -140,6 +326,47 @@ test('real controller retries failed project metadata with empty source, second 
     s.root.querySelector('[data-ta-retry]').click(); await new Promise(resolve=>setImmediate(resolve));
     assert.equal(reads,2); assert.equal(c.getState().stage,'idle'); assert.equal(c.getState().meta.projectKey,'DO');
     assert.equal(c.getState().draft.source,''); assert.equal(aiCalls,0); assert.equal(s.root.querySelector('[data-ta-error]').hidden,true);
+});
+
+for(const operation of ['assist','prepare'])test('real memory-only identity fallback applies '+operation+' proposals through the UI',async t=>{
+    const s=setup();s.ui.destroy();
+    const drafts=loadUnit('draft'),profiles=loadUnit('profiles'),fields=loadUnit('fields');
+    const validation=loadUnit('validation',{'_ujgTA_fields':fields});
+    const creator=loadUnit('creator',{'_ujgTA_draft':drafts,'_ujgTA_fields':fields,'_ujgTA_validation':validation});
+    const controllerModule=loadUnit('controller',{'_ujgTA_draft':drafts,'_ujgTA_profiles':profiles,'_ujgTA_fields':fields,'_ujgTA_validation':validation,'_ujgTA_creator':creator},{AbortController});
+    const storage=loadUnit('storage',{'_ujgTA_profiles':profiles,'_ujgTA_draft':drafts});
+    let ui,store,storeKey='unset';
+    const c=controllerModule.create({api:{getCurrentUser:async()=>null,getProjects:async()=>({values:[{id:'1',key:'DO',name:'Delivery'}]}),
+        getCreateMeta:async()=>({projects:[{id:'1',key:'DO',issuetypes:[{id:'10',name:'Task',subtask:false,fields:{
+            summary:{name:'Summary',required:true,schema:{type:'string',system:'summary'}},description:{name:'Description',schema:{type:'string',system:'description'}}
+        }}]}]}),getComponents:async()=>({values:[],complete:true,projectKey:'DO'}),getVersions:async()=>({values:[],complete:true,projectKey:'DO'})},
+        ai:{assist:async()=>({fields:{description:'Assisted details'},questions:[],warnings:[],evidence:[]}),
+            prepare:async()=>({fields:{summary:'Prepared title'},questions:[],warnings:[],evidence:[]})},
+        createStore:key=>{storeKey=key;store=storage.createStore({userKey:key,origin:s.window.location.origin,storage:s.window.localStorage});return store;},
+        onChange:state=>{if(ui)ui.update(state);}});
+    ui=s.uiModule.create({$:s.$,controller:c});ui.mount(s.root);t.after(()=>{ui.destroy();c.destroy();s.dom.window.close();});
+    await c.init();await c.selectProject('DO');await c.selectIssueType('10');await c.selectTemplate('task');
+    await c.updateSource('Literal manual source');await c.updateField('summary','Manual title');
+    if(operation==='assist')await c.assistField('description','generate');else await c.prepare();
+    const ready=c.getState(),id=operation==='assist'?'description':'summary',proposal=operation==='assist'?'Assisted details':'Prepared title';
+    assert.equal(storeKey,null);assert.equal(store.isPersistent(),false);assert.equal(ready.error.code,'identity');
+    assert.equal(ready.draft.pendingFields[id],proposal);
+    if(operation==='assist')assert.equal(ready.assistance.status,'ready');
+    const apply=()=>s.root.querySelector('[data-ta-accept="'+id+'"]');
+    for(const code of ['metadata','storage','conflict','transport','network','response','input','config','limit','creation']) {
+        ui.update({...ready,error:{code,message:'Blocking failure'}});assert.equal(apply().disabled,true,code+' remains blocked');
+    }
+    ui.update({...ready,meta:null});assert.equal(apply().disabled,true,'missing metadata remains blocked');
+    for(const stage of ['metadata','assisting','preparing','checking']) {ui.update({...ready,stage});assert.equal(apply().disabled,true,stage+' remains blocked');}
+    for(const status of ['preflight','submitting','unknown','created']) {
+        const locked=JSON.parse(JSON.stringify(ready));locked.draft.creation.status=status;ui.update(locked);assert.equal(apply().disabled,true,status+' remains blocked');
+    }
+    ui.update(ready);assert.equal(apply().disabled,false,'valid proposal remains actionable with identity warning');
+    assert.match(s.root.querySelector('[data-ta-error]').textContent,/временное хранилище/);
+    apply().click();await new Promise(resolve=>setImmediate(resolve));
+    const accepted=c.getState();assert.equal(accepted.draft.fields[id],proposal);assert.equal(Object.hasOwn(accepted.draft.pendingFields,id),false);
+    assert.equal(accepted.error.code,'identity');assert.equal(accepted.draft.source,'Literal manual source');assert.equal(s.window.localStorage.length,0);
+    if(operation==='assist')assert.equal(accepted.draft.fields.summary,'Manual title');
 });
 
 test('metadata fields, source, questions, current values and protected proposals render as text', t => {
@@ -341,7 +568,7 @@ test('main composes real controller, reinitializes identity, replaces prior inst
     const dom = new JSDOM('<div id="root"></div>',{url:'http://localhost/jira',runScripts:'outside-only'});
     const $ = jquery(dom.window), registry = new Map([['jquery',{value:$}]]);
     dom.window.define = (name,deps,factory) => registry.set(name,{deps,factory});
-    dom.window.eval(fs.readFileSync(path.resolve(__dirname,'../../ujg-ticket-assistant.runtime.js'),'utf8'));
+    dom.window.eval(require('./ticket-assistant-preview-server.cjs').buildPreviewAssets()['ujg-ticket-assistant.runtime.js']);
     function resolve(name) {const item=registry.get(name); if (!('value' in item)) item.value=item.factory(...item.deps.map(resolve)); return item.value;}
     const Gadget = resolve('_ujgTicketAssistantRuntime'), identities = []; let user = 'first', searchSignal;
     const api = {getCurrentUser:async () => ({key:user}),getProjects:async () => ({values:[{id:'1',key:'DO',name:'Delivery'}]}),
@@ -382,6 +609,7 @@ test('generated runtime works in installed Chrome at desktop and mobile, without
                 return route.continue();
             });
             await page.goto(server.url); await page.waitForSelector('html[data-ta-preview-ready="true"]');
+            await page.locator('[data-ta-additional] > summary').click();
             const labels = page.locator('[data-ta-field="labels"] input');
             await labels.pressSequentially('alpha,beta');
             assert.equal(await labels.inputValue(),'alpha,beta');

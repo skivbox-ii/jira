@@ -22,6 +22,88 @@ function response(kind = 'draft', extra = {}) {
 function parse(kind, body, value = input()) { return ai().parseResponse(kind, typeof body === 'string' ? body : JSON.stringify(body), value); }
 const config = {apiBase: 'https://stub.invalid', apiKey: 'KEY_SECRET', model: 'stub', basePrompt: 'unchanged'};
 
+test('Prepare cannot generate estimates or relations but retains their manual current values for review',()=>{
+    const i=input();i.meta.issueTypes[0].fields.push({id:'epic',name:'Epic',kind:'epic',supported:true,writable:true,allowedValues:[],optionsComplete:false});
+    i.draft.fields.customfield_1=3.5;i.draft.fields.epic='DO-42';
+    i.relationConfirmations={epic:'DO-42'};
+    const prompt=JSON.parse(ai().buildRequest('prepare',i).userPrompt);
+    assert.equal(prompt.fields.customfield_1,3.5);assert.equal(prompt.fields.epic,'DO-42');
+    assert.ok(prompt.currentFieldContext.some(f=>f.id==='customfield_1'));
+    const reviewed=parse('check',response('check'),i);
+    assert.ok(!reviewed.questions.some(q=>q.id==='required:epic'));
+    i.allowFieldIds.push('customfield_1');
+    assert.throws(()=>ai().buildRequest('prepare',i),e=>e.code==='input');
+    i.allowFieldIds.pop();
+    assert.throws(()=>parse('prepare',response('draft',{fields:{customfield_1:8}}),i),e=>e.code==='response');
+});
+
+function assisted(fieldId = 'description', action = 'generate') {
+    return {...input(), allowFieldIds: [fieldId], targetFieldId: fieldId, fieldAction: action};
+}
+test('field assistance limits catalogs and local questions to its target while retaining non-user values', () => {
+    const i = assisted(); i.draft.fields.assignee = {name: 'PRIVATE_USER'};
+    i.draft.fields.customfield_2 = {id: 'DO-1'};
+    const request = ai().buildRequest('assist', i), prompt = JSON.parse(request.userPrompt);
+    assert.equal(prompt.targetFieldId, 'description'); assert.equal(prompt.fieldAction, 'generate');
+    assert.deepEqual(prompt.issueTypes[0].fieldSchema.map(f => f.id), ['description']);
+    assert.deepEqual(prompt.issueTypes[0].requiredOutsideScope, []);
+    assert.equal(prompt.fields.customfield_2.id, 'DO-1');
+    assert.ok(!request.userPrompt.includes('PRIVATE_USER'));
+    i.draft.fields = {};
+    assert.deepEqual(plainAssist(parse('assist', response('draft', {fields: {description: 'Details'}}), i).questions), []);
+});
+function plainAssist(value) { return JSON.parse(JSON.stringify(value)); }
+test('field assistance rejects invalid scope, foreign IDs, missing target and unsupported shortening', () => {
+    for (const fieldId of ['assignee', 'project', '__proto__', 'missing'])
+        assert.throws(() => ai().buildRequest('assist', assisted(fieldId)), e => e.code === 'input');
+    assert.throws(() => ai().buildRequest('assist', assisted('customfield_2', 'shorten')), e => e.code === 'input');
+    for (const fields of [{}, {summary: 'Other'}, {customfield_2: {id: 'APP-1'}}])
+        assert.throws(() => parse('assist', response('draft', {fields}), assisted('customfield_2')), e => e.code === 'response');
+    assert.equal(parse('assist', response('draft', {fields: {customfield_2: {id: 'DO-1'}}}), assisted('customfield_2')).fields.customfield_2.id, 'DO-1');
+});
+test('field assistance rejects dates absent from source', () => {
+    for (const [id, value] of [['duedate', '2026-11-01'], ['customfield_4', '2026-11-01T08:00:00Z']]) {
+        const i = assisted(id);
+        assert.throws(() => parse('assist', response('draft', {fields: {[id]: value}}), i), e => e.code === 'response');
+        i.source = 'Agreed value: ' + value;
+        assert.equal(parse('assist', response('draft', {fields: {[id]: value}}), i).fields[id], value);
+    }
+});
+test('numeric assistance stays human even for exact literals and rejects identifier/date/version fragments', () => {
+    for (const source of ['Fix ticket ABC8', 'Fix ABC-8', 'Estimate is 1e8 hours', 'Estimate is 0,8 hours',
+        'Release 1.8.0', 'Date 2026-08-08', 'There are 8 failures', 'Effort: 8 story points']) {
+        const i = assisted('customfield_1'); i.source = source;
+        assert.throws(() => ai().buildRequest('assist', i), e => e.code === 'input');
+        assert.throws(() => parse('assist', response('draft', {fields: {customfield_1: 8}}), i), e => e.code === 'input');
+    }
+});
+test('date assistance requires a complete standalone source literal', () => {
+    for (const source of ['Invalid date 2026-11-010', 'Version v2026-11-01', '2026-11-01T08:00:00Z',
+        'Version 2026-11-01.2', 'path/2026-11-01', '2026-11-01suffix']) {
+        const i = assisted('duedate'); i.source = source;
+        assert.throws(() => parse('assist', response('draft', {fields: {duedate: '2026-11-01'}}), i), e => e.code === 'response');
+    }
+    const i = assisted('duedate'); i.source = 'Agreed date: 2026-11-01\n';
+    assert.equal(parse('assist', response('draft', {fields: {duedate: '2026-11-01'}}), i).fields.duedate, '2026-11-01');
+});
+test('field assistance shares the provider boundary, strict parser, secrets and budget safeguards', async () => {
+    const module = ai(), i = assisted('description', 'shorten');
+    let request;
+    const client = module.createClient({readConfig: () => config, llmClient: {...shared,
+        async requestText(c, value) {request = value; return {text: JSON.stringify(response('draft', {fields: {description: 'Brief'}}))};}}});
+    assert.equal((await client.assist(i)).fields.description, 'Brief');
+    assert.equal(JSON.parse(request.userPrompt).fieldAction, 'shorten');
+    assert.equal(request.preservePrompt, true); assert.equal(request.allowProtocolFallback, false);
+    for (const body of [response('draft', {fields: {description: 'OK', summary: 'Extra'}}),
+        response('draft', {evidence: [{fieldId: 'summary', kind: 'source', quote: 'исправить'}], fields: {description: 'OK'}}),
+        response('draft', {fields: {description: 'Cookie: PRIVATE'}}),
+        JSON.stringify(response('draft', {fields: {description: 'OK'}})).replace('"fields":{', '"fields":{"__proto__":{},')])
+        assert.throws(() => parse('assist', body, i));
+    i.source = 'password: PRIVATE'; assert.throws(() => module.buildRequest('assist', i), e => e.code === 'secret');
+    i.source = 'Large '.repeat(1000); i.tokenBudget = {context: 1000, reserve: 100};
+    await assert.rejects(client.assist(i), e => e.code === 'limit');
+});
+
 test('literal catalog ID arrays normalize losslessly and preserve valid text', () => {
     const i = input(); i.allowFieldIds.push('components', 'fixVersions', 'customfield_3', 'labels');
     const result = parse('prepare', response('draft', {fields: {summary: 'Keep text', description: 'Keep details',

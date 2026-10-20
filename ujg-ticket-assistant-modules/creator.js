@@ -96,7 +96,10 @@ define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'],
                     ctx.draft=drafts.setSelection(ctx.draft,{metaSignature:meta.signature});ctx.draft.creation.status='idle';
                     ctx.draft.creation.error='Поля Jira изменились. Проверьте черновик заново.';persist(ctx,{meta:meta});return;
                 }
-                var p = policy(d,ctx.settings,meta), valid = validation.validateFields(meta,d.issueTypeId,d.fields,p);
+                var confirmed = await fields.confirmRelations(meta,d.issueTypeId,d.fields,api,{});
+                if (!stillCurrent(ctx,snap)) return;
+                var p = policy(d,ctx.settings,meta); p.relations=confirmed;
+                var valid = validation.validateFields(meta,d.issueTypeId,d.fields,p);
                 if (!valid.ok || d.questions.some(function(q) {return q.required;})) throw new Error('validation');
                 var payload = validation.buildCreatePayload(meta,d.issueTypeId,d.fields,p);
                 if (d.attachments.length && !request.withoutAttachments) {

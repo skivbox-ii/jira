@@ -109,6 +109,8 @@ define('_ujgTA_fields', [], function() {
 
     function kindFor(id, schema) {
         var kind;
+        if (schema.custom === 'com.pyxis.greenhopper.jira:gh-epic-link') return schema.type === 'any' || schema.type === 'string' ? 'epic' : 'unknown';
+        if (schema.custom === 'com.pyxis.greenhopper.jira:gh-sprint') return schema.type === 'array' && schema.items === 'string' ? 'sprint' : 'unknown';
         if (schema.custom) {
             if (schema.custom.indexOf(customPrefix) !== 0) return 'unknown';
             kind = customKinds[schema.custom.slice(customPrefix.length)];
@@ -162,7 +164,11 @@ define('_ujgTA_fields', [], function() {
                 if (Array.isArray(source.allowedValues)) catalog = null;
                 var values = catalog ? catalog.values : source.allowedValues;
                 var complete = catalog ? catalog.complete === true : Array.isArray(values) && source.optionsComplete !== false && !source.autoCompleteUrl;
-                var allowed = Array.isArray(values) ? values.map(option).filter(Boolean) : [];
+                var allowed = Array.isArray(values) ? values.map(function(value) {
+                    if (kind === 'epic') return option({id:typeof value === 'string' ? value : value && value.key, label:value && (value.name || value.key) || value});
+                    if (kind === 'sprint') return option(typeof value === 'number' ? {id:value} : value);
+                    return option(value);
+                }).filter(Boolean) : [];
                 if (!Array.isArray(values) || allowed.length !== values.length) complete = false;
                 var spec = {
                     id: id, name: String(source.name || id), kind: kind, required: source.required === true,
@@ -174,6 +180,7 @@ define('_ujgTA_fields', [], function() {
                     autoCompleteUrl: typeof source.autoCompleteUrl === 'string' ? source.autoCompleteUrl : null,
                     maxLength: Number.isInteger(source.maxLength) && source.maxLength > 0 ? source.maxLength : null
                 };
+                if (kind === 'epic' || kind === 'sprint') spec.relationRestricted=Array.isArray(source.allowedValues);
                 if (id === 'summary') spec.maxLength = Math.min(spec.maxLength || 255, 255);
                 return spec;
             }) };
@@ -199,7 +206,36 @@ define('_ujgTA_fields', [], function() {
             field.optionsComplete === false && !(field.allowedValues || []).length;
     }
 
-    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable };
+    function relationValue(field, value) {
+        return field.kind === 'epic' ? typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value) :
+            field.kind === 'sprint' && Number.isSafeInteger(value) && value > 0;
+    }
+    function relationAllowed(field, value) {
+        return relationValue(field,value) && (!field.relationRestricted || field.allowedValues.some(function(item) {return item.id === String(value);}));
+    }
+    function hasRelationValues(meta, typeId, values) {
+        return Object.keys(values || {}).some(function(id) {
+            var field=getField(meta,typeId,id);
+            return field && ['epic','sprint'].indexOf(field.kind)!==-1 && values[id]!==null;
+        });
+    }
+    // Confirm selected identities separately from metadata: search pages never
+    // change the schema signature or become an authoritative allowed catalog.
+    async function confirmRelations(meta, typeId, values, api, options) {
+        var result = Object.create(null);
+        for (var id of Object.keys(values || {})) {
+            var field = getField(meta,typeId,id), value = values[id];
+            if (!field || ['epic','sprint'].indexOf(field.kind) === -1 || value === null) continue;
+            if (!field.supported || !field.writable || !relationAllowed(field,value)) throw {kind:'relation',fieldId:id};
+            var selected = await (field.kind === 'epic' ? api.getEpic(meta.projectKey,value,options) : api.getSprint(meta.projectKey,value,options));
+            if (!selected || selected.id !== String(value)) throw {kind:'relation',fieldId:id};
+            result[id] = value;
+        }
+        return result;
+    }
+
+    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable,
+        relationValue:relationValue, relationAllowed:relationAllowed, hasRelationValues:hasRelationValues, confirmRelations:confirmRelations };
 });
 
 /* === Module: validation.js === */
@@ -242,6 +278,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if (field.kind === 'user' && ((field.id === 'assignee' && policy.allowAssignee !== true) || !Array.isArray(policy.explicitUserFields) || policy.explicitUserFields.indexOf(field.id) === -1)) return { ok: false, error: 'Explicit user selection and policy approval required' };
         if (value === null) return { ok: true, value: null };
         var kind = field.kind;
+        if (kind === 'epic' || kind === 'sprint') return {ok:fields.relationAllowed(field,value) && !!policy.relations &&
+            Object.prototype.hasOwnProperty.call(policy.relations,field.id) && policy.relations[field.id] === value, value:value,
+            error:'Confirm the selected Jira relation again'};
         if (kind === 'string' || kind === 'textarea') return { ok: typeof value === 'string' && (!field.maxLength || value.length <= field.maxLength), value: value };
         if (kind === 'number') return { ok: typeof value === 'number' && isFinite(value), value: value };
         if (kind === 'date' || kind === 'datetime') return { ok: kind === 'date' ? calendar(value) : datetime(value), value: value };
@@ -393,6 +432,10 @@ define('_ujgTA_draft', [], function() {
         var result = {
             schemaVersion: 1, id: str(input.id), projectKey: str(input.projectKey), issueTypeId: str(input.issueTypeId), templateId: str(input.templateId),
             source: source, fields: fields(input.fields), protectedFields: fields(input.protectedFields, true), pendingFields: fields(input.pendingFields),
+            pendingAssistance: record(input.pendingAssistance) && safeKey(input.pendingAssistance.fieldId) &&
+                typeof input.pendingAssistance.fieldId === 'string' && ['generate', 'improve', 'shorten'].indexOf(input.pendingAssistance.action) !== -1 &&
+                Object.prototype.hasOwnProperty.call(fields(input.pendingFields), input.pendingAssistance.fieldId) ?
+                {fieldId: input.pendingAssistance.fieldId, action: input.pendingAssistance.action} : null,
             questions: questions(input.questions), warnings: strings(input.warnings), evidence: evidence(input.evidence, source),
             sourceRevision: revision(input.sourceRevision), settingsRevision: revision(input.settingsRevision), draftRevision: revision(input.draftRevision),
             metaSignature: str(input.metaSignature), checked: checked(input.checked), creation: creation(input.creation), attachments: attachments(input.attachments)
@@ -423,6 +466,8 @@ define('_ujgTA_draft', [], function() {
     }
     function changed(d) {
         var next = persistent(d);
+        if (next.pendingAssistance) delete next.pendingFields[next.pendingAssistance.fieldId];
+        next.pendingAssistance = null;
         // Runtime file references remain in memory across pure draft mutations.
         next.attachments = (d.attachments || []).map(function(a) { return Object.assign({}, a); });
         next.draftRevision++;
@@ -498,6 +543,27 @@ define('_ujgTA_draft', [], function() {
         if (!safeKey(id) || !Object.prototype.hasOwnProperty.call(d.pendingFields, id)) return d;
         return editField(d, id, d.pendingFields[id]);
     }
+    function rejectField(d, id) {
+        if (!safeKey(id) || !Object.prototype.hasOwnProperty.call(d.pendingFields, id)) return d;
+        var next = changed(d);
+        delete next.pendingFields[id];
+        return next;
+    }
+    function invalidateAssistance(d) {
+        return d.pendingAssistance ? changed(d) : d;
+    }
+    function applyFieldProposal(d, id, action, proposal, requestSnapshot) {
+        if (!isCurrent(d, requestSnapshot) || !safeKey(id)) return d;
+        var proposed = fields(proposal.fields);
+        if (Object.keys(proposed).length !== 1 || !Object.prototype.hasOwnProperty.call(proposed, id)) throw new Error('Invalid field proposal');
+        var next = changed(d);
+        next.pendingFields = {}; next.pendingFields[id] = proposed[id];
+        next.pendingAssistance = {fieldId: id, action: action};
+        next.questions = questions(proposal.questions);
+        next.warnings = strings(proposal.warnings);
+        next.evidence = evidence(proposal.evidence, next.source);
+        return next;
+    }
     function markChecked(d, validation, currentQuestions, requestSnapshot) {
         if (!isCurrent(d, requestSnapshot)) return d;
         var next = persistent(d);
@@ -511,7 +577,8 @@ define('_ujgTA_draft', [], function() {
         return next;
     }
     return { createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
-        appendAnswers: appendAnswers, applyProposal: applyProposal, acceptField: acceptField, markChecked: markChecked,
+        appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
+        invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };
 });
 
@@ -650,8 +717,9 @@ define('_ujgTA_api', [], function() {
             base = parsed.pathname;
         } else if (base && base[0] !== '/') throw new Error('Jira base URL must be a context path');
         base = base.replace(/\/+$/, '');
+        var sprintBoardHints = new Map();
 
-        function request(path, data, options) {
+        function request(path, data, options, agile) {
             return new Promise(function(resolve, reject) {
                 var signal = options && options.signal, xhr, settled = false;
                 function finish(error, value) {
@@ -667,7 +735,7 @@ define('_ujgTA_api', [], function() {
                 if (signal && signal.aborted) { abort(); return; }
                 if (signal) signal.addEventListener('abort', abort, { once: true });
                 try {
-                    xhr = config.ajax({ url: base + '/rest/api/2' + path, type: 'GET', dataType: 'json', timeout: 30000, data: data || {} });
+                    xhr = config.ajax({ url: base + (agile ? '/rest/agile/1.0' : '/rest/api/2') + path, type: 'GET', dataType: 'json', timeout: 30000, data: data || {} });
                     Promise.resolve(xhr).then(function(value) { finish(null, value); }, function(error) {
                         var status = Number(error && error.status) || 0;
                         var kinds = { 401: 'unauthorized', 403: 'forbidden', 404: 'not-found', 429: 'rate-limit' };
@@ -678,10 +746,11 @@ define('_ujgTA_api', [], function() {
             });
         }
 
-        function catalog(path, data, options, picker, collectionKey) {
+        function catalog(path, data, options, picker, collectionKey, agile) {
             var collected = [], expectedTotal = null, seen = Object.create(null);
             function page(startAt) {
-                return request(path, Object.assign({}, data, { startAt: startAt, maxResults: 1000 }), options).then(function(raw) {
+                if (startAt >= 10000) return Promise.reject(failure('incomplete'));
+                return request(path, Object.assign({}, data, { startAt: startAt, maxResults: 1000 }), options, agile).then(function(raw) {
                     var values = Array.isArray(raw) ? raw : raw && raw[collectionKey || (picker ? 'users' : 'values')];
                     if (!Array.isArray(values)) throw failure('incomplete');
                     var total = raw && raw.total;
@@ -753,7 +822,79 @@ define('_ujgTA_api', [], function() {
                 return result;
             });
         }
+        function numericId(value) {return /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value));}
+        function issueKey(value) {return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value);}
+        function getBoards(project, options) {
+            return catalog('/board',{projectKeyOrId:String(project),type:'scrum'},options,false,null,true).then(function(result) {
+                if (!result.values.every(function(v) {return numericId(v.id) && typeof v.name === 'string';})) throw failure('incomplete');
+                return {values:result.values.map(function(v) {return {id:String(v.id),label:v.name};}),complete:result.complete,projectKey:String(project)};
+            });
+        }
+        function getSprints(project, board, options) {
+            if (!numericId(board)) return Promise.reject(failure('input'));
+            return catalog('/board/'+String(board)+'/sprint',{state:'active,future'},options,false,null,true).then(function(result) {
+                if (!result.values.every(function(v) {return numericId(v.id) && typeof v.name === 'string' && ['active','future'].indexOf(v.state)!==-1;})) throw failure('incomplete');
+                result.values.forEach(function(v) {sprintBoardHints.set(String(project)+'/'+String(v.id),String(board));});
+                return {values:result.values.map(function(v) {return {id:String(v.id),label:v.name,state:v.state,boardId:String(board)};}),complete:result.complete,projectKey:String(project),boardId:String(board)};
+            });
+        }
+        async function getEpic(project, key, options) {
+            if (!issueKey(key)) throw failure('input');
+            var epic=await request('/epic/'+encodeURIComponent(key),{},options,true);
+            var issue=await request('/issue/'+encodeURIComponent(key),{fields:'project'},options);
+            if (!epic || !numericId(epic.id) || !issue || String(issue.id)!==String(epic.id) || issue.key!==key || !issue.fields || !issue.fields.project || issue.fields.project.key!==project) throw failure('relation');
+            return {id:key,label:String(epic.name || key)};
+        }
+        async function getSprint(project, id, options) {
+            if (!numericId(id)) throw failure('input');
+            var sprint=await request('/sprint/'+String(id),{},options,true);
+            if (!sprint || sprint.id!==Number(id) || ['active','future'].indexOf(sprint.state)===-1) throw failure('relation');
+            var boards=await getBoards(project,options);
+            if (!boards.complete) throw failure('incomplete');
+            var hint=sprintBoardHints.get(String(project)+'/'+String(id));
+            var ordered=boards.values.slice().sort(function(a,b) {
+                function rank(board) {return board.id===hint ? 0 : board.id===String(sprint.originBoardId) ? 1 : 2;}
+                return rank(a)-rank(b);
+            });
+            var denied=null;
+            // Discovery is chosen-board-only. Reload/preflight may confirm an
+            // existing numeric value against at most 50 relevant boards.
+            for(var board of ordered.slice(0,50)) {
+                try {
+                    var choices=await getSprints(project,board.id,options);
+                    var match=choices.values.find(function(s) {return s.id===String(id);});
+                    if (!choices.complete) throw failure('incomplete');
+                    if(match) return match;
+                } catch(error) {
+                    if(!error || ['forbidden','not-found'].indexOf(error.kind)===-1) throw error;
+                    denied=error;
+                }
+            }
+            if(ordered.length>50) throw failure('incomplete');
+            throw denied || failure('relation');
+        }
+        async function searchEpics(project, query, options) {
+            function quote(value) {return '"'+String(value).replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"';}
+            var term=String(query || '');
+            if (term.length>200) throw failure('input');
+            if (issueKey(term)) return {values:[await getEpic(project,term,options)],complete:false,projectKey:String(project)};
+            var allFields=await request('/field',{},options);
+            if(!Array.isArray(allFields)) throw failure('incomplete');
+            var epicNames=allFields.filter(function(f) {return f && f.schema && f.schema.custom==='com.pyxis.greenhopper.jira:gh-epic-label';});
+            if(epicNames.length!==1 || !/^customfield_[1-9]\d*$/.test(epicNames[0].id)) throw failure('incomplete');
+            var customId=epicNames[0].id.slice('customfield_'.length);
+            var jql='project = '+quote(project)+' AND cf['+customId+'] IS NOT EMPTY'+(term ? ' AND text ~ '+quote(term) : '')+' ORDER BY updated DESC';
+            var raw=await request('/search',{jql:jql,fields:'project,summary',startAt:0,maxResults:20},options);
+            if (!raw || !Array.isArray(raw.issues) || raw.issues.length>20) throw failure('incomplete');
+            var values=[];
+            for (var issue of raw.issues) {
+                if (!issue || !issueKey(issue.key) || !issue.fields || !issue.fields.project || issue.fields.project.key!==project) throw failure('incomplete');
+                values.push({id:issue.key,label:typeof issue.fields.summary==='string' ? issue.fields.summary : issue.key});
+            }
+            return {values:values,complete:false,projectKey:String(project)};
+        }
         return {
+            getBoards:getBoards, getSprints:getSprints, getEpic:getEpic, getSprint:getSprint, searchEpics:searchEpics,
             getProjects: function(options) { return catalog('/project', {}, options); },
             getCurrentUser: function(options) { return request('/myself', {}, options); },
             getCreateMeta: function(projectKey, issueTypeId, options) {
@@ -826,7 +967,7 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         return items.every(function(item) { if (item == null) return false; var key = getId(item); if (!id(key) || seen[key]) return false; seen[key] = true; return true; });
     }
     function currentField(field) { return field.id !== 'project' && field.id !== 'issuetype' && field.kind !== 'user' && field.supported === true; }
-    function generated(field) { return currentField(field) && field.writable === true; }
+    function generated(field) { return currentField(field) && field.writable === true && ['number','epic','sprint'].indexOf(field.kind) === -1; }
     function normalizedValue(field, value) {
         if (value === null) return true;
         if (field.kind === 'option') return keys(value, ['id']) && id(value.id);
@@ -834,11 +975,13 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         if (field.kind === 'user') return keys(value, ['name']) && id(value.name);
         if (['string', 'textarea', 'date', 'datetime'].indexOf(field.kind) !== -1) return typeof value === 'string';
         if (field.kind === 'number') return typeof value === 'number' && isFinite(value);
+        if (field.kind === 'epic') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value);
+        if (field.kind === 'sprint') return Number.isSafeInteger(value) && value > 0;
         if (field.kind === 'labels') return Array.isArray(value) && value.every(function(item) { return typeof item === 'string'; });
         return false;
     }
     function context(kind, input) {
-        if (['route', 'prepare', 'check'].indexOf(kind) === -1 || !record(input)) fail('input');
+        if (['route', 'prepare', 'check', 'assist'].indexOf(kind) === -1 || !record(input)) fail('input');
         var meta = input.meta, profile = input.profile;
         if (!record(meta) || !id(meta.projectId) || !id(meta.projectKey) || !Array.isArray(meta.issueTypes) ||
             !record(profile) || !id(profile.id) || !Array.isArray(profile.templates) || !Array.isArray(input.allowFieldIds) ||
@@ -861,6 +1004,12 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         if (!pairs.length || input.allowFieldIds.some(function(fieldId) {
             return !types.some(function(type) { return type.fields.some(function(f) { return f.id === fieldId && generated(f); }); });
         })) fail('input');
+        if (kind === 'assist') {
+            var target = types[0].fields.find(function(f) {return f.id === input.targetFieldId;});
+            if (!target || !generated(target) || target.kind === 'number' || input.allowFieldIds.length !== 1 || input.allowFieldIds[0] !== target.id ||
+                ['generate', 'improve', 'shorten'].indexOf(input.fieldAction) === -1 ||
+                input.fieldAction === 'shorten' && ['string', 'textarea'].indexOf(target.kind) === -1) fail('input');
+        }
         return {meta: meta, profile: profile, types: types, templates: templates, pairs: pairs, typeId: typeId, templateId: templateId};
     }
     function pairAllowed(ctx, typeId, templateId) {
@@ -873,7 +1022,8 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         ctx.types[0].fields.forEach(function(field) {
             var human = field.kind === 'user' && Array.isArray(input.explicitUserFields) && input.explicitUserFields.indexOf(field.id) !== -1 &&
                 (field.id !== 'assignee' || ctx.profile.allowAssignee === true) && field.supported && field.writable;
-            if (!own(source, field.id) || (local ? !generated(field) && !human : !currentField(field))) return;
+            var manual = currentField(field) && field.writable === true && ['number','epic','sprint'].indexOf(field.kind)!==-1;
+            if (!own(source, field.id) || (local ? !generated(field) && !human && !manual : !currentField(field))) return;
             if (!normalizedValue(field, source[field.id])) fail('input');
             result[field.id] = JSON.parse(JSON.stringify(source[field.id]));
         });
@@ -889,7 +1039,7 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         'check: {schemaVersion:1,kind:"check",questions:[],warnings:[],evidence:[]}. Never return replacement fields on check.',
         'Questions always contain {id,text,reason,required:boolean}; warnings contain strings; evidence contains {fieldId,kind:"source"|"suggestion",quote:string}.',
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
-        'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype or user values. Humans select users explicitly.',
+        'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype, user values, numeric estimates, Epic or Sprint relations. Humans enter estimates and select relations explicitly.',
         'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
         'Field shapes by kind: string/textarea/date/datetime -> string; number -> finite number; option -> {"id":"literal catalog ID"}; multioption/components/versions -> [{"id":"literal catalog ID"}]; labels -> string[]. Null is allowed. Never return labels or names in place of IDs, numeric IDs, extra object keys, HTML execution or nested commands.'
     ].join('\n');
@@ -905,7 +1055,9 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
             return {id: t.id, name: text(t.name), whenToUse: text(t.whenToUse), instructions: text(t.instructions), issueTypeId: t.issueTypeId};
         })};
         var systemPrompt = protocol + '\nEditable content rules (subordinate to JSONv1):\n' + JSON.stringify(editable);
+        if (kind === 'assist') systemPrompt += '\nField assistance: use the prepare draft JSONv1 shape. Return exactly the target field in fields, as a proposal for explicit human Apply. Follow fieldAction: generate from source, improve the current value, or shorten text preserving meaning. Ask only target-specific questions. Numeric fields require explicit human input and cannot be assisted. Never invent effort, numeric estimates or dates; date/datetime values must occur as complete whitespace-delimited literals in source. If unsupported, return null and ask for the value.';
         var userPrompt = JSON.stringify({action: kind, source: input.source,
+            targetFieldId: kind === 'assist' ? input.targetFieldId : undefined, fieldAction: kind === 'assist' ? input.fieldAction : undefined,
             contextScope: 'Only selected issue types/templates and explicitly allowlisted generation field catalogs are included; other catalogs are excluded. All current supported non-user values are retained for review with minimal context outside generation scope. User values are excluded. Missing values require human selection.',
             project: {id: ctx.meta.projectId, key: ctx.meta.projectKey}, selected: {issueTypeId: ctx.typeId, templateId: ctx.templateId},
             candidatePairs: ctx.pairs, issueTypes: ctx.types.map(function(type) {
@@ -916,7 +1068,7 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
                     return {id: f.id, name: text(f.name), kind: f.kind, required: f.required === true, supported: true, writable: true,
                         maxLength: f.maxLength, optionsComplete: f.optionsComplete === true,
                         allowedValues: f.allowedValues.map(function(v) { return {id: v.id, label: text(v.label)}; })};
-                }), requiredOutsideScope: type.fields.filter(function(f) { return f.required && (!generated(f) || input.allowFieldIds.indexOf(f.id) === -1); }).map(function(f) { return f.id; })};
+                }), requiredOutsideScope: kind === 'assist' ? [] : type.fields.filter(function(f) { return f.required && (!generated(f) || input.allowFieldIds.indexOf(f.id) === -1); }).map(function(f) { return f.id; })};
             }), fields: current, currentFieldContext: ctx.typeId === null ? [] : ctx.types[0].fields.filter(function(f) {
                 return own(current, f.id) && input.allowFieldIds.indexOf(f.id) === -1;
             }).map(function(f) { return {id: f.id, name: text(f.name), kind: f.kind}; })});
@@ -948,9 +1100,10 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
         try { result = JSON.parse(raw); }
         catch (ignored) { responseFailure('json'); }
         rejectSecrets(raw);
-        var expected = kind === 'prepare' ? 'draft' : kind;
+        var proposal = kind === 'prepare' || kind === 'assist';
+        var expected = proposal ? 'draft' : kind;
         var allowed = kind === 'route' ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'candidates', 'questions'] :
-            kind === 'prepare' ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'fields', 'questions', 'warnings', 'evidence'] : ['schemaVersion', 'kind', 'questions', 'warnings', 'evidence'];
+            proposal ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'fields', 'questions', 'warnings', 'evidence'] : ['schemaVersion', 'kind', 'questions', 'warnings', 'evidence'];
         if (!keys(result, allowed) || !tree(result, 0) || result.schemaVersion !== 1 || result.kind !== expected) responseFailure('contract');
         if (!validQuestions(result.questions)) responseFailure('questions');
         if (kind === 'route') {
@@ -973,9 +1126,10 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
                 typeof e.quote === 'string' && !!e.quote.trim() && (e.kind === 'suggestion' || e.kind === 'source' && input.source.indexOf(e.quote) !== -1);
         })) responseFailure('evidence');
         var values = draftFields(input, ctx, true);
-        if (kind === 'prepare') {
+        if (proposal) {
             if (result.issueTypeId !== ctx.typeId || result.templateId !== ctx.templateId) responseFailure('selection');
             if (!record(result.fields)) responseFailure('contract');
+            if (kind === 'assist' && (Object.keys(result.fields).length !== 1 || !own(result.fields, input.targetFieldId))) responseFailure('scope');
             Object.keys(result.fields).forEach(function(fieldId) {
                 var field = type.fields.find(function(f) { return f.id === fieldId; });
                 if (!field || !generated(field) || input.allowFieldIds.indexOf(fieldId) === -1) responseFailure('scope', field);
@@ -985,6 +1139,9 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
                     value = value.map(function(item) { return id(item) ? {id: item} : item; });
                 }
                 if (!normalizedValue(field, value)) responseFailure('shape', field);
+                if (kind === 'assist' && value !== null && value !== '' && ['date', 'datetime'].indexOf(field.kind) !== -1) {
+                    if (input.source.split(/\s+/).indexOf(value) === -1) responseFailure('value', field);
+                }
                 result.fields[fieldId] = value;
             });
             // Validate proposal values independently; omissions remain questions, not invented facts.
@@ -993,8 +1150,10 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
             if (!checked.ok) responseFailure('value', type.fields.find(function(f) { return own(checked.fieldErrors, f.id); }));
             values = Object.assign(values, result.fields);
         }
-        var local = validation.validateFields(ctx.meta, type.id, values, {allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields});
+        var local = validation.validateFields(ctx.meta, type.id, values, {relations:input.relationConfirmations,
+            allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields});
         Object.keys(local.fieldErrors).forEach(function(fieldId) {
+            if (kind === 'assist' && fieldId !== input.targetFieldId) return;
             var questionId = 'required:' + fieldId;
             // Reserved IDs cannot be used by the model to suppress a local blocker.
             result.questions = result.questions.filter(function(q) { return q.id !== questionId; });
@@ -1044,6 +1203,7 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
             });
         }
         return {preflight:preflight, route: function(input, options) { return run('route', input, options); },
+            assist: function(input, options) { return run('assist', input, options); },
             prepare: function(input, options) { return run('prepare', input, options); },
             check: function(input, options) { return run('check', input, options); }};
     }
@@ -1149,7 +1309,10 @@ define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'],
                     ctx.draft=drafts.setSelection(ctx.draft,{metaSignature:meta.signature});ctx.draft.creation.status='idle';
                     ctx.draft.creation.error='Поля Jira изменились. Проверьте черновик заново.';persist(ctx,{meta:meta});return;
                 }
-                var p = policy(d,ctx.settings,meta), valid = validation.validateFields(meta,d.issueTypeId,d.fields,p);
+                var confirmed = await fields.confirmRelations(meta,d.issueTypeId,d.fields,api,{});
+                if (!stillCurrent(ctx,snap)) return;
+                var p = policy(d,ctx.settings,meta); p.relations=confirmed;
+                var valid = validation.validateFields(meta,d.issueTypeId,d.fields,p);
                 if (!valid.ok || d.questions.some(function(q) {return q.required;})) throw new Error('validation');
                 var payload = validation.buildCreatePayload(meta,d.issueTypeId,d.fields,p);
                 if (d.attachments.length && !request.withoutAttachments) {
@@ -1282,10 +1445,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var api = options.api, ai = options.ai, store = null, scopes = Object.create(null);
         var active = null, destroyed = false, identityWarning = null;
         var state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
-            error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
+            error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
         var budgetCache = null, providerUsage = null;
+        var metadataReady = false;
+        var relationConfirmations = Object.create(null), relationSearches = new Map();
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
         function durableGuard() {
             if (!store || !state.draft) return false;
@@ -1310,6 +1475,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 result.tokenPreflight=budgetCache.value;
             }
             result.providerUsage=providerUsage;
+            if (!result.assistance && state.draft && state.draft.pendingAssistance && canAcceptField(state.draft.pendingAssistance.fieldId)) result.assistance = Object.assign({}, state.draft.pendingAssistance,
+                {status:'ready',error:null,questions:state.draft.questions,warnings:state.draft.warnings,evidence:state.draft.evidence});
             result.draft = state.draft ? JSON.parse(drafts.serialize(state.draft)) : null;
             if (result.draft) result.draft.attachments.forEach(function(a) {a.needsReselect = a.status !== 'uploaded' && !runtimeFiles.has(a.id);});
             return copy(result);
@@ -1321,9 +1488,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return getState();
         }
         function stop() {
+            relationSearches.forEach(function(run) {run.abort();}); relationSearches.clear();
             var previous = active;
             active = null;
             if (previous) previous.abort.abort();
+            state.assistance = null;
+            if (state.draft) state.draft = drafts.invalidateAssistance(state.draft);
             state.startedAt = null;
         }
         function begin(kind) {
@@ -1354,6 +1524,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             active = null; state.startedAt = null;
             if (error && (error.code === 'abort' || error.kind === 'abort' || error.name === 'AbortError')) state.stage = 'stopped';
             else { state.stage = 'error'; state.error = errorState(error, fallback, state.meta, state.draft && state.draft.issueTypeId); }
+            if (run.kind === 'assist') state.assistance = {fieldId:run.fieldId,action:run.action,
+                status:state.stage === 'stopped' ? 'stopped' : 'error',error:state.error,questions:[],warnings:[],evidence:[]};
             emit();
         }
         function profile() {
@@ -1368,7 +1540,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     return (!state.draft.templateId || t.id === state.draft.templateId) && (t.issueTypeId === null || t.issueTypeId === type.id);
                 })) return;
                 type.fields.forEach(function(f) {
-                    if (f.supported && f.writable && f.kind !== 'user' && ['project', 'issuetype'].indexOf(f.id) === -1 && ids.indexOf(f.id) === -1) ids.push(f.id);
+                    if (f.supported && f.writable && ['user','number','epic','sprint'].indexOf(f.kind) === -1 && ['project', 'issuetype'].indexOf(f.id) === -1 && ids.indexOf(f.id) === -1) ids.push(f.id);
                 });
             });
             return ids;
@@ -1407,14 +1579,14 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function edited(next) {
             if (locked() || durableGuard()) return emit();
             if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
-            stop(); state.draft = next; state.validation = null; state.routeCandidates = [];
+            stop(); state.draft = drafts.invalidateAssistance(next); state.validation = null; state.routeCandidates = [];
             providerUsage=null;
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
         }
         function policy() {
             var p = profile();
-            return { allowAssignee: !!p && p.allowAssignee === true, explicitUserFields: Object.keys(state.draft.protectedFields).filter(function(id) {
+            return { relations:relationConfirmations, allowAssignee: !!p && p.allowAssignee === true, explicitUserFields: Object.keys(state.draft.protectedFields).filter(function(id) {
                 var field = fields.getField(state.meta, state.draft.issueTypeId, id);
                 return state.draft.protectedFields[id] === true && field && field.kind === 'user';
             }) };
@@ -1422,15 +1594,38 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
                 templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds, tokenBudget:state.settings.tokenBudget,
-                draft: { fields: state.draft.fields }, explicitUserFields: policy().explicitUserFields });
+                draft: { fields: state.draft.fields }, relationConfirmations:relationConfirmations, explicitUserFields: policy().explicitUserFields });
         }
         function compatible(typeId, templateId) {
             var type = state.meta && state.meta.issueTypes.find(function(t) { return t.id === typeId && !t.subtask; });
             var template = profile() && profile().templates.find(function(t) { return t.id === templateId; });
             return !!type && !!template && (template.issueTypeId === null || template.issueTypeId === typeId);
         }
+        function canAcceptField(id) {
+            if (!metadataReady || !state.meta || !state.draft || state.meta.projectKey !== state.draft.projectKey ||
+                state.meta.signature !== state.draft.metaSignature || !compatible(state.draft.issueTypeId,state.draft.templateId) ||
+                !Object.prototype.hasOwnProperty.call(state.draft.pendingFields,id)) return false;
+            var spec = fields.getField(state.meta,state.draft.issueTypeId,id);
+            if (!spec || !spec.supported || !spec.writable || spec.kind === 'user' || ['project','issuetype'].indexOf(id) !== -1) return false;
+            if (['number','epic','sprint'].indexOf(spec.kind) !== -1) return false;
+            var targetMeta = {projectId:state.meta.projectId,issueTypes:[{id:state.draft.issueTypeId,subtask:false,
+                fields:[Object.assign({},spec,{required:false})]}]}, value = {};
+            value[id] = state.draft.pendingFields[id];
+            return validation.validateFields(targetMeta,state.draft.issueTypeId,value,policy()).ok;
+        }
+        async function acceptField(id) {
+            if (destroyed || !state.draft || locked() || durableGuard() || state.draft.creation.status === 'preflight') return emit();
+            if (!Object.prototype.hasOwnProperty.call(state.draft.pendingFields,id) || !metadataReady) return emit();
+            if (!canAcceptField(id)) {
+                state.error = errorState({code:'response',details:{reason:'value',fieldId:id}},'response',state.meta,state.draft.issueTypeId);
+                return emit();
+            }
+            return mutate(drafts.acceptField,[id]);
+        }
         async function metadata(run, readOnly) {
             var snapshot = drafts.snapshot(state.draft), key = state.draft.projectKey;
+            metadataReady = false;
+            relationConfirmations = Object.create(null);
             stage(run, 'metadata');
             if (!current(run, snapshot)) return false;
             var request = { signal: run.abort.signal };
@@ -1443,6 +1638,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!current(run, snapshot)) return false;
             state.meta = fields.normalizeMeta(raw, key, { components: components, versions: versions });
             if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
+            metadataReady = true;
+            if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
+                var confirmed = await fields.confirmRelations(state.meta,state.draft.issueTypeId,state.draft.fields,api,request);
+                if (!current(run)) return false;
+                relationConfirmations = confirmed;
+            }
             state.validation = null; updateScope();
             if (readOnly) remember(); else save();
             return true;
@@ -1453,9 +1654,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
-            budgetCache=null;providerUsage=null;
+            budgetCache=null;providerUsage=null;metadataReady=false;
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
-                error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
+                error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
             emit();
             try {
                 var user = null;
@@ -1502,6 +1703,47 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 state.error = errorState(null, 'input'); return emit();
             }
             return edited(drafts.setSelection(state.draft, { issueTypeId: id }));
+        }
+        async function searchRelation(query, spec, options) {
+            options = options || {};
+            var id=spec && spec.id, field=state.draft && fields.getField(state.meta,state.draft.issueTypeId,id);
+            if (destroyed || !metadataReady || !field || !field.supported || !field.writable ||
+                ['epic','sprint'].indexOf(field.kind) === -1 || locked() || durableGuard() || state.draft.creation.status==='preflight') throw {kind:'input'};
+            if (relationSearches.has(id)) relationSearches.get(id).abort();
+            var aborter=new AbortController(), signal=options.signal, snapshot=drafts.snapshot(state.draft), meta=state.meta;
+            function abort() {aborter.abort();}
+            if(signal) {if(signal.aborted) abort(); else signal.addEventListener('abort',abort,{once:true});}
+            relationSearches.set(id,aborter);
+            function fresh() {
+                if(destroyed || aborter.signal.aborted || relationSearches.get(id)!==aborter || state.meta!==meta ||
+                    !state.draft || !drafts.isCurrent(state.draft,snapshot)) throw {kind:'abort'};
+            }
+            try {
+                fresh();var request={signal:aborter.signal}, result;
+                if(field.kind==='epic') result=await api.searchEpics(state.draft.projectKey,String(query || ''),request);
+                else {
+                    var boards=await api.getBoards(state.draft.projectKey,request);fresh();
+                    if(!boards || !boards.complete || !Array.isArray(boards.values)) throw {kind:'incomplete'};
+                    if(options.boardId==null) return copy({values:[],complete:false,boards:boards.values,needsBoard:true,boardId:null});
+                    var board=boards.values.find(function(b) {return b.id===String(options.boardId);});
+                    if(!board) throw {kind:'input'};
+                    result=await api.getSprints(state.draft.projectKey,board.id,request);fresh();
+                    result=Object.assign({},result,{boards:boards.values,boardId:board.id,needsBoard:false});
+                    result.values=result.values.filter(function(v) {return (v.label+' '+v.id).toLowerCase().indexOf(String(query || '').toLowerCase())!==-1;});
+                }
+                fresh();
+                if(!result || !Array.isArray(result.values)) throw {kind:'incomplete'};
+                result=Object.assign({},result,{values:result.values.filter(function(v) {
+                    return fields.relationAllowed(field,field.kind==='epic'?v.id:Number(v.id));
+                })});
+                return copy(result);
+            } catch(error) {
+                fresh();
+                throw {kind:error && ['unauthorized','forbidden','not-found','rate-limit','incomplete','input','abort'].indexOf(error.kind)!==-1 ? error.kind : 'network'};
+            } finally {
+                if(relationSearches.get(id)===aborter) relationSearches.delete(id);
+                if(signal) signal.removeEventListener('abort',abort);
+            }
         }
         async function selectTemplate(id) {
             if (destroyed || !state.draft) return getState();
@@ -1602,6 +1844,38 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return edited(next);
         }
 
+        async function assistField(id, action) {
+            if (destroyed || !state.draft || locked() || durableGuard() || state.draft.creation.status === 'preflight') return emit();
+            var spec = fields.getField(state.meta, state.draft.issueTypeId, id);
+            if (!compatible(state.draft.issueTypeId, state.draft.templateId) || !spec || spec.kind === 'number' || eligible().indexOf(id) === -1 ||
+                state.generationFieldIds.indexOf(id) === -1 || ['generate','improve','shorten'].indexOf(action) === -1 ||
+                action === 'shorten' && ['string','textarea'].indexOf(spec.kind) === -1) {
+                state.error = errorState(null,'input'); return emit();
+            }
+            var run = begin('assist'); run.fieldId = id; run.action = action;
+            state.draft = Object.assign({},state.draft,{checked:null}); state.validation = null; save();
+            state.assistance = {fieldId:id,action:action,status:'running',error:null,questions:[],warnings:[],evidence:[]};
+            run.promise = (async function() {
+                try {
+                    if (!state.draft.source.trim()) throw {code:'input'};
+                    if (!await metadata(run)) return;
+                    if (eligible().indexOf(id) === -1 || state.generationFieldIds.indexOf(id) === -1) throw {code:'input'};
+                    var snapshot = drafts.snapshot(state.draft), requestInput = input();
+                    requestInput.allowFieldIds = [id]; requestInput.targetFieldId = id; requestInput.fieldAction = action;
+                    stage(run,'assisting');
+                    if (!current(run,snapshot)) return;
+                    var result = await ai.assist(requestInput,{signal:run.abort.signal});
+                    if (!current(run,snapshot)) return;
+                    if (durableGuard()) throw {code:'conflict'};
+                    state.draft = drafts.applyFieldProposal(state.draft,id,action,result,snapshot);
+                    providerUsage = result.usage || null;
+                    state.assistance = {fieldId:id,action:action,status:'ready',error:null,
+                        questions:state.draft.questions,warnings:state.draft.warnings,evidence:state.draft.evidence};
+                    save(); finish(run);
+                } catch (error) {fail(run,error,state.stage === 'metadata' ? 'metadata' : 'transport');}
+            })();
+            await run.promise; return getState();
+        }
         async function pipeline(kind) {
             if (destroyed || !state.draft) return getState();
             if (locked() || durableGuard()) return emit();
@@ -1677,7 +1951,10 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (state.draft && state.draft.creation.status === 'preflight') {
                 return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
             }
-            stop(); state.stage = 'stopped'; return emit();
+            var assistance = state.assistance;
+            stop(); state.stage = 'stopped';
+            if (assistance) state.assistance = {fieldId:assistance.fieldId,action:assistance.action,status:'stopped',error:null,questions:[],warnings:[],evidence:[]};
+            save(); return emit();
         }
         async function destroy() {
             if (!destroyed) { stop(); destroyed = true; if (creator) creator.destroy();runtimeFiles.clear(); }
@@ -1775,17 +2052,19 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             });
         }
         function connectionChanged() {
-            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
+            if (destroyed || active && active.kind !== 'assist' || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
             if (!state.draft) return getState();
             invalidateCachedChecks();
             return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
         }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
+            searchRelation:searchRelation,
             connectionChanged:connectionChanged,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
             answer: function(answers) { return mutate(drafts.appendAnswers, [answers]); },
-            acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
+            acceptField: acceptField,
+            rejectField: function(id) { return mutate(drafts.rejectField, [id]); }, assistField: assistField,
             applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
             submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,discardDraft:discardDraft,
@@ -1799,6 +2078,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
 define('_ujgTA_icons', [], function() {
     'use strict';
     var nodes = {
+        Info: [['circle',{cx:'12',cy:'12',r:'10'}],['path',{d:'M12 16v-4'}],['path',{d:'M12 8h.01'}]],
+        Expand: [['path',{d:'m15 15 6 6'}],['path',{d:'m15 9 6-6'}],['path',{d:'M21 16v5h-5'}],['path',{d:'M21 8V3h-5'}],['path',{d:'M3 16v5h5'}],['path',{d:'m3 21 6-6'}],['path',{d:'M3 8V3h5'}],['path',{d:'M9 9 3 3'}]],
+        Minimize2: [['path',{d:'m14 10 7-7'}],['path',{d:'M20 10h-6V4'}],['path',{d:'m3 21 7-7'}],['path',{d:'M4 14h6v6'}]],
         Plus: [['path', {d:'M5 12h14'}], ['path', {d:'M12 5v14'}]],
         Copy: [['rect', {width:'14',height:'14',x:'8',y:'8',rx:'2',ry:'2'}], ['path', {d:'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'}]],
         Trash2: [['path', {d:'M10 11v6'}], ['path', {d:'M14 11v6'}], ['path', {d:'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6'}], ['path', {d:'M3 6h18'}], ['path', {d:'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'}]],
@@ -1830,12 +2112,17 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
     'use strict';
     var nextId = 0;
     function create(options) {
-        var $ = options.$, host, label, body, errors, control, panel, chips, candidates, search, toggle;
+        var $ = options.$, host, label, body, errors, control, panel, chips, candidates, search, toggle, boards;
         var current = {}, mode, dead = false, sequence = 0, request = null, userOptions = [], query = '', outside, escape;
         var uid = 'ta-field-' + (++nextId), cache = Object.create(null), localEdit = null;
+        var boardId = null, boardChoices = [], needsBoard = false, partial = false;
+        var searchTimer = null;
+        var relationSearchPending = false, relationSearchError = null;
         function multi() { return current.field.multiple === true || ['multioption', 'components', 'versions'].indexOf(current.field.kind) !== -1; }
         function user() { return current.field.kind === 'user'; }
-        function key(value) { return value && (user() ? value.name : value.id); }
+        function relation() {return ['epic','sprint'].indexOf(current.field.kind)!==-1;}
+        function remote() {return user() || relation();}
+        function key(value) { return relation() ? value == null ? null : String(value) : value && (user() ? value.name : value.id); }
         function selected() { var value = current.value; return Array.isArray(value) ? value : value == null ? [] : [value]; }
         function display(value) { return cache[key(value)] || key(value) || ''; }
         function setValue(value) {
@@ -1843,9 +2130,15 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
             options.onChange(current.field.id, value);
         }
         function close(restoreFocus) {
-            if (panel) {panel.prop('hidden', true); toggle.attr('aria-expanded', 'false'); if (restoreFocus) toggle.trigger('focus');}
+            if (panel) {
+                if (relation()) cancelSearch();
+                panel.prop('hidden', true); toggle.attr('aria-expanded', 'false'); if (restoreFocus) toggle.trigger('focus');
+            }
         }
-        function cancelSearch() { sequence++; if (request) request.abort(); request = null; }
+        function cancelSearch() {
+            sequence++; if (request) request.abort(); request = null;
+            if (searchTimer !== null) {window.clearTimeout(searchTimer);searchTimer=null;}
+        }
         function renderChoices() {
             if (!panel) return;
             chips.empty(); candidates.empty();
@@ -1860,13 +2153,13 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 if (current.removable !== false) chip.append(remove);
                 chips.append(chip);
             });
-            var list = user() ? userOptions : current.field.allowedValues || [];
+            var list = relation() && (relationSearchPending || relationSearchError) ? [] : remote() ? userOptions : current.field.allowedValues || [];
             list.forEach(function(value) {
-                var id = key(value); if (!id || seen[id]) return; seen[id] = true;
+                var id = relation() ? value.id : key(value); if (!id || seen[id]) return; seen[id] = true;
                 if (values.some(function(v) {return key(v) === id;})) return;
                 var name = user() ? value.displayName || value.name : value.label || id;
                 cache[id] = name;
-                if (!user() && (name + ' ' + id).toLowerCase().indexOf(query.toLowerCase()) === -1) return;
+                if (!remote() && (name + ' ' + id).toLowerCase().indexOf(query.toLowerCase()) === -1) return;
                 var button = $('<button type="button" role="option" aria-selected="false" data-ta-candidate>').text(name + ' (' + id + ')');
                 // Metadata may carry actual Jira icons; external and data URLs never load.
                 if (value.iconUrl) {
@@ -1877,49 +2170,84 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     } catch (ignored) { /* Invalid icons are omitted. */ }
                 }
                 button.on('click', function() {
-                    var normalized = user() ? {name: value.name} : {id: value.id};
+                    var normalized = user() ? {name: value.name} : relation() ? current.field.kind==='sprint' ? Number(value.id) : value.id : {id: value.id};
                     setValue(multi() ? selected().concat([normalized]) : normalized);
                     if (!multi()) {close(); toggle.trigger('focus');}
                     else search.trigger('focus');
                 });
                 candidates.append(button);
             });
-            if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text(fields.catalogUnavailable(current.field) ? 'Каталог вариантов недоступен. Используйте форму Jira.' : 'Нет вариантов'));
+            if (relation() && relationSearchPending) candidates.append($('<p class="ta-muted">').text('Поиск…'));
+            else if (relation() && relationSearchError) candidates.append($('<p class="ta-errors">').text(relationSearchError));
+            else {
+                if (!candidates.children().length) candidates.append($('<p class="ta-muted">').text(needsBoard ? 'Выберите доску' : fields.catalogUnavailable(current.field) ? 'Каталог вариантов недоступен. Используйте форму Jira.' : 'Нет вариантов'));
+                if (relation() && partial && !needsBoard) candidates.append($('<p class="ta-muted" data-ta-partial>').text('Неполные результаты. Уточните поиск или введите ключ задачи.'));
+            }
             toggle.find('span').text(values.length ? (multi() ? 'Выбрано: ' + values.length : display(values[0])) : 'Выбрать');
         }
         function runSearch() {
             query = search.val(); cancelSearch();
-            if (!user() || typeof options.onSearch !== 'function') {renderChoices(); return;}
+            if (!remote() || typeof options.onSearch !== 'function') {renderChoices(); return;}
             var token = sequence, aborter = new AbortController(), term = query, field = current.field;
             request = aborter;
-            candidates.empty().append($('<p class="ta-muted">').text('Поиск…'));
-            Promise.resolve().then(function() {
+            if (relation()) {
+                userOptions=[];partial=false;relationSearchPending=true;relationSearchError=null;renderChoices();
+            } else candidates.empty().append($('<p class="ta-muted">').text('Поиск…'));
+            function dispatch() {
+                searchTimer=null;
+                Promise.resolve().then(function() {
                 if (dead || token !== sequence || aborter.signal.aborted) return null;
-                return options.onSearch(term, field, {signal: aborter.signal});
+                return options.onSearch(term, field, {signal: aborter.signal, boardId:boardId});
             }).then(function(result) {
                 if (dead || token !== sequence) return;
+                relationSearchPending=false;relationSearchError=null;
                 userOptions = Array.isArray(result) ? result : result && result.values || [];
-                userOptions.forEach(function(value) {cache[value.name] = value.displayName || value.name;}); renderChoices();
-            }, function() {
-                if (!dead && token === sequence) candidates.empty().append($('<p class="ta-errors">').text('Поиск недоступен. Повторите поиск.'));
+                userOptions.forEach(function(value) {cache[user() ? value.name : value.id] = user() ? value.displayName || value.name : value.label || value.id;});
+                partial = result && result.complete === false; needsBoard = !!(result && result.needsBoard);
+                boardChoices = result && result.boards || []; renderBoards(); renderChoices();
+            }, function(error) {
+                if (dead || token !== sequence) return;
+                var message=error && ['forbidden','unauthorized'].indexOf(error.kind)!==-1 ? 'Нет доступа к вариантам Jira.' : 'Поиск недоступен. Повторите поиск.';
+                if (relation()) {relationSearchPending=false;relationSearchError=message;renderChoices();}
+                else candidates.empty().append($('<p class="ta-errors">').text(message));
             });
+            }
+            if (relation()) searchTimer=window.setTimeout(dispatch,250); else dispatch();
+        }
+        function renderBoards() {
+            if (!boards) return; boards.empty();
+            if (current.field.kind!=='sprint') return;
+            if (needsBoard) {
+                boardChoices.forEach(function(board) {
+                    boards.append($('<button type="button" data-ta-board>').attr('data-ta-board',board.id).text(board.label+' ('+board.id+')')
+                        .on('click',function() {boardId=board.id;runSearch();}));
+                });
+                if (!boardChoices.length) boards.append($('<p class="ta-muted">').text('Доступных Scrum-досок нет.'));
+            } else if (boardId) {
+                var selected=boardChoices.find(function(b) {return b.id===boardId;});
+                boards.append($('<button type="button" data-ta-change-board>').text(selected ? selected.label : boardId)
+                    .on('click',function() {boardId=null;userOptions=[];runSearch();}));
+            }
         }
         function build(kind) {
             cancelSearch(); body.empty(); control = null; panel = null; query = ''; userOptions = []; localEdit = null;
+            relationSearchPending=false;relationSearchError=null;
             if (kind === 'picker') {
                 toggle = $('<button type="button" class="ta-picker" data-ta-picker aria-haspopup="listbox" aria-expanded="false">').attr('id', uid).append($('<span>'), icon('ChevronDown'));
                 panel = $('<div class="ta-popover" data-ta-popover hidden>');
+                boards = $('<div data-ta-boards>');
                 chips = $('<div class="ta-chips" data-ta-chips>');
                 search = $('<input type="search" data-ta-search autocomplete="off">').attr('aria-label', 'Поиск: ' + current.field.name);
                 candidates = $('<div class="ta-candidates" role="listbox">').attr('aria-label', current.field.name);
-                panel.append(chips, search, candidates); body.append(toggle, panel); control = toggle;
+                panel.append(chips, boards, search, candidates); body.append(toggle, panel); control = toggle;
                 toggle.on('click', function() {
                     var open = panel.prop('hidden'); panel.prop('hidden', !open); toggle.attr('aria-expanded', String(open));
                     if (open) {search.trigger('focus'); runSearch();}
+                    else close();
                 });
                 search.on('input', runSearch);
                 body.on('keydown.taPicker', function(event) {
-                    if (event.key === 'Escape') {close(true); event.stopPropagation();}
+                    if (event.key === 'Escape' && !panel.prop('hidden')) {close(true); event.preventDefault();event.stopPropagation();}
                     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                         event.preventDefault(); var buttons = candidates.find('button').toArray(), index = buttons.indexOf(event.target);
                         var target = buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length];
@@ -1944,12 +2272,17 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
             label.attr('for', uid);
         }
         function update(value) {
-            if (dead) return; var oldId = current.field && current.field.id; current = value;
-            if (oldId !== current.field.id) {cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();}
+            if (dead) return; var oldId = current.field && current.field.id, oldScope=current.scopeKey, oldKind=current.field && current.field.kind; current = value;
+            if (oldId !== current.field.id || oldScope !== current.scopeKey || oldKind !== current.field.kind) {
+                cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();boardId=null;boardChoices=[];needsBoard=false;partial=false;
+                relationSearchPending=false;relationSearchError=null;
+                query='';if(search) search.val('');
+                if(panel) {close();boards.empty();}
+            }
             (current.selectedUsers || []).forEach(function(v) {cache[v.name] = v.displayName || v.name;});
             (current.field.allowedValues || []).forEach(function(v) {cache[v.id] = v.label || v.id;});
             var kind = !current.field.supported || !current.field.writable ? 'unsupported' :
-                ['option', 'multioption', 'components', 'versions', 'user'].indexOf(current.field.kind) !== -1 ? 'picker' : current.field.kind;
+                ['option', 'multioption', 'components', 'versions', 'user', 'epic', 'sprint'].indexOf(current.field.kind) !== -1 ? 'picker' : current.field.kind;
             if (mode !== kind) {body.off('.taPicker'); mode = kind; build(kind);}
             label.text(current.field.name + (current.field.required ? ' *' : ''));
             var messages = current.errors || []; errors.text(messages.join(' '));
@@ -2166,11 +2499,75 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         var $ = options.$, c = options.controller, root, state, source, fieldsHost, questionsHost, scopeHost;
         var project, template, type, timer = null, lastOperation = {name:'prepare'}, dead = false, settingsView = null, discardId = null;
         var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null, connectionHost = null;
-        var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', checking: 'Проверка черновика'};
+        var fullscreen = null, tokenOpen = false, activeMenu = null, fieldsQueued = false, pointerHeld = false, pointerTimer = null;
+        var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', assisting:'Подготовка предложения', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
         }
         function textValue(value) { return value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
+        function iconButton(label, name, attrs) {return button(label,name,attrs).addClass('ta-icon-button');}
+        function closeMenu() {
+            if (!activeMenu) return;
+            activeMenu.menu.prop('hidden',true);activeMenu.toggle.attr('aria-expanded','false');activeMenu=null;
+        }
+        function closeTokens(focus) {
+            tokenOpen=false;root.find('[data-ta-token-preflight]').prop('hidden',true);
+            root.find('[data-ta-tokens]').attr('aria-expanded','false');
+            if (focus) root.find('[data-ta-tokens]').trigger('focus');
+        }
+        function toggleFullscreen() {
+            var page=document.scrollingElement || document.documentElement;
+            if (!fullscreen) {
+                fullscreen={overflow:document.body.style.overflow,focus:document.activeElement,
+                    pageTop:page.scrollTop,pageLeft:page.scrollLeft,scroll:root[0].scrollTop,source:root.find('.ta-source-area').scrollTop(),editor:root.find('.ta-draft-area').scrollTop()};
+                document.body.style.overflow='hidden';root.addClass('ta-fullscreen');
+            } else {
+                var saved=fullscreen;fullscreen=null;root.removeClass('ta-fullscreen');document.body.style.overflow=saved.overflow;
+                root[0].scrollTop=saved.scroll;root.find('.ta-source-area').scrollTop(saved.source);root.find('.ta-draft-area').scrollTop(saved.editor);
+                if (saved.focus && saved.focus.isConnected) saved.focus.focus({preventScroll:true});
+                page.scrollTop=saved.pageTop;page.scrollLeft=saved.pageLeft;
+            }
+            root.find('[data-ta-fullscreen]').empty().append(icon(fullscreen?'Minimize2':'Expand'))
+                .attr({'aria-pressed':String(!!fullscreen),title:fullscreen?'Выйти из полноэкранного режима':'На весь экран','aria-label':fullscreen?'Выйти из полноэкранного режима':'На весь экран'});
+        }
+        function focusField(id) {
+            var entry=fields.get(id);if (!entry) return;
+            entry.host.parents('details').prop('open',true);
+            var input=entry.host.find('input,textarea,[data-ta-picker]').first()[0];
+            if (input) {input.focus();if (input.scrollIntoView) input.scrollIntoView({block:'nearest'});}
+        }
+        function scheduleFields() {
+            if(fieldsQueued) return;fieldsQueued=true;
+            // Wait until focus has reached its new editor before reconciling layout.
+            Promise.resolve().then(flushFields);
+        }
+        function flushFields() {
+            if(pointerHeld || !fieldsQueued) return;
+            fieldsQueued=false;
+            if(!dead && state && state.draft)renderFields(state.draft,!!stages[state.stage]);
+        }
+        function finishPointer(event) {
+            if(pointerTimer!==null) {window.clearTimeout(pointerTimer);pointerTimer=null;}
+            // Preserve the pointer's target through click; pointerup is the fallback for drags.
+            if(event && event.type==='pointerup') {pointerTimer=window.setTimeout(finishPointer,0);return;}
+            pointerHeld=false;if(fieldsQueued)Promise.resolve().then(flushFields);
+        }
+        function escapeOverlay(event) {
+            if(event.key!=='Escape') return;
+            var modal=root.find('[data-ta-settings]:not([hidden]),[data-ta-connection]:not([hidden])').last();
+            var area=modal.length?modal:root;
+            var cancel=area.find('[data-ta-discard-dialog]:not([hidden]) [data-ta-discard-cancel],[data-ta-discard-confirm]:not([hidden]) [data-ta-keep-editing]')
+                .filter(function(){return !$(this).closest('[hidden]').length;}).last();
+            var reset=area.find('[data-ta-reset-prompt]:not([hidden])').filter(function(){return !$(this).closest('[hidden]').length;});
+            var popup=area.find('[data-ta-popover]:not([hidden])').filter(function() {
+                return !$(this).closest('[hidden]').length && !$(this).parents('details:not([open])').length;
+            }).last();
+            if(cancel.length)cancel.trigger('click');
+            else if(reset.length) {reset.find('button').last().trigger('click');area.find('[data-ta-reset]').trigger('focus');}
+            else if(popup.length)popup.siblings('[data-ta-picker]').trigger('click').trigger('focus');
+            else return;
+            event.preventDefault();event.stopPropagation();
+        }
         function canEditField(id) {
             if (writeLocked()) return false;
             var p=state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;});
@@ -2259,7 +2656,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var selectedTemplate = profile && profile.templates.find(function(t) {return t.id === d.templateId;});
             (state.meta && state.meta.issueTypes || []).forEach(function(t) {
                 if (t.subtask || d.issueTypeId && t.id !== d.issueTypeId || selectedTemplate && selectedTemplate.issueTypeId && t.id !== selectedTemplate.issueTypeId) return;
-                t.fields.forEach(function(f) {if (f.supported && f.writable && f.kind !== 'user' && f.id !== 'project' && f.id !== 'issuetype') result.set(f.id, f);});
+                t.fields.forEach(function(f) {if (f.supported && f.writable && ['user','number','epic','sprint'].indexOf(f.kind)===-1 && f.id !== 'project' && f.id !== 'issuetype') result.set(f.id, f);});
             }); return result;
         }
         function makeSelection(host, id, name, action) {
@@ -2301,6 +2698,43 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-reconcile-confirm]').on('change',function() {root.find('[data-ta-reconcile-actions] button').prop('disabled',!this.checked);});
             root.find('.ta-header').append(button('Настройки', 'Settings', {'data-ta-open-settings':''}).on('click',openSettings));
             root.find('.ta-header').append(button('Подключение AI','Settings',{'data-ta-open-connection':''}).on('click',openConnection));
+            root.find('.ta-header').append(root.find('.ta-selections'));
+            var tools=$('<div class="ta-header-tools">').appendTo(root.find('.ta-header'));
+            tools.append(root.find('[data-ta-open-settings],[data-ta-open-connection]').addClass('ta-icon-button'),
+                iconButton('Токены','Info',{'data-ta-tokens':'','aria-expanded':'false','aria-controls':'ta-tokens-'+(++connectionSequence)}).on('click',function() {
+                    tokenOpen=!tokenOpen;root.find('[data-ta-token-preflight]').prop('hidden',!tokenOpen);
+                    $(this).attr('aria-expanded',String(tokenOpen));if(tokenOpen)root.find('[data-ta-budget-settings]').trigger('focus');
+                }),
+                iconButton('На весь экран','Expand',{'data-ta-fullscreen':'','aria-pressed':'false'}).on('click',toggleFullscreen));
+            root.find('[data-ta-open-connection] svg').replaceWith(icon('ExternalLink'));
+            root.find('[data-ta-token-preflight]').attr({id:root.find('[data-ta-tokens]').attr('aria-controls'),role:'region','aria-label':'Бюджет токенов'}).appendTo(tools);
+            var feedback=$('<section class="ta-feedback" data-ta-feedback aria-label="Ответ помощника">').append($('<h3>').text('Помощник'));
+            root.find('.ta-source-label textarea').attr('rows','5');
+            root.find('.ta-source-area').append(feedback);
+            feedback.append(root.find('[data-ta-progress],[data-ta-error],[data-ta-stopped],[data-ta-retry-host],[data-ta-routes],[data-ta-warnings],[data-ta-evidence],[data-ta-fallback],.ta-questions'));
+            feedback.children('h3').after('<div data-ta-field-feedback></div>');
+            feedback.append($('<div data-ta-budget-warning class="ta-error" role="alert" hidden>').append(
+                $('<p>').text('Бюджет контекста превышен. Измените бюджет или исходные данные.'),
+                button('Бюджет контекста','Settings',{'data-ta-warning-budget':''}).on('click',openSettings)));
+            root.find('.ta-source-area').append(root.find('.ta-scope'));
+            var actions=$('<div class="ta-primary-actions">').insertAfter(root.find('.ta-workspace'));
+            actions.append(root.find('[data-ta-actions]'),root.find('.ta-footer'));
+            root.on('keydown.taGuided',function(event) {
+                if(event.key!=='Escape' || $(event.target).closest('[role="dialog"],[role="alertdialog"]').length) return;
+                if(activeMenu) {var toggle=activeMenu.toggle;closeMenu();toggle.trigger('focus');event.preventDefault();event.stopPropagation();return;}
+                if(tokenOpen) {closeTokens(true);event.preventDefault();event.stopPropagation();return;}
+                if(fullscreen) {toggleFullscreen();event.preventDefault();}
+            });
+            // Capture before dialog/root bubbling and picker document listeners.
+            root[0].addEventListener('keydown',escapeOverlay,true);
+            document.addEventListener('click',finishPointer);
+            document.addEventListener('pointerup',finishPointer);
+            document.addEventListener('pointercancel',finishPointer);
+            root.on('pointerdown.taGuided',function(event) {
+                pointerHeld=true;
+                if(activeMenu && !activeMenu.host[0].contains(event.target))closeMenu();
+                if(tokenOpen && !tools[0].contains(event.target))closeTokens(false);
+            });
             project = makeSelection(root.find('[data-ta-project]'), 'project', 'Проект', 'selectProject');
             template = makeSelection(root.find('[data-ta-template]'), 'template', 'Шаблон', 'selectTemplate');
             type = makeSelection(root.find('[data-ta-type]'), 'issuetype', 'Тип Jira', 'selectIssueType');
@@ -2311,12 +2745,21 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-retry-host]').append(button('Повторить', 'RefreshCw', {'data-ta-retry':''}).on('click', function() {
                 if (!state.draft) c.init();
                 else if (writeLocked() && !state.meta) c.selectProject(state.draft.projectKey);
+                else if(lastOperation.name==='assistField')c.assistField(lastOperation.argument,lastOperation.action);
                 else invoke(lastOperation.name, lastOperation.argument);
             }));
             root.find('[data-ta-copy-actions]').append(
                 button('Копировать тему', null, {'data-ta-copy':'summary'}).on('click', function() {copy('summary');}),
                 button('Копировать описание', null, {'data-ta-copy':'description'}).on('click', function() {copy('description');}));
             fieldsHost = root.find('[data-ta-fields]'); questionsHost = root.find('[data-ta-questions]'); scopeHost = root.find('[data-ta-scope]');
+            fieldsHost.after('<details data-ta-additional class="ta-additional"><summary>Дополнительно</summary><div data-ta-optional-fields></div></details>');
+            root.on('focusout.taGuided','[data-ta-field]',function(event) {if(!this.contains(event.relatedTarget))scheduleFields();});
+            root.find('[data-ta-additional]').on('toggle.taGuided',function() {
+                if(!this.open) {
+                    if(this.contains(document.activeElement))$(this).children('summary').trigger('focus');
+                    scheduleFields();
+                }
+            });
             root.find('[data-ta-omitted]').insertAfter(root.find('.ta-scope'));
             update(c.getState());
         }
@@ -2345,14 +2788,15 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var issue = state.meta && state.meta.issueTypes.find(function(t) {return t.id === d.issueTypeId;});
             var list = issue ? issue.fields.filter(function(f) {return f.id !== 'project' && f.id !== 'issuetype';}) : [];
             // Reorder only this display projection; Meta and its signature remain exact.
-            list = ['summary', 'description'].map(function(id) {return list.find(function(f) {return f.id === id;});}).filter(Boolean)
-                .concat(list.filter(function(f) {return f.id !== 'summary' && f.id !== 'description';}));
+            list = ['summary', 'description', 'environment'].map(function(id) {return list.find(function(f) {return f.id === id;});}).filter(Boolean)
+                .concat(list.filter(function(f) {return ['summary','description','environment'].indexOf(f.id)===-1;}));
             Object.keys(d.fields).concat(Object.keys(d.pendingFields)).forEach(function(id) {
                 if (id !== 'project' && id !== 'issuetype' && !list.some(function(f) {return f.id === id;}))
                     list.push({id:id,name:id + ' (нет в текущих metadata)',kind:'unknown',supported:false,writable:false,required:false,allowedValues:[]});
             });
             var ids = new Set(list.map(function(f) {return f.id;}));
             fields.forEach(function(entry, id) {if (!ids.has(id)) {entry.view.destroy(); entry.host.remove(); fields.delete(id);}});
+            var visibleIndex=0,optionalIndex=0,optionalHost=root.find('[data-ta-optional-fields]');
             list.forEach(function(field) {
                 var entry = fields.get(field.id);
                 if (!entry) {
@@ -2364,10 +2808,51 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                             return Promise.resolve(options.onSearch(query,field,request)).then(function(result){return canEditField(field.id)?result:{values:[]};});
                         }});
                     view.mount(editor); entry = {host:host, view:view, pending:pending, pendingKey:null}; fields.set(field.id, entry);
+                    entry.help=$('<p class="ta-muted" data-ta-field-help hidden>').insertAfter(editor);
+                    entry.helper=$('<div class="ta-field-helper">').prependTo(host);
+                    entry.toggle=iconButton('Помощь AI: '+field.name,'WandSparkles',{'data-ta-assist-menu':field.id,'aria-expanded':'false','aria-haspopup':'menu'});
+                    entry.menu=$('<div class="ta-helper-menu" role="menu" hidden>');entry.helper.append(entry.toggle,entry.menu);
+                    entry.menu.on('keydown',function(event) {
+                        var controls=entry.menu.find('button').filter(function(){return !this.hidden && !this.disabled;}).toArray();
+                        var index=controls.indexOf(document.activeElement),next;
+                        if(event.key==='ArrowDown')next=(index+1)%controls.length;
+                        if(event.key==='ArrowUp')next=(index+controls.length-1)%controls.length;
+                        if(event.key==='Home')next=0;if(event.key==='End')next=controls.length-1;
+                        if(next!==undefined && controls[next]) {event.preventDefault();controls[next].focus();}
+                        if(event.key==='Tab') {closeMenu();entry.toggle.trigger('focus');}
+                    });
+                    entry.toggle.on('click',function() {
+                        var open=entry.menu.prop('hidden');closeMenu();
+                        if(open) {entry.menu.prop('hidden',false);entry.toggle.attr('aria-expanded','true');activeMenu={host:entry.helper,menu:entry.menu,toggle:entry.toggle};entry.menu.find('button').first().trigger('focus');}
+                    });
+                    [['generate','Сгенерировать'],['improve','Улучшить'],['shorten','Сократить']].forEach(function(action) {
+                        entry.menu.append(button(action[1],null,{'data-ta-assist':action[0],role:'menuitem'}).on('click',function() {
+                            closeMenu();entry.toggle.trigger('focus');lastOperation={name:'assistField',argument:field.id,action:action[0]};c.assistField(field.id,action[0]);
+                        }));
+                    });
                 }
                 var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
                 entry.view.update({field:field, value:d.fields[field.id], errors:state.validation && state.validation.fieldErrors[field.id] || [],
-                    disabled:writeLocked() || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
+                    scopeKey:JSON.stringify([d.projectKey,d.issueTypeId,state.meta && state.meta.signature]),
+                    disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
+                var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
+                    'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':
+                    field.kind==='number' && field.supported && field.writable?'Числовое значение задаётся вручную; AI его не рассчитывает.':'';
+                entry.help.text(help).prop('hidden',!help);
+                if(help) {
+                    var control=entry.host.find('.ta-field-body').find('input,textarea,[data-ta-picker]').first(),helpId=control.attr('id')+'-help';
+                    entry.help.attr('id',helpId);control.attr('aria-describedby',(control.attr('aria-describedby') || '')+' '+helpId);
+                }
+                var helperEligible=field.supported && field.writable && ['user','number','epic','sprint'].indexOf(field.kind)===-1;
+                entry.helper.prop('hidden',!helperEligible);
+                // Ineligible fields expose no AI control, including in the accessibility tree.
+                if (!helperEligible) entry.helper.detach();else if(!entry.helper.parent().length)entry.host.prepend(entry.helper);
+                var helperBlocked=busy || writeLocked() || d.creation.status==='preflight' || !d.source.trim() || !d.templateId || (state.generationFieldIds || []).indexOf(field.id)===-1 || fieldUi.catalogUnavailable(field);
+                var helperLabel='Помощь AI: '+field.name;
+                entry.toggle.prop('disabled',helperBlocked).attr({'aria-label':helperLabel,title:helperBlocked?helperLabel+'. Недоступна: проверьте исходник, шаблон, область генерации и каталог.':helperLabel});
+                entry.toggle.children('span').text(helperLabel);
+                entry.menu.find('[data-ta-assist="shorten"]').prop('hidden',['string','textarea'].indexOf(field.kind)===-1);
+                entry.menu.find('button').prop('disabled',helperBlocked);
                 if(field.id==='assignee') entry.host.find('[data-ta-search],[data-ta-candidate]').prop('disabled',!canEditField(field.id));
                 entry.host.find('[data-ta-policy-block]').remove();
                 entry.host.find('[data-ta-field-exclusion]').remove();
@@ -2380,21 +2865,44 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                         button('Не отправлять исполнителя','Trash2',{'data-ta-discard-field':field.id}).on('click',function(){c.discardField(field.id);} )));
                 }
                 var hasPending = Object.prototype.hasOwnProperty.call(d.pendingFields, field.id);
-                var pendingKey = hasPending ? JSON.stringify(d.pendingFields[field.id]) : null;
+                var pendingKey = hasPending ? JSON.stringify([d.fields[field.id],d.pendingFields[field.id],field.allowedValues]) : null;
                 entry.pending.prop('hidden', !hasPending);
                 if (entry.pendingKey !== pendingKey) {
                     entry.pending.empty(); entry.pendingKey = pendingKey;
-                    if (hasPending) entry.pending.append($('<p>').text('Предлагаемое изменение: ' + textValue(d.pendingFields[field.id])),
-                        button('Принять изменение', 'Check', {'data-ta-accept':field.id}).on('click', function() {c.acceptField(field.id);}));
+                    function display(value) {
+                        if(Array.isArray(value))return value.map(display).join(', ') || '—';
+                        var id=value && typeof value==='object'?value.id:null;
+                        var match=(field.allowedValues || []).find(function(v){return v.id===id;});
+                        return match?match.label:textValue(value);
+                    }
+                    if (hasPending) entry.pending.append($('<p>').text('Сейчас: ' + display(d.fields[field.id])),
+                        $('<p>').text('Предложение: ' + display(d.pendingFields[field.id])),
+                        button('Применить', 'Check', {'data-ta-accept':field.id}).on('click', function() {c.acceptField(field.id);}),
+                        button('Отклонить', 'X', {'data-ta-reject':field.id}).on('click', function() {c.rejectField(field.id);}));
                 }
-                entry.pending.find('button').prop('disabled', busy);
+                var individual=d.pendingAssistance && d.pendingAssistance.fieldId===field.id;
+                entry.pending.find('[data-ta-accept]').prop('disabled',busy || writeLocked() || d.creation.status==='preflight' || !state.meta || !!state.error && state.error.code!=='identity' || individual && !(state.assistance && state.assistance.fieldId===field.id && state.assistance.status==='ready') || !helperEligible);
+                entry.pending.find('[data-ta-reject]').prop('disabled',busy || writeLocked() || d.creation.status==='preflight');
+                var value=d.fields[field.id],filled=value!=null && value!=='' && (!Array.isArray(value) || value.length>0);
+                var invalid=state.validation && (state.validation.fieldErrors[field.id] || []).length;
+                var prominent=['summary','description','environment'].indexOf(field.id)!==-1 || field.required || filled || invalid || hasPending || !field.supported;
+                // A local echo must never move the active editor or its caret.
+                var active=entry.host[0].contains(document.activeElement);
+                var destination=active?entry.host.parent():prominent?fieldsHost:optionalHost;
+                var index=destination[0]===fieldsHost[0]?visibleIndex++:optionalIndex++;
+                if(!active && destination.children()[index]!==entry.host[0]) {
+                    var before=destination.children()[index];if(before)entry.host.insertBefore(before);else destination.append(entry.host);
+                }
+                entry.host.toggleClass('ta-wide-field',['summary','description','environment'].indexOf(field.id)!==-1 || field.kind==='textarea' || hasPending || !field.supported);
             });
+            root.find('[data-ta-additional]').prop('hidden',!optionalHost.children().length);
             if (!list.length) fieldsHost.attr('data-empty', 'Выберите тип Jira'); else fieldsHost.removeAttr('data-empty');
         }
         function renderQuestions(d) {
-            var ids = new Set(d.questions.map(function(q) {return q.id;}));
+            var all=d.questions.concat(state.assistance && state.assistance.questions || []).filter(function(q,index,items){return items.findIndex(function(other){return other.id===q.id || other.text===q.text;})===index;});
+            var ids = new Set(all.map(function(q) {return q.id;}));
             questions.forEach(function(entry, id) {if (!ids.has(id)) {entry.host.remove(); questions.delete(id);}});
-            d.questions.forEach(function(q) {
+            all.forEach(function(q) {
                 var entry = questions.get(q.id);
                 if (!entry) {
                     var host = $('<div class="ta-question">').attr('data-ta-question', q.id);
@@ -2405,7 +2913,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 }
                 entry.title.text(q.text + (q.required ? ' *' : '')); entry.reason.text(q.reason);
             });
-            questionsHost.attr('data-empty', d.questions.length ? '' : 'Нет открытых вопросов');
+            questionsHost.closest('.ta-questions').prop('hidden',!all.length);
+            questionsHost.attr('data-empty', all.length ? '' : 'Нет открытых вопросов');
         }
         function renderScope(d) {
             var eligible = eligibleFields();
@@ -2500,7 +3009,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-open-settings]').prop('disabled',!state.settings || writeLocked());
             root.find('[data-ta-budget-settings],[data-ta-error-budget]').prop('disabled',!state.settings || writeLocked());
             var estimate=state.tokenPreflight, counter=root.find('[data-ta-token-preflight]');
-            counter.prop('hidden',!estimate);
+            counter.prop('hidden',!estimate || !tokenOpen);
+            root.find('[data-ta-budget-warning]').prop('hidden',!estimate || estimate.fits && estimate.safetyFits || !!state.error && state.error.code==='limit');
+            root.find('[data-ta-warning-budget]').prop('disabled',!state.settings || writeLocked());
+            root.find('[data-ta-tokens]').prop('disabled',!estimate);
             if (estimate) {
                 counter.toggleClass('ta-budget-over',!estimate.fits || !estimate.safetyFits);
                 root.find('[data-ta-token-summary]').text('Приблизительно ' + estimate.input + ' / ' + estimate.available + ' токенов на вход' + (!estimate.fits ? ' · Бюджет превышен' : '') + (!estimate.safetyFits ? ' · Превышен защитный размер передачи 4 МиБ' : ''));
@@ -2521,8 +3033,16 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 routes.append($('<p>').text((issue ? issue.name : pair.issueTypeId) + ' / ' + (tmpl ? tmpl.name : pair.templateId) + ': ' + pair.reason),
                     button('Выбрать вариант', 'Check').on('click', function() {c.selectIssueType(pair.issueTypeId).then(function() {return c.selectTemplate(pair.templateId);});}));
             });
-            var warnings = d ? d.warnings.concat(state.validation && state.validation.warnings || []).filter(function(w, index, all) { return all.indexOf(w) === index; }) : [];
+            var warnings = d ? d.warnings.concat(state.validation && state.validation.warnings || [],state.assistance && state.assistance.warnings || []).filter(function(w, index, all) { return all.indexOf(w) === index; }) : [];
             root.find('[data-ta-warnings]').prop('hidden', !warnings.length).text(warnings.join('\n'));
+            var feedback=root.find('[data-ta-field-feedback]').empty();
+            if(d) Object.keys(d.pendingFields).forEach(function(id) {
+                feedback.append(button('Предложение: '+fieldName(id),'WandSparkles',{'data-ta-focus-field':id}).on('click',function(){focusField(id);}));
+            });
+            if(state.assistance) {
+                var target=state.assistance.fieldId;
+                if(!d || !Object.prototype.hasOwnProperty.call(d.pendingFields,target))feedback.append(button(fieldName(target),'WandSparkles',{'data-ta-focus-field':target}).on('click',function(){focusField(target);}));
+            }
             var evidence = root.find('[data-ta-evidence]').empty();
             (d && d.evidence || []).forEach(function(e) {evidence.append($('<p class="ta-muted">').text((e.kind === 'source' ? 'Из источника: ' : 'Предположение: ') + fieldName(e.fieldId) + ' — ' + e.quote));});
             var blocked = !writeLocked() && state.validation && state.validation.unsupportedRequired || [];
@@ -2533,7 +3053,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 fallback.append($('<a data-ta-jira-form target="_blank" rel="noopener">').attr('href', href).append(icon('ExternalLink'), $('<span>').text('Открыть форму Jira')));
             }
             root.find('[data-ta-copy]').prop('disabled', !d); renderStatus();renderCreation();
-            root.find('[data-ta-questions] textarea,[data-ta-questions] button,[data-ta-scope] input,[data-ta-accept],[data-ta-discard-field]').prop('disabled',!!writeLocked());
+            root.find('[data-ta-questions] textarea,[data-ta-questions] button,[data-ta-scope] input,[data-ta-discard-field]').prop('disabled',!!writeLocked() || !!d && d.creation.status==='preflight');
         }
         function openSettings() {
             if (!state.settings || writeLocked()) return;
@@ -2551,10 +3071,13 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             return host[0];
         }
         function destroy() {
+            if(fullscreen)toggleFullscreen();
             if (dead) return; dead = true; if (timer) clearInterval(timer); timer = null;
+            if(pointerTimer!==null)window.clearTimeout(pointerTimer);pointerTimer=null;
+            document.removeEventListener('click',finishPointer);document.removeEventListener('pointerup',finishPointer);document.removeEventListener('pointercancel',finishPointer);
             [project, template, type].forEach(function(s) {if (s) s.view.destroy();});
             fields.forEach(function(entry) {entry.view.destroy();}); fields.clear();
-            if (settingsView) settingsView.destroy(); if (root) root.empty();
+            if (settingsView) settingsView.destroy(); if (root) {root[0].removeEventListener('keydown',escapeOverlay,true);root.off('.taGuided').empty();}
         }
         return {mount:mount, update:update, openSettings:openSettings, destroy:destroy};
     }
@@ -2603,6 +3126,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
             onChange:function(state) {if (!dead && ui) {ui.update(state); scheduleResize();}}, now:deps.now});
         var searches = new Set();
         function searchUsers(query, field, options) {
+            if (field && (field.kind === 'epic' || field.kind === 'sprint')) return controller.searchRelation(query,field,options);
             var aborter = new AbortController(), signal = options && options.signal;
             function abort() {aborter.abort();} if (signal) {if (signal.aborted) abort(); else signal.addEventListener('abort', abort, {once:true});}
             searches.add(aborter);

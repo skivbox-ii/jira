@@ -17,10 +17,12 @@ test('local context preflight and settings shortcut work at 1440 and 390 without
             });
             await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-source]').fill(source);
+            await page.locator('[data-ta-tokens]').click();
             const counter=page.locator('[data-ta-token-preflight]');await counter.waitFor({timeout:1500});
             assert.match(await counter.textContent(),/Приблизительно/);
             for(const word of ['Инструкции','Текст','Jira'])assert.match(await counter.textContent(),new RegExp(word));
             assert.match(await counter.textContent(),/превышен/);
+            await page.keyboard.press('Escape');
             await page.locator('[data-ta-prepare]').click();
             await page.locator('[data-ta-error-budget]').waitFor();
             assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c.startsWith('ai:')).length),0);

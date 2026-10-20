@@ -8,6 +8,8 @@ define('_ujgTA_fields', [], function() {
 
     function kindFor(id, schema) {
         var kind;
+        if (schema.custom === 'com.pyxis.greenhopper.jira:gh-epic-link') return schema.type === 'any' || schema.type === 'string' ? 'epic' : 'unknown';
+        if (schema.custom === 'com.pyxis.greenhopper.jira:gh-sprint') return schema.type === 'array' && schema.items === 'string' ? 'sprint' : 'unknown';
         if (schema.custom) {
             if (schema.custom.indexOf(customPrefix) !== 0) return 'unknown';
             kind = customKinds[schema.custom.slice(customPrefix.length)];
@@ -61,7 +63,11 @@ define('_ujgTA_fields', [], function() {
                 if (Array.isArray(source.allowedValues)) catalog = null;
                 var values = catalog ? catalog.values : source.allowedValues;
                 var complete = catalog ? catalog.complete === true : Array.isArray(values) && source.optionsComplete !== false && !source.autoCompleteUrl;
-                var allowed = Array.isArray(values) ? values.map(option).filter(Boolean) : [];
+                var allowed = Array.isArray(values) ? values.map(function(value) {
+                    if (kind === 'epic') return option({id:typeof value === 'string' ? value : value && value.key, label:value && (value.name || value.key) || value});
+                    if (kind === 'sprint') return option(typeof value === 'number' ? {id:value} : value);
+                    return option(value);
+                }).filter(Boolean) : [];
                 if (!Array.isArray(values) || allowed.length !== values.length) complete = false;
                 var spec = {
                     id: id, name: String(source.name || id), kind: kind, required: source.required === true,
@@ -73,6 +79,7 @@ define('_ujgTA_fields', [], function() {
                     autoCompleteUrl: typeof source.autoCompleteUrl === 'string' ? source.autoCompleteUrl : null,
                     maxLength: Number.isInteger(source.maxLength) && source.maxLength > 0 ? source.maxLength : null
                 };
+                if (kind === 'epic' || kind === 'sprint') spec.relationRestricted=Array.isArray(source.allowedValues);
                 if (id === 'summary') spec.maxLength = Math.min(spec.maxLength || 255, 255);
                 return spec;
             }) };
@@ -98,5 +105,34 @@ define('_ujgTA_fields', [], function() {
             field.optionsComplete === false && !(field.allowedValues || []).length;
     }
 
-    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable };
+    function relationValue(field, value) {
+        return field.kind === 'epic' ? typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value) :
+            field.kind === 'sprint' && Number.isSafeInteger(value) && value > 0;
+    }
+    function relationAllowed(field, value) {
+        return relationValue(field,value) && (!field.relationRestricted || field.allowedValues.some(function(item) {return item.id === String(value);}));
+    }
+    function hasRelationValues(meta, typeId, values) {
+        return Object.keys(values || {}).some(function(id) {
+            var field=getField(meta,typeId,id);
+            return field && ['epic','sprint'].indexOf(field.kind)!==-1 && values[id]!==null;
+        });
+    }
+    // Confirm selected identities separately from metadata: search pages never
+    // change the schema signature or become an authoritative allowed catalog.
+    async function confirmRelations(meta, typeId, values, api, options) {
+        var result = Object.create(null);
+        for (var id of Object.keys(values || {})) {
+            var field = getField(meta,typeId,id), value = values[id];
+            if (!field || ['epic','sprint'].indexOf(field.kind) === -1 || value === null) continue;
+            if (!field.supported || !field.writable || !relationAllowed(field,value)) throw {kind:'relation',fieldId:id};
+            var selected = await (field.kind === 'epic' ? api.getEpic(meta.projectKey,value,options) : api.getSprint(meta.projectKey,value,options));
+            if (!selected || selected.id !== String(value)) throw {kind:'relation',fieldId:id};
+            result[id] = value;
+        }
+        return result;
+    }
+
+    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable,
+        relationValue:relationValue, relationAllowed:relationAllowed, hasRelationValues:hasRelationValues, confirmRelations:confirmRelations };
 });

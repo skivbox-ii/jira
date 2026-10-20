@@ -75,6 +75,10 @@ define('_ujgTA_draft', [], function() {
         var result = {
             schemaVersion: 1, id: str(input.id), projectKey: str(input.projectKey), issueTypeId: str(input.issueTypeId), templateId: str(input.templateId),
             source: source, fields: fields(input.fields), protectedFields: fields(input.protectedFields, true), pendingFields: fields(input.pendingFields),
+            pendingAssistance: record(input.pendingAssistance) && safeKey(input.pendingAssistance.fieldId) &&
+                typeof input.pendingAssistance.fieldId === 'string' && ['generate', 'improve', 'shorten'].indexOf(input.pendingAssistance.action) !== -1 &&
+                Object.prototype.hasOwnProperty.call(fields(input.pendingFields), input.pendingAssistance.fieldId) ?
+                {fieldId: input.pendingAssistance.fieldId, action: input.pendingAssistance.action} : null,
             questions: questions(input.questions), warnings: strings(input.warnings), evidence: evidence(input.evidence, source),
             sourceRevision: revision(input.sourceRevision), settingsRevision: revision(input.settingsRevision), draftRevision: revision(input.draftRevision),
             metaSignature: str(input.metaSignature), checked: checked(input.checked), creation: creation(input.creation), attachments: attachments(input.attachments)
@@ -105,6 +109,8 @@ define('_ujgTA_draft', [], function() {
     }
     function changed(d) {
         var next = persistent(d);
+        if (next.pendingAssistance) delete next.pendingFields[next.pendingAssistance.fieldId];
+        next.pendingAssistance = null;
         // Runtime file references remain in memory across pure draft mutations.
         next.attachments = (d.attachments || []).map(function(a) { return Object.assign({}, a); });
         next.draftRevision++;
@@ -180,6 +186,27 @@ define('_ujgTA_draft', [], function() {
         if (!safeKey(id) || !Object.prototype.hasOwnProperty.call(d.pendingFields, id)) return d;
         return editField(d, id, d.pendingFields[id]);
     }
+    function rejectField(d, id) {
+        if (!safeKey(id) || !Object.prototype.hasOwnProperty.call(d.pendingFields, id)) return d;
+        var next = changed(d);
+        delete next.pendingFields[id];
+        return next;
+    }
+    function invalidateAssistance(d) {
+        return d.pendingAssistance ? changed(d) : d;
+    }
+    function applyFieldProposal(d, id, action, proposal, requestSnapshot) {
+        if (!isCurrent(d, requestSnapshot) || !safeKey(id)) return d;
+        var proposed = fields(proposal.fields);
+        if (Object.keys(proposed).length !== 1 || !Object.prototype.hasOwnProperty.call(proposed, id)) throw new Error('Invalid field proposal');
+        var next = changed(d);
+        next.pendingFields = {}; next.pendingFields[id] = proposed[id];
+        next.pendingAssistance = {fieldId: id, action: action};
+        next.questions = questions(proposal.questions);
+        next.warnings = strings(proposal.warnings);
+        next.evidence = evidence(proposal.evidence, next.source);
+        return next;
+    }
     function markChecked(d, validation, currentQuestions, requestSnapshot) {
         if (!isCurrent(d, requestSnapshot)) return d;
         var next = persistent(d);
@@ -193,6 +220,7 @@ define('_ujgTA_draft', [], function() {
         return next;
     }
     return { createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
-        appendAnswers: appendAnswers, applyProposal: applyProposal, acceptField: acceptField, markChecked: markChecked,
+        appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
+        invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };
 });

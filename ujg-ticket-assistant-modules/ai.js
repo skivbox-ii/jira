@@ -41,7 +41,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         return items.every(function(item) { if (item == null) return false; var key = getId(item); if (!id(key) || seen[key]) return false; seen[key] = true; return true; });
     }
     function currentField(field) { return field.id !== 'project' && field.id !== 'issuetype' && field.kind !== 'user' && field.supported === true; }
-    function generated(field) { return currentField(field) && field.writable === true; }
+    function generated(field) { return currentField(field) && field.writable === true && ['number','epic','sprint'].indexOf(field.kind) === -1; }
     function normalizedValue(field, value) {
         if (value === null) return true;
         if (field.kind === 'option') return keys(value, ['id']) && id(value.id);
@@ -49,11 +49,13 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         if (field.kind === 'user') return keys(value, ['name']) && id(value.name);
         if (['string', 'textarea', 'date', 'datetime'].indexOf(field.kind) !== -1) return typeof value === 'string';
         if (field.kind === 'number') return typeof value === 'number' && isFinite(value);
+        if (field.kind === 'epic') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value);
+        if (field.kind === 'sprint') return Number.isSafeInteger(value) && value > 0;
         if (field.kind === 'labels') return Array.isArray(value) && value.every(function(item) { return typeof item === 'string'; });
         return false;
     }
     function context(kind, input) {
-        if (['route', 'prepare', 'check'].indexOf(kind) === -1 || !record(input)) fail('input');
+        if (['route', 'prepare', 'check', 'assist'].indexOf(kind) === -1 || !record(input)) fail('input');
         var meta = input.meta, profile = input.profile;
         if (!record(meta) || !id(meta.projectId) || !id(meta.projectKey) || !Array.isArray(meta.issueTypes) ||
             !record(profile) || !id(profile.id) || !Array.isArray(profile.templates) || !Array.isArray(input.allowFieldIds) ||
@@ -76,6 +78,12 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         if (!pairs.length || input.allowFieldIds.some(function(fieldId) {
             return !types.some(function(type) { return type.fields.some(function(f) { return f.id === fieldId && generated(f); }); });
         })) fail('input');
+        if (kind === 'assist') {
+            var target = types[0].fields.find(function(f) {return f.id === input.targetFieldId;});
+            if (!target || !generated(target) || target.kind === 'number' || input.allowFieldIds.length !== 1 || input.allowFieldIds[0] !== target.id ||
+                ['generate', 'improve', 'shorten'].indexOf(input.fieldAction) === -1 ||
+                input.fieldAction === 'shorten' && ['string', 'textarea'].indexOf(target.kind) === -1) fail('input');
+        }
         return {meta: meta, profile: profile, types: types, templates: templates, pairs: pairs, typeId: typeId, templateId: templateId};
     }
     function pairAllowed(ctx, typeId, templateId) {
@@ -88,7 +96,8 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         ctx.types[0].fields.forEach(function(field) {
             var human = field.kind === 'user' && Array.isArray(input.explicitUserFields) && input.explicitUserFields.indexOf(field.id) !== -1 &&
                 (field.id !== 'assignee' || ctx.profile.allowAssignee === true) && field.supported && field.writable;
-            if (!own(source, field.id) || (local ? !generated(field) && !human : !currentField(field))) return;
+            var manual = currentField(field) && field.writable === true && ['number','epic','sprint'].indexOf(field.kind)!==-1;
+            if (!own(source, field.id) || (local ? !generated(field) && !human && !manual : !currentField(field))) return;
             if (!normalizedValue(field, source[field.id])) fail('input');
             result[field.id] = JSON.parse(JSON.stringify(source[field.id]));
         });
@@ -104,7 +113,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         'check: {schemaVersion:1,kind:"check",questions:[],warnings:[],evidence:[]}. Never return replacement fields on check.',
         'Questions always contain {id,text,reason,required:boolean}; warnings contain strings; evidence contains {fieldId,kind:"source"|"suggestion",quote:string}.',
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
-        'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype or user values. Humans select users explicitly.',
+        'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype, user values, numeric estimates, Epic or Sprint relations. Humans enter estimates and select relations explicitly.',
         'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
         'Field shapes by kind: string/textarea/date/datetime -> string; number -> finite number; option -> {"id":"literal catalog ID"}; multioption/components/versions -> [{"id":"literal catalog ID"}]; labels -> string[]. Null is allowed. Never return labels or names in place of IDs, numeric IDs, extra object keys, HTML execution or nested commands.'
     ].join('\n');
@@ -120,7 +129,9 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             return {id: t.id, name: text(t.name), whenToUse: text(t.whenToUse), instructions: text(t.instructions), issueTypeId: t.issueTypeId};
         })};
         var systemPrompt = protocol + '\nEditable content rules (subordinate to JSONv1):\n' + JSON.stringify(editable);
+        if (kind === 'assist') systemPrompt += '\nField assistance: use the prepare draft JSONv1 shape. Return exactly the target field in fields, as a proposal for explicit human Apply. Follow fieldAction: generate from source, improve the current value, or shorten text preserving meaning. Ask only target-specific questions. Numeric fields require explicit human input and cannot be assisted. Never invent effort, numeric estimates or dates; date/datetime values must occur as complete whitespace-delimited literals in source. If unsupported, return null and ask for the value.';
         var userPrompt = JSON.stringify({action: kind, source: input.source,
+            targetFieldId: kind === 'assist' ? input.targetFieldId : undefined, fieldAction: kind === 'assist' ? input.fieldAction : undefined,
             contextScope: 'Only selected issue types/templates and explicitly allowlisted generation field catalogs are included; other catalogs are excluded. All current supported non-user values are retained for review with minimal context outside generation scope. User values are excluded. Missing values require human selection.',
             project: {id: ctx.meta.projectId, key: ctx.meta.projectKey}, selected: {issueTypeId: ctx.typeId, templateId: ctx.templateId},
             candidatePairs: ctx.pairs, issueTypes: ctx.types.map(function(type) {
@@ -131,7 +142,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                     return {id: f.id, name: text(f.name), kind: f.kind, required: f.required === true, supported: true, writable: true,
                         maxLength: f.maxLength, optionsComplete: f.optionsComplete === true,
                         allowedValues: f.allowedValues.map(function(v) { return {id: v.id, label: text(v.label)}; })};
-                }), requiredOutsideScope: type.fields.filter(function(f) { return f.required && (!generated(f) || input.allowFieldIds.indexOf(f.id) === -1); }).map(function(f) { return f.id; })};
+                }), requiredOutsideScope: kind === 'assist' ? [] : type.fields.filter(function(f) { return f.required && (!generated(f) || input.allowFieldIds.indexOf(f.id) === -1); }).map(function(f) { return f.id; })};
             }), fields: current, currentFieldContext: ctx.typeId === null ? [] : ctx.types[0].fields.filter(function(f) {
                 return own(current, f.id) && input.allowFieldIds.indexOf(f.id) === -1;
             }).map(function(f) { return {id: f.id, name: text(f.name), kind: f.kind}; })});
@@ -163,9 +174,10 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         try { result = JSON.parse(raw); }
         catch (ignored) { responseFailure('json'); }
         rejectSecrets(raw);
-        var expected = kind === 'prepare' ? 'draft' : kind;
+        var proposal = kind === 'prepare' || kind === 'assist';
+        var expected = proposal ? 'draft' : kind;
         var allowed = kind === 'route' ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'candidates', 'questions'] :
-            kind === 'prepare' ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'fields', 'questions', 'warnings', 'evidence'] : ['schemaVersion', 'kind', 'questions', 'warnings', 'evidence'];
+            proposal ? ['schemaVersion', 'kind', 'issueTypeId', 'templateId', 'fields', 'questions', 'warnings', 'evidence'] : ['schemaVersion', 'kind', 'questions', 'warnings', 'evidence'];
         if (!keys(result, allowed) || !tree(result, 0) || result.schemaVersion !== 1 || result.kind !== expected) responseFailure('contract');
         if (!validQuestions(result.questions)) responseFailure('questions');
         if (kind === 'route') {
@@ -188,9 +200,10 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                 typeof e.quote === 'string' && !!e.quote.trim() && (e.kind === 'suggestion' || e.kind === 'source' && input.source.indexOf(e.quote) !== -1);
         })) responseFailure('evidence');
         var values = draftFields(input, ctx, true);
-        if (kind === 'prepare') {
+        if (proposal) {
             if (result.issueTypeId !== ctx.typeId || result.templateId !== ctx.templateId) responseFailure('selection');
             if (!record(result.fields)) responseFailure('contract');
+            if (kind === 'assist' && (Object.keys(result.fields).length !== 1 || !own(result.fields, input.targetFieldId))) responseFailure('scope');
             Object.keys(result.fields).forEach(function(fieldId) {
                 var field = type.fields.find(function(f) { return f.id === fieldId; });
                 if (!field || !generated(field) || input.allowFieldIds.indexOf(fieldId) === -1) responseFailure('scope', field);
@@ -200,6 +213,9 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                     value = value.map(function(item) { return id(item) ? {id: item} : item; });
                 }
                 if (!normalizedValue(field, value)) responseFailure('shape', field);
+                if (kind === 'assist' && value !== null && value !== '' && ['date', 'datetime'].indexOf(field.kind) !== -1) {
+                    if (input.source.split(/\s+/).indexOf(value) === -1) responseFailure('value', field);
+                }
                 result.fields[fieldId] = value;
             });
             // Validate proposal values independently; omissions remain questions, not invented facts.
@@ -208,8 +224,10 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             if (!checked.ok) responseFailure('value', type.fields.find(function(f) { return own(checked.fieldErrors, f.id); }));
             values = Object.assign(values, result.fields);
         }
-        var local = validation.validateFields(ctx.meta, type.id, values, {allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields});
+        var local = validation.validateFields(ctx.meta, type.id, values, {relations:input.relationConfirmations,
+            allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields});
         Object.keys(local.fieldErrors).forEach(function(fieldId) {
+            if (kind === 'assist' && fieldId !== input.targetFieldId) return;
             var questionId = 'required:' + fieldId;
             // Reserved IDs cannot be used by the model to suppress a local blocker.
             result.questions = result.questions.filter(function(q) { return q.id !== questionId; });
@@ -259,6 +277,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             });
         }
         return {preflight:preflight, route: function(input, options) { return run('route', input, options); },
+            assist: function(input, options) { return run('assist', input, options); },
             prepare: function(input, options) { return run('prepare', input, options); },
             check: function(input, options) { return run('check', input, options); }};
     }

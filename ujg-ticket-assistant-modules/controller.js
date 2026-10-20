@@ -59,10 +59,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var api = options.api, ai = options.ai, store = null, scopes = Object.create(null);
         var active = null, destroyed = false, identityWarning = null;
         var state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
-            error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
+            error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
         var budgetCache = null, providerUsage = null;
+        var metadataReady = false;
+        var relationConfirmations = Object.create(null), relationSearches = new Map();
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
         function durableGuard() {
             if (!store || !state.draft) return false;
@@ -87,6 +89,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 result.tokenPreflight=budgetCache.value;
             }
             result.providerUsage=providerUsage;
+            if (!result.assistance && state.draft && state.draft.pendingAssistance && canAcceptField(state.draft.pendingAssistance.fieldId)) result.assistance = Object.assign({}, state.draft.pendingAssistance,
+                {status:'ready',error:null,questions:state.draft.questions,warnings:state.draft.warnings,evidence:state.draft.evidence});
             result.draft = state.draft ? JSON.parse(drafts.serialize(state.draft)) : null;
             if (result.draft) result.draft.attachments.forEach(function(a) {a.needsReselect = a.status !== 'uploaded' && !runtimeFiles.has(a.id);});
             return copy(result);
@@ -98,9 +102,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return getState();
         }
         function stop() {
+            relationSearches.forEach(function(run) {run.abort();}); relationSearches.clear();
             var previous = active;
             active = null;
             if (previous) previous.abort.abort();
+            state.assistance = null;
+            if (state.draft) state.draft = drafts.invalidateAssistance(state.draft);
             state.startedAt = null;
         }
         function begin(kind) {
@@ -131,6 +138,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             active = null; state.startedAt = null;
             if (error && (error.code === 'abort' || error.kind === 'abort' || error.name === 'AbortError')) state.stage = 'stopped';
             else { state.stage = 'error'; state.error = errorState(error, fallback, state.meta, state.draft && state.draft.issueTypeId); }
+            if (run.kind === 'assist') state.assistance = {fieldId:run.fieldId,action:run.action,
+                status:state.stage === 'stopped' ? 'stopped' : 'error',error:state.error,questions:[],warnings:[],evidence:[]};
             emit();
         }
         function profile() {
@@ -145,7 +154,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     return (!state.draft.templateId || t.id === state.draft.templateId) && (t.issueTypeId === null || t.issueTypeId === type.id);
                 })) return;
                 type.fields.forEach(function(f) {
-                    if (f.supported && f.writable && f.kind !== 'user' && ['project', 'issuetype'].indexOf(f.id) === -1 && ids.indexOf(f.id) === -1) ids.push(f.id);
+                    if (f.supported && f.writable && ['user','number','epic','sprint'].indexOf(f.kind) === -1 && ['project', 'issuetype'].indexOf(f.id) === -1 && ids.indexOf(f.id) === -1) ids.push(f.id);
                 });
             });
             return ids;
@@ -184,14 +193,14 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function edited(next) {
             if (locked() || durableGuard()) return emit();
             if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
-            stop(); state.draft = next; state.validation = null; state.routeCandidates = [];
+            stop(); state.draft = drafts.invalidateAssistance(next); state.validation = null; state.routeCandidates = [];
             providerUsage=null;
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
         }
         function policy() {
             var p = profile();
-            return { allowAssignee: !!p && p.allowAssignee === true, explicitUserFields: Object.keys(state.draft.protectedFields).filter(function(id) {
+            return { relations:relationConfirmations, allowAssignee: !!p && p.allowAssignee === true, explicitUserFields: Object.keys(state.draft.protectedFields).filter(function(id) {
                 var field = fields.getField(state.meta, state.draft.issueTypeId, id);
                 return state.draft.protectedFields[id] === true && field && field.kind === 'user';
             }) };
@@ -199,15 +208,38 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
                 templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds, tokenBudget:state.settings.tokenBudget,
-                draft: { fields: state.draft.fields }, explicitUserFields: policy().explicitUserFields });
+                draft: { fields: state.draft.fields }, relationConfirmations:relationConfirmations, explicitUserFields: policy().explicitUserFields });
         }
         function compatible(typeId, templateId) {
             var type = state.meta && state.meta.issueTypes.find(function(t) { return t.id === typeId && !t.subtask; });
             var template = profile() && profile().templates.find(function(t) { return t.id === templateId; });
             return !!type && !!template && (template.issueTypeId === null || template.issueTypeId === typeId);
         }
+        function canAcceptField(id) {
+            if (!metadataReady || !state.meta || !state.draft || state.meta.projectKey !== state.draft.projectKey ||
+                state.meta.signature !== state.draft.metaSignature || !compatible(state.draft.issueTypeId,state.draft.templateId) ||
+                !Object.prototype.hasOwnProperty.call(state.draft.pendingFields,id)) return false;
+            var spec = fields.getField(state.meta,state.draft.issueTypeId,id);
+            if (!spec || !spec.supported || !spec.writable || spec.kind === 'user' || ['project','issuetype'].indexOf(id) !== -1) return false;
+            if (['number','epic','sprint'].indexOf(spec.kind) !== -1) return false;
+            var targetMeta = {projectId:state.meta.projectId,issueTypes:[{id:state.draft.issueTypeId,subtask:false,
+                fields:[Object.assign({},spec,{required:false})]}]}, value = {};
+            value[id] = state.draft.pendingFields[id];
+            return validation.validateFields(targetMeta,state.draft.issueTypeId,value,policy()).ok;
+        }
+        async function acceptField(id) {
+            if (destroyed || !state.draft || locked() || durableGuard() || state.draft.creation.status === 'preflight') return emit();
+            if (!Object.prototype.hasOwnProperty.call(state.draft.pendingFields,id) || !metadataReady) return emit();
+            if (!canAcceptField(id)) {
+                state.error = errorState({code:'response',details:{reason:'value',fieldId:id}},'response',state.meta,state.draft.issueTypeId);
+                return emit();
+            }
+            return mutate(drafts.acceptField,[id]);
+        }
         async function metadata(run, readOnly) {
             var snapshot = drafts.snapshot(state.draft), key = state.draft.projectKey;
+            metadataReady = false;
+            relationConfirmations = Object.create(null);
             stage(run, 'metadata');
             if (!current(run, snapshot)) return false;
             var request = { signal: run.abort.signal };
@@ -220,6 +252,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!current(run, snapshot)) return false;
             state.meta = fields.normalizeMeta(raw, key, { components: components, versions: versions });
             if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
+            metadataReady = true;
+            if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
+                var confirmed = await fields.confirmRelations(state.meta,state.draft.issueTypeId,state.draft.fields,api,request);
+                if (!current(run)) return false;
+                relationConfirmations = confirmed;
+            }
             state.validation = null; updateScope();
             if (readOnly) remember(); else save();
             return true;
@@ -230,9 +268,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
-            budgetCache=null;providerUsage=null;
+            budgetCache=null;providerUsage=null;metadataReady=false;
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
-                error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null };
+                error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
             emit();
             try {
                 var user = null;
@@ -279,6 +317,47 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 state.error = errorState(null, 'input'); return emit();
             }
             return edited(drafts.setSelection(state.draft, { issueTypeId: id }));
+        }
+        async function searchRelation(query, spec, options) {
+            options = options || {};
+            var id=spec && spec.id, field=state.draft && fields.getField(state.meta,state.draft.issueTypeId,id);
+            if (destroyed || !metadataReady || !field || !field.supported || !field.writable ||
+                ['epic','sprint'].indexOf(field.kind) === -1 || locked() || durableGuard() || state.draft.creation.status==='preflight') throw {kind:'input'};
+            if (relationSearches.has(id)) relationSearches.get(id).abort();
+            var aborter=new AbortController(), signal=options.signal, snapshot=drafts.snapshot(state.draft), meta=state.meta;
+            function abort() {aborter.abort();}
+            if(signal) {if(signal.aborted) abort(); else signal.addEventListener('abort',abort,{once:true});}
+            relationSearches.set(id,aborter);
+            function fresh() {
+                if(destroyed || aborter.signal.aborted || relationSearches.get(id)!==aborter || state.meta!==meta ||
+                    !state.draft || !drafts.isCurrent(state.draft,snapshot)) throw {kind:'abort'};
+            }
+            try {
+                fresh();var request={signal:aborter.signal}, result;
+                if(field.kind==='epic') result=await api.searchEpics(state.draft.projectKey,String(query || ''),request);
+                else {
+                    var boards=await api.getBoards(state.draft.projectKey,request);fresh();
+                    if(!boards || !boards.complete || !Array.isArray(boards.values)) throw {kind:'incomplete'};
+                    if(options.boardId==null) return copy({values:[],complete:false,boards:boards.values,needsBoard:true,boardId:null});
+                    var board=boards.values.find(function(b) {return b.id===String(options.boardId);});
+                    if(!board) throw {kind:'input'};
+                    result=await api.getSprints(state.draft.projectKey,board.id,request);fresh();
+                    result=Object.assign({},result,{boards:boards.values,boardId:board.id,needsBoard:false});
+                    result.values=result.values.filter(function(v) {return (v.label+' '+v.id).toLowerCase().indexOf(String(query || '').toLowerCase())!==-1;});
+                }
+                fresh();
+                if(!result || !Array.isArray(result.values)) throw {kind:'incomplete'};
+                result=Object.assign({},result,{values:result.values.filter(function(v) {
+                    return fields.relationAllowed(field,field.kind==='epic'?v.id:Number(v.id));
+                })});
+                return copy(result);
+            } catch(error) {
+                fresh();
+                throw {kind:error && ['unauthorized','forbidden','not-found','rate-limit','incomplete','input','abort'].indexOf(error.kind)!==-1 ? error.kind : 'network'};
+            } finally {
+                if(relationSearches.get(id)===aborter) relationSearches.delete(id);
+                if(signal) signal.removeEventListener('abort',abort);
+            }
         }
         async function selectTemplate(id) {
             if (destroyed || !state.draft) return getState();
@@ -379,6 +458,38 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return edited(next);
         }
 
+        async function assistField(id, action) {
+            if (destroyed || !state.draft || locked() || durableGuard() || state.draft.creation.status === 'preflight') return emit();
+            var spec = fields.getField(state.meta, state.draft.issueTypeId, id);
+            if (!compatible(state.draft.issueTypeId, state.draft.templateId) || !spec || spec.kind === 'number' || eligible().indexOf(id) === -1 ||
+                state.generationFieldIds.indexOf(id) === -1 || ['generate','improve','shorten'].indexOf(action) === -1 ||
+                action === 'shorten' && ['string','textarea'].indexOf(spec.kind) === -1) {
+                state.error = errorState(null,'input'); return emit();
+            }
+            var run = begin('assist'); run.fieldId = id; run.action = action;
+            state.draft = Object.assign({},state.draft,{checked:null}); state.validation = null; save();
+            state.assistance = {fieldId:id,action:action,status:'running',error:null,questions:[],warnings:[],evidence:[]};
+            run.promise = (async function() {
+                try {
+                    if (!state.draft.source.trim()) throw {code:'input'};
+                    if (!await metadata(run)) return;
+                    if (eligible().indexOf(id) === -1 || state.generationFieldIds.indexOf(id) === -1) throw {code:'input'};
+                    var snapshot = drafts.snapshot(state.draft), requestInput = input();
+                    requestInput.allowFieldIds = [id]; requestInput.targetFieldId = id; requestInput.fieldAction = action;
+                    stage(run,'assisting');
+                    if (!current(run,snapshot)) return;
+                    var result = await ai.assist(requestInput,{signal:run.abort.signal});
+                    if (!current(run,snapshot)) return;
+                    if (durableGuard()) throw {code:'conflict'};
+                    state.draft = drafts.applyFieldProposal(state.draft,id,action,result,snapshot);
+                    providerUsage = result.usage || null;
+                    state.assistance = {fieldId:id,action:action,status:'ready',error:null,
+                        questions:state.draft.questions,warnings:state.draft.warnings,evidence:state.draft.evidence};
+                    save(); finish(run);
+                } catch (error) {fail(run,error,state.stage === 'metadata' ? 'metadata' : 'transport');}
+            })();
+            await run.promise; return getState();
+        }
         async function pipeline(kind) {
             if (destroyed || !state.draft) return getState();
             if (locked() || durableGuard()) return emit();
@@ -454,7 +565,10 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (state.draft && state.draft.creation.status === 'preflight') {
                 return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
             }
-            stop(); state.stage = 'stopped'; return emit();
+            var assistance = state.assistance;
+            stop(); state.stage = 'stopped';
+            if (assistance) state.assistance = {fieldId:assistance.fieldId,action:assistance.action,status:'stopped',error:null,questions:[],warnings:[],evidence:[]};
+            save(); return emit();
         }
         async function destroy() {
             if (!destroyed) { stop(); destroyed = true; if (creator) creator.destroy();runtimeFiles.clear(); }
@@ -552,17 +666,19 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             });
         }
         function connectionChanged() {
-            if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
+            if (destroyed || active && active.kind !== 'assist' || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
             if (!state.draft) return getState();
             invalidateCachedChecks();
             return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
         }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
+            searchRelation:searchRelation,
             connectionChanged:connectionChanged,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },
             updateField: function(id, value) { return mutate(drafts.editField, [id, value]); },
             answer: function(answers) { return mutate(drafts.appendAnswers, [answers]); },
-            acceptField: function(id) { return mutate(drafts.acceptField, [id]); },
+            acceptField: acceptField,
+            rejectField: function(id) { return mutate(drafts.rejectField, [id]); }, assistField: assistField,
             applySettings: applySettings, loadSavedSettings:loadSavedSettings, resolveSettingsConflict:resolveSettingsConflict, discardField:discardField, setGenerationFields: setGenerationFields,
             prepare: function() { return pipeline('prepare'); }, check: function() { return pipeline('check'); },
             submit:submit, selectFiles:selectFiles,removeFile:removeFile,retryAttachment:retryAttachment,reconcileUnknown:reconcileUnknown,newDraft:newDraft,discardDraft:discardDraft,

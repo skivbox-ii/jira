@@ -4,6 +4,23 @@ const { loadUnit } = require('./helpers/ticket-assistant-fixture');
 const draft = () => loadUnit('draft');
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('individual proposals remain pending on empty fields, round-trip, reject and invalidate on edits', () => {
+    const api = draft(); let d = api.createDraft({projectKey: 'DO'});
+    d = api.editField(d, 'summary', 'Manual');
+    const initial = d;
+    d = api.applyFieldProposal(d, 'description', 'generate', {fields: {description: 'Suggested'}}, api.snapshot(d));
+    assert.deepEqual(plain(d.fields), {summary: 'Manual'});
+    assert.deepEqual(plain(d.pendingFields), {description: 'Suggested'});
+    d = api.restore(api.serialize(d));
+    assert.deepEqual(plain(d.pendingAssistance), {fieldId: 'description', action: 'generate'});
+    assert.equal(api.acceptField(d, 'description').fields.description, 'Suggested');
+    assert.deepEqual(plain(api.rejectField(d, 'description').fields), {summary: 'Manual'});
+    assert.deepEqual(plain(api.rejectField(d, 'description').pendingFields), {});
+    assert.deepEqual(plain(api.setSource(d, 'New source').pendingFields), {});
+    assert.deepEqual(plain(api.editField(d, 'summary', 'Changed').pendingFields), {});
+    assert.equal(api.applyFieldProposal(initial, 'description', 'generate', {fields: {description: 'Late'}}, api.snapshot(d)), initial);
+});
+
 test('Russian answer blocks preserve exact legacy deduplication and multiline boundaries', () => {
     const api = draft();
     let d = api.createDraft({projectKey:'DO'});
