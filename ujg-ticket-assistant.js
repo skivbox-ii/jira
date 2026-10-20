@@ -1681,6 +1681,13 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function connectionChanged() {
             if (destroyed || active || locked() || state.draft && state.draft.creation.status === 'preflight') return getState();
             if (!state.draft) return getState();
+            Object.keys(scopes).forEach(function(key) {
+                var entry=scopes[key], draft=entry.draft;
+                if (key===state.draft.projectKey || !draft || !draft.checked || draft.creation.issueKey ||
+                    ['preflight','submitting','unknown','created'].indexOf(draft.creation.status)!==-1) return;
+                // Inactive scopes save on selection; retain their storage revision and creation outcome.
+                entry.draft=Object.assign({},draft,{checked:null,draftRevision:draft.draftRevision+1});
+            });
             return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
         }
         return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,

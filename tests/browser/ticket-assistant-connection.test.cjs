@@ -46,7 +46,7 @@ async function setup(t, storage = memoryStorage(), requestText) {
     async function fill() {
         input('[data-ta-connection-base]',config.apiBase);input('[data-ta-connection-model]',config.model);input('[data-ta-connection-key]',secret);
     }
-    return {gadget,c:gadget.controller,root,q,click,input,select,fill,shared,calls,window,storage,$,deps};
+    return {gadget,c:gadget.controller,root,q,click,input,select,fill,shared,calls,window,storage,$,deps,api};
 }
 
 test('first-run connection is accessible before project; cancel and invalid input never write or call AI',async t=>{
@@ -93,6 +93,60 @@ test('fresh explicit save uses the same shared default key and survives reload',
     const next=await setup(t,s.storage);await next.click('[data-ta-open-connection]');assert.equal(next.q('[data-ta-connection-model]').value,config.model);
     assert.equal(next.calls.length,0);
 });
+
+test('connection change invalidates both checked project drafts without losing content or cached storage revisions',async t=>{
+    const backend=memoryStorage();backend.setItem(key,JSON.stringify(config));
+    const s=await setup(t,backend), before={};
+    for (const project of ['DO','APP']) {
+        await s.c.selectProject(project);await s.c.selectIssueType('10');await s.c.selectTemplate('task');
+        await s.c.updateSource('Source '+project);await s.c.updateField('summary','Manual '+project);
+        const settings=s.c.getState().settings;settings.profiles[0].instructions='Rules '+project;await s.c.applySettings(settings);
+        await s.c.check();before[project]=s.c.getState();assert.ok(before[project].draft.checked);
+        assert.equal(s.q('[data-ta-create]').disabled,false);
+    }
+    await s.click('[data-ta-open-connection]');s.input('[data-ta-connection-model]','changed-model');await s.click('[data-ta-connection-save]');
+    assert.equal(s.c.getState().validation,null);assert.equal(s.c.getState().draft.checked,null);
+    assert.equal(s.q('[data-ta-create]').disabled,true);assert.equal(s.calls.length,2);
+    for (const project of ['DO','APP']) {
+        await s.c.selectProject(project);
+        const state=s.c.getState(), {checked,draftRevision,...content}=state.draft;
+        const {checked:oldChecked,draftRevision:oldRevision,...oldContent}=before[project].draft;
+        assert.equal(checked,null,project);assert.equal(s.q('[data-ta-create]').disabled,true,project);
+        assert.deepEqual(content,oldContent);assert.deepEqual(state.settings,before[project].settings);
+        assert.equal(state.error,null,project);
+        await s.c.updateField('summary','After connection '+project);
+        assert.equal(s.c.getState().error,null,project);
+        const saved=Array.from({length:backend.length},(_,i)=>JSON.parse(backend.getItem(backend.key(i))))
+            .find(value=>value.draft && value.draft.projectKey===project);
+        assert.equal(saved.draft.fields.summary,'After connection '+project);
+        assert.equal(saved.draft.source,'Source '+project);
+    }
+});
+
+for (const outcome of ['created','unknown']) {
+    test('connection change from another project preserves submitting and '+outcome+' creation guards',async t=>{
+        const backend=memoryStorage();backend.setItem(key,JSON.stringify(config));
+        const s=await setup(t,backend);await s.select();await s.c.check();
+        let resolveCreate,rejectCreate,creates=0;
+        s.api.createIssue=()=>{creates++;return new Promise((resolve,reject)=>{resolveCreate=resolve;rejectCreate=reject;});};
+        const pending=s.c.submit();await tick();
+        assert.equal(s.c.getState().draft.creation.status,'submitting');
+        const submitted=s.c.getState().draft;
+        await s.c.selectProject('APP');
+        await s.click('[data-ta-open-connection]');s.input('[data-ta-connection-model]','during-submit');await s.click('[data-ta-connection-save]');
+        await s.c.selectProject('DO');
+        assert.deepEqual(s.c.getState().draft,submitted);assert.equal(s.q('[data-ta-create]').disabled,true);
+        await s.c.submit();assert.equal(creates,1);
+        if (outcome==='created') resolveCreate({id:'offline-1',key:'DO-101'});else rejectCreate({outcome:'unknown'});
+        await pending;
+        const guarded=s.c.getState().draft;assert.equal(guarded.creation.status,outcome);
+        await s.c.selectProject('APP');
+        await s.click('[data-ta-open-connection]');s.input('[data-ta-connection-model]','after-submit');await s.click('[data-ta-connection-save]');
+        await s.c.selectProject('DO');
+        assert.deepEqual(s.c.getState().draft,guarded);assert.equal(s.q('[data-ta-create]').disabled,true);
+        await s.c.submit();assert.equal(creates,1);
+    });
+}
 
 for (const storage of [null,{getItem:()=>null,setItem:()=>{throw new Error(secret);}},{getItem:()=>null,setItem:()=>{}}]) {
     test('unavailable, throwing or silently dropping storage cannot report saved connection',async t=>{
