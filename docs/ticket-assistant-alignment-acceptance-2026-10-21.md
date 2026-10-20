@@ -4,7 +4,7 @@
 
 Продолжение пользовательской приёмки версии `52e8dc2`. Изменения
 реализованы, проверены локально и прошли независимое Sol 6.1 / medium
-ревью. Публикация выполняется; новая версия в Citrix не принята.
+ревью. Опубликованы в `main`; новая версия в Citrix не принята.
 
 ## Изменения
 
@@ -83,6 +83,33 @@ runtime с диска. Jira и LLM только на заглушках. Пол�
 node --test --test-concurrency=2 --test-reporter=tap tests/*.test.js tests/browser/*.test.cjs
 node --test --test-reporter=tap tests/browser/ticket-assistant-acceptance.cjs
 ```
+
+## Публикация
+
+Код и тесты: `63f5949273c8eed5d79d7f9bcce6c3d981cf5f05`.
+Закреплённый bootstrap: `53031027de1f9eca3b2c3da069b8caf2eb2ea061`.
+Оба коммита отправлены обычным push в `skivbox-ii/jira`, ветка `main`.
+Пересборка с закреплённым ref изменила только bootstrap; проверки сборки
+и загрузчика прошли **46/46** (`/tmp/ticket-assistant-alignment-pin.log`).
+
+После очистки кэша jsDelivr все ссылки ниже вернули HTTP 200 и побайтово
+совпали с проверенными файлами:
+
+| Файл | Ref | Байт | SHA-256 |
+| --- | --- | ---: | --- |
+| `ujg-ticket-assistant.js` | `63f5949` | 258649 | `71110ed96f1a34b04f8fcd7326ce9693430f39c56add879b6a66a9a86f3bf848` |
+| `ujg-ticket-assistant.runtime.js` | `63f5949` | 284968 | `d885b4695a916ab80a0b1a2ad95cbb7cfab212147ad067084fb7682f80900c76` |
+| `ujg-ticket-assistant.css` | `63f5949` | 14428 | `3e2e052463781cae5898b2318e692e2368ecb97fcf9508eafeb9d15976cbbf76` |
+| `ujg-ticket-assistant.bootstrap.js` | `5303102` и `main` | 20046 | `ee75b4ce5fac2afbbc7525d1007ece2aabeaedbe1d398a3d1d87f2fa611bcc08` |
+
+Ссылку подключения менять не нужно. Для Citrix следующий шаг:
+«Обновить версию» на дашборде помощника. Локальный preview `4320`
+продолжает работать; для новой формы нужна перезагрузка страницы.
+Агент не менял сохранённую версию дашборда или пользовательский черновик.
+
+Копии логов, снимков и author/reviewer-отчётов сохранены вне Git:
+`/Users/skivbox/.cache/ujg-ticket-assistant-acceptance/2026-10-21-alignment/`.
+Временные серверы тестирования `4317` и `4321` остановлены.
 
 ## Ограничения
 
