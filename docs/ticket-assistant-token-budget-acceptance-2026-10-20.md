@@ -1,13 +1,15 @@
 # Ticket Assistant: Prompt Settings And Token Budget
 
 Date: 20 October 2026 (Europe/Moscow).
-Source/runtime: `21238c243d5babb961440aefe38a856f204c80f0`.
-Bootstrap: `364e118`, pushed to `main`.
-Status: implemented, locally verified and published. Subsequent personal
-Citrix verification confirmed the settings and live AI connection, but
-the end-to-end preparation/creation scenario failed. No Jira issue was
-created. See the production follow-up below; the original release checks
-remain historical evidence, not full production acceptance.
+Original token-budget source/runtime: `21238c243d5babb961440aefe38a856f204c80f0`.
+Original bootstrap: `364e118`, pushed to `main`.
+Current response-fix source/runtime: `272cff2`; bootstrap release `28c846d`.
+Status: implemented, locally verified and published. Initial personal
+Citrix preparation failed; after the response fixes, the authorized
+synthetic Bug scenario passed through preparation, clarification, checking,
+one creation and opening the resulting issue. See the chronological
+production follow-ups below. This does not accept every template or
+establish the cause of the second historical rejection.
 
 ## Scope
 
@@ -243,3 +245,53 @@ Production evidence remains in the Citrix session directory above:
 `inspect-20261020-215449-20424.png` (excluded catalogs).
 These successful preparations alone do not establish end-to-end creation
 acceptance or general quality across all three templates.
+
+## Authorized Creation Completed, 20 October, 22:10 MSK
+
+The user confirmed that the Citrix screen was free. The parent continued
+the existing draft, without recreating it or changing the connection,
+templates or provider. All production interaction used the Citrix UI.
+
+- Selected one allowed required fix version; the required component had
+  already been selected manually. An extra transient version selection
+  was removed before validation, leaving exactly one selected version.
+- Added an explicit opening paragraph to the description: a fictional
+  assistant test, not work to perform; component/version selected only
+  for this test. The summary and label also identify the test.
+- Check returned a required clarification confirming that real logs were
+  not applicable to the fictional case. Provider usage: 4191 input + 195
+  output = 4386 tokens.
+- Entered and submitted that clarification through the normal UI. The
+  answer was appended to the source, without replacing the prepared draft.
+- A second explicit Check returned no open questions and enabled Create.
+  Provider usage: 4263 input + 40 output = 4303 tokens.
+- Clicked Create once. The widget reported success, displayed the issue
+  link and disabled further creation for that draft.
+- Opened the returned issue. Its summary, complete description,
+  reproduction steps, expected/actual behavior, acceptance criterion,
+  test disclaimer, environment, label, component and one fix version
+  matched the reviewed draft. No attachment was added or claimed.
+
+The new issue had a server-selected assignee despite the assistant's
+assignee field being empty. Jira also supplied its default priority and
+initial status. No assignment or transition was performed after creation.
+An empty assignee field must therefore not be described as a guarantee of
+an unassigned Jira issue. The created issue was left open for the user;
+no second issue, comment, cleanup or deletion was performed.
+
+Evidence in the same private Citrix session:
+
+- `inspect-20261020-220822-21890.png`: test disclaimer in the draft.
+- `inspect-20261020-220839-06831.png`: required clarification.
+- `inspect-20261020-220954-32488.png`: submitted answer in source.
+- `inspect-20261020-221010-31116.png`: no open questions after Check.
+- `inspect-20261020-221020-22706.png`: Create enabled.
+- `inspect-20261020-221038-15825.png`: successful creation and locked draft.
+- `inspect-20261020-221053-12693.png`: resulting Jira issue with saved fields.
+
+The issue key/link is retained in private evidence and reported directly
+to the user, not published in this repository.
+The tested Bug flow is accepted end to end. Real incident quality, other
+templates, attachment upload and handling every future model response
+remain outside this single production test. The second historical
+rejection's exact cause is still unknown.
