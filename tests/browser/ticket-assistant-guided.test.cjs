@@ -25,6 +25,9 @@ for(const width of [1440,390]) test('guided source UI offline at '+width,async()
     });
     try {
         await page.goto(server.url+'?review=guided');await page.waitForSelector('html[data-ta-preview-ready="true"]');
+        assert.equal(await page.locator('.ta-header h2').textContent(),'Помощник создания задачи');
+        assert.equal(await page.locator('.ta-draft-heading h3').textContent(),'Задача');
+        assert.equal(await page.locator('[data-ta-create]').textContent(),'Создать');
         const source='На тестовом стенде требуется проверить обработку ошибок API. '.repeat(12);
         await page.locator('[data-ta-source]').fill(source);
         const description=page.locator('[data-ta-field="description"] textarea');
