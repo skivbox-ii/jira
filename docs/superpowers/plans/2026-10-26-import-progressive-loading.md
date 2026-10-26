@@ -48,4 +48,4 @@
 - [x] Personally inspect desktop/mobile before, during and after enrichment; verify filters and last rows with the existing workload fixture.
 - [x] Obtain independent spec/quality review of complete diff and resolve material findings.
 - [x] Update contract/backlog and acceptance report with verified results and outstanding Citrix acceptance.
-- [ ] Build/commit/publish only importer changes through the existing authorized process; verify commit-pinned assets and report exact publication, never infer production acceptance from CDN.
+- [x] Build/commit/publish only importer changes through the existing authorized process; verify commit-pinned assets and report exact publication, never infer production acceptance from CDN.

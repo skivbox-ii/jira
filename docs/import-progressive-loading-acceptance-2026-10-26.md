@@ -99,8 +99,17 @@ JS/runtime пересобраны после последней правки, CS
 
 ## Публикация
 
-Изменения проверены и подготовлены к публикации по существующему процессу.
-Коммит и сверка CDN добавляются после фактической отправки в `origin/main`.
+Код `222ea1ddfd7c51a7a4adb740e3d4a9f94e72779c` опубликован в `origin/main`.
+JS, runtime и CSS побайтово совпали с commit-pinned CDN:
+
+| Файл | Байты | SHA-256 |
+| --- | ---: | --- |
+| `ujg-excel-story-importer.js` | 1123506 | `4627f6863cb19b5889446935058700e1835f35fe3ae9396449d7031d3f1cbca5` |
+| `ujg-excel-story-importer.runtime.js` | 1123513 | `aaacb456c9fdb0fecc6508def30c7e1cc52dbd3fb12107eee07c15efa16415b7` |
+| `ujg-excel-story-importer.css` | 124960 | `d712a159edf76d3879dda4e6a483a51cc3549b8e0f391545ef9fcf3f96e28ccb` |
+
+Сверка: `/tmp/import-progressive-20261026/cdn/verification.json`.
+Посторонние документы и пользовательские изменения не включены.
 
 ## Приёмка
 
