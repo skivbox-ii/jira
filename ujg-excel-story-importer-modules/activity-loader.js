@@ -36,7 +36,7 @@ define("_ujgESI_activityLoader", [], function() {
       }
     }
     function pump(skipNotification) {
-      while (enabled && queued.length && Object.keys(active).length < 3) start(queued.shift());
+      while (enabled && queued.length && Object.keys(active).length < (options.concurrency || 3)) start(queued.shift());
       if (!skipNotification) notify();
     }
     function start(key) {

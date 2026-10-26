@@ -754,7 +754,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
         var remaining = opened ? group.children.length - children.length : 0;
         var span = children.length + 1 + (remaining ? 1 : 0);
         [parent].concat(children).forEach(function(entry, rowNumber) {
-          var $tr = $("<tr/>").addClass(entry.isChild ? "ujg-esi-child-row" : "ujg-esi-parent-row").attr({ "data-key": entry.key, "data-source-index": entry.rowIndex });
+          var $tr = $("<tr/>").addClass(entry.isChild ? "ujg-esi-child-row" : "ujg-esi-parent-row").attr({ "data-key": entry.key, "data-source-index": entry.rowIndex, "data-row-uid":entry.uid });
           $tr.toggleClass("is-context", rowNumber === 0 && group.contextOnly).toggleClass("is-new", !parent.key).toggleClass("is-failed", parent.source.status === "failed");
           $tr.toggleClass("is-collapsed", !opened).toggleClass("is-last-child", entry.isChild && rowNumber === children.length && !remaining);
           visible.forEach(function(column) {
@@ -816,7 +816,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       });
       if (!groups.length) $body.append($("<tr/>").append($("<td/>").attr("colspan", visible.length + 1).addClass("ujg-esi-grid-empty").text("Нет замечаний по выбранным фильтрам")));
       $table.append($body);
-      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { closeMenu(); closeDescription(); });
+      $viewport = $("<div/>").addClass("ujg-esi-registry-scroll").attr({ tabindex: "0", "aria-label": "Таблица замечаний" }).append($table).on("scroll", function() { if (this.scrollTop === scroll.top && this.scrollLeft === scroll.left) return; closeMenu(); closeDescription(); });
       $host.append($viewport);
       var $footer = $("<div/>").addClass("ujg-esi-grid-footer");
       $footer.append($("<span/>").text(groups.length ? (page * pageSize + 1) + "–" + Math.min((page + 1) * pageSize, groups.length) + " из " + groups.length : "0 замечаний"));
@@ -831,7 +831,65 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       startWidthWatch();
       startDateWatch();
     }
+    var historyFocusable = "button,a[href],input,select,textarea,[tabindex]";
+    function historyFocus(active) {
+      if (!active || !$.contains($host[0],active)) return null;
+      var $active=$(active), $scope=$active.closest("tr[data-row-uid],th,.ujg-esi-grid-footer,.ujg-esi-hidden-filters");
+      if ($active.is(".ujg-esi-registry-scroll")) return {kind:"viewport"};
+      if (!$scope.length) return {kind:"viewport"};
+      return {kind:$scope.is("tr") ? "row" : $scope.is("th") ? "header" : "section",
+        key:$scope.attr("data-row-uid"),column:$scope.attr("data-column"),
+        section:$scope.hasClass("ujg-esi-grid-footer") ? ".ujg-esi-grid-footer" : ".ujg-esi-hidden-filters",
+        index:$scope.find(historyFocusable).index(active)};
+    }
+    function restoreHistoryFocus(saved) {
+      if (!saved) return;
+      var $scope=$();
+      if (saved.kind === "row") $scope=$host.find("tr[data-row-uid]").filter(function() { return $(this).attr("data-row-uid") === saved.key; });
+      else if (saved.kind === "header") $scope=$host.find("th").filter(function() { return $(this).attr("data-column") === saved.column; });
+      else if (saved.kind === "section") $scope=$host.find(saved.section);
+      var replacement=saved.index >= 0 && $scope.find(historyFocusable).eq(saved.index)[0];
+      if (replacement && !$(replacement).is(":disabled")) {
+        replacement.focus({preventScroll:true});
+        if (document.activeElement === replacement) return;
+      }
+      // A missing or unusable control must keep keyboard navigation in the table.
+      $viewport[0].focus({preventScroll:true});
+    }
     return {
+      // Patch only age evidence: retain the exact menu DOM, draft, focus and viewport.
+      updateHistory: function(nextState) {
+        if (!$host || sourceRows !== nextState.rows) return false;
+        state=nextState;
+        var fresh=registry.buildRows(state.rows,null,state), byUid=Object.create(null);
+        fresh.forEach(function(entry) { byUid[entry.uid]=entry; });
+        rows.forEach(function(entry) {
+          var update=byUid[entry.uid];
+          if (!update) return;
+          ["age","ageMs","statusSince","ageReason"].forEach(function(key) { entry[key]=update[key]; });
+        });
+        if (sort && sort.column === "age" || Array.isArray(filters.age)) {
+          var menu=$menu, anchor=menuAnchor, active=document.activeElement;
+          var filterKey=anchor && $(anchor).attr("data-filter");
+          var menuFocused=menu && (active === menu[0] || $.contains(menu[0],active));
+          var savedFocus=menuFocused ? null : historyFocus(active);
+          if (menu) menu.detach();
+          draw();
+          if (menu) {
+            $host.append(menu);
+            menuAnchor=filterKey ? $host.find("[data-filter]").filter(function() { return $(this).attr("data-filter") === filterKey; })[0] : anchor;
+            if (menuAnchor) $(menuAnchor).attr("aria-expanded","true");
+            if (menuFocused) active.focus({preventScroll:true});
+          }
+          restoreHistoryFocus(savedFocus);
+          return true;
+        }
+        $host.find("tr[data-row-uid]").each(function() {
+          var entry=byUid[$(this).attr("data-row-uid")];
+          if (entry) $(this).find(".ujg-esi-cell-age").text(entry.age || "—").attr("title",entry.statusSince ? "В статусе с " + new Date(entry.statusSince).toLocaleString("ru-RU") : entry.ageReason);
+        });
+        return true;
+      },
       teamMenu: teamMenu,
       suspend: suspend,
       teamFilterButton: function(nextState) {

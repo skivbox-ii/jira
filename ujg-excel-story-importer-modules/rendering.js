@@ -69,7 +69,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     }
     function renderStages(rows) {
       var localStage=progress.localStage || ((progress.status === "error" || progress.status === "cancelled") ? lastLocalStage : "");
-      var order=kind === "activity" ? ["history","comments"] : (rows.some(function(row) { return row.stage === "summary"; }) ? ["summary","stories","linked"] : ["stories","linked"]);
+      var order=progress.phase === "history" ? ["history"] : kind === "activity" ? ["history","comments"] : (rows.some(function(row) { return row.stage === "summary"; }) ? ["summary","stories","linked"] : ["stories","linked"]);
       if (localStage) order.push("local");
       var active=localStage ? "local" : kind === "activity" ? "history" : order[0];
       rows.forEach(function(row) { if (kind !== "activity" && !localStage) active=row.stage; });
@@ -105,7 +105,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       });
       // Registry denominators describe a batch, never the whole network queue.
       var completed=0, total=null, text="";
-      if (kind === "activity") {
+      if (kind === "activity" || progress.phase === "history") {
         completed=Math.max(0,(Number(progress.completed) || 0)-failures);
         if (Number.isFinite(progress.total) && progress.total > 0) total=progress.total;
         text=total !== null ? completed+" из "+total+" задач" : completed ? "Прочитано задач: "+completed : "Чтение задач";
@@ -2243,6 +2243,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     render: render,
     createRequestPanel:createRequestPanel,
     renderRequestProgress:renderRequestProgress,
+    renderRegistryHistory:function(state) { return !!(grid && grid.updateHistory && grid.updateHistory(state)); },
     revealActivityRequests:function(state) {
       if (state.reportView !== "activity") return;
       renderRequestProgress(state);

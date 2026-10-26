@@ -77,7 +77,7 @@ async function registry(page) {
   const counts=await page.evaluate(() => ({actual:usabilityState.rows.length,
     expected:Object.values(fixtureIssues).filter(issue => issue.fields.issuetype.name === "История").length}));
   assert.equal(counts.actual,counts.expected);
-  assert.ok(await page.evaluate(() => usabilityFixture.requests.some(request => request.requested === 200)),"Story pages request up to 200");
+  assert.ok(await page.evaluate(() => usabilityFixture.requests.some(request => request.requested === 50)),"Registry Story pages request up to 50");
   const jiraBefore=await fingerprint(page);
   await page.evaluate(() => { usabilityFixture.delay=100; usabilityFixture.failNext=true; });
   await page.getByRole("button",{name:"Загрузить замечания из Jira",exact:true}).click(); await idle(page);

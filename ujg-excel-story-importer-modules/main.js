@@ -740,6 +740,7 @@ define("_ujgESI_main", [
       updated: fields.updated != null ? String(fields.updated) : "",
       created: fields.created != null ? String(fields.created) : "",
       activity: activity,
+      historyState: issue && issue.changelog ? (since.statusSince ? "complete" : "error") : "pending",
       statusSince: since.statusSince,
       statusSinceReason: since.statusSinceReason,
     };
@@ -897,6 +898,7 @@ define("_ujgESI_main", [
         updated: details.updated,
         created: details.created,
         activity: details.activity,
+        historyState: details.historyState,
         statusSince: details.statusSince,
         statusSinceReason: details.statusSinceReason,
         sourceIndex: index,
@@ -1102,6 +1104,7 @@ define("_ujgESI_main", [
     var excelRows = state.rows;
     var registryRows = [];
     var registryLoaded = false;
+    var registryPublishedScope = null;
     var createdChildrenByParent = Object.create(null);
     var registrySeq = 0;
     var syncSeq = 0;
@@ -1111,6 +1114,7 @@ define("_ujgESI_main", [
       if (rendering.renderRequestProgress) rendering.renderRequestProgress(state);
     }
     function stopRegistryRead(clear) {
+      stopRegistryHistory(clear);
       var run=registryRun;
       if (run && run.status === "running") {
         run.status="cancelled";
@@ -1130,7 +1134,7 @@ define("_ujgESI_main", [
       return registryRun;
     }
     function registryReadOptions(run,stage) {
-      return {expand:"changelog",stage:stage,onRequest:function(row) {
+      return {profile:"registry",pageSize:50,timeoutRetrySize:25,expand:null,stage:stage,onRequest:function(row) {
         if (registryRun !== run || run.status !== "running") return;
         row=Object.assign({},row,{runId:run.runId});
         var index=run.rows.findIndex(function(item) { return item.id === row.id; });
@@ -1153,6 +1157,7 @@ define("_ujgESI_main", [
       }
     }
     function restartRegistryRead(retry) {
+      if (state.registryProgress && state.registryProgress.phase === "history") { startRegistryHistory(retry === true); return; }
       var kind=registryRun && registryRun.kind || (state.viewMode === "excel" ? "excel" : "jira");
       stopRegistryRead(false);
       if (kind === "excel") onSyncJira(retry); else onLoadRegistry(retry);
@@ -1183,7 +1188,14 @@ define("_ujgESI_main", [
         if (issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
         var snapshot = activityModule.capture(issue);
         snapshot.linkedKeys = childIssueKeysFromIssues([issue]);
-        (activityTargets[key] || []).forEach(function(detail) { detail.activity = snapshot; detail.created = issue.fields && issue.fields.created || ""; });
+        var fields=issue.fields || {}, since=issueStatusSince(issue);
+        (activityTargets[key] || []).forEach(function(detail) {
+          detail.activity = snapshot; detail.created = fields.created || "";
+          if (since.statusSince && sameStatus("",detail.status,fields.status && fields.status.id,issueStatusName(issue)) &&
+              isoTimestamp(detail.updated) && isoTimestamp(fields.updated) && Date.parse(fields.updated) >= Date.parse(detail.updated)) {
+            detail.statusSince=since.statusSince; detail.statusSinceReason=since.statusSinceReason; detail.historyState="complete";
+          }
+        });
       },
       onProgress:function(progress) {
         state.activityProgress = progress;
@@ -1198,6 +1210,99 @@ define("_ujgESI_main", [
         render();
       }
     });
+    // History-only enrichment never owns current fields or full report coverage.
+    var historyTargets = null, historyOwner = null, registryHistoryPaintTimer = null;
+    function flushRegistryHistory() {
+      clearTimeout(registryHistoryPaintTimer); registryHistoryPaintTimer=null;
+      paintRegistryHistory();
+    }
+    function queueRegistryHistoryPaint() {
+      if (registryHistoryPaintTimer === null) registryHistoryPaintTimer=setTimeout(flushRegistryHistory,100);
+    }
+    function paintRegistryHistory() {
+      paintRegistryProgress();
+      if (rendering.renderRegistryHistory) rendering.renderRegistryHistory(state);
+      else render();
+    }
+    function eachHistoryDetail(callback) {
+      (state.rows || []).forEach(function(row) {
+        if (row.storyDetails && issueKeyFromRow(row)) callback(issueKeyFromRow(row),row.storyDetails);
+        (row.childStatuses || []).forEach(function(detail) {
+          var key=normalizeIssueKey(detail.key);
+          if (key && detail.linkedToParent !== false) callback(key,detail);
+        });
+      });
+    }
+    var registryHistoryLoader = activityLoaderModule.create({
+      concurrency:1,
+      read:function(key) { return api.getIssueWithHistory(key,{profile:"registry-history"}); },
+      errorText:searchErrorText,
+      accept:function(key,issue) {
+        if (!historyTargets || issueKey(issue) !== key) throw new Error("Ответ Jira не совпадает с запрошенным ключом");
+        var fields=issue.fields || {}, since=issueStatusSince(issue), targets=historyTargets[key] || [];
+        if (!since.statusSince) throw new Error(since.statusSinceReason);
+        targets.forEach(function(target) {
+          var detail=target.detail;
+          if (detail.status !== target.status || detail.updated !== target.updated ||
+              !sameStatus("",detail.status,fields.status && fields.status.id,issueStatusName(issue)) ||
+              !isoTimestamp(fields.updated) || !isoTimestamp(detail.updated) || Date.parse(fields.updated) < Date.parse(detail.updated)) {
+            throw new Error("История не согласуется с текущим снимком Jira; обновите реестр.");
+          }
+        });
+        targets.forEach(function(target) {
+          var detail=target.detail;
+          detail.statusSince=since.statusSince; detail.statusSinceReason=since.statusSinceReason; detail.historyState="complete";
+          // Minimal history has no comments/worklogs: keep it separate from full activity snapshots.
+          detail.registryHistory=issue.changelog;
+        });
+        queueRegistryHistoryPaint();
+      },
+      onProgress:function(progress) {
+        if (!historyTargets) return;
+        progress.runId="registry-history-" + progress.runId;
+        progress.rows=progress.rows.map(function(row) { return Object.assign({},row,{runId:"registry-history-" + row.runId}); });
+        progress.phase="history";
+        progress.kind=state.viewMode;
+        state.registryProgress=progress;
+        (progress.failures || []).forEach(function(failure) {
+          (historyTargets[failure.key] || []).forEach(function(target) {
+            target.detail.historyState="error"; target.detail.statusSinceReason=failure.message;
+          });
+        });
+        queueRegistryHistoryPaint();
+      },
+      onComplete:function() { flushRegistryHistory(); }
+    });
+    function stopRegistryHistory(clear) {
+      if (!registryHistoryLoader || !historyTargets) return;
+      var targets=historyTargets;
+      registryHistoryLoader.cancel(); historyTargets=null; historyOwner=null;
+      Object.keys(targets).forEach(function(key) { targets[key].forEach(function(target) {
+        if (target.detail.historyState === "pending") {
+          target.detail.historyState="cancelled"; target.detail.statusSinceReason="Загрузка истории остановлена. Повторите догрузку.";
+        }
+      }); });
+      if (state.registryProgress && state.registryProgress.phase === "history") {
+        var progress=state.registryProgress;
+        progress.rows.forEach(function(row) { if (row.state === "running" || row.state === "queued") { row.state="cancelled"; row.finishedAt=Date.now(); } });
+        progress.status="cancelled"; progress.activeKeys=[]; progress.queued=0;
+        if (clear) state.registryProgress=null;
+        flushRegistryHistory();
+      }
+    }
+    function startRegistryHistory(retainErrors) {
+      stopRegistryHistory(true);
+      if (state.reportView === "activity" || state.statusTransition && state.statusTransition.open || !api || typeof api.getIssueWithHistory !== "function") return;
+      historyTargets=Object.create(null);
+      historyOwner={mode:state.viewMode,rows:state.rows,scope:registryPublishedScope};
+      eachHistoryDetail(function(key,detail) {
+        if (detail.historyState === "complete") return;
+        if (!historyTargets[key]) historyTargets[key]=[];
+        historyTargets[key].push({detail:detail,status:detail.status,updated:detail.updated});
+        detail.historyState="pending"; detail.statusSince=""; detail.statusSinceReason="История изменений загружается…";
+      });
+      registryHistoryLoader.select(Object.keys(historyTargets),retainErrors === true);
+    }
     var dueDateSync = dueDateSyncModule ? dueDateSyncModule.create({api:api,onChange:function(snapshot) {
       state.dueDateSync = snapshot;
       if (rendering.renderDueDateSync) rendering.renderDueDateSync(state);
@@ -1270,6 +1375,7 @@ define("_ujgESI_main", [
       });
       if (!matches) return false;
       closeUserPicker(); closeEpicPicker();
+      stopRegistryHistory(false);
       return statusTransition.open(key);
     }
 
@@ -1300,6 +1406,7 @@ define("_ujgESI_main", [
     }
 
     function invalidateActivityHistory() {
+      stopRegistryHistory(true);
       activityLoader.cancel();
       clearActivityProgressPaint();
       activityTargets = Object.create(null);
@@ -1312,6 +1419,7 @@ define("_ujgESI_main", [
     function onLoadActivityHistory(options) {
       if (state.statusTransition && (state.statusTransition.running || state.statusTransition.loading)) return;
       if (state.loading || state.syncLoading || state.registryLoading) return;
+      stopRegistryHistory(true);
       var opts = options || {}, requiredThrough = 0, requestedDate = opts.date || activityDate;
       if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate || "")) {
         var start = Date.parse(requestedDate + "T00:00:00+03:00");
@@ -2562,6 +2670,7 @@ define("_ujgESI_main", [
       if (state.viewMode === "jira") state.registrySnapshotAt="";
       registrySeq += 1;
       registryRows = [];
+      registryPublishedScope = null;
       registryLoaded = false;
       state.registryLoading = false;
       state.registryError = "";
@@ -2615,6 +2724,7 @@ define("_ujgESI_main", [
       var run=beginRegistryRead("jira",retry === true);
       invalidateActivityHistory();
       state.registryLoading = true;
+      registryLoaded = false;
       state.registryError = "";
       state.registryWarning = "";
       state.createDialog = null;
@@ -2670,9 +2780,11 @@ define("_ujgESI_main", [
         state.registryError = "";
         state.registryWarning = data.warning;
         registryLoaded = true;
+        registryPublishedScope={project:project,epic:epic,rows:registryRows};
         finishRegistryRead(run);
         render();
         if (state.reportView === "activity") onLoadActivityHistory({onlyIncomplete:true});
+        else startRegistryHistory();
       }).then(null, function(err) {
         if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
         state.registryLoading = false;
@@ -3314,6 +3426,7 @@ define("_ujgESI_main", [
           state.syncSummary = syncSummaryText(synced);
           finishRegistryRead(run);
           render();
+          startRegistryHistory();
         });
       }).then(null,
         function(err) {
@@ -4331,11 +4444,18 @@ define("_ujgESI_main", [
         if (view !== "registry" && view !== "activity") return;
         if (state.reportView !== view && !closeDueDateSyncForContextChange()) return;
         var enteringActivity = view === "activity" && state.reportView !== "activity";
+        var handoffHistory=enteringActivity && state.viewMode === "jira" && registryLoaded &&
+          historyOwner && historyOwner.mode === "jira" && historyOwner.rows === state.rows && state.rows === registryRows &&
+          historyOwner.scope === registryPublishedScope && registryPublishedScope && registryPublishedScope.rows === registryRows &&
+          registryPublishedScope.project === state.projectKey && registryPublishedScope.epic === state.epicKey &&
+          state.registryProgress && state.registryProgress.phase === "history" && state.registryProgress.status === "running";
         if (state.reportView !== view) invalidateActivityHistory();
         state.reportView = view;
         closeUserPicker();
         if (view === "activity" && state.viewMode !== "jira") onViewModeChange("jira");
-        if (view === "activity" && (enteringActivity || !registryLoaded)) onLoadRegistry();
+        if (view === "activity" && (!registryLoaded || enteringActivity && !handoffHistory)) onLoadRegistry();
+        else if (enteringActivity) onLoadActivityHistory({onlyIncomplete:true});
+        else if (view === "registry") startRegistryHistory();
         render();
       },
       onDownloadPatchedExcel: onDownloadPatchedExcel,

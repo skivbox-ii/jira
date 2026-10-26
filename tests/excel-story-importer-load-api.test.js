@@ -51,3 +51,32 @@ test('summary matching exposes only actual read pages and can be aborted before 
   request.abort();await assert.rejects(request,e=>e.name==='AbortError');resolve({startAt:0,total:1,issues:[{key:'P-1'}]});
   await new Promise(r=>setImmediate(r));assert.equal(rows.at(-1).state,'cancelled');assert.equal(calls.length,1);
 });
+test('explicit registry profile uses light 50 pages and retries only a timed-out offset once at 25',async()=>{
+  const calls=[];let timed=false;
+  const api=setup(opts=>{const b=JSON.parse(opts.data);calls.push(b);
+    if(b.startAt===50&&!timed){timed=true;return Promise.reject({statusText:'timeout'});}
+    return Promise.resolve({startAt:b.startAt,total:101,issues:Array.from({length:Math.min(b.maxResults,101-b.startAt)},(_,i)=>({key:'P-'+(b.startAt+i+1)}))});});
+  const result=await api.getProjectIssues('P','',{profile:'registry',pageSize:50,timeoutRetrySize:25,expand:null});
+  assert.equal(result.issues.length,101);
+  assert.deepEqual(calls.map(b=>[b.startAt,b.maxResults]),[[0,50],[50,50],[50,25],[75,50]]);
+  for(const b of calls){assert.ok(b.fields.includes('description'));assert.ok(b.fields.includes('updated'));assert.ok(!b.fields.includes('comment'));assert.ok(!b.fields.includes('worklog'));assert.equal(b.expand,undefined);}
+});
+test('registry timeout recovery is bounded and abort during recovery prevents further pages',async()=>{
+  let calls=0;const api=setup(()=>{calls++;return Promise.reject({statusText:'timeout'});});
+  await assert.rejects(api.getProjectIssues('P','',{profile:'registry',pageSize:50,timeoutRetrySize:25,expand:null}));assert.equal(calls,2);
+  let resolve;const bodies=[];const other=setup(opts=>{bodies.push(JSON.parse(opts.data));if(bodies.length===1)return Promise.reject({statusText:'timeout'});return new Promise(r=>resolve=r);});
+  const request=other.getProjectIssues('P','',{profile:'registry',pageSize:50,timeoutRetrySize:25,expand:null});await new Promise(r=>setImmediate(r));
+  request.abort();await assert.rejects(request,e=>e.name==='AbortError');resolve({startAt:0,total:30,issues:[{key:'P-1'}]});await new Promise(r=>setImmediate(r));assert.equal(bodies.length,2);
+});
+test('registry history requests minimal age validation fields while default full readers retain collections',async()=>{
+  const calls=[],api=setup(opts=>{calls.push(opts);return Promise.resolve({});});
+  await api.getIssueWithHistory('P-1',{profile:'registry-history'});await api.getIssueWithHistory('P-1');
+  assert.equal(calls[0].data.fields,'status,updated,created');assert.equal(calls[0].data.expand,'changelog');
+  assert.ok(calls[1].data.fields.includes('comment'));assert.ok(calls[1].data.fields.includes('worklog'));
+});
+test('linked registry lookups explicitly omit heavy data; HTTP errors never consume the timeout retry',async()=>{
+  const calls=[],api=setup(opts=>{const b=JSON.parse(opts.data);calls.push(b);const keys=b.jql.match(/key in \(([^)]+)\)/)[1].split(', ');return Promise.resolve({startAt:b.startAt,total:keys.length,issues:keys.slice(b.startAt,b.startAt+b.maxResults).map(key=>({key}))});});
+  const result=await api.getIssuesByKeys(Array.from({length:101},(_,i)=>'P-'+(i+1)),{profile:'registry',pageSize:50,timeoutRetrySize:25,expand:null});assert.equal(result.issues.length,101);
+  assert.deepEqual(calls.map(b=>b.startAt),[0,50,0]);for(const b of calls){assert.equal(b.maxResults,50);assert.ok(!b.fields.includes('comment'));assert.ok(!b.fields.includes('worklog'));assert.equal(b.expand,undefined);}
+  let reads=0;const broken=setup(()=>{reads++;return Promise.reject({status:502,statusText:'Bad Gateway'});});await assert.rejects(broken.getProjectIssues('P','',{profile:'registry',pageSize:50,timeoutRetrySize:25,expand:null}));assert.equal(reads,1);
+});

@@ -101,7 +101,7 @@ define("_ujgESI_registry", ["_ujgESI_remarkId", "_ujgESI_deadlines"], function(r
           assignee: key ? text(synced || child ? details.assignee : cols["Исполнитель в Jira"]) : "",
           assigneeIdentifiers: Array.isArray(details.assigneeIdentifiers) ? details.assigneeIdentifiers.slice() : [],
           priority: text(synced || child ? details.priority : cols["Приоритет"]),
-          updated: key ? text(details.updated) : "", age: ageText(ms), ageMs: ms,
+          updated: key ? text(details.updated) : "", age: key && details.historyState === "pending" ? "Загружается…" : key && !isFinite(since) && (details.historyState === "error" || details.historyState === "cancelled") ? "Нет истории" : ageText(ms), ageMs: ms,
           statusSince: text(details.statusSince), ageReason: text(details.statusSinceReason) || "История переходов не загружена",
           done: typeof details.done === "boolean" ? details.done : details.statusCategory ? details.statusCategory === "done" : /^(done|готово|закрыт[ао]?|closed|resolved|снят[ао]?)$/i.test(text(details.status || cols["Статус в Jira"])),
           statusState: text(details.statusState), statusCategory: text(details.statusCategory),

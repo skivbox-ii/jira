@@ -46,12 +46,13 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     }).join(" AND ");
   }
 
-  function issueFields() {
+  function issueFields(profile) {
+    if (profile === "registry-history") return ["status", "updated", "created"];
     var fields = ["summary", "description", "status", "resolution", "resolutiondate", "duedate", "assignee", "creator", "issuelinks", "priority", "components", "issuetype", "updated", "created", "timespent", "worklog", "comment"];
     [config.SPRINT_FIELD, "customfield_10020", "customfield_10007"].forEach(function(field) {
       if (field && fields.indexOf(field) < 0) fields.push(field);
     });
-    return fields;
+    return profile === "registry" ? fields.filter(function(field) { return field !== "comment" && field !== "worklog"; }) : fields;
   }
 
   function dueDateKey(key) {
@@ -79,18 +80,18 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     var promise = new Promise(function(resolve, reject) {
       rejectRun = reject;
       var queryIndex = 0, totalAll = 0;
-      function page(startAt, expectedTotal) {
+      function page(startAt, expectedTotal, retrySize) {
         if (cancelled) return;
-        var query = queries[queryIndex], requested = Math.min(query.size || 200, limit - issues.length);
+        var query = queries[queryIndex], requested = Math.min(retrySize || opts.pageSize || query.size || 200, limit - issues.length);
         row = {id:"search-" + (++requestSequence),stage:opts.stage || "stories",batch:queryIndex + 1,
           startAt:startAt,requested:requested,state:"running",startedAt:Date.now()};
         emit("running");
         try {
           request = $.ajax({url:config.baseUrl + "/rest/api/2/search",type:"POST",timeout:30000,
             contentType:"application/json",dataType:"json",
-            data:JSON.stringify({jql:query.jql || query,fields:issueFields(),expand:opts.expand === "changelog" ? ["changelog"] : undefined,
+            data:JSON.stringify({jql:query.jql || query,fields:issueFields(opts.profile),expand:opts.expand === "changelog" ? ["changelog"] : undefined,
               startAt:startAt,maxResults:requested})});
-        } catch (error) { fail(error); return; }
+        } catch (error) { pageFailure(error); return; }
         Promise.resolve(request).then(function(data) {
           if (cancelled) return;
           var batch = data && data.issues, total = data && data.total == null && Array.isArray(batch) ? startAt + batch.length : Number(data && data.total);
@@ -112,7 +113,13 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
           if (issues.length < limit && ++queryIndex < queries.length) return page(0,null);
           settled = true;
           resolve({issues:issues,total:totalAll,truncated:next < total});
-        }).catch(fail);
+        }).catch(pageFailure);
+        function pageFailure(error) {
+          if (cancelled || settled) return;
+          emit("error",error);
+          if (!retrySize && opts.timeoutRetrySize && error && (error.statusText === "timeout" || error.name === "TimeoutError")) return page(startAt,expectedTotal,opts.timeoutRetrySize);
+          fail(error);
+        }
       }
       function fail(error) { if (cancelled || settled) return; settled = true; emit("error",error); reject(error); }
       if (!queries.length) { settled = true; resolve({issues:[]}); } else page(0,null);
@@ -260,7 +267,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
       }
       return paginatedSearch(queries,Object.assign({stage:"linked"},options),Infinity);
     },
-    getIssueWithHistory: function(key) {
+    getIssueWithHistory: function(key, options) {
       var issueKey = dueDateKey(key);
       if (!issueKey) return Promise.reject(new Error("Invalid Jira issue key"));
       return $.ajax({
@@ -268,7 +275,7 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
         type: "GET",
         timeout: 30000,
         dataType: "json",
-        data: { fields: issueFields().join(","), expand: "changelog" },
+        data: { fields: issueFields(options && options.profile).join(","), expand: "changelog" },
       });
     },
     getIssueComments: function(key, startAt) {

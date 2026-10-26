@@ -23,7 +23,13 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       getProjects: () => Promise.resolve([{ key: "TEST", name: "Test" }]),
       getProjectEpics: () => Promise.resolve({ issues: [] }),
       getProjectCreateMeta: () => Promise.resolve({ projects: [] }),
-    }, api),
+    }, api, api && typeof api.getIssueWithHistory === "function" ? {
+      // These legacy fixtures model full Dynamics reads. The dedicated load-controller
+      // suite supplies field-aware registry-history responses and validates that queue.
+      getIssueWithHistory:(key,options)=>options && options.profile === "registry-history"
+        ? Promise.reject(new Error("Registry history unavailable in full-report fixture"))
+        : api.getIssueWithHistory(key,options)
+    } : {}),
     "_ujgESI_excel-loader": {
       readFileBuffer: () => Promise.resolve(new ArrayBuffer(1)),
       readWorkbookFromBuffer: () => Promise.resolve({ SheetNames: ["Sheet1"] }),
@@ -533,8 +539,8 @@ test("explicit sync enriches Story and child fields without extra requests or is
   await flush();
   await flush();
   assert.deepEqual(calls, [
-    { keys: ["TEST-1"], options: { expand: "changelog", stage:"stories" } },
-    { keys: ["TEST-2"], options: { expand: "changelog", stage:"linked" } },
+    { keys: ["TEST-1"], options: {profile:"registry",pageSize:50,timeoutRetrySize:25,expand:null,stage:"stories"} },
+    { keys: ["TEST-2"], options: {profile:"registry",pageSize:50,timeoutRetrySize:25,expand:null,stage:"linked"} },
   ]);
   assert.equal(app.state.syncError, "");
   assert.deepEqual(plain(row.storyDetails), {
@@ -544,7 +550,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     priority: "High", components: [], componentsKnown:false, issueType: "Story", duedate:"", updated: "2026-03-03T10:00:00.000+0300",
     created: issues[0].fields.created,
     activity: {key:"TEST-1",capturedAt:row.storyDetails.activity.capturedAt,complete:true,histories:plain(issues[0].changelog.histories),linkedKeys:["TEST-2"],comments:{complete:true,total:0,entries:[]}},
-    statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
+    historyState:"complete", statusSince: "2026-03-01T07:00:00.000Z", statusSinceReason: row.storyDetails.statusSinceReason,
   });
   assert.match(row.storyDetails.statusSinceReason, /истор|переход/i);
   assert.deepEqual(plain(row.childStatuses[0]), {
@@ -554,7 +560,7 @@ test("explicit sync enriches Story and child fields without extra requests or is
     priority: "Low", components: [], componentsKnown:false, issueType: "Task", duedate:"", updated: "2026-02-02T00:00:00Z",
     created: child.fields.created,
     activity: {key:"TEST-2",capturedAt:row.childStatuses[0].activity.capturedAt,complete:true,histories:[],linkedKeys:[],comments:{complete:true,total:0,entries:[]}},
-    statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
+    historyState:"complete", statusSince: "2026-02-01T00:00:00.000Z", statusSinceReason: row.childStatuses[0].statusSinceReason,
   });
   assert.match(row.childStatuses[0].statusSinceReason, /создани/i);
   assert.equal(row.summary, "Source remark");

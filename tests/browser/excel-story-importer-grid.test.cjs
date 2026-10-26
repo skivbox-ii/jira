@@ -1998,3 +1998,81 @@ test("wiki table delimiters respect odd and even backslash escapes across lines"
     assert.equal(cells.eq(1).find("br").length,odd ? 1 : 0);
   }
 });
+test('LOAD-02 history patches pending/final age without replacing filter drafts, focus or scroll', t => {
+  const x=setup();t.after(()=>x.dom.window.close());const {$,state,modules}=x;
+  state.rows[1].storyDetails.historyState='pending';x.render();
+  assert.match($('.ujg-esi-parent-row[data-key="P-10"] .ujg-esi-cell-age').text(),/Загружается/);
+  $('[data-filter="assignee"]').first().trigger('click');
+  const search=$('.ujg-esi-filter-search')[0];assert.ok(search);$(search).val('Ann').trigger('input');search.focus();
+  const menu=$('.ujg-esi-column-filter-menu')[0],scroll=$('.ujg-esi-registry-scroll')[0];scroll.scrollTop=43;scroll.scrollLeft=17;
+  const checked=$('.ujg-esi-filter-option input:checked').length;
+  state.rows[1].storyDetails.historyState='complete';state.rows[1].storyDetails.statusSince='2026-01-01T00:00:00Z';
+  assert.equal(typeof modules._ujgESI_rendering.renderRegistryHistory,'function');modules._ujgESI_rendering.renderRegistryHistory(state);
+  assert.equal(x.dom.window.document.activeElement,search);assert.equal(search.value,'Ann');assert.equal($('.ujg-esi-column-filter-menu')[0],menu);
+  assert.equal($('.ujg-esi-filter-option input:checked').length,checked);assert.equal($('.ujg-esi-registry-scroll')[0],scroll);assert.equal(scroll.scrollTop,43);assert.equal(scroll.scrollLeft,17);
+  assert.doesNotMatch($('.ujg-esi-parent-row[data-key="P-10"] .ujg-esi-cell-age').text(),/Загружается|—/);
+});
+test('LOAD-02 history refresh reapplies age sort and filter while retaining an open draft',t=>{
+  for(const filtered of [false,true]) {
+    const x=setup();t.after(()=>x.dom.window.close());const {$,state,modules,dom}=x;
+    state.preferencesStorageKey='age-'+filtered;dom.window.localStorage.setItem(state.preferencesStorageKey,JSON.stringify({gridLayout:{sort:{column:'age',direction:'desc'},filters:filtered?{age:['Загружается…']}: {}}}));
+    state.rows[1].storyDetails.historyState='pending';state.rows[2].storyDetails={key:'P-20',historyState:'pending'};x.render();
+    $('[data-filter="assignee"]').first().trigger('click');const search=$('.ujg-esi-filter-search')[0];$(search).val('Ann').trigger('input');search.focus();
+    state.rows[2].storyDetails.historyState='complete';state.rows[2].storyDetails.statusSince='2026-01-01T00:00:00Z';
+    modules._ujgESI_rendering.renderRegistryHistory(state);
+    const keys=$('.ujg-esi-parent-row').map((i,e)=>e.dataset.key).get();
+    if(filtered)assert.deepEqual(keys,['P-10']);else assert.equal(keys[0],'P-20');
+    assert.equal(dom.window.document.activeElement,search);assert.equal(search.value,'Ann');
+  }
+});
+test('review P2 age redraw restores keyboard focus outside menus without scrolling',t=>{
+  const x=setup();t.after(()=>x.dom.window.close());const {$,state,modules,dom}=x;
+  state.preferencesStorageKey='review-age-focus';dom.window.localStorage.setItem(state.preferencesStorageKey,JSON.stringify({gridLayout:{sort:{column:'age',direction:'desc'}}}));
+  state.rows[1].storyDetails.historyState='pending';x.render();
+  const selectors=['[data-sort="age"]','th[data-column="age"] [role="separator"]','tr[data-key="P-10"] .ujg-esi-track-remark','tr[data-key="P-10"] .ujg-esi-registry-actions button','.ujg-esi-registry-scroll'];
+  for(const selector of selectors){
+    const old=$(selector).first()[0];assert.ok(old,selector);old.focus();assert.equal(dom.window.document.activeElement,old);
+    $('.ujg-esi-registry-scroll').scrollTop(41).scrollLeft(19);
+    state.rows[1].storyDetails.historyState='complete';state.rows[1].storyDetails.statusSince='2026-01-01T00:00:00Z';
+    modules._ujgESI_rendering.renderRegistryHistory(state);
+    const replacement=$(selector).first()[0];assert.notEqual(replacement,old);assert.equal(dom.window.document.activeElement,replacement,selector);
+    assert.equal($('.ujg-esi-registry-scroll').scrollTop(),41);assert.equal($('.ujg-esi-registry-scroll').scrollLeft(),19);
+  }
+});
+test('review P2 age-filtered disappearing focused row falls back to the registry viewport',t=>{
+  const x=setup();t.after(()=>x.dom.window.close());const {$,state,modules,dom}=x;
+  state.preferencesStorageKey='review-age-fallback';dom.window.localStorage.setItem(state.preferencesStorageKey,JSON.stringify({gridLayout:{filters:{age:['Загружается…']}}}));
+  state.rows[1].storyDetails.historyState='pending';x.render();
+  const old=$('tr[data-key="P-10"] .ujg-esi-track-remark')[0];assert.ok(old);old.focus();
+  state.rows[1].storyDetails.historyState='complete';state.rows[1].storyDetails.statusSince='2026-01-01T00:00:00Z';
+  modules._ujgESI_rendering.renderRegistryHistory(state);
+  assert.equal($('tr[data-key="P-10"]').length,0);assert.equal(dom.window.document.activeElement,$('.ujg-esi-registry-scroll')[0]);
+});
+test('review round2 age page shrink falls back when Previous becomes disabled',t=>{
+  const x=setup();t.after(()=>x.dom.window.close());const {$,state,modules,dom}=x;
+  state.preferencesStorageKey='review-age-page-shrink';dom.window.localStorage.setItem(state.preferencesStorageKey,JSON.stringify({gridLayout:{filters:{age:['Загружается…']}}}));
+  state.rows=Array.from({length:55},(_,i)=>({id:'pending-'+i,jiraKey:'P-'+(i+1),summary:'Pending '+i,sourceColumns:{},storyDetails:{key:'P-'+(i+1),historyState:'pending'}}));x.render();
+  $('[aria-label="Следующая страница"]').first()[0].click();
+  const previous=$('[aria-label="Предыдущая страница"]')[0];assert.equal(previous.disabled,false);previous.focus();assert.equal(dom.window.document.activeElement,previous);
+  $('.ujg-esi-registry-scroll').scrollTop(31).scrollLeft(17);
+  state.rows.slice(0,54).forEach(row=>{row.storyDetails.historyState='complete';row.storyDetails.statusSince='2026-01-01T00:00:00Z';});
+  modules._ujgESI_rendering.renderRegistryHistory(state);
+  assert.equal($('.ujg-esi-parent-row').length,1);assert.equal($('[aria-label="Предыдущая страница"]')[0].disabled,true);
+  assert.equal(dom.window.document.activeElement,$('.ujg-esi-registry-scroll')[0]);
+  assert.equal($('.ujg-esi-registry-scroll').scrollTop(),31);assert.equal($('.ujg-esi-registry-scroll').scrollLeft(),17);
+});
+test('review round2 unsuccessful focus restoration falls back with preventScroll',t=>{
+  const x=setup();t.after(()=>x.dom.window.close());const {$,state,modules,dom}=x;
+  state.preferencesStorageKey='review-age-focus-refused';dom.window.localStorage.setItem(state.preferencesStorageKey,JSON.stringify({gridLayout:{sort:{column:'age',direction:'desc'}}}));x.render();
+  $('[data-sort="age"]')[0].focus();
+  const focus=dom.window.HTMLElement.prototype.focus,calls=[];
+  dom.window.HTMLElement.prototype.focus=function(options){
+    calls.push({node:this,options});
+    if(this.getAttribute('data-sort')==='age')return;
+    return focus.call(this,options);
+  };
+  modules._ujgESI_rendering.renderRegistryHistory(state);
+  const viewport=$('.ujg-esi-registry-scroll')[0];assert.equal(dom.window.document.activeElement,viewport);
+  assert.equal(calls.length,2);assert.equal(calls[0].node,$('[data-sort="age"]')[0]);assert.equal(calls[1].node,viewport);
+  assert.ok(calls.every(call=>call.options.preventScroll===true));
+});
