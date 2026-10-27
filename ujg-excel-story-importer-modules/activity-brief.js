@@ -1,4 +1,4 @@
-define("_ujgESI_activityBrief", ["_ujgESI_activity"], function(activity) {
+define("_ujgESI_activityBrief", ["_ujgESI_activity", "_ujgESI_epicScope"], function(activity, epicScope) {
   "use strict";
   var USER_LIMIT = 18000, REPORT_LIMIT = 15000, SYSTEM_LIMIT = 4000, DETAIL_LIMIT = 10, WORKLOG_GROUP_LIMIT = 10;
   var SYSTEM = "Ты готовишь краткий управленческий отчёт на русском языке только по переданным фактам Jira. " +
@@ -98,7 +98,7 @@ define("_ujgESI_activityBrief", ["_ujgESI_activity"], function(activity) {
     var date=options.date || activity.today(options.now), fromDate=dateOffset(date,1-days), scope=options.scope || {};
     var components=scope.components == null ? null : scope.components.map(function(value) { return str(value && value.id); });
     var selected=components===null ? (rows || []) : activity.componentRows(rows || [],components);
-    var scopeKey=JSON.stringify({projectKey:scope.projectKey || "",epicKey:scope.epicKey || "",baseUrl:scope.baseUrl || "",
+    var scopeKey=JSON.stringify({projectKey:scope.projectKey || "",epicKeys:epicScope.keys(scope),epicKey:epicScope.scalar(scope),baseUrl:scope.baseUrl || "",
       preferencesStorageKey:scope.preferencesStorageKey || "",userScope:scope.userScope || "",viewMode:scope.viewMode || "",components:components});
     var daily=[];
     for (var d=0;d<days;d++) daily.push(activity.summarize(selected,teams || [],{
@@ -190,7 +190,7 @@ define("_ujgESI_activityBrief", ["_ujgESI_activity"], function(activity) {
         return group.team+" / "+group.role+": "+group.seconds+" с";
       }).join("; ") || "нет подтверждённых записей")+
       "; остальные группы: "+(rankedWorklogs.length-Math.min(3,rankedWorklogs.length))+".";
-    var fixed={scope:{projectKey:scope.projectKey || "",epicKey:scope.epicKey || "",baseUrl:scope.baseUrl || "",viewMode:scope.viewMode || "",components:components},
+    var fixed={scope:{projectKey:scope.projectKey || "",epicKeys:epicScope.keys(scope),epicKey:epicScope.scalar(scope),baseUrl:scope.baseUrl || "",viewMode:scope.viewMode || "",components:components},
       fromDate:fromDate,date:date,asOf:latest.asOf,coverage:coverage,facts:facts,
       limitations:"Команды и связи задач отражают текущий снимок. Сроки относятся к текущему состоянию, а не к историческому периоду. Причины допустимы только из явных комментариев. completedDuringPeriod означает подтверждённый переход полной готовности за период; к концу замечание могло быть вновь открыто."};
     var fixedText=JSON.stringify(fixed);

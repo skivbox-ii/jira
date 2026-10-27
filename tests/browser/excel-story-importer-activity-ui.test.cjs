@@ -32,7 +32,7 @@ function setup(report, configureWindow) {
   modules._ujgESI_sourceExportUi = {create:()=>({open(){},dismiss(){},updateScope(){},destroy(){}})};
   modules._ujgESI_remarkReportUi = {create:()=>({open(...args){calls.remarkOpen=args;},dismiss(){},updateScope(){},rebindAnchor(){},destroy(){}})};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
-  for (const file of ["icons","activity-brief","activity-management-ui","activity-store","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
+  for (const file of ["epic-scope","icons","activity-brief","activity-management-ui","activity-store","activity-ui"]) dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const state = {rows:[{id:"row"}],teams:[],projectKey:"P",epicKey:"P-EPIC",viewMode:"jira",registryWarning:"Scope warning"};
   const services = {onLoadActivityHistory() { calls.refresh++; }};
   const ui = modules._ujgESI_activityUi.create();
@@ -1977,4 +1977,8 @@ test("activity observes current viewport size and replaces observation on redraw
   assert.equal(observer.nodes.length,1);
   assert.equal(observer.nodes[0],x.$(".ujg-esi-activity-scroll")[0]);
   assert.notEqual(observer.nodes[0],scroll);
+});
+test('legacy single epic component preferences survive multi epic support',t=>{
+ const x=setup(fixture(),w=>w.localStorage.setItem('ujg-esi-state:activity-components:["P","P-EPIC"]',JSON.stringify([{id:'component:20',name:'Saved module'}])));t.after(()=>x.dom.window.close());
+ x.$('.ujg-esi-component-filter').trigger('click');assert.equal(x.$('[data-component-id="component:20"]').prop('checked'),true);
 });

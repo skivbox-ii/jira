@@ -141,7 +141,7 @@ test("provider receives relevant team metadata without rosters or local session 
     assert.ok(Buffer.byteLength(request.userPrompt,"utf8")<=42000);
     assert.ok(Buffer.byteLength(request.systemPrompt,"utf8")<=6000);
     const payload=JSON.parse(request.userPrompt);
-    assert.deepEqual(payload.scope,{projectKey:"P",epicKey:"P-1",baseUrl:"https://jira.test",viewMode:"team"});
+    assert.deepEqual(payload.scope,{projectKey:"P",epicKeys:["P-1"],epicKey:"P-1",baseUrl:"https://jira.test",viewMode:"team"});
     assert.deepEqual(payload.teams,[{name:"BE",roles:["BE"],direction:"development",color:"#123456"}]);
     for (const forbidden of ["unrelated-person-","private-account-","Unrelated Person","internal-team-",privateScope.preferencesStorageKey,privateScope.userScope,"preferencesStorageKey","userScope"]) {
       assert.ok(!request.userPrompt.includes(forbidden),forbidden);
@@ -449,4 +449,10 @@ test("run reports partial failures and cancellation without claiming completion"
   let calls=0;
   await assert.rejects(engine.run(plan,async()=>{calls++;return {text:"OK"};},{isCancelled:()=>calls>0}),/отмен|cancel/i);
   assert.equal(calls,1);
+});
+test('multi epic AI context and cache identify the complete unordered set',()=>{
+ const engine=ai(),data=report(),a=engine.prepare(data,{...scope,epicKey:'',epicKeys:['P-20','P-10','P-20']}),b=engine.prepare(data,{...scope,epicKeys:['P-10','P-20']}),c=engine.prepare(data,{...scope,epicKeys:['P-10','P-30']});
+ assert.equal(a.scopeKey,b.scopeKey);assert.notEqual(a.scopeKey,c.scopeKey);
+ const payload=JSON.parse(a.parts[0].userPrompt);assert.deepEqual(payload.scope.epicKeys,['P-10','P-20']);assert.equal(payload.scope.epicKey,'');
+ const legacy=engine.prepare(data,scope),single=engine.prepare(data,{...scope,epicKeys:['P-1']});assert.equal(legacy.scopeKey,single.scopeKey);
 });

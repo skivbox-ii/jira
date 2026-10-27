@@ -1,4 +1,4 @@
-define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadlines"], function(teamsModule,sourceRemarkId,deadlines) {
+define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadlines", "_ujgESI_epicScope"], function(teamsModule,sourceRemarkId,deadlines, epicScope) {
   "use strict";
   function str(value) { return value == null ? "" : String(value).trim(); }
   function key(value) { return str(value).toUpperCase(); }
@@ -806,7 +806,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     context = context || {};
     var warnings = (report.coverage && report.coverage.warnings || []).concat(report.commentCoverage && report.commentCoverage.warnings || []);
     var html = '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Активность ' + escape(report.date) + '</title><style>body{font:14px system-ui;margin:2rem;max-width:80rem;color:#24313a}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}small{color:#59666e}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:1rem 0}</style></head><body>';
-    html += '<h1>Активность за ' + escape(report.date) + ' МСК</h1><p>Проект: ' + escape(context.projectKey) + ' · Эпик: ' + escape(context.epicKey) + '</p>';
+    html += '<h1>Активность за ' + escape(report.date) + ' МСК</h1><p>Проект: ' + escape(context.projectKey) + ' · Эпик: ' + escape(epicScope.label(context)) + '</p>';
     html += '<p>Сформировано: ' + escape(msk(report.generatedAt)) + ' · Срез на: ' + escape(report.asOf ? msk(report.asOf) : '—') + ' · Покрытие: ' + escape(report.coverage && report.coverage.complete) + '/' + escape(report.coverage && report.coverage.total) + '</p>';
     if (report.commentCoverage) html += '<p>Комментарии: загружено ' + escape(report.commentCoverage.loaded) + ' из ' + escape(report.commentCoverage.expected == null ? 'неизвестного количества' : report.commentCoverage.expected) +
       '; полный список задач: ' + escape(report.commentCoverage.complete) + '/' + escape(report.commentCoverage.total) + '. Удалённые комментарии и прежние редакции недоступны.</p>';

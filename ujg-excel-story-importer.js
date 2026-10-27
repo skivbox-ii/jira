@@ -741,6 +741,22 @@ define("_ujgESI_config", [], function() {
   };
 });
 
+/* === Module: epic-scope.js === */
+define("_ujgESI_epicScope", [], function() {
+  "use strict";
+  function keys(value) {
+    if (value && !Array.isArray(value) && typeof value === "object") value = Array.isArray(value.epicKeys) ? value.epicKeys : value.epicKey;
+    var values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+    return values.filter(function(key) { return typeof key === "string"; }).map(function(key) { return key.trim().toUpperCase(); })
+      .filter(function(key, index, all) { return !!key && all.indexOf(key) === index; }).sort();
+  }
+  function scalar(value) { var selected = keys(value); return selected.length === 1 ? selected[0] : ""; }
+  function key(value) { return JSON.stringify(keys(value)); }
+  function label(value) { return keys(value).join(", ") || "Все истории проекта"; }
+  function apply(state, value) { state.epicKeys = keys(value); state.epicKey = scalar(state.epicKeys); }
+  return {keys:keys,scalar:scalar,key:key,label:label,apply:apply};
+});
+
 /* === Module: mapping-store.js === */
 define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config) {
   "use strict";
@@ -2757,7 +2773,7 @@ define("_ujgESI_creator", ["_ujgESI_config", "_ujgESI_description", "_ujgESI_rem
 });
 
 /* === Module: api.js === */
-define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
+define("_ujgESI_api", ["jquery", "_ujgESI_config", "_ujgESI_epicScope"], function($, config, epicScope) {
   "use strict";
 
   function quoteJqlString(value) {
@@ -3047,11 +3063,12 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getProjectIssues: function(projectKey, epicKey, options) {
       var project = projectKey != null ? String(projectKey).trim() : "";
-      var epic = epicKey != null ? String(epicKey).trim() : "";
+      var epics = epicScope.keys(epicKey);
       var jql;
       if (!project) return Promise.resolve({ issues: [] });
       jql = "project = " + toJqlToken(project) + " AND issuetype = Story";
-      if (epic && config.EPIC_LINK_FIELD) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + " = " + toJqlToken(epic);
+      if (epics.length && !String(config.EPIC_LINK_FIELD || "").trim()) return Promise.reject(new Error("Не настроено поле связи с эпиком"));
+      if (epics.length) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + (epics.length === 1 ? " = " + toJqlToken(epics[0]) : " IN (" + epics.map(toJqlToken).join(", ") + ")");
       jql += " ORDER BY key DESC";
       return paginatedSearch([jql],Object.assign({stage:"stories",expand:"changelog"},options),1000);
     },
@@ -5173,7 +5190,7 @@ define("_ujgESI_statisticsUi", ["jquery", "_ujgESI_statistics"], function($, sta
 });
 
 /* === Module: activity.js === */
-define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadlines"], function(teamsModule,sourceRemarkId,deadlines) {
+define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadlines", "_ujgESI_epicScope"], function(teamsModule,sourceRemarkId,deadlines, epicScope) {
   "use strict";
   function str(value) { return value == null ? "" : String(value).trim(); }
   function key(value) { return str(value).toUpperCase(); }
@@ -5981,7 +5998,7 @@ define("_ujgESI_activity", ["_ujgESI_teams","_ujgESI_remarkId","_ujgESI_deadline
     context = context || {};
     var warnings = (report.coverage && report.coverage.warnings || []).concat(report.commentCoverage && report.commentCoverage.warnings || []);
     var html = '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Активность ' + escape(report.date) + '</title><style>body{font:14px system-ui;margin:2rem;max-width:80rem;color:#24313a}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}small{color:#59666e}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:1rem 0}</style></head><body>';
-    html += '<h1>Активность за ' + escape(report.date) + ' МСК</h1><p>Проект: ' + escape(context.projectKey) + ' · Эпик: ' + escape(context.epicKey) + '</p>';
+    html += '<h1>Активность за ' + escape(report.date) + ' МСК</h1><p>Проект: ' + escape(context.projectKey) + ' · Эпик: ' + escape(epicScope.label(context)) + '</p>';
     html += '<p>Сформировано: ' + escape(msk(report.generatedAt)) + ' · Срез на: ' + escape(report.asOf ? msk(report.asOf) : '—') + ' · Покрытие: ' + escape(report.coverage && report.coverage.complete) + '/' + escape(report.coverage && report.coverage.total) + '</p>';
     if (report.commentCoverage) html += '<p>Комментарии: загружено ' + escape(report.commentCoverage.loaded) + ' из ' + escape(report.commentCoverage.expected == null ? 'неизвестного количества' : report.commentCoverage.expected) +
       '; полный список задач: ' + escape(report.commentCoverage.complete) + '/' + escape(report.commentCoverage.total) + '. Удалённые комментарии и прежние редакции недоступны.</p>';
@@ -6875,7 +6892,7 @@ define("_ujgESI_activityManagementUi", ["jquery", "_ujgESI_activity", "_ujgESI_i
 });
 
 /* === Module: activity-ai.js === */
-define("_ujgESI_activityAi", [], function() {
+define("_ujgESI_activityAi", ["_ujgESI_epicScope"], function(epicScope) {
   "use strict";
 
   var USER_LIMIT = 42000, BASE_LIMIT = 6000, NOTES_LIMIT = 6000;
@@ -7014,7 +7031,7 @@ define("_ujgESI_activityAi", [], function() {
       includedFragments:batch.filter(function(record) { return record.type === "history"; }).length
     })};
     return JSON.stringify({stage:stage || (conversation ? "answer" : "report"),
-      scope:{projectKey:plan.scope.projectKey,epicKey:plan.scope.epicKey,baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode,components:plan.scope.components || undefined},
+      scope:{projectKey:plan.scope.projectKey,epicKeys:epicScope.keys(plan.scope),epicKey:epicScope.scalar(plan.scope),baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode,components:plan.scope.components || undefined},
       date:plan.date,asOf:plan.asOf,timezone:plan.timezone,
       metrics:plan.metrics,confirmed:plan.confirmed,totals:plan.totals,coverage:plan.coverage,commentCoverage:plan.commentCoverage,deadlineCoverage:plan.deadlineCoverage,deadlineReferenceDate:plan.deadlineReferenceDate,balance:plan.balance,observed:plan.observed,
       transitions:plan.transitions,transfers:plan.transfers,teams:plan.teams,
@@ -7104,9 +7121,11 @@ define("_ujgESI_activityAi", [], function() {
     ["projectKey","epicKey","baseUrl","preferencesStorageKey","userScope","viewMode"].forEach(function(field) {
       if (scope && scope[field] != null) currentScope[field] = clone(scope[field]);
     });
+    currentScope.epicKeys = epicScope.keys(scope);
+    currentScope.epicKey = epicScope.scalar(currentScope);
     delete signature.generatedAt;
     currentScope.components = Array.isArray(data.componentScope) ? data.componentScope : null;
-    var scopeKey = JSON.stringify([currentScope.projectKey || "",currentScope.epicKey || "",currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || "",currentScope.components && currentScope.components.map(function(item) { return item.id; }).sort()]);
+    var scopeKey = JSON.stringify([currentScope.projectKey || "",epicScope.key(currentScope),currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || "",currentScope.components && currentScope.components.map(function(item) { return item.id; }).sort()]);
     var plan = {scopeKey:scopeKey,fingerprint:fingerprint(signature),scope:currentScope,
       date:data.date,asOf:data.asOf,timezone:data.timezone || "МСК",metrics:data.metrics || {},confirmed:data.confirmed || null,coverage:data.coverage || {},commentCoverage:data.commentCoverage || null,deadlineCoverage:data.deadlineCoverage || {},deadlineReferenceDate:data.deadlineReferenceDate || null,
       eventCount:data.events.length,balance:data.balance || {},observed:data.observed || {},totals:totals(data),transitions:data.transitions || [],
@@ -7214,7 +7233,7 @@ define("_ujgESI_activityAi", [], function() {
 });
 
 /* === Module: activity-brief.js === */
-define("_ujgESI_activityBrief", ["_ujgESI_activity"], function(activity) {
+define("_ujgESI_activityBrief", ["_ujgESI_activity", "_ujgESI_epicScope"], function(activity, epicScope) {
   "use strict";
   var USER_LIMIT = 18000, REPORT_LIMIT = 15000, SYSTEM_LIMIT = 4000, DETAIL_LIMIT = 10, WORKLOG_GROUP_LIMIT = 10;
   var SYSTEM = "Ты готовишь краткий управленческий отчёт на русском языке только по переданным фактам Jira. " +
@@ -7314,7 +7333,7 @@ define("_ujgESI_activityBrief", ["_ujgESI_activity"], function(activity) {
     var date=options.date || activity.today(options.now), fromDate=dateOffset(date,1-days), scope=options.scope || {};
     var components=scope.components == null ? null : scope.components.map(function(value) { return str(value && value.id); });
     var selected=components===null ? (rows || []) : activity.componentRows(rows || [],components);
-    var scopeKey=JSON.stringify({projectKey:scope.projectKey || "",epicKey:scope.epicKey || "",baseUrl:scope.baseUrl || "",
+    var scopeKey=JSON.stringify({projectKey:scope.projectKey || "",epicKeys:epicScope.keys(scope),epicKey:epicScope.scalar(scope),baseUrl:scope.baseUrl || "",
       preferencesStorageKey:scope.preferencesStorageKey || "",userScope:scope.userScope || "",viewMode:scope.viewMode || "",components:components});
     var daily=[];
     for (var d=0;d<days;d++) daily.push(activity.summarize(selected,teams || [],{
@@ -7406,7 +7425,7 @@ define("_ujgESI_activityBrief", ["_ujgESI_activity"], function(activity) {
         return group.team+" / "+group.role+": "+group.seconds+" с";
       }).join("; ") || "нет подтверждённых записей")+
       "; остальные группы: "+(rankedWorklogs.length-Math.min(3,rankedWorklogs.length))+".";
-    var fixed={scope:{projectKey:scope.projectKey || "",epicKey:scope.epicKey || "",baseUrl:scope.baseUrl || "",viewMode:scope.viewMode || "",components:components},
+    var fixed={scope:{projectKey:scope.projectKey || "",epicKeys:epicScope.keys(scope),epicKey:epicScope.scalar(scope),baseUrl:scope.baseUrl || "",viewMode:scope.viewMode || "",components:components},
       fromDate:fromDate,date:date,asOf:latest.asOf,coverage:coverage,facts:facts,
       limitations:"Команды и связи задач отражают текущий снимок. Сроки относятся к текущему состоянию, а не к историческому периоду. Причины допустимы только из явных комментариев. completedDuringPeriod означает подтверждённый переход полной готовности за период; к концу замечание могло быть вновь открыто."};
     var fixedText=JSON.stringify(fixed);
@@ -8257,15 +8276,16 @@ define("_ujgESI_sourceExport", [], function() {
 });
 
 /* === Module: source-export-api.js === */
-define("_ujgESI_sourceExportApi", ["jquery","_ujgESI_config"], function($,config) {
+define("_ujgESI_sourceExportApi", ["jquery","_ujgESI_config", "_ujgESI_epicScope"], function($,config, epicScope) {
   "use strict";
   function quote(value) { return '"' + String(value).replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"'; }
   function create(scope) {
     if (!scope || !scope.projectKey) throw new Error("Не выбран проект Jira");
-    var field = String(config.EPIC_LINK_FIELD || ""), match = /^customfield_(\d+)$/.exec(field);
-    if (scope.epicKey && !field) throw new Error("Не настроено поле связи с эпиком");
+    var epics = epicScope.keys(scope);
+    var field = String(config.EPIC_LINK_FIELD || "").trim(), match = /^customfield_(\d+)$/.exec(field);
+    if (epics.length && !field) throw new Error("Не настроено поле связи с эпиком");
     var jql = "project = " + quote(scope.projectKey) + " AND issuetype = Story";
-    if (scope.epicKey) jql += " AND " + (match ? "cf[" + match[1] + "]" : quote(field)) + " = " + quote(scope.epicKey);
+    if (epics.length) jql += " AND " + (match ? "cf[" + match[1] + "]" : quote(field)) + (epics.length === 1 ? " = " + quote(epics[0]) : " IN (" + epics.map(quote).join(", ") + ")");
     jql += " ORDER BY key ASC";
     var base = String(config.baseUrl || "").replace(/\/$/,""), requests = [];
     function read(path,params) {
@@ -8301,9 +8321,9 @@ define("_ujgESI_sourceExportApi", ["jquery","_ujgESI_config"], function($,config
 });
 
 /* === Module: source-export-ui.js === */
-define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons"], function($,engine,icon) {
+define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons", "_ujgESI_epicScope"], function($,engine,icon, epicScope) {
   "use strict";
-  function scope(state) {return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.viewMode,state.sourceFileName]);}
+  function scope(state) {return JSON.stringify([state.baseUrl,state.projectKey,epicScope.key(state),state.preferencesStorageKey,state.viewMode,state.sourceFileName]);}
   function requestLines(requests) {
     return (requests||[]).map(function(r,index){
       if(typeof r==="string")return (index+1)+". "+r;
@@ -8366,7 +8386,7 @@ define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons
       $dialog=$("<section/>").addClass("ujg-esi-activity-ai-dialog ujg-esi-source-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"Исходные данные Jira",tabindex:"-1"}).appendTo(document.body);
       var $close=button("X","Закрыть исходные данные","ujg-esi-source-close",dismiss);
       $dialog.append($("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("Исходные данные Jira"),$close));
-      $status=$("<p/>").addClass("ujg-esi-source-status").attr({role:"status","aria-live":"polite"}).text(state.projectKey+" · "+(state.epicKey||"Все истории проекта"));
+      $status=$("<p/>").addClass("ujg-esi-source-status").attr({role:"status","aria-live":"polite"}).text(state.projectKey+" · "+epicScope.label(state));
       $load=button("RefreshCw","Загрузить исходные данные","ujg-esi-source-load",read).append($("<span/>").text("Загрузить"));
       var $json=button("Download","Скачать полный JSON","ujg-esi-source-json",function(){if(data)download("jira-source-"+state.projectKey+"-"+data.finishedAt.replace(/[:.]/g,"-")+".json",JSON.stringify(data,null,2),"application/json");}).append($("<span/>").text("JSON"));
       var $all=button("Download","Скачать текст за все дни","ujg-esi-source-all",function(){if(data)download("jira-source-all.txt",engine.text(data),"text/plain");}).append($("<span/>").text("Все дни · TXT"));
@@ -8680,7 +8700,7 @@ define("_ujgESI_llmDiagnosticsUi", ["jquery", "_ujgESI_icons"], function($, icon
 });
 
 /* === Module: activity-ai-ui.js === */
-define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons", "_ujgESI_llmDiagnosticsUi"], function($, activityAi, markdown, icon, diagnosticsUi) {
+define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons", "_ujgESI_llmDiagnosticsUi", "_ujgESI_epicScope"], function($, activityAi, markdown, icon, diagnosticsUi, epicScope) {
   "use strict";
   function create() {
     var $dialog, $report, $partial, $history, $question, $ask, $generate, $stop, $progress, $error, $stale, $meta;
@@ -8882,7 +8902,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       currentState = state || {}; services = nextServices || {};
       pendingReport = report;
       var nextSelection = JSON.stringify([currentState.baseUrl,currentState.preferencesStorageKey,currentState.userScope,
-        currentState.projectKey,currentState.epicKey,currentState.viewMode,report && report.date,
+        currentState.projectKey,epicScope.key(currentState),currentState.viewMode,report && report.date,
         report && report.componentScope ? report.componentScope.map(function(item) { return item.id; }).sort() : null]);
       if (selectionKey !== nextSelection) {
         selectionKey = nextSelection; serial++; session = null;
@@ -8900,7 +8920,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function prepareCurrent() {
       var plan = null;
       preparationError = "";
-      try { plan = compact() ? services.onPrepareActivityBrief(pendingReport,currentState,days) : activityAi.prepare(pendingReport,{projectKey:currentState.projectKey,epicKey:currentState.epicKey,
+      try { plan = compact() ? services.onPrepareActivityBrief(pendingReport,currentState,days) : activityAi.prepare(pendingReport,{projectKey:currentState.projectKey,epicKeys:epicScope.keys(currentState),epicKey:epicScope.scalar(currentState),
         baseUrl:currentState.baseUrl,preferencesStorageKey:currentState.preferencesStorageKey,userScope:currentState.userScope,viewMode:currentState.viewMode}); }
       catch (error) { preparationError = textError(error); }
       var nextScope = plan ? plan.scopeKey : selectionKey;
@@ -8922,10 +8942,10 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
 });
 
 /* === Module: remark-report-ui.js === */
-define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons","_ujgESI_llmDiagnosticsUi"], function($, engine, markdown, icon, diagnosticsUi) {
+define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons","_ujgESI_llmDiagnosticsUi", "_ujgESI_epicScope"], function($, engine, markdown, icon, diagnosticsUi, epicScope) {
   "use strict";
   function scope(state) {
-    return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.userScope,state.viewMode]);
+    return JSON.stringify([state.baseUrl,state.projectKey,epicScope.key(state),state.preferencesStorageKey,state.userScope,state.viewMode]);
   }
   function stamp(value) {
     var ms = Date.parse(value);
@@ -9051,7 +9071,7 @@ define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activ
 });
 
 /* === Module: activity-ui.js === */
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi", "_ujgESI_sourceExportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi, sourceExportUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi", "_ujgESI_sourceExportUi", "_ujgESI_epicScope"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi, sourceExportUi, epicScope) {
   "use strict";
   var sequence = 0;
 
@@ -9191,7 +9211,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       catch (ignore) { /* Storage is best-effort. */ }
     }
     function loadComponentScope(state) {
-      var nextKey = (state.preferencesStorageKey || "ujg-esi-state") + ":activity-components:" + JSON.stringify([state.projectKey || "",state.epicKey || ""]);
+      var nextKey = (state.preferencesStorageKey || "ujg-esi-state") + ":activity-components:" + JSON.stringify([state.projectKey || "",epicScope.keys(state).length > 1 ? epicScope.keys(state) : epicScope.scalar(state)]);
       if (nextKey === componentKey) return;
       componentKey = nextKey; componentSelection = null; componentNames = Object.create(null);
       try {
@@ -9703,7 +9723,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       snapshot.groups = sortedGroups(snapshot.groups).map(function(group) { return Object.assign({},group,{events:sortedEvents(group.events,group)}); });
       var filterSnapshot = {};
       Object.keys(filters).forEach(function(key) { filterSnapshot[key] = filters[key].slice(); });
-      var html = activity.exportHtml(snapshot, {projectKey:state.projectKey, epicKey:state.epicKey, baseUrl:state.baseUrl, filters:filterSnapshot, sort:Object.assign({},sort)});
+      var html = activity.exportHtml(snapshot, {projectKey:state.projectKey, epicKeys:epicScope.keys(state),epicKey:epicScope.scalar(state), baseUrl:state.baseUrl, filters:filterSnapshot, sort:Object.assign({},sort)});
       var url = URL.createObjectURL(new Blob([html], {type:"text/html;charset=utf-8"}));
       var anchor = document.createElement("a");
       anchor.href = url; anchor.download = "activity-" + date + ".html";
@@ -9795,7 +9815,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
       var draft = preserveFilter ? pendingFilterDraft || filterDraftCapture && filterDraftCapture() : null;
       pendingFilterDraft = null;
-      renderedScope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
+      renderedScope = JSON.stringify([currentState.projectKey || "",epicScope.key(currentState),date,currentState.preferencesStorageKey || "ujg-esi-state"]);
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
@@ -9821,7 +9841,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
               date:slice.date,days:days,now:slice.generatedAt,cutoff:slice.asOf,
               scopeWarning:snapshot.viewMode === "jira" ? snapshot.registryWarning : undefined,
               columnMap:settings.columnMap,journalRows:snapshot.deadlineJournalRows,
-              scope:{projectKey:snapshot.projectKey,epicKey:snapshot.epicKey,baseUrl:snapshot.baseUrl,
+              scope:{projectKey:snapshot.projectKey,epicKeys:epicScope.keys(snapshot),epicKey:epicScope.scalar(snapshot),baseUrl:snapshot.baseUrl,
                 preferencesStorageKey:snapshot.preferencesStorageKey,userScope:snapshot.userScope,
                 viewMode:snapshot.viewMode,components:slice.componentScope || null}
             });
@@ -9856,7 +9876,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
-      $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
+      $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (" · " + epicScope.label(state)) + " · текущие связи и настройки команд; история состава связей недоступна."));
       if (componentSelection !== null) $root.append($("<p/>").addClass("ujg-esi-activity-component-scope").text("Компоненты: " + (report.componentScope.map(function(item) { return item.name; }).join(", ") || "не выбраны") + " · текущие компоненты исходных историй"));
       var fullDay = report.asOf && timestamp(report.asOf) === Number(report.end);
       var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(!report.asOf ? "Срез на выбранный день не подтверждён" : fullDay ? "Итоги за весь день" : "Итоги на " + cutoff(report) + " МСК"));
@@ -10153,7 +10173,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           order.splice(from,1); order.splice(order.indexOf($target.attr("data-column"))+(from < to ? 1 : 0),0,action.id);
           saveLayout(); draw();
         }).on("pointercancel"+namespace,function() { drag = null; });
-      var scope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
+      var scope = JSON.stringify([currentState.projectKey || "",epicScope.key(currentState),date,currentState.preferencesStorageKey || "ujg-esi-state"]);
       var preserveFilter = renderedScope === scope;
       renderedScope = scope;
       draw(preserveFilter);
@@ -11142,7 +11162,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
 });
 
 /* === Module: rendering.js === */
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi", "_ujgESI_epicScope"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi, epicScope) {
   "use strict";
 
   var $root;
@@ -11782,80 +11802,57 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function appendEpicPicker($toolbar, state) {
-    var picker = state && state.epicPicker ? state.epicPicker : {};
-    var disabled = !state.projectKey;
-    var active = !disabled && !!picker.open;
-    var selected = selectedEpicLabel(state);
-    var value = active ? picker.query || "" : selected;
-    var $field = $("<label/>").addClass("ujg-esi-field");
-    var $wrap = $("<div/>")
-      .addClass("ujg-esi-epic-picker")
-      .toggleClass("ujg-esi-epic-picker-active", active);
-    var $input = $("<input/>")
-      .attr("type", "text")
-      .attr("autocomplete", "off")
-      .attr("placeholder", state.projectKey ? "Поиск Epic" : "Сначала проект")
-      .addClass("ujg-esi-epic-search")
-      .val(value);
-    $field.append($("<span/>").text("Epic"));
-    if (disabled) $input.prop("disabled", true);
-    $input.on("input", function() {
-      var query = $(this).val();
-      if (!disabled) scheduleEpicSearch(query);
-    });
-    $wrap.append($input);
-    if (!disabled && state.epicKey) {
-      $wrap.append(
-        $("<button/>")
-          .attr("type", "button")
-          .attr("title", "Очистить Epic")
-          .addClass("ujg-esi-epic-clear")
-          .text("×")
-          .on("click", function() {
-            if (services && services.onEpicSelect) services.onEpicSelect("");
-          })
-      );
-    }
-    if (active) {
-      var $options = $("<div/>").addClass("ujg-esi-epic-options");
-      $options.append(
-        $("<button/>")
-          .attr("type", "button")
-          .addClass("ujg-esi-epic-option")
-          .toggleClass("ujg-esi-epic-option-active", !state.epicKey)
-          .text("Без Epic")
-          .on("click", function() {
-            if (services && services.onEpicSelect) services.onEpicSelect("");
-          })
-      );
-      filteredEpics(state).forEach(function(epic) {
-        var key = epic && epic.key != null ? String(epic.key) : "";
-        if (!key) return;
-        $options.append(
-          $("<button/>")
-            .attr("type", "button")
-            .addClass("ujg-esi-epic-option")
-            .toggleClass("ujg-esi-epic-option-active", key === state.epicKey)
-            .text(epicLabel(epic))
-            .on("click", function() {
-              if (services && services.onEpicSelect) services.onEpicSelect(key);
-            })
-        );
+    var picker = state.epicPicker || {}, selected = epicScope.keys(state), active = !!picker.open && !!state.projectKey;
+    var $field = $("<div/>").addClass("ujg-esi-field"), $wrap = $("<div/>").addClass("ujg-esi-epic-picker");
+    var $toggle = $("<button/>").attr({type:"button","aria-expanded":String(active),"aria-haspopup":"dialog"})
+      .addClass("ujg-esi-epic-toggle").prop("disabled",!state.projectKey)
+      .text(selected.length ? "Эпики: " + selected.length : "Эпики: все истории проекта")
+      .attr("title",epicScope.label(state)).on("click",function() {
+        if (active) cancel(); else if (services.onEpicOpen) services.onEpicOpen();
       });
-      if (!filteredEpics(state).length) {
-        $options.append($("<div/>").addClass("ujg-esi-epic-empty").text("Ничего не найдено"));
-      }
-      $wrap.append($options);
-      if (typeof setTimeout === "function") {
-        setTimeout(function() {
-          var node = $input[0];
-          $input.trigger("focus");
-          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
-        }, 0);
-      }
+    function restoreFocus() { $root.find(".ujg-esi-epic-toggle").trigger("focus"); }
+    function cancel() { if (services.onEpicCancel) services.onEpicCancel(); restoreFocus(); }
+    $(document).off("click.ujgEsiEpic");
+    $field.append($("<span/>").text("Epic"),$wrap.append($toggle)); $toolbar.append($field);
+    if (!active) return;
+    var draft = epicScope.keys(picker.draft == null ? selected : picker.draft);
+    var $popup = $("<div/>").addClass("ujg-esi-epic-options").attr({role:"dialog","aria-label":"Выбор эпиков"});
+    var $search = $("<input/>").addClass("ujg-esi-epic-search").attr({type:"search",placeholder:"Поиск Epic","aria-label":"Поиск эпиков",autocomplete:"off"}).val(picker.query || "");
+    var $list = $("<div/>").addClass("ujg-esi-epic-list"), rows = [], seen = Object.create(null);
+    function updateDraft() {
+      draft = epicScope.keys(draft);
+      if (services.onEpicDraft) services.onEpicDraft(draft);
+      $hint.text(draft.length ? "Выбрано: " + draft.length : "Все истории проекта (без ограничения эпиком)");
     }
-    $field.append($wrap);
-    $toolbar.append($field);
+    function filter() {
+      var query = normalizedSearch($search.val());
+      picker.query = String($search.val() || "");
+      rows.forEach(function(row) { row.node.toggle(draft.indexOf(row.key) >= 0 || row.text.toLowerCase().indexOf(query) >= 0); });
+    }
+    var choices = (state.epics || []).slice();
+    selected.concat(draft).forEach(function(key) {
+      if (!choices.some(function(epic) { return epic.key === key; })) choices.push({key:key,summary:"Сохранённый Epic, отсутствует в списке"});
+    });
+    choices.forEach(function(epic) {
+      var key = String(epic.key || ""); if (!key || seen[key]) return; seen[key] = true;
+      var text = epicLabel(epic), $row = $("<label/>").addClass("ujg-esi-epic-option");
+      var $check = $("<input/>").attr({type:"checkbox",value:key}).prop("checked",draft.indexOf(key) >= 0);
+      $check.on("change",function() {
+        if (this.checked) draft.push(key); else draft = draft.filter(function(value) { return value !== key; });
+        updateDraft();
+      });
+      $row.append($check,$("<span/>").text(text)); $list.append($row); rows.push({key:key,text:text,node:$row});
+    });
+    var $hint = $("<p/>").addClass("ujg-esi-epic-hint").attr({role:"status","aria-live":"polite"});
+    var $actions = $("<div/>").addClass("ujg-esi-epic-actions");
+    $actions.append($("<button/>").attr("type","button").text("Очистить").on("click",function() { draft=[]; $list.find("input").prop("checked",false); updateDraft(); filter(); }),
+      $("<button/>").attr("type","button").addClass("ujg-esi-epic-apply").text("ОК").on("click",function() { if (services.onEpicApply) services.onEpicApply(); restoreFocus(); }),
+      $("<button/>").attr("type","button").addClass("ujg-esi-epic-cancel").text("Отмена").on("click",cancel));
+    $search.on("input",filter);
+    $popup.on("keydown",function(event) { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel(); } });
+    $popup.append($search,$hint,$list,$actions); $wrap.append($popup); updateDraft(); filter();
+    $(document).on("click.ujgEsiEpic",function(event) { if (!$(event.target).closest(".ujg-esi-epic-picker").length) cancel(); });
+    setTimeout(function() { if ($search[0] && $search[0].isConnected) $search.trigger("focus"); },0);
   }
 
   function appendFileInput($actions) {
@@ -12859,6 +12856,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (dialog.epicKey && !epicOptions.some(function(option) { return option.value === dialog.epicKey; })) {
       epicOptions.push({ value: dialog.epicKey, label: dialog.epicText || dialog.epicKey });
     }
+    if (dialog.epicSelectionNote) $fields.append($("<p/>").addClass("ujg-esi-epic-creation-note").text(dialog.epicSelectionNote));
     appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", epicOptions, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
@@ -13421,8 +13419,7 @@ define("_ujgESI_main", [
   "_ujgESI_remarkReportLoader",
   "_ujgESI_sourceExport",
   "_ujgESI_sourceExportApi",
-  "_ujgESI_statusTransition",
-], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi, statusTransitionModule) {
+  "_ujgESI_statusTransition", "_ujgESI_epicScope"], function($, config, api, excelLoader, parser, creator, mappingStore, xlsxPatcher, rendering, llmClient, teamsModule, activityModule, dueDateSyncModule, componentSyncModule, activityLoaderModule, deadlines, remarkReportLoader, sourceExport, sourceExportApi, statusTransitionModule, epicScope) {
   "use strict";
 
   function searchErrorText(err) {
@@ -13780,7 +13777,7 @@ define("_ujgESI_main", [
     var out = Object.create(null);
     if (source && typeof source === "object" && !Array.isArray(source)) {
       Object.keys(source).forEach(function(project) {
-        if (typeof source[project] === "string") out[project] = source[project].trim();
+        if (typeof source[project] === "string" || Array.isArray(source[project])) out[project] = epicScope.keys(source[project]).length > 1 ? epicScope.keys(source[project]) : epicScope.scalar(source[project]);
       });
     }
     return out;
@@ -13793,9 +13790,9 @@ define("_ujgESI_main", [
       // Merge the latest object so grid preferences and other project choices survive.
       var stored = readStoredState(storageKey);
       stored.projectKey = projectKey;
-      if (projectKey && typeof epicKey === "string") {
+      if (projectKey && epicKey !== undefined) {
         stored.epicsByProject = storedEpics(stored);
-        stored.epicsByProject[projectKey] = epicKey;
+        stored.epicsByProject[projectKey] = epicScope.keys(epicKey).length > 1 ? epicScope.keys(epicKey) : epicScope.scalar(epicKey);
       }
       storage.setItem(storageKey, JSON.stringify(stored));
     } catch (err) {
@@ -14427,6 +14424,7 @@ define("_ujgESI_main", [
       projectKey: "",
       epics: [],
       epicKey: "",
+      epicKeys: [],
       rows: [],
       viewMode: "excel",
       reportView: "registry",
@@ -14736,7 +14734,7 @@ define("_ujgESI_main", [
         state.mappingEditorOpen || state.dueDateSync && state.dueDateSync.open || state.componentSync && state.componentSync.open);
     }
     function statusScope() {
-      return JSON.stringify([state.projectKey,state.epicKey,state.viewMode,state.preferencesStorageKey,state.sourceFileName]);
+      return JSON.stringify([state.projectKey,epicScope.key(state),state.viewMode,state.preferencesStorageKey,state.sourceFileName]);
     }
     var statusTransition = statusTransitionModule ? statusTransitionModule.create({api:api,scope:statusScope,canOperate:statusCanOperate,
       onChange:function(snapshot) {
@@ -15368,6 +15366,7 @@ define("_ujgESI_main", [
     function closeEpicPicker() {
       state.epicPicker.open = false;
       state.epicPicker.query = "";
+      state.epicPicker.draft = null;
     }
 
     function selectedProjectTextFor(projectKey) {
@@ -15776,6 +15775,7 @@ define("_ujgESI_main", [
         projectText: selectedProjectText(),
         epicKey: state.epicKey,
         epicText: selectedEpicText(),
+        epicSelectionNote: state.epicKeys.length > 1 ? "Выбрано несколько эпиков. Укажите один Epic для новой Story или оставьте «Без Epic»." : "",
         epicLinkAllowed: projectEpicLinkAllowed(state.projectKey, issueType),
         summary: summary,
         assigneeId: row && row.ownerAssignee ? row.ownerAssigneeId || "" : settings.storyAssigneeId || "",
@@ -15893,7 +15893,7 @@ define("_ujgESI_main", [
           if (!state.projectKey) {
             var storedProjectKey = readStoredProjectKey(state.preferencesStorageKey);
             if (storedProjectKey && hasProjectKey(storedProjectKey)) state.projectKey = storedProjectKey;
-            state.epicKey = rememberedEpic(state.projectKey);
+            epicScope.apply(state, rememberedEpic(state.projectKey));
           }
           state.loading = false;
           loadTeams();
@@ -16110,7 +16110,8 @@ define("_ujgESI_main", [
     function onLoadRegistry(retry) {
       if (state.statusTransition && state.statusTransition.open && !closeDueDateSyncForContextChange()) return;
       var project = state.projectKey;
-      var epic = state.epicKey;
+      var epic = epicScope.key(state);
+      var selectedEpics = state.epicKeys.slice();
       var seq;
       if (state.viewMode !== "jira" || state.registryLoading) return;
       if (!project) {
@@ -16133,8 +16134,8 @@ define("_ujgESI_main", [
       state.createDialog = null;
       closeUserPicker();
       render();
-      registryRead(run,function() { return api.getProjectIssues(project, epic,registryReadOptions(run,"stories")); }).then(function(data) {
-        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return null;
+      registryRead(run,function() { return api.getProjectIssues(project, selectedEpics.length > 1 ? selectedEpics : epicScope.scalar(selectedEpics),registryReadOptions(run,"stories")); }).then(function(data) {
+        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || epicScope.key(state) !== epic) return null;
         var fetched = normalizeIssues(data);
         var parents = fetched.filter(isStoryIssue);
         var total = data && Number(data.total);
@@ -16147,7 +16148,7 @@ define("_ujgESI_main", [
         for (var offset = 0; offset < childKeys.length; offset += 100) {
           (function(batch) {
             chain = chain.then(function() {
-              if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+              if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || epicScope.key(state) !== epic) return;
               return registryRead(run,function() { return api.getIssuesByKeys(copyArrayForHost(batch),registryReadOptions(run,"linked")); }).then(function(childData) {
                 var found = issueMapByKey(childData);
                 Object.keys(found).forEach(function(key) { children[key] = found[key]; });
@@ -16157,7 +16158,7 @@ define("_ujgESI_main", [
         }
         return chain.then(function() { return { parents: parents, children: children, warning: warning }; });
       }).then(function(data) {
-        if (!data || seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+        if (!data || seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || epicScope.key(state) !== epic) return;
         registryRows = data.parents.map(function(issue) {
           var key = issueKey(issue);
           var createdChildren = knownCreatedChildrenForKey(key);
@@ -16189,7 +16190,7 @@ define("_ujgESI_main", [
         if (state.reportView === "activity") onLoadActivityHistory({onlyIncomplete:true});
         else startRegistryHistory();
       }).then(null, function(err) {
-        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || state.epicKey !== epic) return;
+        if (seq !== registrySeq || state.viewMode !== "jira" || state.projectKey !== project || epicScope.key(state) !== epic) return;
         state.registryLoading = false;
         state.registryError = "Не удалось загрузить Jira: " + searchErrorText(err);
         finishRegistryRead(run,err);
@@ -16206,7 +16207,7 @@ define("_ujgESI_main", [
         state.syncLoading = false;
       }
       state.projectKey = projectKey != null ? String(projectKey).trim() : "";
-      state.epicKey = rememberedEpic(state.projectKey);
+      epicScope.apply(state, rememberedEpic(state.projectKey));
       loadTeams();
       invalidateRegistry();
       state.error = "";
@@ -16226,22 +16227,24 @@ define("_ujgESI_main", [
 
     function onEpicSearch(query) {
       if (!state.projectKey) return;
+      if (!state.epicPicker.open) state.epicPicker.draft = state.epicKeys.slice();
       state.epicPicker.open = true;
       state.epicPicker.query = query != null ? String(query) : "";
       render();
     }
 
     function onEpicSelect(epicKey) {
+      if (epicScope.key(epicKey) === epicScope.key(state)) { closeEpicPicker(); render(); return; }
       if (!closeDueDateSyncForContextChange()) return;
       invalidateActivityHistory();
       if (state.syncLoading) {
         syncSeq += 1;
         state.syncLoading = false;
       }
-      state.epicKey = epicKey != null ? String(epicKey).trim() : "";
+      epicScope.apply(state, epicKey);
       if (state.projectKey) {
-        epicChoices[state.projectKey] = state.epicKey;
-        writeStoredSelection(state.preferencesStorageKey, state.projectKey, state.epicKey);
+        epicChoices[state.projectKey] = state.epicKeys.slice();
+        writeStoredSelection(state.preferencesStorageKey, state.projectKey, state.epicKeys);
       }
       invalidateRegistry();
       state.createDialog = null;
@@ -16942,7 +16945,7 @@ define("_ujgESI_main", [
       }
       var confirmedRows = state.rows;
       var confirmedViewMode = state.viewMode;
-      var confirmedEpicKey = state.epicKey;
+      var confirmedEpicKey = epicScope.key(state);
       var confirmedWorkbook = state.sourceWorkbook;
       var confirmedBuffer = state.sourceFileBuffer;
       var confirmedFileName = state.sourceFileName;
@@ -16951,7 +16954,7 @@ define("_ujgESI_main", [
       var previousErrors = row.errors;
       var childCreateStarted = false;
       function staleContext() {
-        return dialog.scopeProjectKey !== state.projectKey || state.epicKey !== confirmedEpicKey ||
+        return dialog.scopeProjectKey !== state.projectKey || epicScope.key(state) !== confirmedEpicKey ||
           state.viewMode !== confirmedViewMode || state.rows !== confirmedRows || state.rows[dialog.rowIndex] !== row ||
           state.sourceWorkbook !== confirmedWorkbook || state.sourceFileBuffer !== confirmedBuffer ||
           state.sourceFileName !== confirmedFileName || fileReadSeq !== confirmedFileReadSeq || state.loading || issueKeyFromRow(row) !== parentKey;
@@ -17176,7 +17179,7 @@ define("_ujgESI_main", [
       return llmClient.writeStoredConfig(storage, prompted, config.LLM_CONFIG_STORAGE_KEY);
     }
 
-    function sourceExportScope() { return {projectKey:state.projectKey,epicKey:state.epicKey,baseUrl:state.baseUrl,sourceFileName:state.sourceFileName}; }
+    function sourceExportScope() { return {projectKey:state.projectKey,epicKeys:state.epicKeys.slice(),epicKey:state.epicKey,baseUrl:state.baseUrl,sourceFileName:state.sourceFileName}; }
     function onSourceExportPlan() { return sourceExportApi.create(sourceExportScope()).plan; }
     function onLoadSourceExport(options) {
       options=options || {};
@@ -17206,7 +17209,7 @@ define("_ujgESI_main", [
     function onLoadRemarkReport(key, options) {
       options = options || {};
       var rows = state.rows, row = (rows || []).filter(function(value) { return issueKeyFromRow(value) === key; })[0];
-      function scope() { return JSON.stringify([state.projectKey,state.epicKey,state.viewMode,state.preferencesStorageKey,state.sourceFileName]); }
+      function scope() { return JSON.stringify([state.projectKey,epicScope.key(state),state.viewMode,state.preferencesStorageKey,state.sourceFileName]); }
       var originalScope = scope();
       function cancelled() { return state.rows !== rows || scope() !== originalScope || !!(options.isCancelled && options.isCancelled()); }
       return Promise.resolve().then(function() {
@@ -17759,6 +17762,10 @@ define("_ujgESI_main", [
       onEpicChange: onEpicChange,
       onEpicSearch: onEpicSearch,
       onEpicSelect: onEpicSelect,
+      onEpicOpen: function() { onEpicSearch(""); },
+      onEpicCancel: function() { closeEpicPicker(); render(); },
+      onEpicDraft: function(keys) { state.epicPicker.draft = epicScope.keys(keys); },
+      onEpicApply: function() { onEpicSelect(state.epicPicker.draft || state.epicKeys); },
       onFileChange: onFileChange,
       onSubtasksChange: onSubtasksChange,
       onToggleSheetPicker: onToggleSheetPicker,
@@ -17850,7 +17857,7 @@ define("_ujgESI_main", [
         var handoffHistory=enteringActivity && state.viewMode === "jira" && registryLoaded &&
           historyOwner && historyOwner.mode === "jira" && historyOwner.rows === state.rows && state.rows === registryRows &&
           historyOwner.scope === registryPublishedScope && registryPublishedScope && registryPublishedScope.rows === registryRows &&
-          registryPublishedScope.project === state.projectKey && registryPublishedScope.epic === state.epicKey &&
+          registryPublishedScope.project === state.projectKey && registryPublishedScope.epic === epicScope.key(state) &&
           state.registryProgress && state.registryProgress.phase === "history" && state.registryProgress.status === "running";
         if (state.reportView !== view) invalidateActivityHistory();
         state.reportView = view;

@@ -15,7 +15,7 @@ function setup(activityReport, configureWindow) {
   modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
   if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,componentFacets: () => [],componentRows: rows => rows,statusLabel: value => value,statusTone: () => "unknown",eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
-  const files=["remark-id", "deadlines", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
+  const files=["epic-scope","remark-id", "deadlines", "registry", "icons", "teams", "teams-ui", "statistics", "statistics-ui", "grid"];
   if (activityReport) {
     modules._ujgESI_marked = require("../../vendor/marked-16.4.2.umd.js");
     files.push("activity-ai","activity-brief","remark-report","activity-markdown","llm-diagnostics-ui","activity-ai-ui","remark-report-ui","source-export","source-export-ui","activity-management-ui","activity-store","activity-ui");

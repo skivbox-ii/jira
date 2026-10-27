@@ -126,6 +126,10 @@ async function activity(page,width) {
     fixtureIssues["EVOSCADA-50000"].fields.comment={startAt:0,total:3,comments:comments.slice(0,1)};
     usabilityFixture.commentPages["EVOSCADA-50000"]=comments;
   });
+  // Date/layout updates can leave the pointer over a metric and open its hover preview.
+  // Dismiss that user-visible overlay before exercising the separate refresh control.
+  await page.mouse.move(0,0);
+  await page.keyboard.press("Escape");
   await page.getByRole("button",{name:"Обновить историю",exact:true}).click();
   await page.waitForFunction(()=>!usabilityState.activityLoading,null,{timeout:120000});
   assert.deepEqual(await page.evaluate(()=>usabilityFixture.requests.filter(r=>r.url.endsWith("/comment")).map(r=>r.page)),[0,2]);

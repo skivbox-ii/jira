@@ -164,6 +164,7 @@ const files = {
   "/": [path.join(__dirname,"import-preview.html"),"text/html; charset=utf-8"],
   "/test/preview-bootstrap.js": [path.join(__dirname,"import-preview-bootstrap.js"),"text/javascript"],
   "/test/usability-fixture.js": [path.join(__dirname,"import-usability-fixture.js"),"text/javascript"],
+  "/test/multiple-epics-fixture.js": [path.join(__dirname,"import-multiple-epics-fixture.js"),"text/javascript"],
   "/test/progressive-fixture.js": [path.join(__dirname,"import-progressive-fixture.js"),"text/javascript"],
   "/test/jquery.js": [require.resolve("jquery/dist/jquery.js"),"text/javascript"],
   "/test/xlsx.js": [require.resolve("xlsx/dist/xlsx.full.min.js"),"text/javascript"],
@@ -190,6 +191,8 @@ const server = http.createServer((req,res) => {
       '<script src="/test/usability-fixture.js"></script>\n<script src="/test/preview-bootstrap.js">');
     if (requestUrl.searchParams.has("progressive")) html=html.replace('<script src="/test/preview-bootstrap.js">',
       '<script src="/test/progressive-fixture.js"></script>\n<script src="/test/preview-bootstrap.js">');
+    if (requestUrl.searchParams.has("multiEpics")) html=html.replace('<script src="/test/preview-bootstrap.js">',
+      '<script src="/test/multiple-epics-fixture.js"></script>\n<script src="/test/preview-bootstrap.js">');
     res.setHeader("Content-Type","text/html; charset=utf-8");return res.end(html);
   }
   if (pathname === "/test/performance-fixture.js") {

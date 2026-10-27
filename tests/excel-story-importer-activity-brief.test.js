@@ -275,3 +275,8 @@ test("run checks cancellation before and after call, and never retries failures"
   await assert.rejects(engine.run(plan,async()=>{calls++;cancelled=true;return {text:"late"};},{isCancelled:()=>cancelled}),/отмен/i);
   assert.equal(calls,2);
 });
+test('brief scope includes every epic and changes cache when only the second key changes',()=>{
+ const options={date:'2026-09-27',days:1,now:Date.parse('2026-09-27T12:00:00Z')},engine=brief();
+ const a=engine.prepare([],[],{...options,scope:{projectKey:'P',epicKeys:['P-20','P-10','P-20']}}),b=engine.prepare([],[],{...options,scope:{projectKey:'P',epicKeys:['P-10','P-20']}}),c=engine.prepare([],[],{...options,scope:{projectKey:'P',epicKeys:['P-10','P-30']}});
+ assert.equal(a.scopeKey,b.scopeKey);assert.notEqual(a.scopeKey,c.scopeKey);assert.deepEqual(JSON.parse(a.request.userPrompt).context.scope.epicKeys,['P-10','P-20']);
+});

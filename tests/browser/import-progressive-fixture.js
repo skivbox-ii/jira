@@ -46,6 +46,7 @@
           var keys=/key in\s*\(([^)]+)\)/i.exec(payload.jql || "");
           var all=keys ? keys[1].split(",").map(function(key) { return fixtureIssues[key.trim().replace(/^"|"$/g,"")]; }).filter(Boolean)
             : Object.values(fixtureIssues).filter(function(issue) { return issue.fields.issuetype.name === "История"; });
+          if (typeof control.selectIssues === "function") all=control.selectIssues(payload,all);
           var count=Math.min(Number(payload.maxResults)||50,control.cap || 50);
           deferred.resolve({startAt:offset,total:all.length,maxResults:count,issues:all.slice(offset,offset+count).map(function(issue) { return projected(issue,payload); })});
         } else {

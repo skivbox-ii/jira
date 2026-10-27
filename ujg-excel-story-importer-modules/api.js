@@ -1,4 +1,4 @@
-define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
+define("_ujgESI_api", ["jquery", "_ujgESI_config", "_ujgESI_epicScope"], function($, config, epicScope) {
   "use strict";
 
   function quoteJqlString(value) {
@@ -288,11 +288,12 @@ define("_ujgESI_api", ["jquery", "_ujgESI_config"], function($, config) {
     },
     getProjectIssues: function(projectKey, epicKey, options) {
       var project = projectKey != null ? String(projectKey).trim() : "";
-      var epic = epicKey != null ? String(epicKey).trim() : "";
+      var epics = epicScope.keys(epicKey);
       var jql;
       if (!project) return Promise.resolve({ issues: [] });
       jql = "project = " + toJqlToken(project) + " AND issuetype = Story";
-      if (epic && config.EPIC_LINK_FIELD) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + " = " + toJqlToken(epic);
+      if (epics.length && !String(config.EPIC_LINK_FIELD || "").trim()) return Promise.reject(new Error("Не настроено поле связи с эпиком"));
+      if (epics.length) jql += " AND " + epicLinkJqlField(config.EPIC_LINK_FIELD) + (epics.length === 1 ? " = " + toJqlToken(epics[0]) : " IN (" + epics.map(toJqlToken).join(", ") + ")");
       jql += " ORDER BY key DESC";
       return paginatedSearch([jql],Object.assign({stage:"stories",expand:"changelog"},options),1000);
     },

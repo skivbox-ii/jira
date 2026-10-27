@@ -1,7 +1,7 @@
-define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons","_ujgESI_llmDiagnosticsUi"], function($, engine, markdown, icon, diagnosticsUi) {
+define("_ujgESI_remarkReportUi", ["jquery","_ujgESI_remarkReport","_ujgESI_activityMarkdown","_ujgESI_icons","_ujgESI_llmDiagnosticsUi", "_ujgESI_epicScope"], function($, engine, markdown, icon, diagnosticsUi, epicScope) {
   "use strict";
   function scope(state) {
-    return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.userScope,state.viewMode]);
+    return JSON.stringify([state.baseUrl,state.projectKey,epicScope.key(state),state.preferencesStorageKey,state.userScope,state.viewMode]);
   }
   function stamp(value) {
     var ms = Date.parse(value);

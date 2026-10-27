@@ -27,6 +27,7 @@ module.exports = function loadAmdModule(filePath, deps, extraGlobals) {
             }
             exported = factory.apply(null, (names || []).map(function(dep) {
                 if (!Object.prototype.hasOwnProperty.call(deps, dep)) {
+                    if (dep === "_ujgESI_epicScope") return module.exports(path.join(__dirname,"../../ujg-excel-story-importer-modules/epic-scope.js"), {});
                     // Legacy importer harnesses do not exercise the optional status dialog.
                     if (dep === "_ujgESI_statusTransition" || dep === "_ujgESI_statusTransitionUi") return null;
                     throw new Error("Missing dependency: " + dep);

@@ -1,6 +1,6 @@
-define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons"], function($,engine,icon) {
+define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons", "_ujgESI_epicScope"], function($,engine,icon, epicScope) {
   "use strict";
-  function scope(state) {return JSON.stringify([state.baseUrl,state.projectKey,state.epicKey,state.preferencesStorageKey,state.viewMode,state.sourceFileName]);}
+  function scope(state) {return JSON.stringify([state.baseUrl,state.projectKey,epicScope.key(state),state.preferencesStorageKey,state.viewMode,state.sourceFileName]);}
   function requestLines(requests) {
     return (requests||[]).map(function(r,index){
       if(typeof r==="string")return (index+1)+". "+r;
@@ -63,7 +63,7 @@ define("_ujgESI_sourceExportUi", ["jquery","_ujgESI_sourceExport","_ujgESI_icons
       $dialog=$("<section/>").addClass("ujg-esi-activity-ai-dialog ujg-esi-source-dialog").attr({role:"dialog","aria-modal":"true","aria-label":"Исходные данные Jira",tabindex:"-1"}).appendTo(document.body);
       var $close=button("X","Закрыть исходные данные","ujg-esi-source-close",dismiss);
       $dialog.append($("<header/>").addClass("ujg-esi-ai-header").append($("<h2/>").text("Исходные данные Jira"),$close));
-      $status=$("<p/>").addClass("ujg-esi-source-status").attr({role:"status","aria-live":"polite"}).text(state.projectKey+" · "+(state.epicKey||"Все истории проекта"));
+      $status=$("<p/>").addClass("ujg-esi-source-status").attr({role:"status","aria-live":"polite"}).text(state.projectKey+" · "+epicScope.label(state));
       $load=button("RefreshCw","Загрузить исходные данные","ujg-esi-source-load",read).append($("<span/>").text("Загрузить"));
       var $json=button("Download","Скачать полный JSON","ujg-esi-source-json",function(){if(data)download("jira-source-"+state.projectKey+"-"+data.finishedAt.replace(/[:.]/g,"-")+".json",JSON.stringify(data,null,2),"application/json");}).append($("<span/>").text("JSON"));
       var $all=button("Download","Скачать текст за все дни","ujg-esi-source-all",function(){if(data)download("jira-source-all.txt",engine.text(data),"text/plain");}).append($("<span/>").text("Все дни · TXT"));

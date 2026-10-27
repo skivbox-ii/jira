@@ -10,6 +10,7 @@ var OUTPUT_FILE = path.join(__dirname, "ujg-excel-story-importer.js");
 var MODULE_ORDER = [
   { dir: SHARED_DIR, file: "llm-client.js" },
   "config.js",
+  "epic-scope.js",
   "mapping-store.js",
   "description.js",
   "deadlines.js",

@@ -1,12 +1,13 @@
-define("_ujgESI_sourceExportApi", ["jquery","_ujgESI_config"], function($,config) {
+define("_ujgESI_sourceExportApi", ["jquery","_ujgESI_config", "_ujgESI_epicScope"], function($,config, epicScope) {
   "use strict";
   function quote(value) { return '"' + String(value).replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"'; }
   function create(scope) {
     if (!scope || !scope.projectKey) throw new Error("Не выбран проект Jira");
-    var field = String(config.EPIC_LINK_FIELD || ""), match = /^customfield_(\d+)$/.exec(field);
-    if (scope.epicKey && !field) throw new Error("Не настроено поле связи с эпиком");
+    var epics = epicScope.keys(scope);
+    var field = String(config.EPIC_LINK_FIELD || "").trim(), match = /^customfield_(\d+)$/.exec(field);
+    if (epics.length && !field) throw new Error("Не настроено поле связи с эпиком");
     var jql = "project = " + quote(scope.projectKey) + " AND issuetype = Story";
-    if (scope.epicKey) jql += " AND " + (match ? "cf[" + match[1] + "]" : quote(field)) + " = " + quote(scope.epicKey);
+    if (epics.length) jql += " AND " + (match ? "cf[" + match[1] + "]" : quote(field)) + (epics.length === 1 ? " = " + quote(epics[0]) : " IN (" + epics.map(quote).join(", ") + ")");
     jql += " ORDER BY key ASC";
     var base = String(config.baseUrl || "").replace(/\/$/,""), requests = [];
     function read(path,params) {

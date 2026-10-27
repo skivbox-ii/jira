@@ -14,6 +14,7 @@ function setup(realRenderer = false) {
   };
   modules._ujgESI_activityMarkdown = {render(value) { return $("<p/>").text(value); }};
   dom.window.define = (name,deps,factory) => modules[name] = factory(...deps.map(dep => modules[dep]));
+  dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/epic-scope.js"),"utf8"));
   dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/icons.js"),"utf8"));
   dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/llm-diagnostics-ui.js"),"utf8"));
   if (realRenderer) {
@@ -346,7 +347,7 @@ test("Escape after a Dynamics redraw returns focus to the newly mounted report c
   const dom=new JSDOM('<div id="root"></div>',{runScripts:"outside-only",url:"http://localhost"});
   const $=jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")};
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","remark-report","activity-markdown","llm-diagnostics-ui","activity-ai-ui","remark-report-ui","source-export","source-export-ui","activity-store","activity-ui"])
+  for (const file of ["epic-scope","teams","remark-id","activity","icons","activity-management-ui","activity-ai","activity-brief","remark-report","activity-markdown","llm-diagnostics-ui","activity-ai-ui","remark-report-ui","source-export","source-export-ui","activity-store","activity-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   const state={rows:[],teams:[],projectKey:"P",epicKey:"P-1",viewMode:"jira"};
@@ -424,7 +425,7 @@ test("real engine and renderer send the prepared slice through the service", asy
   const dom = new JSDOM('<button id="anchor">Open</button>',{runScripts:"outside-only",url:"http://localhost"});
   const $ = jquery(dom.window), modules={jquery:$,_ujgESI_marked:require("../../vendor/marked-16.4.2.umd.js")}, requests=[];
   dom.window.define=(name,deps,factory)=>modules[name]=factory(...deps.map(dep=>modules[dep]));
-  for (const file of ["icons","activity-ai","activity-markdown","llm-diagnostics-ui","activity-ai-ui"])
+  for (const file of ["epic-scope","icons","activity-ai","activity-markdown","llm-diagnostics-ui","activity-ai-ui"])
     dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules",file+".js"),"utf8"));
   const ui=modules._ujgESI_activityAiUi.create(); t.after(()=>{ui.destroy();dom.window.close();});
   ui.update({date:"2026-09-24",asOf:"2026-09-24T09:00:00Z",groups:[],events:[],metrics:{events:0},coverage:{complete:1,total:1}},
@@ -479,4 +480,10 @@ test("scoped Markdown styles keep report typography, tables and code readable an
   assert.match(style("code").fontFamily,/monospace/);
   assert.equal(style("pre").overflowX,"auto");
   assert.equal(dom.window.getComputedStyle($(".ujg-esi-ai-question")[0]).maxHeight.replace(/\s/g,""),"min(180px,25vh)");
+});
+test('second epic changes invalidate pending AI even with identical report fingerprint',async t=>{
+ const x=setup();t.after(()=>{x.ui.destroy();x.dom.window.close();});const state={...x.state(),epicKey:'',epicKeys:['P-10','P-20']};
+ x.ui.update(x.report(),state,x.services);x.ui.open(x.$('#anchor')[0]);x.$('.ujg-esi-ai-generate').trigger('click');await x.flush();
+ x.ui.update(x.report(),{...state,epicKeys:['P-10','P-30']},x.services);assert.equal(x.pending[0].options.isCancelled(),true);
+ x.pending[0].resolve({markdown:'Late second epic',completedParts:1,totalParts:1});await x.flush();assert.doesNotMatch(x.$('.ujg-esi-ai-dialog').text(),/Late second epic/);
 });

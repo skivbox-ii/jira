@@ -1,4 +1,4 @@
-define("_ujgESI_activityAi", [], function() {
+define("_ujgESI_activityAi", ["_ujgESI_epicScope"], function(epicScope) {
   "use strict";
 
   var USER_LIMIT = 42000, BASE_LIMIT = 6000, NOTES_LIMIT = 6000;
@@ -137,7 +137,7 @@ define("_ujgESI_activityAi", [], function() {
       includedFragments:batch.filter(function(record) { return record.type === "history"; }).length
     })};
     return JSON.stringify({stage:stage || (conversation ? "answer" : "report"),
-      scope:{projectKey:plan.scope.projectKey,epicKey:plan.scope.epicKey,baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode,components:plan.scope.components || undefined},
+      scope:{projectKey:plan.scope.projectKey,epicKeys:epicScope.keys(plan.scope),epicKey:epicScope.scalar(plan.scope),baseUrl:plan.scope.baseUrl,viewMode:plan.scope.viewMode,components:plan.scope.components || undefined},
       date:plan.date,asOf:plan.asOf,timezone:plan.timezone,
       metrics:plan.metrics,confirmed:plan.confirmed,totals:plan.totals,coverage:plan.coverage,commentCoverage:plan.commentCoverage,deadlineCoverage:plan.deadlineCoverage,deadlineReferenceDate:plan.deadlineReferenceDate,balance:plan.balance,observed:plan.observed,
       transitions:plan.transitions,transfers:plan.transfers,teams:plan.teams,
@@ -227,9 +227,11 @@ define("_ujgESI_activityAi", [], function() {
     ["projectKey","epicKey","baseUrl","preferencesStorageKey","userScope","viewMode"].forEach(function(field) {
       if (scope && scope[field] != null) currentScope[field] = clone(scope[field]);
     });
+    currentScope.epicKeys = epicScope.keys(scope);
+    currentScope.epicKey = epicScope.scalar(currentScope);
     delete signature.generatedAt;
     currentScope.components = Array.isArray(data.componentScope) ? data.componentScope : null;
-    var scopeKey = JSON.stringify([currentScope.projectKey || "",currentScope.epicKey || "",currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || "",currentScope.components && currentScope.components.map(function(item) { return item.id; }).sort()]);
+    var scopeKey = JSON.stringify([currentScope.projectKey || "",epicScope.key(currentScope),currentScope.baseUrl || "",data.date || "",currentScope.preferencesStorageKey || "",currentScope.userScope || "",currentScope.viewMode || "",currentScope.components && currentScope.components.map(function(item) { return item.id; }).sort()]);
     var plan = {scopeKey:scopeKey,fingerprint:fingerprint(signature),scope:currentScope,
       date:data.date,asOf:data.asOf,timezone:data.timezone || "МСК",metrics:data.metrics || {},confirmed:data.confirmed || null,coverage:data.coverage || {},commentCoverage:data.commentCoverage || null,deadlineCoverage:data.deadlineCoverage || {},deadlineReferenceDate:data.deadlineReferenceDate || null,
       eventCount:data.events.length,balance:data.balance || {},observed:data.observed || {},totals:totals(data),transitions:data.transitions || [],

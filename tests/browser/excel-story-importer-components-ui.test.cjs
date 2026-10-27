@@ -12,6 +12,7 @@ test("component editor distinguishes absent components from noncanonical names",
   const $ = jquery(dom.window);
   const modules = {jquery:$, _ujgESI_grid:{button:()=>$("<button/>"),create:()=>({render(){},dismissPopover(){},resetFiltersButton:()=>$("<button/>"),teamFilterButton:()=>$("<button/>")})}, _ujgESI_icons:()=>$("<span/>")};
   dom.window.define = (name,deps,factory) => {modules[name]=factory(...deps.map(dep=>modules[dep]));};
+  dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/epic-scope.js"),"utf8"));
   dom.window.eval(fs.readFileSync(path.join(__dirname,"../../ujg-excel-story-importer-modules/rendering.js"),"utf8"));
   modules._ujgESI_rendering.init($("#root"),{});
   modules._ujgESI_rendering.render({rows:[], mappingEditorOpen:true, activeMappingBlock:"modules", componentsLoaded:true,

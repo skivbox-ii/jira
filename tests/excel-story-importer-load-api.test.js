@@ -80,3 +80,14 @@ test('linked registry lookups explicitly omit heavy data; HTTP errors never cons
   assert.deepEqual(calls.map(b=>b.startAt),[0,50,0]);for(const b of calls){assert.equal(b.maxResults,50);assert.ok(!b.fields.includes('comment'));assert.ok(!b.fields.includes('worklog'));assert.equal(b.expand,undefined);}
   let reads=0;const broken=setup(()=>{reads++;return Promise.reject({status:502,statusText:'Bad Gateway'});});await assert.rejects(broken.getProjectIssues('P','',{profile:'registry',pageSize:50,timeoutRetrySize:25,expand:null}));assert.equal(reads,1);
 });
+test('multi epic search normalizes a set into one project constrained IN query',async()=>{
+  const calls=[],api=setup(opts=>{calls.push(JSON.parse(opts.data));return Promise.resolve({startAt:0,total:0,issues:[]});});
+  await api.getProjectIssues('P',[' P-20 ','P-10','P-20','']);
+  assert.match(calls[0].jql,/project = P AND issuetype = Story AND cf\[1\] IN \(P-10, P-20\)/);
+  await api.getProjectIssues('P','P-10');assert.match(calls[1].jql,/cf\[1\] = P-10/);
+  await api.getProjectIssues('P',[]);assert.doesNotMatch(calls[2].jql,/cf\[/);
+});
+test('selected epics reject an unconfigured link field instead of reading the entire project',async()=>{
+  const api=load(path.join(__dirname,'../ujg-excel-story-importer-modules/api.js'),{jquery:{ajax:()=>{throw Error('must not read');}},_ujgESI_config:{baseUrl:'/jira'}});
+  await assert.rejects(async()=>api.getProjectIssues('P',['P-1','P-2']),/эпик/i);
+});

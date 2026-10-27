@@ -339,3 +339,45 @@ test("unavailable storage and throwing user metadata preserve in-session choices
     assert.equal(app.state.error, "");
   }
 });
+
+test('multiple epics round trip canonically per project and never choose a scalar creation target', async()=>{
+  const storage=memoryStorage(),app=await loadImporter({storage});
+  app.callbacks.onProjectChange('P1');app.callbacks.onEpicSelect([' P1-20 ','P1-10','P1-20']);
+  assert.deepEqual(Array.from(app.state.epicKeys),['P1-10','P1-20']);assert.equal(app.state.epicKey,'');
+  app.callbacks.onProjectChange('P2');assert.deepEqual(Array.from(app.state.epicKeys),[]);
+  app.callbacks.onEpicSelect('P2-30');app.callbacks.onProjectChange('P1');
+  assert.deepEqual(Array.from(app.state.epicKeys),['P1-10','P1-20']);
+  const reload=await loadImporter({storage});assert.deepEqual(Array.from(reload.state.epicKeys),['P1-10','P1-20']);
+  const isolated=await loadImporter({storage:memoryStorage()});assert.deepEqual(Array.from(isolated.state.epicKeys),[]);
+});
+test('changing only the second epic discards a late registry result', async()=>{
+  const pending=deferred(),calls=[],app=await loadImporter({storage:memoryStorage(),getProjectIssues:(p,e)=>{calls.push(e);return pending.promise;}});
+  app.callbacks.onProjectChange('P1');app.callbacks.onEpicSelect(['P1-10','P1-20']);app.callbacks.onViewModeChange('jira');app.callbacks.onLoadRegistry();
+  app.callbacks.onEpicSelect(['P1-10','P1-30']);pending.resolve({issues:[{key:'P1-1',fields:{issuetype:{name:'Story'},summary:'stale'}}]});await flush();await flush();
+  assert.deepEqual(Array.from(calls[0]),['P1-10','P1-20']);assert.equal(app.state.rows.length,0);
+});
+test('reordering and duplicating the same epic set preserves the loaded rows',async()=>{
+ const app=await loadImporter({storage:memoryStorage(),getProjectIssues:()=>Promise.resolve({issues:[{key:'P1-1',fields:{issuetype:{name:'Story'},summary:'Current'}}]})});
+ app.callbacks.onProjectChange('P1');app.callbacks.onEpicSelect(['P1-10','P1-20']);app.callbacks.onViewModeChange('jira');app.callbacks.onLoadRegistry();await flush();await flush();
+ assert.equal(app.state.rows.length,1);const rows=app.state.rows;
+ app.callbacks.onEpicSelect(['P1-20','P1-10','P1-20']);assert.equal(app.state.rows,rows);
+});
+test('multi epic Story creation defaults to no epic and accepts a separate scalar choice',async()=>{
+ const app=await loadImporter({storage:memoryStorage()});app.callbacks.onProjectChange('P1');await flush();
+ app.callbacks.onEpicSelect(['P1-10','P1-20']);app.callbacks.onFileChange({name:'test.xlsx'});await flush();app.callbacks.onCreateRow(0);
+ assert.equal(app.state.createDialog.epicKey,'');assert.match(app.state.createDialog.epicSelectionNote,/несколько/);
+ app.callbacks.onDialogFieldChange('epicKey','P1-20');assert.equal(app.state.createDialog.epicKey,'P1-20');assert.equal(app.state.epicKey,'');
+});
+test('two epic choices are isolated between identified users sharing storage',async()=>{
+ const storage=memoryStorage(),globals=user=>({AJS:{Meta:{get:()=>user}}});
+ const alice=await loadImporter({storage,globals:globals('alice')}),bob=await loadImporter({storage,globals:globals('bob')});
+ alice.callbacks.onProjectChange('P1');alice.callbacks.onEpicSelect(['P1-10','P1-20']);bob.callbacks.onProjectChange('P1');bob.callbacks.onEpicSelect(['P1-30','P1-40']);
+ const restored=await loadImporter({storage,globals:globals('alice')});assert.deepEqual(Array.from(restored.state.epicKeys),['P1-10','P1-20']);
+ assert.notEqual(alice.state.preferencesStorageKey,bob.state.preferencesStorageKey);
+});
+test('catalog arriving during a draft preserves search and unsaved choices',async()=>{
+ const pending=deferred(),app=await loadImporter({storage:memoryStorage(),getProjectEpics:()=>pending.promise});
+ app.callbacks.onProjectChange('P1');app.callbacks.onEpicSelect(['P1-10','P1-20']);app.callbacks.onEpicOpen();app.callbacks.onEpicDraft(['P1-20','P1-30']);app.callbacks.onEpicSearch('search');
+ pending.resolve({issues:[{key:'P1-40'}]});await flush();assert.equal(app.state.epicPicker.open,true);assert.equal(app.state.epicPicker.query,'search');assert.deepEqual(Array.from(app.state.epicPicker.draft),['P1-20','P1-30']);
+ app.callbacks.onEpicCancel();assert.deepEqual(Array.from(app.state.epicKeys),['P1-10','P1-20']);
+});

@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi", "_ujgESI_epicScope"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi, epicScope) {
   "use strict";
 
   var $root;
@@ -638,80 +638,57 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function appendEpicPicker($toolbar, state) {
-    var picker = state && state.epicPicker ? state.epicPicker : {};
-    var disabled = !state.projectKey;
-    var active = !disabled && !!picker.open;
-    var selected = selectedEpicLabel(state);
-    var value = active ? picker.query || "" : selected;
-    var $field = $("<label/>").addClass("ujg-esi-field");
-    var $wrap = $("<div/>")
-      .addClass("ujg-esi-epic-picker")
-      .toggleClass("ujg-esi-epic-picker-active", active);
-    var $input = $("<input/>")
-      .attr("type", "text")
-      .attr("autocomplete", "off")
-      .attr("placeholder", state.projectKey ? "Поиск Epic" : "Сначала проект")
-      .addClass("ujg-esi-epic-search")
-      .val(value);
-    $field.append($("<span/>").text("Epic"));
-    if (disabled) $input.prop("disabled", true);
-    $input.on("input", function() {
-      var query = $(this).val();
-      if (!disabled) scheduleEpicSearch(query);
-    });
-    $wrap.append($input);
-    if (!disabled && state.epicKey) {
-      $wrap.append(
-        $("<button/>")
-          .attr("type", "button")
-          .attr("title", "Очистить Epic")
-          .addClass("ujg-esi-epic-clear")
-          .text("×")
-          .on("click", function() {
-            if (services && services.onEpicSelect) services.onEpicSelect("");
-          })
-      );
-    }
-    if (active) {
-      var $options = $("<div/>").addClass("ujg-esi-epic-options");
-      $options.append(
-        $("<button/>")
-          .attr("type", "button")
-          .addClass("ujg-esi-epic-option")
-          .toggleClass("ujg-esi-epic-option-active", !state.epicKey)
-          .text("Без Epic")
-          .on("click", function() {
-            if (services && services.onEpicSelect) services.onEpicSelect("");
-          })
-      );
-      filteredEpics(state).forEach(function(epic) {
-        var key = epic && epic.key != null ? String(epic.key) : "";
-        if (!key) return;
-        $options.append(
-          $("<button/>")
-            .attr("type", "button")
-            .addClass("ujg-esi-epic-option")
-            .toggleClass("ujg-esi-epic-option-active", key === state.epicKey)
-            .text(epicLabel(epic))
-            .on("click", function() {
-              if (services && services.onEpicSelect) services.onEpicSelect(key);
-            })
-        );
+    var picker = state.epicPicker || {}, selected = epicScope.keys(state), active = !!picker.open && !!state.projectKey;
+    var $field = $("<div/>").addClass("ujg-esi-field"), $wrap = $("<div/>").addClass("ujg-esi-epic-picker");
+    var $toggle = $("<button/>").attr({type:"button","aria-expanded":String(active),"aria-haspopup":"dialog"})
+      .addClass("ujg-esi-epic-toggle").prop("disabled",!state.projectKey)
+      .text(selected.length ? "Эпики: " + selected.length : "Эпики: все истории проекта")
+      .attr("title",epicScope.label(state)).on("click",function() {
+        if (active) cancel(); else if (services.onEpicOpen) services.onEpicOpen();
       });
-      if (!filteredEpics(state).length) {
-        $options.append($("<div/>").addClass("ujg-esi-epic-empty").text("Ничего не найдено"));
-      }
-      $wrap.append($options);
-      if (typeof setTimeout === "function") {
-        setTimeout(function() {
-          var node = $input[0];
-          $input.trigger("focus");
-          if (node && node.setSelectionRange) node.setSelectionRange(String($input.val() || "").length, String($input.val() || "").length);
-        }, 0);
-      }
+    function restoreFocus() { $root.find(".ujg-esi-epic-toggle").trigger("focus"); }
+    function cancel() { if (services.onEpicCancel) services.onEpicCancel(); restoreFocus(); }
+    $(document).off("click.ujgEsiEpic");
+    $field.append($("<span/>").text("Epic"),$wrap.append($toggle)); $toolbar.append($field);
+    if (!active) return;
+    var draft = epicScope.keys(picker.draft == null ? selected : picker.draft);
+    var $popup = $("<div/>").addClass("ujg-esi-epic-options").attr({role:"dialog","aria-label":"Выбор эпиков"});
+    var $search = $("<input/>").addClass("ujg-esi-epic-search").attr({type:"search",placeholder:"Поиск Epic","aria-label":"Поиск эпиков",autocomplete:"off"}).val(picker.query || "");
+    var $list = $("<div/>").addClass("ujg-esi-epic-list"), rows = [], seen = Object.create(null);
+    function updateDraft() {
+      draft = epicScope.keys(draft);
+      if (services.onEpicDraft) services.onEpicDraft(draft);
+      $hint.text(draft.length ? "Выбрано: " + draft.length : "Все истории проекта (без ограничения эпиком)");
     }
-    $field.append($wrap);
-    $toolbar.append($field);
+    function filter() {
+      var query = normalizedSearch($search.val());
+      picker.query = String($search.val() || "");
+      rows.forEach(function(row) { row.node.toggle(draft.indexOf(row.key) >= 0 || row.text.toLowerCase().indexOf(query) >= 0); });
+    }
+    var choices = (state.epics || []).slice();
+    selected.concat(draft).forEach(function(key) {
+      if (!choices.some(function(epic) { return epic.key === key; })) choices.push({key:key,summary:"Сохранённый Epic, отсутствует в списке"});
+    });
+    choices.forEach(function(epic) {
+      var key = String(epic.key || ""); if (!key || seen[key]) return; seen[key] = true;
+      var text = epicLabel(epic), $row = $("<label/>").addClass("ujg-esi-epic-option");
+      var $check = $("<input/>").attr({type:"checkbox",value:key}).prop("checked",draft.indexOf(key) >= 0);
+      $check.on("change",function() {
+        if (this.checked) draft.push(key); else draft = draft.filter(function(value) { return value !== key; });
+        updateDraft();
+      });
+      $row.append($check,$("<span/>").text(text)); $list.append($row); rows.push({key:key,text:text,node:$row});
+    });
+    var $hint = $("<p/>").addClass("ujg-esi-epic-hint").attr({role:"status","aria-live":"polite"});
+    var $actions = $("<div/>").addClass("ujg-esi-epic-actions");
+    $actions.append($("<button/>").attr("type","button").text("Очистить").on("click",function() { draft=[]; $list.find("input").prop("checked",false); updateDraft(); filter(); }),
+      $("<button/>").attr("type","button").addClass("ujg-esi-epic-apply").text("ОК").on("click",function() { if (services.onEpicApply) services.onEpicApply(); restoreFocus(); }),
+      $("<button/>").attr("type","button").addClass("ujg-esi-epic-cancel").text("Отмена").on("click",cancel));
+    $search.on("input",filter);
+    $popup.on("keydown",function(event) { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel(); } });
+    $popup.append($search,$hint,$list,$actions); $wrap.append($popup); updateDraft(); filter();
+    $(document).on("click.ujgEsiEpic",function(event) { if (!$(event.target).closest(".ujg-esi-epic-picker").length) cancel(); });
+    setTimeout(function() { if ($search[0] && $search[0].isConnected) $search.trigger("focus"); },0);
   }
 
   function appendFileInput($actions) {
@@ -1715,6 +1692,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     if (dialog.epicKey && !epicOptions.some(function(option) { return option.value === dialog.epicKey; })) {
       epicOptions.push({ value: dialog.epicKey, label: dialog.epicText || dialog.epicKey });
     }
+    if (dialog.epicSelectionNote) $fields.append($("<p/>").addClass("ujg-esi-epic-creation-note").text(dialog.epicSelectionNote));
     appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", epicOptions, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));

@@ -1,4 +1,4 @@
-define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi", "_ujgESI_sourceExportUi"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi, sourceExportUi) {
+define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_ujgESI_activityManagementUi", "_ujgESI_activityAiUi", "_ujgESI_activityStore", "_ujgESI_activityBrief", "_ujgESI_remarkReportUi", "_ujgESI_sourceExportUi", "_ujgESI_epicScope"], function($, activity, icon, managementUi, activityAiUi, activityStore, activityBrief, remarkReportUi, sourceExportUi, epicScope) {
   "use strict";
   var sequence = 0;
 
@@ -138,7 +138,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       catch (ignore) { /* Storage is best-effort. */ }
     }
     function loadComponentScope(state) {
-      var nextKey = (state.preferencesStorageKey || "ujg-esi-state") + ":activity-components:" + JSON.stringify([state.projectKey || "",state.epicKey || ""]);
+      var nextKey = (state.preferencesStorageKey || "ujg-esi-state") + ":activity-components:" + JSON.stringify([state.projectKey || "",epicScope.keys(state).length > 1 ? epicScope.keys(state) : epicScope.scalar(state)]);
       if (nextKey === componentKey) return;
       componentKey = nextKey; componentSelection = null; componentNames = Object.create(null);
       try {
@@ -650,7 +650,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       snapshot.groups = sortedGroups(snapshot.groups).map(function(group) { return Object.assign({},group,{events:sortedEvents(group.events,group)}); });
       var filterSnapshot = {};
       Object.keys(filters).forEach(function(key) { filterSnapshot[key] = filters[key].slice(); });
-      var html = activity.exportHtml(snapshot, {projectKey:state.projectKey, epicKey:state.epicKey, baseUrl:state.baseUrl, filters:filterSnapshot, sort:Object.assign({},sort)});
+      var html = activity.exportHtml(snapshot, {projectKey:state.projectKey, epicKeys:epicScope.keys(state),epicKey:epicScope.scalar(state), baseUrl:state.baseUrl, filters:filterSnapshot, sort:Object.assign({},sort)});
       var url = URL.createObjectURL(new Blob([html], {type:"text/html;charset=utf-8"}));
       var anchor = document.createElement("a");
       anchor.href = url; anchor.download = "activity-" + date + ".html";
@@ -742,7 +742,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       var scrollLeft = $host && $host.find(".ujg-esi-activity-scroll").scrollLeft() || 0;
       var draft = preserveFilter ? pendingFilterDraft || filterDraftCapture && filterDraftCapture() : null;
       pendingFilterDraft = null;
-      renderedScope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
+      renderedScope = JSON.stringify([currentState.projectKey || "",epicScope.key(currentState),date,currentState.preferencesStorageKey || "ujg-esi-state"]);
       if (resizeObserver) resizeObserver.disconnect();
       closePopover(); closeManagement();
       var state = currentState || {}, services = currentServices || {};
@@ -768,7 +768,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
               date:slice.date,days:days,now:slice.generatedAt,cutoff:slice.asOf,
               scopeWarning:snapshot.viewMode === "jira" ? snapshot.registryWarning : undefined,
               columnMap:settings.columnMap,journalRows:snapshot.deadlineJournalRows,
-              scope:{projectKey:snapshot.projectKey,epicKey:snapshot.epicKey,baseUrl:snapshot.baseUrl,
+              scope:{projectKey:snapshot.projectKey,epicKeys:epicScope.keys(snapshot),epicKey:epicScope.scalar(snapshot),baseUrl:snapshot.baseUrl,
                 preferencesStorageKey:snapshot.preferencesStorageKey,userScope:snapshot.userScope,
                 viewMode:snapshot.viewMode,components:slice.componentScope || null}
             });
@@ -803,7 +803,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
       $controls.append(button("WandSparkles","LLM-отчёт",function() { if (state.activityLoading || state.registryLoading) return; closePopover(); closeManagement(); aiUi.open(this); })
         .addClass("ujg-esi-activity-ai-command").attr({"aria-label":"LLM-отчёт","aria-haspopup":"dialog","aria-expanded":"false"}).prop("disabled",!!(state.activityLoading || state.registryLoading)).append($("<span/>").text("LLM-отчёт")));
       $toolbar.append($controls); $root.append($toolbar);
-      $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (state.epicKey ? " · " + state.epicKey : "") + " · текущие связи и настройки команд; история состава связей недоступна."));
+      $root.append($("<p/>").addClass("ujg-esi-activity-scope").text("Загруженные замечания · " + label(state.projectKey) + (" · " + epicScope.label(state)) + " · текущие связи и настройки команд; история состава связей недоступна."));
       if (componentSelection !== null) $root.append($("<p/>").addClass("ujg-esi-activity-component-scope").text("Компоненты: " + (report.componentScope.map(function(item) { return item.name; }).join(", ") || "не выбраны") + " · текущие компоненты исходных историй"));
       var fullDay = report.asOf && timestamp(report.asOf) === Number(report.end);
       var $metrics = $("<section/>").addClass("ujg-esi-activity-summary").append($("<h3/>").text(!report.asOf ? "Срез на выбранный день не подтверждён" : fullDay ? "Итоги за весь день" : "Итоги на " + cutoff(report) + " МСК"));
@@ -1100,7 +1100,7 @@ define("_ujgESI_activityUi", ["jquery", "_ujgESI_activity", "_ujgESI_icons", "_u
           order.splice(from,1); order.splice(order.indexOf($target.attr("data-column"))+(from < to ? 1 : 0),0,action.id);
           saveLayout(); draw();
         }).on("pointercancel"+namespace,function() { drag = null; });
-      var scope = JSON.stringify([currentState.projectKey || "",currentState.epicKey || "",date,currentState.preferencesStorageKey || "ujg-esi-state"]);
+      var scope = JSON.stringify([currentState.projectKey || "",epicScope.key(currentState),date,currentState.preferencesStorageKey || "ujg-esi-state"]);
       var preserveFilter = renderedScope === scope;
       renderedScope = scope;
       draw(preserveFilter);

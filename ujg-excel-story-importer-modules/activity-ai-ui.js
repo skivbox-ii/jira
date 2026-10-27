@@ -1,4 +1,4 @@
-define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons", "_ujgESI_llmDiagnosticsUi"], function($, activityAi, markdown, icon, diagnosticsUi) {
+define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activityMarkdown", "_ujgESI_icons", "_ujgESI_llmDiagnosticsUi", "_ujgESI_epicScope"], function($, activityAi, markdown, icon, diagnosticsUi, epicScope) {
   "use strict";
   function create() {
     var $dialog, $report, $partial, $history, $question, $ask, $generate, $stop, $progress, $error, $stale, $meta;
@@ -200,7 +200,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
       currentState = state || {}; services = nextServices || {};
       pendingReport = report;
       var nextSelection = JSON.stringify([currentState.baseUrl,currentState.preferencesStorageKey,currentState.userScope,
-        currentState.projectKey,currentState.epicKey,currentState.viewMode,report && report.date,
+        currentState.projectKey,epicScope.key(currentState),currentState.viewMode,report && report.date,
         report && report.componentScope ? report.componentScope.map(function(item) { return item.id; }).sort() : null]);
       if (selectionKey !== nextSelection) {
         selectionKey = nextSelection; serial++; session = null;
@@ -218,7 +218,7 @@ define("_ujgESI_activityAiUi", ["jquery", "_ujgESI_activityAi", "_ujgESI_activit
     function prepareCurrent() {
       var plan = null;
       preparationError = "";
-      try { plan = compact() ? services.onPrepareActivityBrief(pendingReport,currentState,days) : activityAi.prepare(pendingReport,{projectKey:currentState.projectKey,epicKey:currentState.epicKey,
+      try { plan = compact() ? services.onPrepareActivityBrief(pendingReport,currentState,days) : activityAi.prepare(pendingReport,{projectKey:currentState.projectKey,epicKeys:epicScope.keys(currentState),epicKey:epicScope.scalar(currentState),
         baseUrl:currentState.baseUrl,preferencesStorageKey:currentState.preferencesStorageKey,userScope:currentState.userScope,viewMode:currentState.viewMode}); }
       catch (error) { preparationError = textError(error); }
       var nextScope = plan ? plan.scopeKey : selectionKey;

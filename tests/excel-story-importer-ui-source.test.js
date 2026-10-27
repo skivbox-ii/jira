@@ -209,17 +209,14 @@ test("row create action only requires project selection", function () {
   assert.doesNotMatch(source, /state\.epicKey &&/);
 });
 
-test("epic picker searches from input without replacing the field on focus", function () {
+test("epic picker filters candidates without rebuilding the draft controls", function () {
   const source = read("ujg-excel-story-importer-modules/rendering.js");
   const start = source.indexOf("function appendEpicPicker");
-  const end = source.indexOf("function appendFileInput", start);
-  const block = source.slice(start, end);
-
-  assert.match(source, /function scheduleEpicSearch\(query\)/);
-  assert.match(block, /var query = \$\(this\)\.val\(\);/);
-  assert.match(block, /if \(!disabled\) scheduleEpicSearch\(query\);/);
-  assert.doesNotMatch(block, /\.on\("focus click"/);
-  assert.doesNotMatch(block, /!disabled && services && services\.onEpicSearch\) services\.onEpicSearch\(""\)/);
+  const block = source.slice(start, source.indexOf("function appendFileInput", start));
+  assert.match(block, /\$search\.on\("input",filter\)/);
+  assert.match(block, /onEpicDraft/);
+  assert.match(block, /onEpicApply/);
+  assert.doesNotMatch(block, /scheduleEpicSearch/);
 });
 
 test("main module wires renderer callbacks for project, epic, file, subtasks, and confirmed row create", function () {

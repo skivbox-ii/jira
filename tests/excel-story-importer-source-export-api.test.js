@@ -26,3 +26,7 @@ test('failed reads preserve status without response, headers or credentials',asy
   await assert.rejects(r.readIssue('P-1'),/403/);assert.equal(r.requests[0].status,403);
   assert.doesNotMatch(JSON.stringify(r.requests),/SECRET|responseText/);
 });
+test('source export queries every selected epic with the project constraint',async()=>{
+ const x=setup(),reader=x.engine.create({projectKey:'P',epicKey:'',epicKeys:['P-20','P-10','P-20']});await reader.readStories(0);
+ assert.match(x.calls[0].data.jql,/project = "P" AND issuetype = Story AND cf\[10109\] IN \("P-10", "P-20"\)/);
+});
