@@ -39,7 +39,9 @@ test("the shared preview URL opens a populated tree without manual import or syn
   });
   t.after(() => dom.window.close());
   const doc = dom.window.document;
-  const deadline = Date.now() + 15000;
+  // Workbook preparation and full grid redraws are synchronous in JSDOM.
+  // This readiness wait is not a production performance assertion.
+  const deadline = Date.now() + 60000;
   while (!doc.querySelector(".ujg-esi-child-row") && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve,20));
   assert.equal(doc.querySelectorAll(".ujg-esi-parent-row").length,50);
   assert.ok(doc.querySelector(".ujg-esi-child-row"), (doc.querySelector(".ujg-esi-sync-error")?.textContent || doc.querySelector("main").textContent.slice(0,800)) + " | " + errors.join(" | "));

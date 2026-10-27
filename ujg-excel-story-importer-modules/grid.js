@@ -388,7 +388,22 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       });
       return $cell;
     }
-    function refresh() { closeMenu(); closeDescription(); draw(); }
+    function historyKeys(nextState) {
+      ensureLayout(nextState);
+      // Only the two completed exclusions limit enrichment; ordinary grid visibility does not.
+      var selected = registry.selectGroups(registry.buildRows(nextState.rows, null, nextState),
+        {excludeDone:!!filters.excludeDone,excludeDoneStories:!!filters.excludeDoneStories}, null,
+        sourceRows === nextState.rows ? disclosed : null);
+      var keys = [], seen = Object.create(null);
+      selected.forEach(function(group) { [group.parent].concat(group.children).forEach(function(entry) {
+        if (entry.key && !seen[entry.key]) { seen[entry.key]=true; keys.push(entry.key); }
+      }); });
+      return keys;
+    }
+    function refresh() {
+      closeMenu(); closeDescription(); draw();
+      if (hooks && hooks.historySelectionChanged) hooks.historySelectionChanged();
+    }
     function hasFilters() { return Object.keys(filters).length > 0; }
     function teamName(teamId) {
       var team = filterTeams.filter(function(team) { return team.id === teamId; })[0];
@@ -857,6 +872,7 @@ define("_ujgESI_grid", ["jquery", "_ujgESI_registry", "_ujgESI_icons", "_ujgESI_
       $viewport[0].focus({preventScroll:true});
     }
     return {
+      historyKeys: historyKeys,
       // Patch only age evidence: retain the exact menu DOM, draft, focus and viewport.
       updateHistory: function(nextState) {
         if (!$host || sourceRows !== nextState.rows) return false;

@@ -1211,7 +1211,7 @@ define("_ujgESI_main", [
       }
     });
     // History-only enrichment never owns current fields or full report coverage.
-    var historyTargets = null, historyOwner = null, registryHistoryPaintTimer = null;
+    var historyTargets = null, historyOwner = null, historySelectionFailures = [], historySelection = "", registryHistoryPaintTimer = null;
     function flushRegistryHistory() {
       clearTimeout(registryHistoryPaintTimer); registryHistoryPaintTimer=null;
       paintRegistryHistory();
@@ -1269,6 +1269,17 @@ define("_ujgESI_main", [
             target.detail.historyState="error"; target.detail.statusSinceReason=failure.message;
           });
         });
+        // select() resets loader results. Keep required failures in the progress
+        // contract without queuing them again; explicit Retry owns those reads.
+        var failures=Object.create(null);
+        progress.failures.forEach(function(failure) { failures[failure.key]=true; });
+        historySelectionFailures.forEach(function(failure) {
+          if (failures[failure.key]) return;
+          failures[failure.key]=true;
+          progress.failures.push(failure);
+          progress.total++; progress.completed++;
+        });
+        if (progress.status === "completed" && progress.failures.length) progress.status="error";
         queueRegistryHistoryPaint();
       },
       onComplete:function() { flushRegistryHistory(); }
@@ -1276,7 +1287,7 @@ define("_ujgESI_main", [
     function stopRegistryHistory(clear) {
       if (!registryHistoryLoader || !historyTargets) return;
       var targets=historyTargets;
-      registryHistoryLoader.cancel(); historyTargets=null; historyOwner=null;
+      registryHistoryLoader.cancel(); historyTargets=null; historyOwner=null; historySelectionFailures=[];
       Object.keys(targets).forEach(function(key) { targets[key].forEach(function(target) {
         if (target.detail.historyState === "pending") {
           target.detail.historyState="cancelled"; target.detail.statusSinceReason="Загрузка истории остановлена. Повторите догрузку.";
@@ -1290,18 +1301,47 @@ define("_ujgESI_main", [
         flushRegistryHistory();
       }
     }
+    function updateRegistryHistorySelection(restart,retainErrors) {
+      if (!historyOwner || historyOwner.rows !== state.rows || historyOwner.mode !== state.viewMode ||
+          historyOwner.scope !== registryPublishedScope || state.reportView === "activity" ||
+          state.statusTransition && state.statusTransition.open) return;
+      var selected=rendering.registryHistoryKeys ? rendering.registryHistoryKeys(state) : null;
+      var wanted=selected === null ? null : Object.create(null);
+      if (wanted) selected.forEach(function(key) { wanted[normalizeIssueKey(key)]=true; });
+      var required=Object.create(null);
+      eachHistoryDetail(function(key) { if (!wanted || wanted[key]) required[key]=true; });
+      var signature=JSON.stringify(Object.keys(required).sort());
+      if (!restart && signature === historySelection) return;
+      historySelection=signature;
+      var previous=historyTargets || Object.create(null), next=Object.create(null), skippedFailures=Object.create(null);
+      eachHistoryDetail(function(key,detail) {
+        if (detail.historyState === "complete") return;
+        if (!required[key]) {
+          if (detail.historyState !== "error") {
+            detail.historyState="deferred";
+            detail.statusSinceReason="История не загружена: задача исключена фильтром готовых.";
+          }
+          return;
+        }
+        // Applied selection changes never retry failed reads implicitly.
+        if (!restart && detail.historyState === "error") {
+          skippedFailures[key]={key:key,message:detail.statusSinceReason};
+          return;
+        }
+        if (!next[key]) next[key]=[];
+        var prior=(previous[key] || []).filter(function(target) { return target.detail === detail; })[0];
+        next[key].push(prior || {detail:detail,status:detail.status,updated:detail.updated});
+        detail.historyState="pending"; detail.statusSince=""; detail.statusSinceReason="История изменений загружается…";
+      });
+      historyTargets=next;
+      historySelectionFailures=Object.keys(skippedFailures).map(function(key) { return skippedFailures[key]; });
+      registryHistoryLoader.select(Object.keys(next),retainErrors === true || !restart);
+    }
     function startRegistryHistory(retainErrors) {
       stopRegistryHistory(true);
       if (state.reportView === "activity" || state.statusTransition && state.statusTransition.open || !api || typeof api.getIssueWithHistory !== "function") return;
-      historyTargets=Object.create(null);
       historyOwner={mode:state.viewMode,rows:state.rows,scope:registryPublishedScope};
-      eachHistoryDetail(function(key,detail) {
-        if (detail.historyState === "complete") return;
-        if (!historyTargets[key]) historyTargets[key]=[];
-        historyTargets[key].push({detail:detail,status:detail.status,updated:detail.updated});
-        detail.historyState="pending"; detail.statusSince=""; detail.statusSinceReason="История изменений загружается…";
-      });
-      registryHistoryLoader.select(Object.keys(historyTargets),retainErrors === true);
+      updateRegistryHistorySelection(true,retainErrors);
     }
     var dueDateSync = dueDateSyncModule ? dueDateSyncModule.create({api:api,onChange:function(snapshot) {
       state.dueDateSync = snapshot;
@@ -4420,6 +4460,7 @@ define("_ujgESI_main", [
       onCancelColumnImport: onCancelColumnImport,
       onConfirmColumnImport: function() { commitPendingImport(true); },
       onLoadRegistry: onLoadRegistry,
+      onRegistryHistorySelectionChange:function() { updateRegistryHistorySelection(false); },
       onStopRegistryLoad:function() { stopRegistryRead(false); render(); },
       onRestartRegistryLoad:function() { restartRegistryRead(false); },
       onRetryRegistryLoad:function() { restartRegistryRead(true); },

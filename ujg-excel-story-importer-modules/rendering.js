@@ -2107,6 +2107,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     grid.mount($parent, state, {
       appendActions: function($td, row, index) { appendRowActions($td, row, state, index); },
       renderDescription: renderJiraWiki,
+      historySelectionChanged: function() { if (services.onRegistryHistorySelectionChange) services.onRegistryHistorySelectionChange(); },
       openStatus: function(entry) { if (services.onOpenStatusTransition) services.onOpenStatusTransition(entry); },
       editOwner: function(entry) { if (services && services.onDialogAssigneeFocus) services.onDialogAssigneeFocus("row-owner-" + entry.rowIndex); },
       assignTeam: function(user, teamId) { if (services && services.onAssignUserTeam) services.onAssignUserTeam(user, teamId); }
@@ -2274,6 +2275,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     render: render,
     createRequestPanel:createRequestPanel,
     renderRequestProgress:renderRequestProgress,
+    registryHistoryKeys:function(state) { return grid && grid.historyKeys ? grid.historyKeys(state) : null; },
     renderRegistryHistory:function(state) { return !!(grid && grid.updateHistory && grid.updateHistory(state)); },
     revealActivityRequests:function(state) {
       if (state.reportView !== "activity") return;

@@ -21,7 +21,9 @@ test("due-date preview writes only explicitly selected fixture dates and leaves 
   });
   t.after(()=>dom.window.close());
   const w=dom.window,doc=w.document;
-  async function until(check) {const end=Date.now()+15000;while(!check() && Date.now()<end) await new Promise(r=>setTimeout(r,20));assert.ok(check(),errors.join(" | "));}
+  // JSDOM synchronously redraws the 71-row fixture; this is a functional check,
+  // not a production latency budget. Keep the wait bounded on slower hosts.
+  async function until(check) {const end=Date.now()+60000;while(!check() && Date.now()<end) await new Promise(r=>setTimeout(r,20));assert.ok(check(),errors.join(" | "));}
   const query=selector=>doc.querySelector(selector);
   await until(()=>query(".ujg-esi-child-row"));
   const parentCount=doc.querySelectorAll(".ujg-esi-parent-row").length;

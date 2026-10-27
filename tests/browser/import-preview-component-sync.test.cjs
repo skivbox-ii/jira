@@ -21,7 +21,8 @@ test("offline component preview writes only one explicitly selected Story", asyn
   async function until(check, timeout=15000){const end=Date.now()+timeout;while(!check()&&Date.now()<end)await new Promise(resolve=>setTimeout(resolve,20));
     assert.ok(check(),JSON.stringify({errors:errors,progress:query(".ujg-esi-due-progress")&&query(".ujg-esi-due-progress").textContent,
       rows:doc.querySelectorAll(".ujg-esi-due-row").length,ready:doc.querySelectorAll(".ujg-esi-due-row-select:not(:disabled)").length}));}
-  await until(()=>query(".ujg-esi-sync-component") && !query(".ujg-esi-sync-component").disabled);
+  // Allow the same bounded JSDOM workbook/grid preparation as the startup preview.
+  await until(()=>query(".ujg-esi-sync-component") && !query(".ujg-esi-sync-component").disabled,60000);
   query(".ujg-esi-sync-component").click();
   // JSDOM computes per-cell styles across 69 mock reads; this is not a network or performance budget.
   await until(()=>query(".ujg-esi-due-dialog") && !query(".ujg-esi-due-progress"),60000);

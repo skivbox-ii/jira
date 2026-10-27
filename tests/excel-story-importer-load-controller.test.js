@@ -4,7 +4,9 @@ const flush=()=>new Promise(r=>setImmediate(r));
 function deferred() { let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject}; }
 function issue(key,status='Open') { return {key,fields:{summary:'Same summary',status:{name:status},assignee:{displayName:'Jira Owner'},issuelinks:[],issuetype:{name:'Story'}},changelog:{histories:[]}}; }
 async function setup(options={}) {
-  const a={renders:0,historyPaints:0};a.api={getIssueComments:()=>Promise.resolve({startAt:0,total:0,comments:[]}),getProjects:()=>Promise.resolve([]),getProjectEpics:()=>Promise.resolve({issues:[]}),getProjectCreateMeta:()=>Promise.resolve({projects:[]}),
+  const a={renders:0,historyPaints:0};a.filters=options.filters || {};a.disclosed={};
+  const registry=load(path.join(dir,'registry.js'),{_ujgESI_remarkId:load(path.join(dir,'remark-id.js'),{}),_ujgESI_deadlines:load(path.join(dir,'deadlines.js'),{})});
+  a.selection=s=>Array.from(registry.selectGroups(registry.buildRows(s.rows),{excludeDone:a.filters.excludeDone,excludeDoneStories:a.filters.excludeDoneStories},null,a.disclosed)).flatMap(g=>[g.parent.key,...Array.from(g.children,c=>c.key)]);a.api={getIssueComments:()=>Promise.resolve({startAt:0,total:0,comments:[]}),getProjects:()=>Promise.resolve([]),getProjectEpics:()=>Promise.resolve({issues:[]}),getProjectCreateMeta:()=>Promise.resolve({projects:[]}),
     getProjectIssues:()=>Promise.resolve({issues:[issue('P-1')]}),getIssuesByKeys:()=>Promise.resolve({issues:[issue('P-1')]}),searchIssueBySummary:()=>Promise.resolve({issues:[issue('P-1')]})};
   a.patcher={patchWorkbook:()=>Promise.resolve(new ArrayBuffer(2))};
   const Gadget=load(path.join(dir,'main.js'),{jquery:()=>({length:0}),_ujgESI_config:load(path.join(dir,'config.js'),{}),_ujgESI_api:a.api,
@@ -12,7 +14,7 @@ async function setup(options={}) {
     _ujgESI_parser:{extractJiraKey:value=>/^P-\d+$/.test(value)?value:'',parseWorkbook:()=>({sheetName:'Sheet1',rows:[{id:'1',jiraKey:'P-1',summary:'Same summary',sourceColumns:{'Ответственный':'Excel Owner'},storyDetails:{key:'P-1',status:'Old'},createdChildren:[]}]})},
     _ujgESI_statusTransition:load(path.join(dir,"status-transition.js"),{}),_ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:a.patcher,_ujgShared_llmClient:null,_ujgESI_teams:null,_ujgESI_activity:options.activity ? load(path.join(dir,"activity.js"),{_ujgESI_teams:load(path.join(dir,"teams.js"),{}),_ujgESI_remarkId:load(path.join(dir,"remark-id.js"),{}),_ujgESI_deadlines:load(path.join(dir,"deadlines.js"),{})}) : null,
     _ujgESI_activityLoader:require('./helpers/import-activity-loader'),_ujgESI_deadlines:load(path.join(dir,'deadlines.js'),{}),_ujgESI_dueDateSync:null,_ujgESI_componentSync:null,_ujgESI_remarkReportLoader:null,_ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,
-    _ujgESI_rendering:{init:(_,cb)=>a.cb=cb,render:s=>{a.renders++;a.state=s;},renderRegistryHistory:()=>{a.historyPaints++;return true;},renderRequestProgress:()=>true}});
+    _ujgESI_rendering:{registryHistoryKeys:s=>a.selection(s),init:(_,cb)=>a.cb=cb,render:s=>{a.renders++;a.state=s;},renderRegistryHistory:()=>{a.historyPaints++;return true;},renderRequestProgress:()=>true}});
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}});await flush();
   a.cb.onFileChange({name:'original.xlsx'});await flush();await flush();a.cb.onProjectChange('P');await flush();return a;
 }
@@ -148,4 +150,108 @@ test('review P2 Excel history cannot hand off cached Jira membership to Dynamics
   assert.equal(searches,1,'Excel enrichment must not suppress a fresh Jira base search');
   assert.deepEqual(Array.from(a.state.rows,row=>row.jiraKey),['P-10']);assert.deepEqual(fullReads,['P-10']);
   excelHistory.resolve(history('P-1'));await flush();assert.equal(a.state.rows[0].jiraKey,'P-10');
+});
+
+async function filteredRun(options={}) {
+  const a=await setup(options);a.calls=[];a.pending=[];a.aborted=[];
+  const ready=light('P-1');ready.fields.status={name:'Done',statusCategory:{key:'done'}};
+  const open=light('P-2');open.fields.issuelinks=[{type:{name:'Child'},outwardIssue:{key:'P-3'}}];
+  ready.fields.issuelinks=[{type:{name:'Child'},outwardIssue:{key:'P-3'}},{type:{name:'Child'},outwardIssue:{key:'P-4'}}];
+  a.api.getProjectIssues=()=>Promise.resolve({issues:options.allHidden?[ready]:[ready,open]});
+  const child=light('P-4');if(options.childDone)child.fields.status={name:'Done',statusCategory:{key:'done'}};
+  a.api.getIssuesByKeys=()=>Promise.resolve({issues:[light('P-3'),child]});
+  a.api.getIssueWithHistory=(key,opts)=>{const d=deferred();a.calls.push(key);a.pending.push(d);if(options.abortable)d.promise.abort=()=>a.aborted.push(key);return d.promise;};
+  a.change=filters=>{a.filters=filters;a.cb.onRegistryHistorySelectionChange();};
+  a.cb.onViewModeChange('jira');a.cb.onLoadRegistry();await flush();await flush();return a;
+}
+test('saved ready-story exclusion skips whole hidden group but shared child loads once',async()=>{
+  const a=await filteredRun({filters:{excludeDoneStories:true}}),rows=a.state.rows;
+  assert.deepEqual(a.calls,['P-3']);assert.equal(rows[0].storyDetails.historyState,'deferred');assert.equal(rows[0].storyDetails.statusSince,'');
+  a.pending[0].resolve(history('P-3'));await flush();assert.deepEqual(a.calls,['P-3','P-2']);
+  a.pending[1].resolve(history('P-2'));await flush();assert.equal(rows[0].childStatuses[0].historyState,'complete');
+  assert.equal(rows[0].childStatuses[1].historyState,'deferred');assert.equal(a.state.registryProgress.status,'completed');
+  a.change({});await flush();assert.deepEqual(a.calls,['P-3','P-2','P-1']);
+  const done=history('P-1');done.fields.status={name:'Done',statusCategory:{key:'done'}};a.pending[2].resolve(done);await flush();assert.deepEqual(a.calls,['P-3','P-2','P-1','P-4']);
+  a.pending[3].resolve(history('P-4'));await flush();assert.equal(a.state.registryProgress.status,'completed');
+});
+test('all saved excluded stories make no history requests and stay incomplete; reset resumes',async()=>{
+  const a=await filteredRun({filters:{excludeDoneStories:true},allHidden:true});
+  assert.deepEqual(a.calls,[]);assert.equal(a.state.rows[0].storyDetails.historyState,'deferred');
+  assert.ok(a.state.rows[0].childStatuses.every(d=>d.historyState==='deferred'));
+  a.change({});await flush();assert.deepEqual(a.calls,['P-1']);a.cb.onStopRegistryLoad();
+});
+for(const abortable of [false,true])test('applied exclusion cancels obsolete queued reads and ignores late reply; abortable='+abortable,async()=>{
+  const a=await filteredRun({abortable}),old=a.state.rows[0].storyDetails;
+  assert.deepEqual(a.calls,['P-1']);a.change({excludeDoneStories:true});await flush();
+  assert.deepEqual(a.calls,abortable?['P-1','P-3']:['P-1']);assert.equal(old.historyState,'deferred');
+  if(abortable)assert.deepEqual(a.aborted,['P-1']);
+  a.change({excludeDoneStories:true,summary:['nothing']});await flush();assert.equal(a.calls.length,abortable?2:1);
+  const done=history('P-1');done.fields.status={name:'Done'};a.pending[0].resolve(done);await flush();assert.equal(old.historyState,'deferred');assert.equal(old.statusSince,'');
+  assert.deepEqual(a.calls,['P-1','P-3']);
+  a.pending[1].resolve(history('P-3'));await flush();assert.deepEqual(a.calls,['P-1','P-3','P-2']);
+  a.pending[2].resolve(history('P-2'));await flush();assert.equal(a.calls.includes('P-4'),false);
+});
+test('selection change retains useful active read, does not retry errors and explicit Stop prevents resumption',async()=>{
+  const a=await filteredRun({filters:{excludeDoneStories:true},abortable:true});
+  a.change({});await flush();assert.deepEqual(a.calls,['P-3']);assert.deepEqual(a.aborted,[]);
+  a.pending[0].reject(new Error('offline'));await flush();assert.deepEqual(a.calls,['P-3','P-1']);
+  a.change({excludeDoneStories:true});await flush();assert.deepEqual(a.calls,['P-3','P-1','P-2']);
+  a.pending[2].resolve(history('P-2'));await flush();
+  a.change({excludeDoneStories:true,owner:[]});await flush();assert.equal(a.calls.filter(k=>k==='P-3').length,1);
+  a.cb.onStopRegistryLoad();a.change({});await flush();assert.equal(a.calls.length,3);
+  a.cb.onRestartRegistryLoad();await flush();assert.equal(a.calls.length,4);a.cb.onStopRegistryLoad();
+});
+test('Dynamics reads full histories and comments for excluded source issues too',async()=>{
+  const a=await filteredRun({activity:true,filters:{excludeDoneStories:true},allHidden:true}),full=[],comments=[];
+  assert.deepEqual(a.calls,[]);
+  a.api.getIssueWithHistory=(key,opts)=>{assert.equal(opts,undefined);full.push(key);const x=history(key);x.fields.comment={startAt:0,total:1,comments:[]};return Promise.resolve(x);};
+  a.api.getIssueComments=key=>{comments.push(key);return Promise.resolve({startAt:0,total:1,comments:[{id:'one',created:'2026-01-02T00:00:00Z',body:'Comment'}]});};
+  a.cb.onReportViewChange('activity');await flush();await flush();
+  assert.deepEqual(full.sort(),['P-1','P-3','P-4']);assert.deepEqual(comments.sort(),full);assert.equal(a.state.rows[0].storyDetails.activity.comments.complete,true);
+});
+
+test('saved ready-story exclusion applies on the first Excel sync, keeping workbook publication',async()=>{
+  const a=await setup({filters:{excludeDoneStories:true}}),calls=[];
+  const ready=light('P-1');ready.fields.status={name:'Done',statusCategory:{key:'done'}};
+  a.api.getIssuesByKeys=()=>Promise.resolve({issues:[ready]});
+  a.api.getIssueWithHistory=key=>{calls.push(key);return Promise.resolve(history(key));};
+  a.cb.onSyncJira();await flush();await flush();
+  assert.deepEqual(calls,[]);assert.ok(a.state.exportBuffer);assert.equal(a.state.rows[0].storyDetails.historyState,'deferred');
+  a.filters={};a.cb.onRegistryHistorySelectionChange();await flush();assert.deepEqual(calls,['P-1']);
+});
+test('children exclusion loads parents and active children; manual disclosure adds and cancels only hidden child',async()=>{
+  const a=await filteredRun({filters:{excludeDone:true},childDone:true,abortable:true});
+  assert.deepEqual(a.calls,['P-1']);const done=history('P-1');done.fields.status={name:'Done'};
+  a.pending[0].resolve(done);await flush();assert.deepEqual(a.calls,['P-1','P-3']);
+  assert.equal(a.state.rows[0].childStatuses[1].historyState,'deferred');
+  a.disclosed={'P-1':true};a.cb.onRegistryHistorySelectionChange();await flush();assert.deepEqual(a.calls,['P-1','P-3']);
+  a.pending[1].resolve(history('P-3'));await flush();assert.deepEqual(a.calls,['P-1','P-3','P-4']);
+  a.disclosed={};a.cb.onRegistryHistorySelectionChange();await flush();assert.deepEqual(a.aborted,['P-4']);assert.deepEqual(a.calls,['P-1','P-3','P-4','P-2']);
+  a.pending[2].resolve(history('P-4'));a.pending[3].resolve(history('P-2'));await flush();
+  assert.equal(a.state.rows[0].childStatuses[1].historyState,'deferred');assert.equal(a.state.registryProgress.status,'completed');
+  a.change({excludeDone:true,owner:[]});await flush();assert.equal(a.calls.length,4);
+});
+test('unabortable obsolete read retains sequential slot until settling; re-include fetches missing history',async()=>{
+  const a=await filteredRun();a.change({excludeDoneStories:true});await flush();assert.deepEqual(a.calls,['P-1']);
+  const done=history('P-1');done.fields.status={name:'Done'};
+  a.pending[0].resolve(done);await flush();assert.deepEqual(a.calls,['P-1','P-3']);assert.equal(a.state.rows[0].storyDetails.historyState,'deferred');
+  a.change({});await flush();assert.deepEqual(a.calls,['P-1','P-3']);
+  a.pending[1].resolve(history('P-3'));await flush();assert.deepEqual(a.calls,['P-1','P-3','P-1']);
+  a.pending[2].resolve(done);await flush();assert.equal(a.state.rows[0].storyDetails.historyState,'complete');
+  a.cb.onStopRegistryLoad();
+});
+test('required history errors stay visible and retryable across relevant selection changes without auto retry',async()=>{
+  const a=await filteredRun({filters:{excludeDoneStories:true},abortable:true});
+  a.pending[0].reject(new Error('offline'));await flush();
+  a.pending[1].resolve(history('P-2'));await flush();assert.equal(a.state.registryProgress.status,'error');
+  a.change({});await flush();
+  const done=history('P-1');done.fields.status={name:'Done'};a.pending[2].resolve(done);await flush();
+  a.pending[3].resolve(history('P-4'));await flush();
+  assert.equal(a.calls.filter(k=>k==='P-3').length,1,'Filter changes must not retry the visible shared child');
+  assert.equal(a.state.registryProgress.status,'error');
+  assert.deepEqual(Array.from(a.state.registryProgress.failures,f=>f.key),['P-3']);
+  assert.equal(a.state.registryProgress.total,3);assert.equal(a.state.registryProgress.completed,3);
+  a.change({excludeDoneStories:true});await flush();assert.equal(a.state.registryProgress.status,'error');
+  a.cb.onRetryRegistryLoad();await flush();assert.deepEqual(a.calls.slice(4),['P-3']);
+  a.pending[4].resolve(history('P-3'));await flush();assert.equal(a.state.registryProgress.status,'completed');
 });
