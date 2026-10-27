@@ -8,7 +8,11 @@ assert.ok(["127.0.0.1","localhost","[::1]"].includes(new URL(origin).hostname));
 const picker=page=>page.locator(".ujg-esi-epic-picker");
 const epic=key=>"EVOSCADA-"+key;
 async function open(page) {await picker(page).getByRole("button",{name:/Эпики/}).first().click();}
-async function toggle(page,key) {await picker(page).getByRole("checkbox",{name:new RegExp(epic(key))}).click();}
+async function toggle(page,key) {
+  const chip=picker(page).locator('.ujg-esi-selected-chip[data-epic-key="'+epic(key)+'"]');
+  if (await chip.count()) await chip.click();
+  else await picker(page).getByRole("checkbox",{name:new RegExp(epic(key))}).click();
+}
 async function apply(page) {await picker(page).getByRole("button",{name:"ОК",exact:true}).click();}
 async function load(page) {await page.getByRole("button",{name:"Загрузить замечания из Jira",exact:true}).click();}
 async function settled(page) {await page.waitForFunction(()=>window.usabilityState && !usabilityState.registryLoading && !usabilityState.syncLoading && usabilityState.registryProgress?.status!=="running",null,{timeout:120000});}

@@ -652,41 +652,94 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     $field.append($("<span/>").text("Epic"),$wrap.append($toggle)); $toolbar.append($field);
     if (!active) return;
     var draft = epicScope.keys(picker.draft == null ? selected : picker.draft);
-    var $popup = $("<div/>").addClass("ujg-esi-epic-options").attr({role:"dialog","aria-label":"Выбор эпиков"});
-    var $search = $("<input/>").addClass("ujg-esi-epic-search").attr({type:"search",placeholder:"Поиск Epic","aria-label":"Поиск эпиков",autocomplete:"off"}).val(picker.query || "");
-    var $list = $("<div/>").addClass("ujg-esi-epic-list"), rows = [], seen = Object.create(null);
+    var $popup = $("<div/>").addClass("ujg-esi-epic-options ujg-esi-grid-menu ujg-esi-column-filter-menu").attr({role:"dialog","aria-label":"Выбор эпиков"});
+    var $search = $("<input/>").addClass("ujg-esi-epic-search ujg-esi-filter-search").attr({type:"search",placeholder:"Поиск","aria-label":"Поиск эпиков",autocomplete:"off"}).val(picker.query || "");
+    var $chips = $("<div/>").addClass("ujg-esi-filter-chips");
+    var $all = $("<input/>").attr({type:"checkbox","aria-label":"Выделить все найденные эпики"});
+    var $count = $("<span/>").addClass("ujg-esi-filter-count");
+    var $list = $("<div/>").addClass("ujg-esi-epic-list ujg-esi-filter-values"), rows = [], seen = Object.create(null);
+    var $hint = $("<p/>").addClass("ujg-esi-epic-hint").attr({role:"status","aria-live":"polite"});
+    function matching(row) { return row.text.toLowerCase().indexOf(normalizedSearch($search.val())) >= 0; }
+    function filter() {
+      picker.query = String($search.val() || "");
+      var found = rows.filter(matching), picked = found.filter(function(row) { return draft.indexOf(row.key) >= 0; });
+      rows.forEach(function(row) { row.node.prop("hidden",!matching(row)); });
+      $all.prop("checked",!!found.length && picked.length === found.length)
+        .prop("indeterminate",picked.length > 0 && picked.length < found.length).prop("disabled",!found.length);
+      $list.find(".ujg-esi-filter-empty").remove();
+      if (!found.some(function(row) { return draft.indexOf(row.key) < 0; })) $list.append($("<div/>").addClass("ujg-esi-filter-empty").text("Нет значений"));
+      // Chips and search results can change height after opening, so reclamp each update.
+      var rect = $toggle[0].getBoundingClientRect(), width = Math.min(282,window.innerWidth - 24);
+      $popup.css({position:"fixed",width:width,left:Math.max(12,Math.min(rect.left,window.innerWidth-width-12)),top:12,maxHeight:Math.max(100,window.innerHeight-24)});
+      $popup.css("top",Math.max(12,Math.min(rect.bottom+4,window.innerHeight-$popup.outerHeight()-12)));
+    }
     function updateDraft() {
       draft = epicScope.keys(draft);
       if (services.onEpicDraft) services.onEpicDraft(draft);
-      $hint.text(draft.length ? "Выбрано: " + draft.length : "Все истории проекта (без ограничения эпиком)");
+      var scroll = $list.scrollTop(), chipsScroll = $chips.scrollTop();
+      $chips.empty();
+      rows.forEach(function(row) {
+        var chosen = draft.indexOf(row.key) >= 0;
+        row.check.prop("checked",chosen);
+        if (chosen) {
+          row.node.detach();
+          $chips.append($("<button/>").attr({type:"button","data-epic-key":row.key,title:"Убрать: " + row.text,"aria-label":"Убрать: " + row.text})
+            .addClass("ujg-esi-selected-chip").append($("<span/>").text(row.text),icon("X")).on("click",function(event) {
+              event.stopPropagation();
+              draft = draft.filter(function(key) { return key !== row.key; });
+              updateDraft();
+              if (matching(row)) row.check.trigger("focus"); else $search.trigger("focus");
+            }));
+        } else $list.append(row.node);
+      });
+      $count.text(draft.length + " / " + rows.length);
+      $hint.text(draft.length ? "" : "Все истории проекта (без ограничения эпиком)").prop("hidden",!!draft.length);
+      $reset.prop("disabled",!draft.length);
+      filter(); $list.scrollTop(scroll); $chips.scrollTop(chipsScroll);
     }
-    function filter() {
-      var query = normalizedSearch($search.val());
-      picker.query = String($search.val() || "");
-      rows.forEach(function(row) { row.node.toggle(draft.indexOf(row.key) >= 0 || row.text.toLowerCase().indexOf(query) >= 0); });
+    function sortChoices(direction) {
+      rows.sort(function(a,b) { return direction * a.text.localeCompare(b.text, "ru", {numeric:true}); });
+      updateDraft();
     }
+    [[1,"ArrowDownAZ","Сортировка по возрастанию"],[-1,"ArrowUpAZ","Сортировка по убыванию"]].forEach(function(item) {
+      $popup.append($("<button/>").attr({type:"button",title:item[2] + " списка эпиков (только варианты выбора)","aria-label":item[2] + " списка эпиков"})
+        .addClass("ujg-esi-icon-button ujg-esi-menu-command").append(icon(item[1]),$("<span/>").text(item[2])).on("click",function() { sortChoices(item[0]); }));
+    });
+    var $reset = $("<button/>").attr({type:"button",title:"Снять фильтр эпиков в черновике; применить по ОК"})
+      .addClass("ujg-esi-icon-button ujg-esi-menu-command").append(icon("FunnelX"),$("<span/>").text("Снять фильтр"))
+      .on("click",function() { draft=[]; updateDraft(); $search.trigger("focus"); });
+    $popup.append($reset);
     var choices = (state.epics || []).slice();
     selected.concat(draft).forEach(function(key) {
       if (!choices.some(function(epic) { return epic.key === key; })) choices.push({key:key,summary:"Сохранённый Epic, отсутствует в списке"});
     });
     choices.forEach(function(epic) {
       var key = String(epic.key || ""); if (!key || seen[key]) return; seen[key] = true;
-      var text = epicLabel(epic), $row = $("<label/>").addClass("ujg-esi-epic-option");
-      var $check = $("<input/>").attr({type:"checkbox",value:key}).prop("checked",draft.indexOf(key) >= 0);
+      var text = epicLabel(epic), $row = $("<label/>").addClass("ujg-esi-epic-option ujg-esi-filter-option");
+      var $check = $("<input/>").attr({type:"checkbox",value:key});
       $check.on("change",function() {
         if (this.checked) draft.push(key); else draft = draft.filter(function(value) { return value !== key; });
         updateDraft();
+        // Native label/Space activation removes this row; retain focus on its chip.
+        $chips.children().filter(function() { return $(this).attr("data-epic-key") === key; }).trigger("focus");
       });
-      $row.append($check,$("<span/>").text(text)); $list.append($row); rows.push({key:key,text:text,node:$row});
+      $row.append($check,$("<span/>").text(text)); rows.push({key:key,text:text,node:$row,check:$check});
     });
-    var $hint = $("<p/>").addClass("ujg-esi-epic-hint").attr({role:"status","aria-live":"polite"});
-    var $actions = $("<div/>").addClass("ujg-esi-epic-actions");
-    $actions.append($("<button/>").attr("type","button").text("Очистить").on("click",function() { draft=[]; $list.find("input").prop("checked",false); updateDraft(); filter(); }),
-      $("<button/>").attr("type","button").addClass("ujg-esi-epic-apply").text("ОК").on("click",function() { if (services.onEpicApply) services.onEpicApply(); restoreFocus(); }),
+    $all.on("change",function() {
+      var check = this.checked;
+      rows.filter(matching).forEach(function(row) {
+        if (check && draft.indexOf(row.key) < 0) draft.push(row.key);
+        else if (!check) draft = draft.filter(function(key) { return key !== row.key; });
+      });
+      updateDraft();
+    });
+    var $actions = $("<div/>").addClass("ujg-esi-epic-actions ujg-esi-filter-actions");
+    $actions.append($("<button/>").attr("type","button").addClass("ujg-esi-epic-apply ujg-esi-filter-apply").text("ОК").on("click",function() { if (services.onEpicApply) services.onEpicApply(); restoreFocus(); }),
       $("<button/>").attr("type","button").addClass("ujg-esi-epic-cancel").text("Отмена").on("click",cancel));
     $search.on("input",filter);
     $popup.on("keydown",function(event) { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel(); } });
-    $popup.append($search,$hint,$list,$actions); $wrap.append($popup); updateDraft(); filter();
+    $popup.append($search,$chips,$("<label/>").addClass("ujg-esi-filter-all").append($all,$("<span/>").text("(Выделить всё)"),$count),$hint,$list,$actions);
+    $wrap.append($popup); updateDraft();
     $(document).on("click.ujgEsiEpic",function(event) { if (!$(event.target).closest(".ujg-esi-epic-picker").length) cancel(); });
     setTimeout(function() { if ($search[0] && $search[0].isConnected) $search.trigger("focus"); },0);
   }

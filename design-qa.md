@@ -40,3 +40,28 @@
 - This is local UI acceptance, not Citrix acceptance. The user retains production control.
 
 final result: passed
+
+
+# REG-10: Epic picker reference correction — 27.10.2026
+
+## Target and evidence
+
+- Approved target: `/Users/skivbox/Desktop/Снимок экрана 2026-10-27 в 17.33.54.png`.
+- Rejected previous layout: `/Users/skivbox/Desktop/Снимок экрана 2026-10-27 в 17.25.44.png`.
+- Implementation: `http://127.0.0.1:4318/?empty&usability&progressive&multiEpics&epicCatalog=long`.
+- Final personal evidence: `/tmp/import-epic-filter-reference-20261027/personal-popup.png` and `personal-desktop.png`.
+- Browser evidence: `reference-390x500.png`, `all-selected-390x500.png` and `final-390x844.png` in the same directory.
+- Target and final personal/mobile captures were opened together in one comparison input. The supplied crop has unknown browser zoom/device scale and a roughly508px-wide popup; the existing registry implementation is282CSSpx. Comparison normalizes by popup structure and established CSS dimensions, not an invented exact source DPR. No bitmap resampling/pixel-exact claim.
+
+## Findings and final comparison
+
+- [P2, resolved] The previous custom checklist differed from the approved registry filter: no pinned chips or select-all row and wrong footer placement. Shared filter classes now provide commands/search/chips/count/list/right-aligned footer,282CSSpx width.
+- [P2, resolved] Long names aligned the checkbox with their middle. Candidate-only flex-start and1px offset now align the first line; select-all stays centered. Final browser geometry proves the first-line offset at all three viewports.
+- [P2, resolved] Growing selected chips could move the footer below a short viewport. Placement now reclamps on draft/search changes; at390×500 the footer remains within481px. Independent chip/list scrolling keeps controls visible.
+- Fonts and colors: existing importer12px text,11px selected chips, blue chip/primary-button and neutral borders. No new fonts, assets, framework, arbitrary restyling or generated bitmap UI.
+- Layout: target command order and compact density preserved; long epic labels wrap rather than hide their identity. First screenshot contains shorter person names, so row heights intentionally vary with actual text. Search keeps selected chips, without duplicates below.
+- Assets: existing ArrowDownAZ, ArrowUpAZ, FunnelX, X icons. Copy: same commands, search, select-all and OK/Cancel; empty-set meaning explicitly preserved. Sorting tooltip identifies the epic-choice list only.
+- Verified1440×900/390×844/390×500; native keyboard selection/removal/focus, all21 selected, empty results, last rows, apply/cancel and persistence. Personal IAB desktop/short-mobile checks agree with browser screenshots. No open P0/P1/P2 findings; no P3 follow-up required.
+- Production CSS cause remains unproven; this is local acceptance. Citrix remains with the user and was not accessed.
+
+final result: passed

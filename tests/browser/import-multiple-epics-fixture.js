@@ -7,6 +7,13 @@
     {key:"EVOSCADA-300",fields:{summary:"Другой этап"}}];
   var stories=Object.values(fixtureIssues).filter(function(issue) {return issue.fields.issuetype.name === "История";});
   stories.forEach(function(issue,index) {issue.fields[epicField]=epics[index % epics.length].key;});
+  // Optional realistic catalog for the picker: preserve the original story partitions.
+  if (new URLSearchParams(location.search).get("epicCatalog") === "long") {
+    epics[0].fields.summary="Замечания на ИИ ТСВ ЭВОСКАДА";
+    epics[1].fields.summary="Замечания ПНР ТН-Север";
+    for (var i=4;i<=21;i++) epics.push({key:"EVOSCADA-"+(i*100),fields:{summary:
+      (i%2 ? "Север" : "Юг")+" — замечания по результатам индивидуальных испытаний и опытной эксплуатации, этап "+i}});
+  }
   // A shared child must appear under both stories, but be fetched/enriched once.
   var shared=stories[0].fields.issuelinks[0];
   stories[1].fields.issuelinks.push(JSON.parse(JSON.stringify(shared)));
