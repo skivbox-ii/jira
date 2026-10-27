@@ -48,4 +48,4 @@
 - [x] Create a mock with two epics, excluded third epic, shared child and field-aware paginated search; old UI fails multi-select scenario.
 - [x] Build final sources; verify 1440/390 px selection union, cancel/search, saved reload, stale responses, clear-to-all and independent creation target. Personally inspect UI.
 - [x] Verify existing progressive loading and 1000-task Dynamics/900–1100 events; run full suite and scoped independent Author/Reviewer, resolving material findings.
-- [ ] Update docs and backlog, commit/publish only verified task files via existing process, compare commit-pinned CDN bytes; leave Citrix acceptance pending.
+- [x] Update docs and backlog, commit/publish only verified task files via existing process, compare commit-pinned CDN bytes; leave Citrix acceptance pending.
