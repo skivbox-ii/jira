@@ -26,5 +26,10 @@
 2. Controller in parallel:
    - [x] Browser reproduction with applied exclusion; measure requested key sets and saved requests rather than guessed wall-clock speed.
    - [x] Personal local UI1440/390, exclusions toggle/reset during queue and after finish, drafts, errors/retry/stop; Dynamics900–1100events if behavior affected.
-   - [ ] Independent Sol6.1 medium review, relevant/full tests, generated artifacts, publish and CDN verify.
-   - [ ] Update backlog/report with exact local counts, limitations and next step.
+   - [x] Independent Sol6.1 medium review, relevant/full tests, generated artifacts, publish and CDN verify.
+   - [x] Update backlog/report with exact local counts, limitations and next step.
+
+Published code: `610161b`. Local acceptance is recorded in
+`docs/import-filtered-history-acceptance-2026-10-27.md`, including the
+JSDOM baseline timing investigation and separate successful rerun.
+Citrix acceptance remains pending until the user hands control back.
