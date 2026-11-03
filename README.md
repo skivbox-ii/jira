@@ -413,6 +413,8 @@ CSS URLs пусто; HTML: `<div class="ujg-knowledge-assistant"></div>`.
 том же Jira origin. Confluence PAT вводит пользователь, только в память вкладки.
 
 [Установка, scoped bootstrap build, двухфазное закрепление и приёмка](docs/knowledge-assistant-acceptance.md).
-Первый fallback `6f8b282` временный: перед публикацией контроллер закрепляет
-commit с runtime/CSS. Citrix/browser auth и реальный LLM **ожидают приёмки**;
+Bootstrap локально закреплён на готовые runtime/CSS `489d90d80ca593c0e1f3407b2ccf5c13725c0727`.
+Полный регресс 2267/2267; личный Chrome 1440/390 и совместное размещение пройдены.
+Публикация и итоговое ревью ветки выполняются контроллером.
+Citrix/browser auth и реальный LLM **ожидают приёмки**;
 VDI `/health` не подтверждает доступ к источникам. Production-ready не заявляется.
