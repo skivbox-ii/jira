@@ -406,7 +406,7 @@ Preview по умолчанию `http://127.0.0.1:4320/`; если порт за
 Новый read-only виджет `_ujgKnowledgeAssistant` устанавливается на отдельный
 дашборд. Локальная сборка: `node build-knowledge-assistant.js` — только новые
 source/runtime/bootstrap; Pico и общий LLM-клиент встроены под `_ujgKA_*`.
-UJG JavaScript URL после публикации:
+Опубликованный UJG JavaScript URL:
 `https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-knowledge-assistant.bootstrap.js`;
 CSS URLs пусто; HTML: `<div class="ujg-knowledge-assistant"></div>`.
 Используются существующие `ujg.dashboardReleaseRef` и LLM-конфигурация на
@@ -415,6 +415,7 @@ CSS URLs пусто; HTML: `<div class="ujg-knowledge-assistant"></div>`.
 [Установка, scoped bootstrap build, двухфазное закрепление и приёмка](docs/knowledge-assistant-acceptance.md).
 Bootstrap локально закреплён на готовые runtime/CSS `66c7e83f6f743383dc0ad1a90b576152cc86eab9`.
 Полный регресс 2292/2292; личный Chrome 1440/390 и совместное размещение пройдены.
-Итоговое ревью ветки и исправлений завершено; публикация выполняется контроллером.
+Итоговое ревью ветки и исправлений завершено; push `57c8c64` в `main` выполнен.
+Bootstrap/source/runtime/CSS/common на CDN: HTTP 200, побайтовое совпадение.
 Citrix/browser auth и реальный LLM **ожидают приёмки**;
 VDI `/health` не подтверждает доступ к источникам. Production-ready не заявляется.
