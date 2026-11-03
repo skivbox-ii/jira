@@ -74,7 +74,8 @@
 
 **Files:** generated source/runtime/bootstrap, `docs/ticket-assistant-dashboard-setup.md`, a dated chat acceptance report.
 
-- [ ] Record checks, known limits, migration behavior and production acceptance still pending.
-- [ ] Commit verified source/runtime, pin bootstrap to that source commit and push using the established main publication process.
-- [ ] Verify commit-pinned runtime/CSS/bootstrap on CDN against local files.
-- [ ] Leave a working local mock preview and provide its URL. Perform Citrix read-only acceptance when the screen is available; any live creation needs its own explicit user authorization.
+- [x] Record checks, known limits, migration behavior and production acceptance still pending.
+- [x] Commit verified source/runtime, pin bootstrap to that source commit and push using the established main publication process.
+- [x] Verify commit-pinned runtime/CSS/bootstrap on CDN against local files.
+- [x] Leave a working local mock preview and provide its URL (`http://127.0.0.1:4321/`).
+- [ ] Citrix acceptance remains separate: perform read-only acceptance when the screen is available; any live creation needs its own explicit user authorization.
