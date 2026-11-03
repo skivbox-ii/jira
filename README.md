@@ -399,3 +399,20 @@ NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node test
 ```
 
 Preview по умолчанию `http://127.0.0.1:4320/`; если порт занят, команда сообщает фактически выбранный свободный порт. Уже работающий preview достаточно перезагрузить. Все Jira/LLM вызовы, включая создание/вложения, в этом preview синтетические и выполняются в памяти. [Browser README](tests/browser/README.md) содержит команды acceptance без живых API.
+
+
+## Отдельный Pico-дашборд знаний Jira и Confluence
+
+Новый read-only виджет `_ujgKnowledgeAssistant` устанавливается на отдельный
+дашборд. Локальная сборка: `node build-knowledge-assistant.js` — только новые
+source/runtime/bootstrap; Pico и общий LLM-клиент встроены под `_ujgKA_*`.
+UJG JavaScript URL после публикации:
+`https://cdn.jsdelivr.net/gh/skivbox-ii/jira@main/ujg-knowledge-assistant.bootstrap.js`;
+CSS URLs пусто; HTML: `<div class="ujg-knowledge-assistant"></div>`.
+Используются существующие `ujg.dashboardReleaseRef` и LLM-конфигурация на
+том же Jira origin. Confluence PAT вводит пользователь, только в память вкладки.
+
+[Установка, scoped bootstrap build, двухфазное закрепление и приёмка](docs/knowledge-assistant-acceptance.md).
+Первый fallback `6f8b282` временный: перед публикацией контроллер закрепляет
+commit с runtime/CSS. Citrix/browser auth и реальный LLM **ожидают приёмки**;
+VDI `/health` не подтверждает доступ к источникам. Production-ready не заявляется.

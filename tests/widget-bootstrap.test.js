@@ -263,12 +263,14 @@ test("re-running bootstrap generator produces the committed assets byte-for-byte
     assetBaseUrl: baseUrl,
     widgets: mod.allWidgetIds()
   });
-  // The new widget has its own release pin; legacy URLs keep the canonical pin.
-  Object.assign(generated, mod.buildAssets({
-    releaseRef: releaseRefFromBootstrapSource(fs.readFileSync(path.join(root, 'ujg-ticket-assistant.bootstrap.js'), 'utf8')),
-    assetBaseUrl: baseUrl,
-    widgets: ['ujg-ticket-assistant']
-  }));
+  // Separate assistants have their own release pins; legacy URLs keep the canonical pin.
+  ['ujg-ticket-assistant', 'ujg-knowledge-assistant'].forEach(function(widget) {
+    Object.assign(generated, mod.buildAssets({
+      releaseRef: releaseRefFromBootstrapSource(fs.readFileSync(path.join(root, widget + '.bootstrap.js'), 'utf8')),
+      assetBaseUrl: baseUrl,
+      widgets: [widget]
+    }));
+  });
   var names = Object.keys(generated).sort();
   names.forEach(function(name) {
     var committed = mod.normalizeTextNewlines(
