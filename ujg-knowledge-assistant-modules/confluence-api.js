@@ -1,17 +1,6 @@
-define('_ujgKA_confluenceApi', ['_ujgKA_transport'], function(contract) {
+define('_ujgKA_confluenceApi', ['_ujgKA_transport', '_ujgKA_evidence'], function(contract, evidence) {
     'use strict';
 
-    function storageText(value) {
-        var entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
-        return value.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-            .replace(/<!--[\s\S]*?-->/g, '').replace(/<br\s*\/?\s*>|<\/(?:p|div|li|h[1-6]|tr)>/gi, '\n')
-            .replace(/<[^>]*>/g, '').replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, function(all, entity) {
-                var lower = entity.toLowerCase();
-                if (lower[0] !== '#') return entities[lower];
-                var n = lower[1] === 'x' ? parseInt(lower.slice(2), 16) : parseInt(lower.slice(1), 10);
-                return n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : '\ufffd';
-            }).replace(/\n{3,}/g, '\n\n').trim();
-    }
     function createApi(config) {
         var transport = config.transport, select = contract.createScope(config.scopes), base = contract.sourceBase(config.baseUrl);
         function inScope(page, scopes) { return page && page.space && scopes.indexOf(page.space.key) !== -1; }
@@ -52,7 +41,8 @@ define('_ujgKA_confluenceApi', ['_ujgKA_transport'], function(contract) {
             if (!raw || String(raw.id) !== id || !raw.space) throw contract.failure('invalid-response');
             if (!inScope(raw, scopes)) throw contract.failure('scope');
             if (!raw.body || !raw.body.storage || typeof raw.body.storage.value !== 'string') throw contract.failure('invalid-response');
-            return contract.fragment(source(raw), storageText(raw.body.storage.value), start);
+            var extracted = evidence.extractStorage(raw.body.storage.value);
+            return contract.fragment(source(raw), extracted.text, start, extracted.warnings);
         }
         return { search: search, read: read };
     }

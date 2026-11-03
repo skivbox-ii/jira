@@ -24,7 +24,7 @@ function adapter(kind, fetchImpl, scopes = ['DOC']) {
             fetchImpl: (url, options) => url.endsWith('/rest/api/user/current') ? Promise.resolve(response({ type: 'known', username: 'reader' })) : fetchImpl(url, options) });
         connection = { getJson: async (...args) => { await bridge.getJson('/rest/api/user/current'); return bridge.getJson(...args); } };
     }
-    return unit(kind + '-api', { _ujgKA_transport: unit('transport') }).createApi({
+    return unit(kind + '-api', { _ujgKA_transport: unit('transport'), _ujgKA_evidence: unit('evidence') }).createApi({
         transport: connection, scopes, baseUrl: kind === 'jira' ? 'https://jira.example/jira' : 'https://wiki.example/wiki'
     });
 }
@@ -331,4 +331,11 @@ test('bridge authentication invalidation retains cancellation for pending reques
     controller.abort(); requests[1].resolve(response({ id: '42' })); await cancelled;
     const current = bridge.getJson('/rest/api/content/43'); requests[3].resolve(response({ id: '43' }));
     assert.equal((await current).id, '43');
+});
+
+test('Confluence extraction retains table headers/cells and warns on unknown macros', async () => {
+    const api = adapter('confluence', async () => response(page('42', 'DOC', '<table><tr><th>Name</th><th>Value</th></tr><tr><td>A</td><td>2</td></tr></table><ac:structured-macro ac:name="unknown"><ac:parameter ac:name="x">PRIVATE</ac:parameter><ac:rich-text-body><p>Readable</p></ac:rich-text-body></ac:structured-macro>')));
+    const result = await api.read({ id: '42' });
+    assert.match(result.text, /Name\tValue\nA\t2/); assert.match(result.text, /Readable/);
+    assert.ok(!result.text.includes('PRIVATE')); assert.ok(result.warnings.length); assert.equal(result.total, result.text.length);
 });
