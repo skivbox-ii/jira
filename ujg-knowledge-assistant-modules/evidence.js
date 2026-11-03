@@ -99,7 +99,11 @@ define('_ujgKA_evidence', [], function() {
                 } else if (name === 'li' && !closing) output += (output.endsWith('\n') ? '' : '\n') + '- ';
                 else if (name === 'tr' && !closing) { output = output.replace(/ +$/, ''); if (!output.endsWith('\n')) output += '\n'; cell = 0; }
                 else if (name === 'td' || name === 'th') {
-                    if (!closing) { if (cell++) output += '\t'; inCell = true; }
+                    if (!closing) {
+                        if (/\s(?:rowspan|colspan)\s*=/i.test(token)) warn('Неподдерживаемые rowspan/colspan: позиции ячеек таблицы неполны');
+                        if (cell++) output += '\t';
+                        inCell = true;
+                    }
                     else { output = output.replace(/ +$/, ''); inCell = false; }
                 }
                 else if (name === 'br' || closing && /^(p|div|li|h[1-6]|tr|ul|ol|table|pre)$/.test(name)) output += inCell ? ' ' : '\n';
@@ -111,7 +115,8 @@ define('_ujgKA_evidence', [], function() {
             else output += decode(token).replace(/[\r\n\t ]+/g, ' ');
         });
         if (blocked.length) warn('Незакрытый блок: содержимое неполно');
-        return { text: output.replace(/ *\t */g, '\t').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim(), warnings: warnings };
+        // Keep boundary tabs: they represent empty leading/trailing table cells.
+        return { text: output.replace(/ *\t */g, '\t').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^[ \r\n]+|[ \r\n]+$/g, ''), warnings: warnings };
     }
     return { createEvidenceStore: createEvidenceStore, canonicalId: canonicalId, validateSource: validateSource, validateRead: validateRead, extractStorage: extractStorage };
 });

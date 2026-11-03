@@ -76,3 +76,39 @@ test('formatted table cells retain their boundaries when Confluence wraps conten
     const out = unit().extractStorage('<table>\n<tr><th><p>Name</p></th><th><p>Value</p></th></tr>\n<tr><td><p>A</p><p>B</p></td><td><p>2</p></td></tr>\n</table>');
     assert.equal(out.text, 'Name\tValue\nA B\t2');
 });
+test('rowspan table warns about unsupported positions and cannot become complete evidence', () => {
+    const module = unit();
+    const out = module.extractStorage('<table><tr><th>Name</th><th>Value</th></tr><tr><td rowspan="2">Alice</td><td>10</td></tr><tr><td>20</td></tr></table>');
+    assert.match(out.text, /Name\tValue\nAlice\t10\n20/);
+    assert.ok(out.warnings.some(w => /rowspan\/colspan/.test(w)));
+    const store = module.createEvidenceStore({ identityKey: 'rowspan' });
+    store.put({ ...part(0, out.text, out.text.length), warnings: out.warnings });
+    assert.equal(store.get('confluence:42').complete, false);
+});
+test('colspan table warns about unsupported positions and cannot become complete evidence', () => {
+    const module = unit();
+    for (const cell of ['<td colspan="2">AB</td>', "<th COLSPAN='2'>AB</th>", '<td colspan=2>AB</td>']) {
+        const out = module.extractStorage('<table><tr><th>A</th><th>B</th><th>C</th></tr><tr>' + cell + '<td>C-value</td></tr></table>');
+        assert.match(out.text, /A\tB\tC\nAB\tC-value/);
+        assert.ok(out.warnings.some(w => /rowspan\/colspan/.test(w)));
+        const store = module.createEvidenceStore({ identityKey: 'colspan' });
+        store.put({ ...part(0, out.text, out.text.length), warnings: out.warnings });
+        assert.equal(store.get('confluence:42').complete, false);
+    }
+});
+test('empty leading and trailing table cells retain boundary tabs and complete rectangular evidence', () => {
+    const module = unit();
+    for (const [cells, expected] of [
+        ['<td></td><td>value</td>', '\tvalue'],
+        ['<td>value</td><td></td>', 'value\t'],
+        ['<td></td><td>value</td><td></td>', '\tvalue\t'],
+        ['<td></td><td></td>', '\t'],
+        ['<td></td><td>value</td></tr><tr><td>last</td><td></td>', '\tvalue\nlast\t']
+    ]) {
+        const out = module.extractStorage(' \n<table>\n<tr>' + cells + '</tr>\n</table>\n ');
+        assert.equal(out.text, expected); assert.equal(out.warnings.length, 0);
+        const store = module.createEvidenceStore({ identityKey: 'empty-cells' });
+        store.put({ ...part(0, out.text, out.text.length), warnings: out.warnings });
+        assert.equal(store.get('confluence:42').complete, true);
+    }
+});
