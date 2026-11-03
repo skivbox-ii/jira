@@ -68,21 +68,41 @@ define('_ujgTA_draft', [], function() {
         });
     }
 
+    function automaticUndo(input, source) {
+        if(!record(input) || !record(input.before) || !record(input.after)) return null;
+        var after={};
+        if(!snapshotKeys.every(function(k) {
+            var value=input.after[k];
+            if(['sourceRevision','settingsRevision','draftRevision'].indexOf(k)!==-1) return Number.isSafeInteger(value) && value>=0;
+            return value===null || typeof value==='string';
+        })) return null;
+        snapshotKeys.forEach(function(k) {after[k]=input.after[k];});
+        var before=input.before;
+        return {after:after,before:{fields:fields(before.fields),pendingFields:fields(before.pendingFields),protectedFields:fields(before.protectedFields,true),
+            questions:questions(before.questions),warnings:strings(before.warnings),evidence:evidence(before.evidence,source),taskExceptions:strings(before.taskExceptions),templateReviewPending:before.templateReviewPending===true}};
+    }
+    function recordAutomaticChange(next, before) {
+        var result=Object.assign({},next);
+        result.automaticUndo=automaticUndo({before:before,after:snapshot(next)},next.source);
+        return result;
+    }
     // Read only known properties; never stringify user-supplied objects or File/Blob values.
     function persistent(input) {
         if (!record(input) || (input.schemaVersion !== undefined && input.schemaVersion !== 1)) throw new Error('Invalid draft');
         var source = str(input.source) || '';
         var result = {
             schemaVersion: 1, id: str(input.id), projectKey: str(input.projectKey), issueTypeId: str(input.issueTypeId), templateId: str(input.templateId),
-            source: source, fields: fields(input.fields), protectedFields: fields(input.protectedFields, true), pendingFields: fields(input.pendingFields),
+            source: source, templateReviewPending:input.templateReviewPending===true, automaticUndo:automaticUndo(input.automaticUndo,source), fields: fields(input.fields), protectedFields: fields(input.protectedFields, true), pendingFields: fields(input.pendingFields),
             pendingAssistance: record(input.pendingAssistance) && safeKey(input.pendingAssistance.fieldId) &&
                 typeof input.pendingAssistance.fieldId === 'string' && ['generate', 'improve', 'shorten'].indexOf(input.pendingAssistance.action) !== -1 &&
                 Object.prototype.hasOwnProperty.call(fields(input.pendingFields), input.pendingAssistance.fieldId) ?
                 {fieldId: input.pendingAssistance.fieldId, action: input.pendingAssistance.action} : null,
+            taskExceptions: strings(input.taskExceptions),
             questions: questions(input.questions), warnings: strings(input.warnings), evidence: evidence(input.evidence, source),
             sourceRevision: revision(input.sourceRevision), settingsRevision: revision(input.settingsRevision), draftRevision: revision(input.draftRevision),
             metaSignature: str(input.metaSignature), checked: checked(input.checked), creation: creation(input.creation), attachments: attachments(input.attachments)
         };
+        if(result.templateReviewPending) result.checked=null;
         if (result.checked && !revisionKeys.every(function(k) { return result.checked[k] === result[k]; })) result.checked = null;
         return result;
     }
@@ -113,6 +133,7 @@ define('_ujgTA_draft', [], function() {
         next.pendingAssistance = null;
         // Runtime file references remain in memory across pure draft mutations.
         next.attachments = (d.attachments || []).map(function(a) { return Object.assign({}, a); });
+        next.automaticUndo=null;
         next.draftRevision++;
         next.checked = null;
         return next;
@@ -213,13 +234,13 @@ define('_ujgTA_draft', [], function() {
         next.attachments = (d.attachments || []).map(function(a) { return Object.assign({}, a); });
         next.questions = questions(currentQuestions);
         next.warnings = strings(validation.warnings);
-        var valid = validation.ok === true && !strings(validation.unsupportedRequired).length &&
+        var valid = !next.templateReviewPending && validation.ok === true && !strings(validation.unsupportedRequired).length &&
             !Object.keys(validation.fieldErrors || {}).some(function(k) { return validation.fieldErrors[k].length; }) &&
             !next.questions.some(function(q) { return q.required; });
         next.checked = valid ? checked(d) : null;
         return next;
     }
-    return { createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
+    return { recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
         appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
         invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };

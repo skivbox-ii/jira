@@ -1,0 +1,207 @@
+import { Agent } from '@earendil-works/pi-agent-core';
+import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
+import { abortable, copy, emptyUsage, estimateTokens, makeRequest, MAX_PROMPT_BYTES, parseEnvelope, requestSize, validateBudget } from './transport.mjs';
+
+export const VERSION = '1.4.0';
+export const LIMITS = Object.freeze({modelCalls: 8, toolCalls: 12, wallMs: 180000});
+const message = (content, stopReason = 'stop', errorMessage) => ({role: 'assistant', content,
+    api: 'text-envelope', provider: 'shared', model: 'configured', usage: emptyUsage(), stopReason,
+    timestamp: Date.now(), ...(errorMessage ? {errorMessage} : {})});
+const interrupted = call => ({role: 'toolResult', toolCallId: call.id, toolName: call.name,
+    content: [{type: 'text', text: 'Tool execution interrupted; result unknown. Historical calls are never replayed.'}],
+    isError: true, timestamp: Date.now()});
+
+// Preserve completed pairs, close interrupted calls with an explicit error result, and
+// reject orphan/duplicate results rather than silently changing historical evidence.
+function repairPairs(messages) {
+    const repaired = [], pending = new Map(), known = new Set();
+    function close() {for (const call of pending.values()) repaired.push(interrupted(call)); pending.clear();}
+    for (const m of messages) {
+        if (m.role !== 'toolResult') close();
+        if (m.role === 'assistant') {
+            for (const c of m.content.filter(c => c.type === 'toolCall')) {
+                if (known.has(c.id)) throw Error('Duplicate historical Pico tool call id');
+                known.add(c.id); pending.set(c.id, c);
+            }
+        } else if (m.role === 'toolResult') {
+            const call = pending.get(m.toolCallId);
+            if (!call || call.name !== m.toolName) throw Error('Orphan historical Pico tool result');
+            pending.delete(m.toolCallId);
+        }
+        repaired.push(m);
+    }
+    close();
+    return repaired;
+}
+function restore(messages) {
+    if (!Array.isArray(messages)) throw Error('Pico messages must be an array');
+    const values = copy(messages).filter(m => m.role !== 'system');
+    for (let i = 0; i < values.length; i++) {
+        const m = values[i];
+        if (!['user', 'assistant', 'toolResult'].includes(m.role)) throw Error('Invalid Pico message role');
+        if (m.role === 'user') {
+            if (typeof m.content !== 'string' && (!Array.isArray(m.content) || m.content.some(p => p.type !== 'text' || typeof p.text !== 'string'))) throw Error('Invalid Pico user message');
+        } else {
+            if (!Array.isArray(m.content)) throw Error('Invalid Pico message content');
+            m.content = m.content.filter(p => p.type !== 'thinking');
+            for (const part of m.content) {
+                if (part.type === 'text' && typeof part.text === 'string') continue;
+                if (m.role === 'assistant' && part.type === 'toolCall' && typeof part.id === 'string' && typeof part.name === 'string' && part.arguments && typeof part.arguments === 'object' && !Array.isArray(part.arguments)) continue;
+                throw Error('Invalid Pico message content');
+            }
+            if (m.role === 'assistant') values[i] = {...message(m.content, m.stopReason || 'stop'), ...m};
+            if (m.role === 'toolResult' && (typeof m.toolCallId !== 'string' || typeof m.toolName !== 'string')) throw Error('Invalid Pico tool result');
+        }
+    }
+    return repairPairs(values);
+}
+
+export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}} = {}) {
+    if (typeof requestText !== 'function') throw Error('Pico requires the configured shared requestText callback');
+    if (typeof system !== 'string' || typeof onEvent !== 'function' || (getContext !== undefined && typeof getContext !== 'function')) throw Error('Invalid Pico session options');
+    const budget = validateBudget(tokenBudget), bounds = {};
+    for (const [key, hardLimit] of Object.entries(LIMITS)) {
+        if (limits[key] !== undefined && (!Number.isSafeInteger(limits[key]) || limits[key] <= 0)) throw Error('Invalid Pico turn limit');
+        bounds[key] = Math.min(hardLimit, limits[key] ?? hardLimit);
+    }
+    if (!Array.isArray(tools)) throw Error('Pico tools must be an array');
+    const names = new Set();
+    tools = tools.map(t => {
+        if (!t || typeof t.name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(t.name) || names.has(t.name) ||
+            typeof t.execute !== 'function' || !t.parameters || t.parameters.type !== 'object') throw Error('Invalid Pico tool declaration');
+        names.add(t.name);
+        return {...t, description: String(t.description || ''), parameters: copy(t.parameters)};
+    });
+    let active = null, disposed = false;
+    const restored = restore(messages);
+    const seenIds = new Set(restored.filter(m => m.role === 'assistant').flatMap(m => m.content.filter(c => c.type === 'toolCall').map(c => c.id)));
+    function emit(event) {
+        try {Promise.resolve(onEvent(copy(event))).catch(() => {});} catch { /* Observers do not own the loop. */ }
+    }
+    function stop(status, reason) {
+        if (!active || active.status) return;
+        active.status = status; active.reason = reason;
+        if (status === 'limit') emit({type: 'limit', reason, message: reason});
+        active.controller.abort(); agent.abort();
+    }
+    function limit(reason) {stop('limit', reason); throw Error(reason);}
+    function live(run, signal) {
+        if (!run || active !== run || run.status || signal?.aborted) throw Error(run?.reason || 'Operation aborted');
+        // Timers cannot run while synchronous callback work occupies the event loop.
+        if (Date.now() - run.started >= bounds.wallMs) limit('Pico wall time limit reached (maximum ' + bounds.wallMs + ' ms per turn).');
+    }
+    const executableTools = tools.map(t => ({...t, label: t.name, executionMode: 'sequential', replay: 'never',
+        async execute(toolCallId, args, signal, onUpdate) {
+            const run = active;
+            live(run, signal);
+            const result = await abortable(Promise.resolve().then(() => {
+                live(run, signal);
+                return t.execute(copy(args), {signal, toolCallId, onUpdate(value) {
+                    if (active !== run || run.status || signal?.aborted) return;
+                    const safe = copy(value);
+                    onUpdate?.({content: [{type: 'text', text: JSON.stringify(safe)}], details: safe});
+                }});
+            }), signal);
+            live(run, signal);
+            const safe = copy(result);
+            // Never truncate evidence: a large result stays in history; the next model
+            // request either fits or visibly stops on the configured context bound.
+            return {content: [{type: 'text', text: JSON.stringify(safe)}], details: safe};
+        }}));
+    const streamFn = (_model, context, {signal} = {}) => {
+        const output = new AssistantMessageEventStream(), run = active;
+        void (async () => {
+            try {
+                live(run, signal);
+                if (run.usage.modelCalls >= bounds.modelCalls) limit('Pico model call limit reached (maximum ' + bounds.modelCalls + ' per turn).');
+                const state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
+                live(run, signal);
+                const full = context.messages.filter(m => m.role !== 'system');
+                let projected = full, compaction = null;
+                let request = makeRequest(system, tools, projected, state, compaction), size = requestSize(request);
+                const fits = () => size.tokens <= budget.context - budget.reserve && size.bytes <= MAX_PROMPT_BYTES;
+                if (!fits() && getContext) {
+                    // Compact only complete older user turns. Keep the current user turn,
+                    // all its tool-call/result pairs, and fresh authoritative application state.
+                    const starts = full.flatMap((m, i) => m.role === 'user' ? [i] : []);
+                    for (const index of starts.slice(1)) {
+                        projected = full.slice(index);
+                        compaction = {removedMessages: index, message: 'Earlier complete turns omitted from model context. Full transcript remains stored; use current authoritative task, manual fields, open questions and template revisions.'};
+                        request = makeRequest(system, tools, projected, state, compaction); size = requestSize(request);
+                        if (fits()) break;
+                    }
+                }
+                if (!fits()) limit('Pico context limit reached: instructions, tools, current turn and authoritative state must fit with the configured response reserve. History is preserved.');
+                if (compaction) {run.usage.compactions++; emit({type: 'compaction', ...compaction});}
+                run.usage.modelCalls++; run.usage.inputTokens += size.tokens;
+                const response = await abortable(Promise.resolve().then(() => {
+                    live(run, signal); return requestText({...request, signal});
+                }), signal);
+                live(run, signal);
+                if (!response || typeof response.text !== 'string') throw Error('Shared requestText returned no text');
+                const tokens = estimateTokens(response.text);
+                run.usage.outputTokens += tokens;
+                if (tokens > budget.reserve) limit('Pico response reserve exceeded. Response was not applied; history is preserved.');
+                const envelope = parseEnvelope(response.text, tools, seenIds);
+                if (envelope.toolCalls.length > bounds.toolCalls - run.usage.toolCalls) limit('Pico tool call limit reached (maximum ' + bounds.toolCalls + ' per turn).');
+                for (const c of envelope.toolCalls) seenIds.add(c.id);
+                const content = [...(envelope.text ? [{type: 'text', text: envelope.text}] : []), ...envelope.toolCalls.map(c => ({type: 'toolCall', ...c}))];
+                const result = message(content, envelope.toolCalls.length ? 'toolUse' : 'stop');
+                result.usage = {...emptyUsage(), input: size.tokens, output: tokens, totalTokens: size.tokens + tokens};
+                output.push({type: 'done', reason: result.stopReason, message: result});
+            } catch (error) {
+                const reason = run?.reason || String(error?.message || error);
+                output.push({type: 'error', reason: run?.status ? 'aborted' : 'error', error: message([], run?.status ? 'aborted' : 'error', reason)});
+            } finally {output.end();}
+        })();
+        return output;
+    };
+    const agent = new Agent({initialState: {systemPrompt: system, messages: restored, tools: executableTools,
+        model: {id: 'configured', name: 'Configured shared client', api: 'text-envelope', provider: 'shared', baseUrl: '', reasoning: false,
+            input: ['text'], cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0}, contextWindow: budget.context, maxTokens: budget.reserve}},
+        streamFn, toolExecution: 'sequential', identity: {attribution: null},
+        beforeToolCall(_context, signal) {
+            if (!active || active.status || signal?.aborted) return {block: true, terminate: true, reason: active?.reason || 'Stopped'};
+            if (active.usage.toolCalls >= bounds.toolCalls) {stop('limit', 'Pico tool call limit reached.'); return {block: true, terminate: true, reason: active.reason};}
+            active.usage.toolCalls++;
+        },
+        finishTurn: () => active?.status ? {action: 'end'} : undefined});
+    const unsubscribe = agent.subscribe(event => {
+        if (!active || active.status) return;
+        if (event.type === 'message_end' && event.message.role === 'assistant') {
+            const text = event.message.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+            if (text) emit({type: 'assistant', text});
+        } else if (event.type === 'tool_execution_start') emit({type: 'tool', phase: 'start', name: event.toolName, toolCallId: event.toolCallId, args: event.args});
+        else if (event.type === 'tool_execution_update') emit({type: 'tool', phase: 'update', name: event.toolName, toolCallId: event.toolCallId, result: event.partialResult.details ?? event.partialResult});
+        else if (event.type === 'tool_execution_end') emit({type: 'tool', phase: 'end', name: event.toolName, toolCallId: event.toolCallId, result: event.result.details ?? event.result, isError: event.isError});
+    });
+    function getMessages() {return copy(agent.state.messages.filter(m => m.role !== 'system'));}
+    function prompt(text) {
+        if (disposed) throw Error('Pico session is disposed');
+        if (active) throw Error('Pico is already running');
+        if (typeof text !== 'string' || !text.trim()) throw Error('Pico prompt must be non-empty text');
+        const run = {controller: new AbortController(), status: null, reason: null, started: Date.now(),
+            usage: {modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, compactions: 0, elapsedMs: 0}};
+        active = run;
+        const timer = setTimeout(() => stop('limit', 'Pico wall time limit reached (maximum ' + bounds.wallMs + ' ms per turn).'), bounds.wallMs);
+        return (async () => {
+            try {
+                await agent.prompt(text);
+                if (!run.status && agent.state.errorMessage) {run.status = 'error'; run.reason = agent.state.errorMessage;}
+            } catch (error) {run.status ||= 'error'; run.reason ||= String(error?.message || error);}
+            finally {
+                clearTimeout(timer);
+                // Pair repair affects only interrupted calls, never executes anything.
+                agent.state.messages = restore(getMessages());
+                run.usage.elapsedMs = Date.now() - run.started;
+                if (run.status === 'error') emit({type: 'error', message: run.reason});
+                const result = {status: run.status || 'complete', messages: getMessages(), usage: {...run.usage}, ...(run.reason ? {reason: run.reason} : {})};
+                active = null;
+                emit({type: 'done', status: result.status, usage: result.usage});
+                return result;
+            }
+        })();
+    }
+    return {prompt, abort() {stop('aborted', 'Stopped by user.');}, getMessages,
+        dispose() {if (disposed) return; stop('aborted', 'Pico session disposed.'); disposed = true; unsubscribe();}};
+}

@@ -1,0 +1,9 @@
+{
+  "name": "ujg-ticket-assistant-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "node build.mjs", "test": "node --test ../tests/ticket-assistant-chat-runtime.test.cjs"},
+  "dependencies": {"@earendil-works/pi-agent-core": "1.4.0", "@earendil-works/pi-ai": "1.4.0", "typebox": "1.3.27"},
+  "devDependencies": {"esbuild": "0.25.12"}
+}

@@ -120,6 +120,7 @@ test('offline preview generates a bounded synthetic Summary from long source and
     };
     const root=path.resolve(__dirname,'..');
     window.eval(fs.readFileSync(path.join(root,'ujg-shared-modules/llm-client.js'),'utf8'));
+    window.eval(fs.readFileSync(path.join(root,'vendor/pico-1.4.0.amd.js'),'utf8'));
     for(const file of fs.readdirSync(path.join(root,'ujg-ticket-assistant-modules')).filter(file=>file.endsWith('.js')))
         window.eval(fs.readFileSync(path.join(root,'ujg-ticket-assistant-modules',file),'utf8'));
     modules.set('_ujgTA_llmClient',modules.get('_ujgShared_llmClient'));

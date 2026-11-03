@@ -75,7 +75,7 @@ async function session(width, run) {
     const issuePosts = new Map();
     const fixture = {issuePostCount:id => issuePosts.get(id) || 0};
     try {
-        server = await startPreview({port:0,sourceAssets:false});
+        server = await startPreview({port:0,sourceAssets:true});
         browser = await chromium.launch({channel:'chrome',headless:true});
         context = await browser.newContext({viewport:{width,height:width === 390 ? 844 : 900},reducedMotion:'reduce'});
         await context.exposeBinding('taRecordIssue', (source, event) => {issuePosts.set(event.draftId,fixture.issuePostCount(event.draftId)+1);});
@@ -94,7 +94,7 @@ async function session(width, run) {
         const page = await context.newPage();
         page.setDefaultTimeout(8000);
         page.on('pageerror', error => pageErrors.push(error.message));
-        await page.goto(server.url); await ready(page);
+        await page.goto(server.url+'?form=1'); await ready(page);
         await run(page, server.url, fixture);
         assert.deepEqual(externalRequests, [], 'external network is an acceptance failure');
         assert.deepEqual(pageErrors, [], 'browser exceptions');

@@ -256,7 +256,7 @@ test('main shows quota fallback after init without replacing editor or caret', a
         const api={getCurrentUser:async()=>({key:'quota-user'}),getProjects:async()=>({values:[{key:'DO',id:'1',name:'Delivery'}]}),
             getCreateMeta:async()=>({projects:[{key:'DO',id:'1',issuetypes:[{id:'10',name:'Task',fields:{summary:{name:'Summary',required:true,schema:{type:'string',system:'summary'}}}}]}]}),
             getComponents:async()=>({values:[],complete:true,projectKey:'DO'}),getVersions:async()=>({values:[],complete:true,projectKey:'DO'})};
-        const Gadget=resolve('_ujgTicketAssistantRuntime'),g=new Gadget({getGadgetContentEl:()=>$('#root')},{api,ai:{},storage});
+        const Gadget=resolve('_ujgTicketAssistantRuntime'),g=new Gadget({getGadgetContentEl:()=>$('#root')},{api,ai:{},storage,legacyForm:true});
         try {
             await g.ready;if(trigger==='project')fail=true;await g.controller.selectProject('DO');
             const input=dom.window.document.querySelector('[data-ta-source]');input.value='Original';input.focus();input.setSelectionRange(3,3);
@@ -579,7 +579,7 @@ test('main composes real controller, reinitializes identity, replaces prior inst
         getCreateMeta:async () => ({projects:[{key:'DO',id:'1',issuetypes:[{id:'10',name:'Task',subtask:false,fields:{summary:{name:'Summary',required:true,schema:{type:'string',system:'summary'}},reporter:{name:'Reporter',schema:{type:'user',system:'reporter'}}}}]}]}),
         getComponents:async () => ({values:[],complete:true,projectKey:'DO'}),getVersions:async () => ({values:[],complete:true,projectKey:'DO'}),
         searchUsers:(query,options) => {searchSignal=options.signal; return new Promise(() => {});}};
-    const deps = {api,ai:{},baseUrl:'/jira',createStore:key => {identities.push(key); return resolve('_ujgTA_storage').createStore({userKey:key,origin:dom.window.location.origin,storage:null});}};
+    const deps = {api,ai:{},legacyForm:true,baseUrl:'/jira',createStore:key => {identities.push(key); return resolve('_ujgTA_storage').createStore({userKey:key,origin:dom.window.location.origin,storage:null});}};
     const API = {getGadgetContentEl:() => $('#root')}; const first = new Gadget(API,deps);
     try {
         await first.ready; assert.deepEqual(identities,['first']); await first.controller.selectProject('DO'); await first.controller.selectIssueType('10');
@@ -612,7 +612,7 @@ test('generated runtime works in installed Chrome at desktop and mobile, without
                 if (!request.url().startsWith(server.url)) {faults.push('external request'); return route.abort();}
                 return route.continue();
             });
-            await page.goto(server.url); await page.waitForSelector('html[data-ta-preview-ready="true"]');
+            await page.goto(server.url+'?form=1'); await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-additional] > summary').click();
             const labels = page.locator('[data-ta-field="labels"] input');
             await labels.pressSequentially('alpha,beta');

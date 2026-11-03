@@ -71,6 +71,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
         var budgetCache = null, providerUsage = null;
         var metadataReady = false;
+        var listeners = new Set();
         var relationConfirmations = Object.create(null), relationSearches = new Map();
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
         function durableGuard() {
@@ -85,6 +86,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
 
         function getState() {
             var result = Object.assign({}, state);
+            result.destroyed = destroyed;
             result.tokenPreflight = null;
             if (state.draft && state.meta && state.settings && typeof ai.preflight === 'function') {
                 if (!budgetCache || budgetCache.draft!==state.draft || budgetCache.meta!==state.meta ||
@@ -106,6 +108,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var entry = state.draft && scopes[state.draft.projectKey];
             if (entry && entry.error && entry.error.code === 'conflict') state.error = entry.error;
             if (!destroyed && typeof options.onChange === 'function') options.onChange(getState());
+            if (!destroyed) listeners.forEach(function(listener) { listener(getState()); });
             return getState();
         }
         function stop() {
@@ -371,7 +374,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (id !== null && !profile().templates.some(function(t) { return t.id === id; })) {
                 state.error = errorState(null, 'input'); return emit();
             }
-            return edited(drafts.setSelection(state.draft, { templateId: id }));
+            var selected=profile().templates.find(function(t) {return t.id===id;}), selection={templateId:id};
+            if(selected && selected.issueTypeId!==null && state.meta && state.meta.issueTypes.some(function(t) {return t.id===selected.issueTypeId && !t.subtask;})) selection.issueTypeId=selected.issueTypeId;
+            return edited(drafts.setSelection(state.draft, selection));
         }
         async function mutate(method, args) {
             if (destroyed || !state.draft) return getState();
@@ -555,6 +560,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     }
                     state.validation = validation.validateFields(state.meta, state.draft.issueTypeId, state.draft.fields, policy());
                     if (kind === 'check') {
+                        // This explicit AI check used the current selected rules and passed the snapshot guard.
+                        if(Array.isArray(result.questions)) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
                         state.validation.warnings = (result.warnings || []).filter(function(w) { return typeof w === 'string'; });
                         state.draft = drafts.markChecked(state.draft, state.validation, result.questions, snapshot);
                         // Reuse the nested whitelist without advancing the checked content revision.
@@ -578,7 +585,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             save(); return emit();
         }
         async function destroy() {
-            if (!destroyed) { stop(); destroyed = true; if (creator) creator.destroy();runtimeFiles.clear(); }
+            if (!destroyed) { stop(); destroyed = true;listeners.forEach(function(listener) {listener(getState());});listeners.clear(); if (creator) creator.destroy();runtimeFiles.clear(); }
             return getState();
         }
         function creationUpdate(ownerScopes, draft, info) {
@@ -598,9 +605,17 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         async function submit(submitOptions) {
             if (destroyed || !state.draft || !creator || locked() || durableGuard()) return getState();
-            stop();state.stage='idle';remember();var owner=scopes;
-            await creator.submit({draft:state.draft,settings:state.settings,files:state.draft.attachments.map(function(a) {return {id:a.id,file:runtimeFiles.get(a.id)};}),
-                withoutAttachments:!!submitOptions && submitOptions.withoutAttachments===true},function(d,info) {creationUpdate(owner,d,info);});
+            var snapshot=drafts.snapshot(state.draft), ownerStore=store;
+            async function guardedSubmit() {
+                if(destroyed || store!==ownerStore || !state.draft || !drafts.isCurrent(state.draft,snapshot) || locked() || durableGuard()) return;
+                stop();state.stage='idle';remember();var owner=scopes;
+                await creator.submit({draft:state.draft,settings:state.settings,files:state.draft.attachments.map(function(a) {return {id:a.id,file:runtimeFiles.get(a.id)};}),
+                    withoutAttachments:!!submitOptions && submitOptions.withoutAttachments===true},function(d,info) {creationUpdate(owner,d,info);});
+            }
+            try {
+                var result=store.withCreationLock ? await store.withCreationLock(state.draft.projectKey,state.draft.id,guardedSubmit) : await guardedSubmit();
+                if(result && result.reason==='busy') {state.error=errorState(null,'conflict');emit();}
+            } catch(error) {state.error=errorState(null,'storage');emit();}
             return getState();
         }
         async function selectFiles(files) {
@@ -678,7 +693,102 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             invalidateCachedChecks();
             return edited(Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1}));
         }
-        return { init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
+        // Chat operations always compare the complete canonical selection/revision snapshot.
+        function chatSnapshot() { return state.draft ? drafts.snapshot(state.draft) : null; }
+        function chatFresh(snapshot) {
+            return !destroyed && state.draft && metadataReady && drafts.isCurrent(state.draft,snapshot) &&
+                !locked() && state.draft.creation.status !== 'preflight' && !durableGuard() &&
+                !(state.error && state.error.code === 'conflict');
+        }
+        function chatFailure(code) { return {ok:false,code:code || 'stale'}; }
+        async function chatUpdate(proposal, snapshot, sourceText) {
+            if (!chatFresh(snapshot)) return chatFailure();
+            if (!compatible(state.draft.issueTypeId,state.draft.templateId) || !proposal || typeof proposal !== 'object' || Array.isArray(proposal) ||
+                Object.keys(proposal).some(function(k) {return ['fields','questions','warnings','taskException'].indexOf(k) === -1;}) ||
+                !proposal.fields || typeof proposal.fields !== 'object' || Array.isArray(proposal.fields)) return chatFailure('input');
+            if (proposal.questions !== undefined && (!Array.isArray(proposal.questions) || proposal.questions.some(function(q) {
+                return !q || typeof q.id !== 'string' || !q.id || typeof q.text !== 'string' || !q.text || typeof q.required !== 'boolean';
+            }))) return chatFailure('input');
+            if (proposal.warnings !== undefined && (!Array.isArray(proposal.warnings) || proposal.warnings.some(function(v) {return typeof v !== 'string';}))) return chatFailure('input');
+            if (proposal.taskException !== undefined && typeof proposal.taskException !== 'string') return chatFailure('input');
+            var patch = {}, ids = Object.keys(proposal.fields), valid = true;
+            ids.forEach(function(id) {
+                var spec = fields.getField(state.meta,state.draft.issueTypeId,id);
+                if (!spec || !spec.supported || !spec.writable || ['user','number','epic','sprint'].indexOf(spec.kind) !== -1 ||
+                    ['project','issuetype','__proto__','constructor','prototype'].indexOf(id) !== -1 || state.generationFieldIds.indexOf(id) === -1) {valid=false;return;}
+                var single = {}; single[id] = proposal.fields[id];
+                var partial = {projectId:state.meta.projectId,issueTypes:[{id:state.draft.issueTypeId,subtask:false,fields:[Object.assign({},spec,{required:false})]}]};
+                try { patch[id] = validation.buildCreatePayload(partial,state.draft.issueTypeId,single,policy()).fields[id]; }
+                catch (error) { valid=false; }
+            });
+            if (!valid) return chatFailure('value');
+            if(sourceText!==undefined && typeof sourceText!=='string') return chatFailure('input');
+            var before = sourceText===undefined ? state.draft : drafts.setSource(state.draft,state.draft.source+(state.draft.source ? '\n\n' : '')+sourceText);
+            var next = drafts.applyProposal(before,{fields:patch,questions:proposal.questions === undefined ? before.questions : proposal.questions,
+                warnings:proposal.warnings === undefined ? before.warnings : proposal.warnings,evidence:before.evidence},drafts.snapshot(before));
+            if (proposal.taskException !== undefined) next.taskExceptions = before.taskExceptions.concat([proposal.taskException]);
+            // Install before emitting so subscribers can inspect undo during this update.
+            next=drafts.recordAutomaticChange(next,before);
+            edited(next);
+            return {ok:true,snapshot:chatSnapshot(),pendingFields:copy(state.draft.pendingFields)};
+        }
+        function chatCanUndo() { return !!state.draft && !!state.draft.automaticUndo && metadataReady && drafts.isCurrent(state.draft,state.draft.automaticUndo.after) && !locked() && state.draft.creation.status!=='preflight'; }
+        async function chatUndo() {
+            if (!chatCanUndo() || !chatFresh(state.draft.automaticUndo.after)) return chatFailure();
+            var previous=state.draft.automaticUndo.before, next=Object.assign({},state.draft,{
+                fields:copy(previous.fields),pendingFields:copy(previous.pendingFields),protectedFields:copy(previous.protectedFields),
+                questions:copy(previous.questions),warnings:copy(previous.warnings),evidence:copy(previous.evidence),taskExceptions:copy(previous.taskExceptions),templateReviewPending:previous.templateReviewPending===true,
+                checked:null,draftRevision:state.draft.draftRevision+1});
+            next.automaticUndo=null;edited(next);return {ok:true,snapshot:chatSnapshot()};
+        }
+        async function chatValidate(snapshot, request, reviewedTemplateRevision) {
+            if (!chatFresh(snapshot)) return chatFailure();
+            var meta=state.meta, signal=request && request.signal;
+            try {
+                var confirmed=await fields.confirmRelations(meta,state.draft.issueTypeId,state.draft.fields,api,{signal:signal});
+                if (signal && signal.aborted || !chatFresh(snapshot) || state.meta !== meta) return chatFailure();
+                relationConfirmations=confirmed;
+                var result=validation.validateFields(meta,state.draft.issueTypeId,state.draft.fields,policy());
+                if (!compatible(state.draft.issueTypeId,state.draft.templateId)) {result.ok=false;result.fieldErrors.template=['Select a compatible template'];}
+                if (state.draft.questions.some(function(q) {return q.required;})) result.ok=false;
+                var reviewed=state.draft.templateReviewPending && reviewedTemplateRevision===state.draft.settingsRevision;
+                if(state.draft.templateReviewPending && !reviewed) {
+                    result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены Pico.'];
+                }
+                if(reviewed) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
+                state.validation=result;
+                state.draft=drafts.markChecked(state.draft,result,state.draft.questions,snapshot);
+                save();emit();return {ok:result.ok,validation:copy(result),questions:copy(state.draft.questions),snapshot:chatSnapshot()};
+            } catch (error) {return chatFailure('metadata');}
+        }
+        function chatReadTemplate() {
+            var p=profile(), t=p && state.draft && p.templates.find(function(t) {return t.id===state.draft.templateId;});
+            return t ? {template:copy(t),profileId:p.id,profileInstructions:p.instructions,revision:state.settings.revision,snapshot:chatSnapshot()} : null;
+        }
+        async function chatApplyTemplate(changes, snapshot) {
+            if (!chatFresh(snapshot) || !changes || typeof changes !== 'object' || Array.isArray(changes) ||
+                !Object.keys(changes).length || Object.keys(changes).some(function(k) {return ['name','whenToUse','instructions','issueTypeId'].indexOf(k)===-1;})) return chatFailure('input');
+            var read=chatReadTemplate();if(!read) return chatFailure('input');
+            var entry=scopes[state.draft.projectKey], saved=store.load(state.draft.projectKey);
+            if (saved.revision!==entry.revision || JSON.stringify(profiles.validateSettings(saved.settings).value)!==JSON.stringify(profiles.validateSettings(state.settings).value)) return chatFailure('conflict');
+            if (changes.issueTypeId !== undefined && changes.issueTypeId !== null && !state.meta.issueTypes.some(function(t) {return t.id===changes.issueTypeId && !t.subtask;})) return chatFailure('input');
+            var settings=copy(state.settings), p=settings.profiles.find(function(p) {return p.id===read.profileId;});
+            Object.assign(p.templates.find(function(t) {return t.id===read.template.id;}),changes);
+            if(!profiles.validateSettings(settings).ok) return chatFailure('input');
+            if(state.settings.revision===Number.MAX_SAFE_INTEGER) return chatFailure('input');
+            var next=profiles.validateSettings(settings).value;next.revision=state.settings.revision+1;
+            // Saving new rules never reuses semantic questions from the old template.
+            state.draft=Object.assign({},state.draft,{templateReviewPending:true,checked:null});
+            installSettings(next);
+            if(state.error && ['conflict','storage'].indexOf(state.error.code)!==-1) return chatFailure(state.error.code);
+            return {ok:true,snapshot:chatSnapshot(),reviewRequired:true};
+        }
+        return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
+            getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
+            chatValidate:chatValidate,chatCompleteTemplateReview:function(snapshot,templateRevision,request) {
+                if(!state.draft || !state.draft.templateReviewPending || templateRevision!==state.draft.settingsRevision) return Promise.resolve(chatFailure());
+                return chatValidate(snapshot,request,templateRevision);
+            },chatReadTemplate:chatReadTemplate,chatApplyTemplate:chatApplyTemplate, init: init, selectProject: selectProject, selectTemplate: selectTemplate, selectIssueType: selectIssueType,
             searchRelation:searchRelation,
             connectionChanged:connectionChanged,
             updateSource: function(text) { return mutate(drafts.setSource, [text]); },

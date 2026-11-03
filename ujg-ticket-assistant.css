@@ -67,6 +67,49 @@
 .ujg-ticket-assistant .ta-primary-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid #dce1e5; padding-top: 8px; background: #fff; }
 .ujg-ticket-assistant .ta-primary-actions .ta-actions, .ujg-ticket-assistant .ta-primary-actions .ta-footer { margin: 0; padding: 0; border: 0; }
 .ujg-ticket-assistant.ta-fullscreen { position: fixed; inset: 0; z-index: 900; overflow-y: auto; }
+.ujg-ticket-assistant .ta-chat { max-width: 940px; margin: 0 auto; padding: 8px 0 0; min-width: 0; }
+.ujg-ticket-assistant .ta-chat-log { min-height: 48px; }
+.ujg-ticket-assistant .ta-chat-intro { color: #53636f; padding: 12px 0; }
+.ujg-ticket-assistant .ta-message { padding: 10px 0; max-width: 100%; }
+.ujg-ticket-assistant .ta-message[data-role="user"] { border-left: 2px solid #9bb9d8; padding-left: 12px; }
+.ujg-ticket-assistant .ta-message-author { color: #53636f; font-size: 12px; font-weight: 650; }
+.ujg-ticket-assistant .ta-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-message-text code { background: #edf2f6; padding: 1px 4px; border-radius: 3px; }
+.ujg-ticket-assistant .ta-task-card { padding: 16px; margin: 14px 0; border: 1px solid #cbd6df; border-radius: 8px; background: #fafcfd; min-width: 0; }
+.ujg-ticket-assistant .ta-card-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ujg-ticket-assistant .ta-card-field { margin: 8px 0 12px; min-width: 0; }
+.ujg-ticket-assistant .ta-change-label { color: #276b48; font-size: 12px; }
+.ujg-ticket-assistant .ta-card-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ujg-ticket-assistant [data-ta-card-field="summary"] .ta-card-value { font-size: 16px; font-weight: 600; }
+.ujg-ticket-assistant .ta-card-proposal { margin: 10px 0; padding: 10px; border-left: 3px solid #d89c39; background: #fffbf2; }
+.ujg-ticket-assistant .ta-card-proposal button { margin-right: 6px; }
+.ujg-ticket-assistant .ta-chat-composer { margin-top: 12px; border-top: 1px solid #dce1e5; padding-top: 12px; }
+.ujg-ticket-assistant .ta-composer-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ujg-ticket-assistant .ta-composer-actions > span { margin-right: auto; font-size: 12px; }
+.ujg-ticket-assistant .ta-template-proposal { padding: 14px; border: 1px solid #d8c79d; border-radius: 6px; }
+.ujg-ticket-assistant .ta-template-proposal > button { margin: 8px 6px 0 0; }
+.ujg-ticket-assistant .ta-template-diff { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.ujg-ticket-assistant .ta-template-diff h4 { margin: 8px 0; }
+.ujg-ticket-assistant .ta-template-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; border-left: 3px solid #bac6d1; padding-left: 10px; }
+.ujg-ticket-assistant [data-ta-template-after] { border-color: #27834d; }
+.ujg-ticket-assistant .ta-editor-panel { position: fixed; inset: 16px 16px 16px max(16px,calc((100vw - 1100px)/2)); z-index: 920; background: #fff; border: 1px solid #bac6d1; border-radius: 8px; box-shadow: 0 0 0 100vmax #172b4d55; overflow-y: auto; overscroll-behavior: contain; }
+.ujg-ticket-assistant .ta-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #dce1e5; position: sticky; top: 0; z-index: 40; background: #fff; }
+.ujg-ticket-assistant .ta-editor-header h3 { margin: 0; }
+.ujg-ticket-assistant .ta-editor-body { padding: 16px; container-type: inline-size; }
+.ujg-ticket-assistant [data-ta-editor-type-slot] { max-width: 360px; margin-bottom: 14px; }
+.ujg-ticket-assistant.ta-chat-mode .ta-header .ta-selections { grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); }
+.ujg-ticket-assistant.ta-chat-mode .ta-header .ta-selections.ta-has-type { grid-template-columns: minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr); }
+@media (max-width: 600px) {
+    .ujg-ticket-assistant .ta-editor-panel { inset: 0; border-radius: 0; }
+    .ujg-ticket-assistant .ta-editor-header, .ujg-ticket-assistant .ta-editor-body { padding: 12px; }
+    .ujg-ticket-assistant .ta-template-diff { grid-template-columns: minmax(0,1fr); }
+    .ujg-ticket-assistant .ta-task-card { padding: 12px; }
+    .ujg-ticket-assistant .ta-composer-actions > span { flex-basis: 100%; }
+    .ujg-ticket-assistant.ta-chat-mode .ta-header .ta-selections { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+    .ujg-ticket-assistant.ta-chat-mode .ta-header .ta-selections.ta-has-type { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+    .ujg-ticket-assistant.ta-chat-mode [data-ta-project] { grid-column: auto; }
+    .ujg-ticket-assistant.ta-chat-mode .ta-has-type [data-ta-project] { grid-column: 1 / -1; }
+}
 .ujg-ticket-assistant .ta-picker { width: 100%; justify-content: space-between; }
 .ujg-ticket-assistant .ta-picker span { min-width: 0; overflow-wrap: anywhere; }
 .ujg-ticket-assistant .ta-field-body { position: relative; }

@@ -214,7 +214,7 @@ test('installed Chrome persists real settings and source across reload, transfer
             const context=await browser.newContext({viewport:{width,height:width===390?844:900}}),page=await context.newPage();
             page.on('pageerror',error=>faults.push(error.message));
             await page.route('**/*',route=>{const r=route.request();requests.push(r.method());if(!r.url().startsWith(server.url)){faults.push(r.url());return route.abort();}return route.continue();});
-            await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
+            await page.goto(server.url+'?form=1');await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-source]').fill('Persisted source '+width);await page.locator('[data-ta-field="summary"] input').fill('Persisted summary');
             await page.locator('[data-ta-open-settings]').click();
             for (const [selector,key,next] of [

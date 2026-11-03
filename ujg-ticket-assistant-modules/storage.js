@@ -24,6 +24,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         var memory = Object.create(null);
         var observed = Object.create(null), startedAt = eventRevision;
         var persistent = typeof options.userKey === 'string' && !!options.userKey.trim() && typeof options.origin === 'string' && !!options.origin && !!options.storage;
+        var conversationPersistent = persistent;
         function warn(reason) {
             if (typeof options.onWarning === 'function') options.onWarning(reason);
         }
@@ -109,7 +110,63 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             value.draft = null;
             return save(projectKey, value, expectedRevision);
         }
-        return { load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
+        // Conversations have a separate CAS counter, so history never rewrites task creation guards.
+        var conversations=Object.create(null);
+        function conversationKey(projectKey,draftId) {return key(projectKey)+':chat:'+encodeURIComponent(draftId);}
+        function cleanConversation(value) {
+            if(!value || !Array.isArray(value.transcript) || !Array.isArray(value.messages)) throw new Error('Invalid conversation');
+            // Runtime history is inert data; never deserialize functions or invoke tools on load.
+            function clean(value,depth) {
+                if(depth>40) throw new Error('Conversation nesting');
+                if(value===null || typeof value==='string' || typeof value==='boolean' || typeof value==='number' && Number.isFinite(value)) return value;
+                if(Array.isArray(value)) return value.map(function(v) {return clean(v,depth+1);});
+                if(value && Object.prototype.toString.call(value)==='[object Object]') {
+                    var result={};Object.keys(value).forEach(function(k) {
+                        if(['__proto__','constructor','prototype','apiKey','authorization','headers','cookie','token','file'].indexOf(k)===-1 && value[k]!==undefined) result[k]=clean(value[k],depth+1);
+                    });return result;
+                }
+                throw new Error('Invalid conversation value');
+            }
+            return {transcript:value.transcript.filter(function(m) {return m && typeof m.id==='string' && ['user','assistant','system'].indexOf(m.role)!==-1 && typeof m.text==='string';})
+                .map(function(m) {
+                    var entry={id:m.id,role:m.role,text:m.text};
+                    if(m.kind==='template') entry.kind='template';
+                    return entry;
+                }),messages:clean(value.messages,0),
+                pendingTemplateProposal:value.pendingTemplateProposal ? clean(value.pendingTemplateProposal,0) : null,
+                notices:Array.isArray(value.notices) ? value.notices.filter(function(n) {return typeof n==='string';}) : []};
+        }
+        function loadConversation(projectKey,draftId) {
+            var scope=conversationKey(projectKey,draftId);
+            if(conversationPersistent) try {
+                var raw=options.storage.getItem(scope);
+                if(raw===null) conversations[scope]={revision:0,value:null};
+                else {
+                    var parsed=JSON.parse(raw);
+                    if(!Number.isSafeInteger(parsed.revision) || parsed.revision<0) throw new Error('Invalid conversation revision');
+                    conversations[scope]={revision:parsed.revision,value:cleanConversation(parsed.value)};
+                }
+            } catch(error) {conversationPersistent=false;warn('Conversation storage unavailable; using memory.');}
+            return clone(conversations[scope] || {revision:0,value:null});
+        }
+        function saveConversation(projectKey,draftId,value,expectedRevision) {
+            var current=loadConversation(projectKey,draftId);
+            if(current.revision!==expectedRevision) return {ok:false,reason:'conflict',revision:current.revision};
+            if(current.revision===Number.MAX_SAFE_INTEGER) return {ok:false,reason:'invalid',revision:current.revision};
+            var next;try {next={revision:current.revision+1,value:cleanConversation(value)};} catch(error) {return {ok:false,reason:'invalid',revision:current.revision};}
+            var scope=conversationKey(projectKey,draftId);conversations[scope]=next;
+            if(conversationPersistent) try {options.storage.setItem(scope,JSON.stringify(next));}
+            catch(error) {conversationPersistent=false;warn('Conversation storage unavailable; changes retained in memory.');}
+            return {ok:true,revision:next.revision};
+        }
+        function withCreationLock(projectKey,draftId,action) {
+            var locks=options.locks || (typeof navigator!=='undefined' && navigator.locks);
+            if(!locks || typeof locks.request!=='function') return Promise.resolve().then(action);
+            return locks.request(key(projectKey)+':create:'+encodeURIComponent(draftId),{mode:'exclusive',ifAvailable:true},function(lock) {
+                return lock ? action() : {ok:false,reason:'busy'};
+            });
+        }
+        return { isConversationPersistent:function() {return conversationPersistent;},withCreationLock:withCreationLock,loadConversation:loadConversation,saveConversation:saveConversation,load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
     }
 
     return { createStore: createStore };

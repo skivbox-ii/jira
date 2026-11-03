@@ -16,12 +16,12 @@ async function setup(t, storage = memoryStorage(), requestText) {
     const globals = {window,document:window.document,navigator:window.navigator,URL,AbortController,setInterval,clearInterval};
     const calls = [];
     const shared = loadAmd(path.resolve(__dirname,'../../ujg-shared-modules/llm-client.js'),{},globals);
-    const deps = {jquery:$,_ujgShared_llmClient:Object.assign({},shared,{requestText:requestText || ((cfg, request) => {
+    const deps = {_ujgTA_picoRuntime:{},jquery:$,_ujgShared_llmClient:Object.assign({},shared,{requestText:requestText || ((cfg, request) => {
         calls.push({cfg,request});
         return Promise.resolve({text:JSON.stringify({schemaVersion:1,kind:'check',questions:[],warnings:[],evidence:[]})});
     })})};
-    for (const name of ['profiles','fields','validation','draft','storage','api','ai','creator','controller','icons','field-ui','settings-ui','ui','main']) {
-        deps['_ujgTA_'+({'field-ui':'fieldUi','settings-ui':'settingsUi'}[name] || name)] = loadUnit(name,deps,globals);
+    for (const name of ['profiles','fields','validation','draft','storage','api','ai','creator','controller','icons','field-ui','settings-ui','ui','chat-tools','chat','chat-ui','main']) {
+        deps['_ujgTA_'+({'field-ui':'fieldUi','settings-ui':'settingsUi','chat-tools':'chatTools','chat-ui':'chatUi'}[name] || name)] = loadUnit(name,deps,globals);
     }
     const api = {
         getCurrentUser:async()=>({key:'connection-fixture'}),
@@ -32,7 +32,7 @@ async function setup(t, storage = memoryStorage(), requestText) {
         getComponents:async project=>({values:[],complete:true,projectKey:project}),
         getVersions:async project=>({values:[],complete:true,projectKey:project})
     };
-    const gadget = new deps._ujgTA_main({getGadgetContentEl:()=>$('#root')},{storage,api,baseUrl:'',fetchImpl:()=>{throw new Error('No network');}});
+    const gadget = new deps._ujgTA_main({getGadgetContentEl:()=>$('#root')},{storage,api,legacyForm:true,baseUrl:'',fetchImpl:()=>{throw new Error('No network');}});
     await gadget.ready;
     t.after(()=>{gadget.destroy();window.close();});
     const root=window.document.querySelector('.ujg-ticket-assistant');

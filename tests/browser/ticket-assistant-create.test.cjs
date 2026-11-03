@@ -10,7 +10,7 @@ test('offline preview exposes explicit create outcomes and independent attachmen
             const page=await browser.newPage({viewport:{width:scenario==='success'?390:1440,height:900}});
             page.on('pageerror',e=>faults.push(e.message));
             await page.route('**/*',route=>{const req=route.request();requests.push({url:req.url(),method:req.method()});return req.url().startsWith(server.url)?route.continue():route.abort();});
-            await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
+            await page.goto(server.url+'?form=1');await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-preview-scenario="'+scenario+'"]').click();
             await page.locator('[data-ta-source]').fill('Create synthetic ticket');
             await page.locator('[data-ta-field="summary"] input').fill('Synthetic title');

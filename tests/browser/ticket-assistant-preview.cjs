@@ -2,9 +2,11 @@
 (function() {
     'use strict';
     var $ = window.jQuery, shared = window.taRequire('_ujgTA_llmClient');
-    var review=new URLSearchParams(window.location.search).get('review');
+    var parameters=new URLSearchParams(window.location.search),review=parameters.get('review');
     if(['obsolete','catalog','storage','response','guided'].indexOf(review)===-1)review='';
     var records = {calls:[], pending:0}; window.taPreview = records;
+    var legacyForm=parameters.get('form')==='1' || !!review;
+    records.chatMode='normal';records.chatRequests=[];
     if(review==='response') records.responseMode=new URLSearchParams(window.location.search).get('responseMode');
     var scenario='success', issueSequence=100, failedFiles=new Set();
     var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
@@ -79,6 +81,7 @@
         },
         getIssueAttachments:function() {return result('attachment-reconcile',[]);}
     };
+    records.api=api;
     var llm = Object.assign({},shared,{requestText:function(config, request) {
         var input = JSON.parse(request.userPrompt); records.calls.push('ai:'+input.action); records.pending++;
         return new Promise(function(resolve,reject) {var mode=records.assistMode;setTimeout(function() {
@@ -113,10 +116,56 @@
     }});
     var ai = window.taRequire('_ujgTA_ai').createClient({llmClient:llm,readConfig:function() {return {apiKey:'offline-fixture-key'};},fetchImpl:function() {throw new Error('Offline preview prohibits fetch');}});
     var Gadget = window.taRequire('_ujgTicketAssistantRuntime');
-    var dependencies={api:api,ai:ai,baseUrl:'',storage:window.localStorage,
+    var dependencies={api:api,ai:ai,baseUrl:'',storage:window.localStorage,legacyForm:legacyForm,
+        fetchImpl:function(){throw new Error('Offline preview prohibits fetch');},
+        requestText:function(request) {
+            // Actual Pi runtime + domain tools; only the text transport is scripted.
+            var input=JSON.parse(request.user),messages=input.messages,last=-1;
+            messages.forEach(function(message,index){if(message.role==='user')last=index;});
+            var content=messages[last].content,text=typeof content==='string'?content:content.filter(function(c){return c.type==='text';}).map(function(c){return c.text;}).join('\n');
+            var toolResults=messages.slice(last+1).filter(function(message){return message.role==='toolResult';});
+            records.calls.push('pico');records.chatRequests.push(input);records.pending++;
+            var mode=records.chatMode;
+            return new Promise(function(resolve,reject){setTimeout(function(){
+                records.pending--;
+                if(mode==='error'){reject(new Error('Synthetic transport failure'));return;}
+                var response={text:'Карточка обновлена. Проверьте сведения перед созданием.',toolCalls:[]};
+                function call(name,args){response={text:'',toolCalls:[{id:'offline_'+Date.now()+'_'+records.chatRequests.length,name:name,arguments:args}]};}
+                var current=input.authoritativeContext,template=current.template && current.template.template;
+                if(/покажи шаблон/i.test(text)) {
+                    if(!toolResults.length)call('read_template',{});else response.text='Это точный текущий текст шаблона. Он не изменён.';
+                } else if(/^Проверь текущую задачу заново по сохранённым правилам выбранного шаблона\./.test(text)) {
+                    if(!toolResults.length) {
+                        var needsEnvironment=/Обязательно укажи среду проверки/.test(template && template.instructions || '') && !/Тестовая среда/i.test(current.draft.fields.description || '');
+                        call('update_task',{fields:{},questions:needsEnvironment?[{id:'template-environment',text:'Укажите среду проверки по новым правилам шаблона.',reason:'Среда проверки не указана.',required:true}]:[]});
+                    } else response.text='Задача оценена по сохранённым правилам. Недостающие сведения отражены в карточке.';
+                } else if(/измени шаблон/i.test(text)) {
+                    if(!toolResults.length)call('propose_template_change',{changes:{instructions:(template && template.instructions || '')+'\nОбязательно укажи среду проверки.'}});
+                    else response.text='Предложение готово. Примените его кнопкой, чтобы сохранить новую ревизию.';
+                } else if(/компонент/i.test(text) && !/выбираю/i.test(text)) {
+                    if(!toolResults.length)call('find_options',{fieldId:'components',query:'',limit:10});
+                    else response.text='Найдено несколько компонентов: API, Интерфейс, Инфраструктура. Какой выбрать?';
+                } else {
+                    if(!toolResults.length) {
+                        var fields={},questions=[];
+                        if(/предложи другую тему/i.test(text))fields.summary='Проверить обработку ошибок API';
+                        else if(/выбираю API/i.test(text))fields.components=[{id:'31'}];
+                        else if(/добавь/i.test(text))fields.description=(current.draft.fields.description || '')+'\n'+text;
+                        else if(!current.draft.fields.summary) {
+                            fields.summary='Исправить ошибку API при сохранении';fields.description='Фактическое поведение\n'+text+'\n\nОжидаемое поведение\nСохранение завершается без ошибки.';
+                            questions=[{id:'environment',text:'В какой среде воспроизводится ошибка?',reason:'Среда не указана.',required:true}];
+                        } else fields.description=(current.draft.fields.description || '')+'\n\nУточнение\n'+text;
+                        call('update_task',{fields:fields,questions:questions,warnings:[]});
+                    } else if(toolResults.length===1)call('validate_task',{});
+                    else response.text=current.draft.questions.length?'В какой среде воспроизводится ошибка?':'Карточка обновлена и проверена. Можно отредактировать или создать задачу.';
+                }
+                resolve({text:JSON.stringify(response)});
+            },mode==='slow'?2200:90);});
+        },
         createStore:function(userKey) {
             var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1'+(review?'/review-'+review:''),userKey:userKey});
-            return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft,isPersistent:store.isPersistent};
+            return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft,isPersistent:store.isPersistent,
+                loadConversation:store.loadConversation,saveConversation:store.saveConversation};
         }};
     if(review==='storage') {
         delete dependencies.createStore;

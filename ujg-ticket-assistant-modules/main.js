@@ -1,5 +1,5 @@
-define('_ujgTA_main', ['jquery', '_ujgShared_llmClient', '_ujgTA_api', '_ujgTA_ai', '_ujgTA_storage', '_ujgTA_controller', '_ujgTA_ui'],
-function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModule) {
+define('_ujgTA_main', ['jquery', '_ujgShared_llmClient', '_ujgTA_api', '_ujgTA_ai', '_ujgTA_storage', '_ujgTA_controller', '_ujgTA_ui', '_ujgTA_chat', '_ujgTA_chatUi', '_ujgTA_picoRuntime'],
+function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModule, chatModule, chatUiModule, picoRuntime) {
     'use strict';
     // Optional dependencies provide offline transport without changing product URL behavior.
     function TicketAssistantGadget(API, dependencies) {
@@ -13,7 +13,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
             typeof AJS !== 'undefined' && typeof AJS.contextPath === 'function' ? AJS.contextPath() : '';
         // Constructing the read adapter also validates the trusted context path for UI links.
         var readApi = apiModule.createApi({baseUrl:baseUrl, ajax:deps.ajax || function(config) {return $.ajax(config);}});
-        var api = deps.api || readApi, ui, dead = false, warning = null;
+        var api = deps.api || readApi, ui, chat, chatUi, dead = false, warning = null;
         var resizeTimer = null, layoutObserver = null, mutationObserver = null;
         function scheduleResize() {
             if (dead || typeof API.resize !== 'function' || resizeTimer !== null) return;
@@ -36,7 +36,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                     }});
                 return personalStore;
             },
-            onChange:function(state) {if (!dead && ui) {ui.update(state); scheduleResize();}}, now:deps.now});
+            onChange:function(state) {if (!dead && ui) {ui.update(state); if(chatUi)chatUi.update(state); scheduleResize();}}, now:deps.now});
         var searches = new Set();
         function searchUsers(query, field, options) {
             if (field && (field.kind === 'epic' || field.kind === 'sprint')) return controller.searchRelation(query,field,options);
@@ -47,9 +47,28 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                 searches.delete(aborter); if (signal) signal.removeEventListener('abort', abort);
             });
         }
-        ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView,
+        ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView, panel:!deps.legacyForm,
+            getChatState:function(){return chat && chat.getState();},
             connection:{shared:shared,storage:storage}});
         ui.mount(root[0]);
+        if(!deps.legacyForm) {
+            chat=chatModule.create({controller:controller,runtime:deps.runtime || picoRuntime,requestText:deps.requestText || function(request) {
+                var config;
+                try {
+                    config=shared.normalizeConfig((deps.readConfig || function(){return shared.readStoredConfig(storage);})());
+                    if(!config)throw new Error('config');
+                    var endpoint=new URL(config.apiBase);
+                    if(!/^https?:$/.test(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash)throw new Error('config');
+                } catch(ignored) {return Promise.reject(new Error('Pico connection configuration invalid'));}
+                var settings=controller.getState().settings,budget=settings && settings.tokenBudget;
+                return Promise.resolve().then(function(){return shared.requestText(config,{systemPrompt:request.system,userPrompt:request.user,preservePrompt:true,
+                    tokenBudget:budget,signal:request.signal,allowProtocolFallback:false},function(url,fetchOptions) {
+                    return (deps.fetchImpl || window.fetch.bind(window))(url,Object.assign({},fetchOptions,{signal:request.signal}));
+                });}).catch(function(){throw new Error('Pico transport failed');});
+            },onChange:function(){if(!dead && chatUi){chatUi.update(controller.getState());ui.updateChatUsage();scheduleResize();}}});
+            chatUi=chatUiModule.create({$: $,controller:controller,chat:chat,editor:ui,baseUrl:baseUrl});
+            chatUi.mount(root[0]);
+        }
         var warningHost = $('<p class="ta-warning" data-ta-storage-warning hidden>');
         root.prepend(warningHost);
         if (typeof API.resize === 'function') {
@@ -69,6 +88,8 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
         }
         var instance = this;
         this.controller = controller;
+        this.chat = chat;
+        this.openEditor = function() {if(!dead)ui.openEditor();};
         this.init = function() {return controller.init().then(function(state) {
             showStorageWarning(); return state;
         });};
@@ -78,6 +99,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
             if (layoutObserver) layoutObserver.disconnect();
             if (mutationObserver) mutationObserver.disconnect();
             if (resizeTimer !== null) {window.clearTimeout(resizeTimer); resizeTimer = null;}
+            if(chatUi)chatUi.destroy();if(chat)chat.destroy();
             controller.destroy(); searches.forEach(function(aborter) {aborter.abort();}); searches.clear(); ui.destroy();
             if (root.data('ta-instance') === instance) root.removeData('ta-instance');
         };

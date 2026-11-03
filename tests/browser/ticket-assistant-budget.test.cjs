@@ -15,7 +15,7 @@ test('local context preflight and settings shortcut work at 1440 and 390 without
                 const r=route.request();requests.push([r.method(),r.url()]);
                 return r.url().startsWith(server.url) && r.method()==='GET' ? route.continue() : route.abort();
             });
-            await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
+            await page.goto(server.url+'?form=1');await page.waitForSelector('html[data-ta-preview-ready="true"]');
             await page.locator('[data-ta-source]').fill(source);
             await page.locator('[data-ta-tokens]').click();
             const counter=page.locator('[data-ta-token-preflight]');await counter.waitFor({timeout:1500});

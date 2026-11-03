@@ -7,6 +7,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         var fields = new Map(), questions = new Map(), scope = new Map(), selectionKey = null, settingsScope = null, connectionHost = null;
         var fullscreen = null, tokenOpen = false, activeMenu = null, fieldsQueued = false, pointerHeld = false, pointerTimer = null;
         var workspace, divider, sourceWidth = null, resizeObserver = null, dragPointer = null;
+        var editorPanel = null, editorReturn = null, editorScroll = null, typeHome = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', assisting:'Подготовка предложения', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
@@ -104,7 +105,14 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (!connectionHost) return;
             connectionHost.find('input').val('');connectionHost.prop('hidden',true);
             connectionHost.find('[data-ta-connection-dialog]').prop('hidden',true);
-            root.children().prop('inert',false);root.find('[data-ta-open-connection]').trigger('focus');
+            restoreOverlayFocus('[data-ta-open-connection]');
+        }
+        function restoreOverlayFocus(selector) {
+            root.children().prop('inert',false);
+            if(editorPanel && !editorPanel.prop('hidden')) {
+                root.children().not(editorPanel).filter(function(){return !this.hidden;}).prop('inert',true);
+                editorPanel.find('[data-ta-editor-close]').trigger('focus');
+            } else root.find(selector).trigger('focus');
         }
         function openConnection() {
             if (connectionLocked() || !options.connection) return;
@@ -305,7 +313,58 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-omitted]').insertAfter(root.find('.ta-scope'));
             // Keep fixed dialogs outside container containment so they retain viewport geometry.
             $('<div class="ta-layout">').prependTo(root).append(root.children('.ta-header,.ta-workspace,.ta-primary-actions'));
+            if (options.panel) mountEditorPanel();
             update(c.getState());
+        }
+        function mountEditorPanel() {
+            var uid='ta-editor-'+(++connectionSequence);
+            editorPanel=$('<section class="ta-editor-panel" data-ta-editor-panel role="dialog" aria-modal="true" hidden>').attr('aria-labelledby',uid).appendTo(root);
+            editorPanel.append($('<header class="ta-editor-header">').append($('<h3>').attr('id',uid).text('Редактировать задачу'),
+                button('Закрыть редактор','X',{'data-ta-editor-close':''}).on('click',closeEditor)));
+            var body=$('<div class="ta-editor-body">').appendTo(editorPanel);
+            typeHome=root.find('[data-ta-type]').parent();
+            body.append($('<div data-ta-editor-type-slot>'),workspace,root.find('.ta-primary-actions'));
+            editorPanel.on('keydown',function(event) {
+                if(event.key==='Escape' && !event.isDefaultPrevented()) {
+                    if(activeMenu) {var toggle=activeMenu.toggle;closeMenu();toggle.trigger('focus');}
+                    else closeEditor();
+                    event.preventDefault();event.stopPropagation();
+                }
+                if(event.key!=='Tab')return;
+                var controls=editorPanel.find('button,input,textarea,summary,[tabindex="0"]').filter(function() {
+                    return !this.disabled && !$(this).closest('[hidden]').length && !$(this).parents('details:not([open])').length;
+                }).toArray(),first=controls[0],last=controls[controls.length-1];
+                if(event.shiftKey && document.activeElement===first) {event.preventDefault();last.focus();}
+                else if(!event.shiftKey && document.activeElement===last) {event.preventDefault();first.focus();}
+            });
+        }
+        function openEditor(invoker) {
+            if(!editorPanel || !editorPanel.prop('hidden'))return;
+            editorReturn=invoker || document.activeElement;
+            editorScroll={top:root[0].scrollTop,page:(document.scrollingElement || document.documentElement).scrollTop,overflow:document.body.style.overflow};
+            document.body.style.overflow='hidden';
+            root.children().not(editorPanel).prop('inert',true);
+            editorPanel.prop('hidden',false);editorPanel.find('[data-ta-editor-close]').trigger('focus');
+            positionType();
+            resizeColumns();
+        }
+        function closeEditor() {
+            if(!editorPanel || editorPanel.prop('hidden'))return;
+            closeMenu();editorPanel.find('[data-ta-popover]').prop('hidden',true);
+            editorPanel.prop('hidden',true);root.children().prop('inert',false);
+            positionType();
+            if(editorScroll) {document.body.style.overflow=editorScroll.overflow;root[0].scrollTop=editorScroll.top;(document.scrollingElement || document.documentElement).scrollTop=editorScroll.page;}
+            if(editorReturn && editorReturn.isConnected)editorReturn.focus({preventScroll:true});
+            editorReturn=null;editorScroll=null;
+        }
+        function positionType() {
+            if(!editorPanel)return;
+            var d=state && state.draft,profile=state && state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;}),
+                selected=profile && d && profile.templates.find(function(t){return t.id===d.templateId;}),unmapped=d && (!selected || !selected.issueTypeId),
+                inPanel=!editorPanel.prop('hidden') || !unmapped;
+            var host=root.find('[data-ta-type]'),target=inPanel?editorPanel.find('[data-ta-editor-type-slot]'):typeHome;
+            if(host.parent()[0]!==target[0])target.append(host);
+            typeHome.toggleClass('ta-has-type',!inPanel);
         }
         function copy(id) {
             if (!state.draft) return;
@@ -564,7 +623,33 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-profile]').text(profile ? profile.name : '');
             root.find('[data-ta-open-settings]').prop('disabled',!state.settings || writeLocked());
             root.find('[data-ta-budget-settings],[data-ta-error-budget]').prop('disabled',!state.settings || writeLocked());
-            var estimate=state.tokenPreflight, counter=root.find('[data-ta-token-preflight]');
+            renderTokens();
+            root.find('[data-ta-open-connection]').prop('disabled',connectionLocked() || !options.connection);
+            if (connectionHost) connectionHost.find('input,[data-ta-connection-save]').prop('disabled',connectionLocked());
+            updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
+            updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d || writeLocked());
+            updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d || writeLocked());
+            positionType();
+            if (d) {renderFields(d, busy); renderQuestions(d); renderScope(d);}
+            renderRemaining(d);
+        }
+        function renderTokens() {
+            if(dead || !root || !state)return;
+            var counter=root.find('[data-ta-token-preflight]');
+            if(options.panel) {
+                var budget=state.settings && state.settings.tokenBudget,s=options.getChatState && options.getChatState(),usage=s && s.lastTurnUsage;
+                counter.prop('hidden',!budget || !tokenOpen).removeClass('ta-budget-over').attr('aria-label','Бюджет Pico');
+                root.find('[data-ta-tokens]').prop('disabled',!budget).attr({'aria-label':'Токены Pico',title:'Токены Pico'});
+                root.find('[data-ta-budget-warning]').prop('hidden',true);
+                root.find('[data-ta-token-summary]').text(budget?'Pico · Контекст '+budget.context+' токенов; на вход каждого запроса до '+(budget.context-budget.reserve)+'.':'Выберите проект для настройки бюджета Pico.');
+                root.find('[data-ta-token-breakdown]').text(budget?'Резерв ответа каждого запроса '+budget.reserve+'. В запрос входят инструкции, схемы инструментов, текущая карточка и история.':'');
+                var outcomes={complete:'завершён',completed:'завершён',aborted:'остановлен',error:'ошибка',limit:'остановлен ограничением'};
+                root.find('[data-ta-token-usage]').prop('hidden',false).text(usage?
+                    'Последний ход Pico · эвристическая оценка, сумма по '+usage.modelCalls+' попыткам запроса: вход '+usage.inputTokens+', ответ '+usage.outputTokens+'. Вызовов инструментов '+usage.toolCalls+'. Ход: '+(outcomes[usage.status] || 'завершён')+'.':
+                    'Оценка последнего хода Pico появится после ответа. Данные usage провайдера здесь не показаны.');
+                return;
+            }
+            var estimate=state.tokenPreflight;
             counter.prop('hidden',!estimate || !tokenOpen);
             root.find('[data-ta-budget-warning]').prop('hidden',!estimate || estimate.fits && estimate.safetyFits || !!state.error && state.error.code==='limit');
             root.find('[data-ta-warning-budget]').prop('disabled',!state.settings || writeLocked());
@@ -576,12 +661,9 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 var usage=state.providerUsage;
                 root.find('[data-ta-token-usage]').prop('hidden',!usage).text(usage ? 'Последний запрос · Точно по usage провайдера: вход ' + (usage.inputTokens===null ? 'нет данных' : usage.inputTokens) + ', ответ ' + (usage.outputTokens===null ? 'нет данных' : usage.outputTokens) + ', всего ' + (usage.totalTokens===null ? 'нет данных' : usage.totalTokens) + '.' : '');
             }
-            root.find('[data-ta-open-connection]').prop('disabled',connectionLocked() || !options.connection);
-            if (connectionHost) connectionHost.find('input,[data-ta-connection-save]').prop('disabled',connectionLocked());
-            updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
-            updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d || writeLocked());
-            updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d || writeLocked());
-            if (d) {renderFields(d, busy); renderQuestions(d); renderScope(d);}
+        }
+        function renderRemaining(d) {
+            var profile=state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;});
             var routes = root.find('[data-ta-routes]').empty();
             (state.routeCandidates || []).forEach(function(pair) {
                 var issue = state.meta && state.meta.issueTypes.find(function(t) {return t.id === pair.issueTypeId;});
@@ -622,11 +704,12 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (options.createSettingsView && !settingsView) {settingsView = options.createSettingsView({$: $, controller:c}); settingsView.mount(host[0]);}
             else if (!settingsView) settingsView = settingsUi.create({$: $,host:host,
                 onApply:function(settings,options){return settingsScopeError() || (options.resolveConflict ? c.resolveSettingsConflict(settings) : c.applySettings(settings));},
-                onLoadSaved:function(){return settingsScopeError() || c.loadSavedSettings();},onClose:function(){host.prop('hidden',true);root.children().prop('inert',false);settingsScope=null;root.find('[data-ta-open-settings]').trigger('focus');}});
+                onLoadSaved:function(){return settingsScopeError() || c.loadSavedSettings();},onClose:function(){host.prop('hidden',true);settingsScope=null;restoreOverlayFocus('[data-ta-open-settings]');}});
             if (settingsView.open) settingsView.open({settings:state.settings,meta:state.meta,conflict:state.error && state.error.code==='conflict',returnFocus:root.find('[data-ta-open-settings]')[0]});
             return host[0];
         }
         function destroy() {
+            closeEditor();
             if(fullscreen)toggleFullscreen();
             if (dead) return; dead = true; if (timer) clearInterval(timer); timer = null;
             stopDrag();if(resizeObserver)resizeObserver.disconnect();window.removeEventListener('resize',refreshColumns);
@@ -637,7 +720,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (settingsView) settingsView.destroy(); if (root) {root[0].removeEventListener('keydown',escapeOverlay,true);root.off('.taGuided').empty();}
         }
         function refreshColumns() {resizeColumns();}
-        return {mount:mount, update:update, openSettings:openSettings, destroy:destroy};
+        return {mount:mount, update:update, updateChatUsage:renderTokens, openSettings:openSettings, openConnection:openConnection, openEditor:openEditor, closeEditor:closeEditor, destroy:destroy};
     }
     return {create:create};
 });

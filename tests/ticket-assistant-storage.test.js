@@ -243,3 +243,57 @@ test('store enforces nested draft whitelist on save and on externally supplied r
     assert.equal(restored.attachments[0].error, 'Upload failed');
     assert.equal(restored.attachments[0].needsReselect, true);
 });
+
+test('conversation history is user/project/draft scoped with revision conflicts and no draft guard changes',()=>{
+    const {store}=fixture();const a=store(),b=store();
+    assert.equal(typeof a.loadConversation,'function');
+    const history={transcript:[{id:'u1',role:'user',text:'facts'}],messages:[{role:'user',content:'facts'}],pendingTemplateProposal:null};
+    assert.equal(a.saveConversation('DO','d1',history,0).ok,true);
+    assert.equal(a.loadConversation('DO','d1').value.transcript[0].text,'facts');
+    assert.equal(b.saveConversation('DO','d1',history,0).reason,'conflict');
+    assert.equal(a.loadConversation('APP','d1').value,null);assert.equal(a.loadConversation('DO','d2').value,null);
+    assert.equal(store({userKey:'bob'}).loadConversation('DO','d1').value,null);
+    assert.equal(a.load('DO').draft,null);
+});
+test('conversation quota failure keeps history in memory and reports persistence loss',()=>{
+    const {store,storage}=fixture();const a=store();storage.setItem=()=>{throw Error('quota');};
+    assert.equal(a.saveConversation('DO','d',{transcript:[{id:'u',role:'user',text:'Retain'}],messages:[]},0).ok,true);
+    assert.equal(a.isPersistent(),true);assert.equal(a.isConversationPersistent(),false);assert.equal(a.loadConversation('DO','d').value.transcript[0].text,'Retain');
+});
+
+test('creation locks use user/project/draft scope and never run an unavailable lock callback',async()=>{
+    const calls=[];let lockAvailable=true;
+    const locks={async request(name,options,fn){calls.push({name,options});return fn(lockAvailable?{}:null);}};
+    const {store}=fixture();const a=store({locks});let mutations=0;
+    assert.equal(typeof a.withCreationLock,'function');
+    await a.withCreationLock('DO','d1',async()=>{mutations++;});lockAvailable=false;
+    assert.equal((await a.withCreationLock('DO','d1',async()=>{mutations++;})).reason,'busy');assert.equal(mutations,1);
+    await store({userKey:'bob',locks}).withCreationLock('DO','d1',()=>{});
+    assert.notEqual(calls[0].name,calls[2].name);assert.equal(calls[0].options.ifAvailable,true);
+});
+
+test('conversation serializer retains only the literal template rendering marker',()=>{
+    const {store}=fixture();const a=store();
+    const history={transcript:[
+        {id:'t',role:'assistant',text:'**literal** <b>text</b>',kind:'template',html:'discard'},
+        {id:'a',role:'assistant',text:'ordinary',kind:'html'},
+        {id:'u',role:'user',text:'facts'}
+    ],messages:[]};
+    assert.equal(a.saveConversation('DO','d',history,0).ok,true);
+    const restored=store().loadConversation('DO','d').value.transcript;
+    assert.deepEqual(restored,[{id:'t',role:'assistant',text:'**literal** <b>text</b>',kind:'template'},
+        {id:'a',role:'assistant',text:'ordinary'},{id:'u',role:'user',text:'facts'}]);
+});
+
+test('corrupt history and chat-only quota leave canonical storage reads persistent',()=>{
+    for(const failure of ['corrupt','quota']) {
+        const f=fixture(),a=f.store(),b=f.store();const initial=a.load('DO');initial.draft={id:'d',source:'Keep'};
+        assert.equal(a.save('DO',initial,0).ok,true);
+        const chatKey=f.storage.key(0)+':chat:d';
+        if(failure==='corrupt') {f.storage.setItem(chatKey,'{invalid');a.loadConversation('DO','d');}
+        else {const set=f.storage.setItem;f.storage.setItem=(key,value)=>{if(key===chatKey) throw Error('quota');return set(key,value);};a.saveConversation('DO','d',{transcript:[],messages:[]},0);}
+        const external=b.load('DO');external.draft.creation={status:'unknown',attemptId:'other'};assert.equal(b.save('DO',external,external.revision).ok,true);
+        assert.equal(a.isPersistent(),true);assert.equal(a.isConversationPersistent(),false);
+        assert.equal(a.load('DO').draft.creation.status,'unknown');
+    }
+});

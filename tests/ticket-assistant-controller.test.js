@@ -383,7 +383,7 @@ test('template binding constrains route generation catalogs to compatible types'
     };
     await h.c.selectProject('DO');
     const settings = h.c.getState().settings; settings.profiles[0].templates[0].issueTypeId = '10';
-    await h.c.applySettings(settings); await h.c.selectTemplate('task'); await h.c.prepare();
+    await h.c.applySettings(settings); await h.c.selectTemplate('task'); await h.c.selectIssueType(null); await h.c.prepare();
     assert.equal(h.calls.find(c => c[0] === 'route')[1].allowFieldIds.includes('environment'), false);
 });
 
@@ -656,4 +656,27 @@ test('controller inputs satisfy real AI route/prepare/check contracts and review
     assert.deepEqual(prompt.currentFieldContext.map(f => f.id), ['customfield_2', 'description']);
     assert.deepEqual(prompt.issueTypes[0].fieldSchema.map(f => f.id), ['summary']);
     assert.deepEqual(prompts.map(p => p.action), ['route', 'prepare', 'check']);
+});
+
+test('manual AI Check can recover pending template review using the newly saved rules',async()=>{
+    for(const missing of [false,true]) {
+        const h=harness();await h.ready();await h.c.updateField('summary','Manual summary');
+        await h.c.chatApplyTemplate({instructions:'Require a customer reference'},h.c.chatSnapshot());
+        assert.equal(h.c.getState().draft.templateReviewPending,true);
+        h.ai.check=async input=>{
+            assert.equal(input.profile.templates.find(t=>t.id===input.templateId).instructions,'Require a customer reference');
+            return {questions:missing?[{id:'customer',text:'Which customer?',required:true}]:[],warnings:[],evidence:[]};
+        };
+        await h.c.check();const draft=h.c.getState().draft;
+        assert.equal(draft.templateReviewPending,false);assert.equal(!!draft.checked,!missing);assert.equal(draft.fields.summary,'Manual summary');
+    }
+});
+test('failed and stale manual AI Check cannot clear pending template review',async()=>{
+    const pending=deferred();const h=harness();await h.ready();await h.c.updateField('summary','Manual');
+    await h.c.chatApplyTemplate({instructions:'New semantic rules'},h.c.chatSnapshot());
+    h.ai.check=async()=>{throw Error('mock failure');};await h.c.check();assert.equal(h.c.getState().draft.templateReviewPending,true);
+    h.ai.check=()=>pending.promise;const checking=h.c.check();
+    for(let i=0;i<30&&h.c.getState().stage!=='checking';i++) await Promise.resolve();
+    assert.equal(h.c.getState().stage,'checking');await h.c.updateField('description','Human edit');pending.resolve({questions:[],warnings:[],evidence:[]});await checking;
+    assert.equal(h.c.getState().draft.templateReviewPending,true);assert.equal(h.c.getState().draft.checked,null);
 });
