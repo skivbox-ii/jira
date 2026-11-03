@@ -23,15 +23,15 @@ function(shared, transportModule, jiraModule, confluenceModule, evidenceModule, 
         }
         function scrub(value){if(typeof value==='string')return redact(value);if(Array.isArray(value))return value.map(scrub);if(value && typeof value==='object'){var out={};Object.keys(value).forEach(function(k){out[k]=scrub(value[k]);});return out;}return value;}
         function scrubModel(value){
-            if(typeof value==='string'){
-                // Pico embeds JSON tool envelopes as strings inside its JSON request.
-                try{return JSON.stringify(scrubModel(JSON.parse(value)));}catch(ignored){return redact(value);}
-            }
-            if(Array.isArray(value))return value.map(scrubModel);
-            if(value && typeof value==='object'){
-                var out={};Object.keys(value).forEach(function(k){out[k]=scrubModel(value[k]);});return out;
-            }
-            return value;
+            // Decode string literals only, including nested serialized tool envelopes.
+            // Never parse objects/numbers: source IDs, numeric text, whitespace and code
+            // must remain exact. Preserve each original literal unless a secret changed it.
+            return value.replace(/"(?:[^"\\]|\\[\s\S])*"/g,function(literal){
+                var text;
+                try{text=JSON.parse(literal);}catch(ignored){return literal;}
+                var clean=redact(scrubModel(text));
+                return clean===text ? literal : JSON.stringify(clean);
+            });
         }
         function clear(){
             generation++;if(verification)verification.abort();verification=null;

@@ -194,3 +194,44 @@ test('real Main preserves separate verified A B A transcripts through Apply save
         conf='B';await applyGadget(h,'TOKEN_B');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_B/);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
     }finally{h.gadget.destroy();}
 });
+
+test('actual Main Pico model envelopes preserve exact numeric JSON and code text alongside nested escaped PATs',async()=>{
+    const old='PAT_OLD."\\[lossless]',current='PAT_NEW_LOSSLESS',requests=[];
+    const questions=[
+        '9007199254740993', '1e400', '-0',
+        '{ "id":9007199254740993, "overflow":1e400, "code":"\\u0041", "fraction":1.2300 }',
+        '```js\nconst id = 9007199254740993;\nconst json = {"id":9007199254740993};\n```'
+    ];
+    const plainSources=[
+        '{ \"numericId\":9007199254740993 }', '{ \"measurement\":1e400 }', '{ \"signedZero\":-0 }',
+        '{ \"sourceId\":9007199254740993, \"overflow\":1e400, \"code\":\"\\u0041\", \"fraction\":1.2300 }',
+        '// source example\n'+questions[4]
+    ];
+    const mixed='{ "id":9007199254740993, "overflow":1e400, "credential":'+JSON.stringify(old)+', "code":"\\u0041", "current":'+JSON.stringify(current)+' }';
+    const sources=plainSources.concat(mixed);let sourceIndex=0,calls=0;
+    const h=gadgetHarness({fetchImpl:async url=>({ok:true,headers:{get:()=> 'application/json'},json:async()=>{
+        if(url.includes('myself'))return {key:'alice'};
+        if(url.includes('user/current'))return {type:'known',userKey:'confluence-a'};
+        return {key:'DO-1',fields:{summary:'Exact text',description:sources[sourceIndex],project:{key:'DO'},updated:'today'}};
+    }}),requestText:async request=>{requests.push(request);calls++;return {text:JSON.stringify(calls%2?{text:'',toolCalls:[{id:'lossless-'+calls,name:'read_issue',arguments:{id:'DO-1'}}]}:{text:'Read [[jira:DO-1@0:'+sources[sourceIndex].length+']]',toolCalls:[]})};}});
+    function texts(value){
+        if(typeof value==='string'){
+            // Keep literal text first; decode nested envelopes only to inspect their string leaves.
+            try{return [value,...texts(JSON.parse(value))];}catch(ignored){return [value];}
+        }
+        return value && typeof value==='object'?Object.values(value).flatMap(texts):[];
+    }
+    try {
+        await applyGadget(h,old);await applyGadget(h,current);
+        for(sourceIndex=0;sourceIndex<sources.length;sourceIndex++){
+            const question=sourceIndex<questions.length?questions[sourceIndex]:'Compare '+old+' '+current;
+            const start=requests.length;await sendGadget(h,question);
+            assert.equal(requests.length,start+2,'Pico must issue read and answer model requests');
+            const first=texts(JSON.parse(requests[start].user)), second=texts(JSON.parse(requests[start+1].user));
+            const expected=sourceIndex<plainSources.length?sources[sourceIndex]:mixed.replace(JSON.stringify(old),JSON.stringify('[скрыто]')).replace(JSON.stringify(current),JSON.stringify('[скрыто]'));
+            if(sourceIndex<plainSources.length)assert.ok(first.includes(question),'question text changed: '+question);
+            assert.ok(second.includes(expected),'source text changed: '+expected);
+            for(const secret of [old,current])assert.equal(second.some(text=>text.includes(secret)),false,'nested model envelope leaked PAT');
+        }
+    }finally{h.gadget.destroy();}
+});
