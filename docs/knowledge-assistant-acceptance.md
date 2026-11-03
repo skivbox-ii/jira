@@ -1,14 +1,15 @@
 # Отдельный Pico-дашборд знаний: установка и приёмка
 
 Состояние на 03.11.2026: виджет реализован и проверен локально. Полный регресс
-**2267/2267** (root + browser), личный Chrome **1440/390 px**, длинный ответ,
+**2292/2292** (root + browser), личный Chrome **1440/390 px**, длинный ответ,
 Stop/Retry, ошибки входа, восстановление настроек и совместное размещение
 собранных виджетов пройдены на заглушках. Все пять этапов прошли Sol 6.1
-Author/Reviewer. Итоговое ревью ветки и публикация выполняются контроллером.
+Author/Reviewer. Итоговое ревью ветки и исправлений завершено без открытых
+замечаний по коду; публикация выполняется контроллером.
 **Citrix browser/CORS, авторизация Confluence и реальная LLM ещё не приняты.**
 Локальные ответы модели в тестах — фикстуры, а не проверка реального сервиса.
 
-Готовые runtime/CSS находятся в `489d90d80ca593c0e1f3407b2ccf5c13725c0727`.
+Готовые runtime/CSS находятся в `66c7e83f6f743383dc0ad1a90b576152cc86eab9`.
 Bootstrap перепривязан к этому полному SHA; source/runtime не изменились.
 
 ## Установка после публикации
@@ -95,15 +96,15 @@ NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node --te
 Для вызова общего bootstrap-процесса только для нового виджета:
 
 ```sh
-UJG_RELEASE_REF=489d90d80ca593c0e1f3407b2ccf5c13725c0727 node -e 'const b=require("./build-widget-bootstrap-assets"); const fs=require("node:fs"); const assets=b.buildAssets({widgets:[b.WIDGETS.knowledgeAssistant]}); for(const [file,source] of Object.entries(assets)) fs.writeFileSync(file,source);'
+UJG_RELEASE_REF=66c7e83f6f743383dc0ad1a90b576152cc86eab9 node -e 'const b=require("./build-widget-bootstrap-assets"); const fs=require("node:fs"); const assets=b.buildAssets({widgets:[b.WIDGETS.knowledgeAssistant]}); for(const [file,source] of Object.entries(assets)) fs.writeFileSync(file,source);'
 ```
 
-Первый коммит готовых ассетов — `489d90d80ca593c0e1f3407b2ccf5c13725c0727`.
+Первый коммит готовых ассетов — `66c7e83f6f743383dc0ad1a90b576152cc86eab9`.
 При следующем выпуске сначала закоммитьте source/runtime/CSS, затем задайте
 полный SHA этого коммита и выполните вторую фазу:
 
 ```sh
-ASSET_COMMIT_SHA=489d90d80ca593c0e1f3407b2ccf5c13725c0727
+ASSET_COMMIT_SHA=66c7e83f6f743383dc0ad1a90b576152cc86eab9
 UJG_RELEASE_REF="$ASSET_COMMIT_SHA" node build-knowledge-assistant.js
 ```
 
@@ -122,7 +123,7 @@ CDN с commit/runtime/CSS/bootstrap принадлежат контроллер�
 NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node --test --test-concurrency=4 tests/*.test.js tests/*.test.cjs tests/browser/*.test.cjs
 ```
 
-Результат: 2267 tests, 2267 pass, 0 fail, 0 skipped. Offline import preview
+Результат: 2292 tests, 2292 pass, 0 fail, 0 skipped. Offline import preview
 4317 работал во время набора. После перепривязки bootstrap: 49/49 build/bootstrap.
 Личный Chrome: два вопроса подряд, раскрытие источников, длинный ответ,
 полный экран, Stop/Retry, 401, восстановление настроек, 1440/390 px;
@@ -136,7 +137,17 @@ NODE_PATH=/Users/skivbox/.cache/ujg-ticket-assistant-test/node_modules node --te
 скрытого ограничения числа сообщений; quota-error явно переключает её в память.
 Известные PAT маскируются и после замены; остальной текст, большие ID и JSON/code
 не преобразуются. Root/full регресс выполнен до изменения закрепления bootstrap;
-после него изменены только pin и документация, а повторяемость проверена отдельно.
+после него изменены pin, документация и тестовый помощник сборки, исключающий
+конкурирующую запись исходного bundle. Код ассетов не менялся; повторяемость
+и параллельные build/bootstrap-проверки выполнены отдельно.
+
+Финальный пакет исправлений `66c7e83` перепроверяет пользователя Jira до
+сохранения вопроса и на границах асинхронного контекста/результатов. Смена
+аккаунта или потеря входа очищает видимую сессию и требует проверки подключения.
+Эти GET-проверки добавляют задержку, но не запускают LLM. В памяти сохраняются
+отдельные UI-истории для проверенных подключений, в том числе при quota-error;
+повторное «Применить» их не теряет. Пересекающиеся прочитанные диапазоны
+показываются ровно один раз, с исходными UTF-16 позициями.
 
 - Локальный build-тест загружает оба настоящих runtime в один AMD registry,
   запрещает дубли модулей, создаёт оба гаджета, уничтожает каждый по очереди

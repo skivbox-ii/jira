@@ -5,7 +5,7 @@ define("_ujgKnowledgeAssistant", [], function() {
   var widgetRuntimeFile = "ujg-knowledge-assistant.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgKnowledgeAssistantRuntime";
-  var releaseRef = "489d90d80ca593c0e1f3407b2ccf5c13725c0727";
+  var releaseRef = "66c7e83f6f743383dc0ad1a90b576152cc86eab9";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
