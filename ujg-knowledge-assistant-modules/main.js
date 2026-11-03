@@ -8,14 +8,31 @@ function(shared, transportModule, jiraModule, confluenceModule, evidenceModule, 
         if(content._ujgKA_instance) content._ujgKA_instance.destroy();
         var doc=content.ownerDocument, win=doc.defaultView, root=doc.createElement('div');content.appendChild(root);
         var dead=false, generation=0, currentChat=null, evidence=null, verification=null, token='', store=null, view;
+        // Rotation does not revoke old credentials. Keep every supplied PAT in tab memory only.
+        var knownSecrets=new Set();
         var backend;try{backend=deps.storage===undefined?win.localStorage:deps.storage;}catch(ignored){backend=null;}
         var settings=storageModule.cleanSettings(Object.assign({skill:skills.getDefaultSkill(),tokenBudget:{context:32768,reserve:4096}},deps.settings||{}));
         var origin=deps.origin||win.location.origin, jiraBase=deps.baseUrl==null?(API.getBaseUrl?API.getBaseUrl():''):deps.baseUrl;
         var fetchImpl=deps.fetchImpl||win.fetch && win.fetch.bind(win);
         var pendingResize=null;
         function resize(){if(dead||pendingResize!==null||!API.resize)return;pendingResize=win.setTimeout(function(){pendingResize=null;if(!dead)API.resize();},16);}
-        function redact(value){return token ? String(value).split(token).join('[скрыто]') : String(value);}
+        function redact(value){
+            var secrets=Array.from(knownSecrets).sort(function(a,b){return b.length-a.length;});
+            var pattern=secrets.map(function(secret){return secret.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}).join('|');
+            return pattern ? String(value).replace(new RegExp(pattern,'g'),'[скрыто]') : String(value);
+        }
         function scrub(value){if(typeof value==='string')return redact(value);if(Array.isArray(value))return value.map(scrub);if(value && typeof value==='object'){var out={};Object.keys(value).forEach(function(k){out[k]=scrub(value[k]);});return out;}return value;}
+        function scrubModel(value){
+            if(typeof value==='string'){
+                // Pico embeds JSON tool envelopes as strings inside its JSON request.
+                try{return JSON.stringify(scrubModel(JSON.parse(value)));}catch(ignored){return redact(value);}
+            }
+            if(Array.isArray(value))return value.map(scrubModel);
+            if(value && typeof value==='object'){
+                var out={};Object.keys(value).forEach(function(k){out[k]=scrubModel(value[k]);});return out;
+            }
+            return value;
+        }
         function clear(){
             generation++;if(verification)verification.abort();verification=null;
             if(currentChat)currentChat.dispose();currentChat=null;
@@ -32,7 +49,7 @@ function(shared, transportModule, jiraModule, confluenceModule, evidenceModule, 
         };
         async function apply(next, newToken){
             clear();var epoch=generation;store=null;
-            if(newToken)token=newToken.trim();
+            if(newToken){token=newToken.trim();if(token)knownSecrets.add(token);}
             settings=scrub(storageModule.cleanSettings(next));
             if(!transportModule.sourceBase(settings.confluenceBaseUrl))throw {code:'not-configured'};
             var aborter=new AbortController();verification=aborter;
@@ -60,7 +77,10 @@ function(shared, transportModule, jiraModule, confluenceModule, evidenceModule, 
                 currentChat=chatModule.createKnowledgeChat({tools:tools,evidence:evidence,runtime:deps.runtime,
                     getContext:function(){return {identityKey:identityKey,scopes:{spaces:settings.spaces,projects:settings.projects},skill:settings.skill,tokenBudget:settings.tokenBudget};},
                     onEvent:function(event){if(!dead&&epoch===generation&&view){view.onEvent(scrub(event));resize();}},
-                    requestText:deps.requestText||function(request){
+                    requestText:function(request){
+                        // Tool corpus and prior raw runtime messages also cross this model boundary.
+                        request=Object.assign({},request,{system:redact(request.system),user:scrubModel(request.user)});
+                        if(deps.requestText)return deps.requestText(request);
                         var config=shared.normalizeConfig((deps.readConfig||function(){return shared.readStoredConfig(backend);})());
                         if(!config)throw {code:'not-configured'};
                         return shared.requestText(config,{systemPrompt:request.system,userPrompt:request.user,preservePrompt:true,allowProtocolFallback:false,signal:request.signal,tokenBudget:settings.tokenBudget},function(url,options){return fetchImpl(url,Object.assign({},options,{signal:request.signal}));});
@@ -84,7 +104,7 @@ function(shared, transportModule, jiraModule, confluenceModule, evidenceModule, 
         view=uiModule.mount(root,{chat:facade,identity:null,storage:null,redact:redact,connection:{getSettings:function(){return settings;},restoreSettings:restoreSettings,apply:apply}});
         var observer=typeof win.MutationObserver==='function'?new win.MutationObserver(resize):null;if(observer)observer.observe(root,{subtree:true,childList:true,attributes:true,characterData:true});
         this.ready=Promise.resolve();this.openSettings=function(){view.openSettings();resize();};
-        this.destroy=function(){if(dead)return;dead=true;clear();token='';store=null;if(observer)observer.disconnect();if(pendingResize!==null)win.clearTimeout(pendingResize);view.dispose();root.remove();if(content._ujgKA_instance===this)delete content._ujgKA_instance;};
+        this.destroy=function(){if(dead)return;dead=true;clear();token='';knownSecrets.clear();store=null;if(observer)observer.disconnect();if(pendingResize!==null)win.clearTimeout(pendingResize);view.dispose();root.remove();if(content._ujgKA_instance===this)delete content._ujgKA_instance;};
         content._ujgKA_instance=this;resize();
     }
     return KnowledgeAssistantGadget;

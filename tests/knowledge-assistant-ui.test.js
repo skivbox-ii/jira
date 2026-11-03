@@ -144,3 +144,53 @@ test('rate limit reports a safe retry delay and settings recovery',async()=>{
     const h=setup({connection:{apply:async()=>{throw {code:'rate-limit',retryAfter:5,message:'PRIVATE_RAW'};}}});h.q('[data-ka-settings]').click();h.q('[data-ka-apply]').click();await tick();
     assert.match(h.q('[data-ka-panel-status]').textContent,/лимит.*5/);assert.doesNotMatch(h.root.textContent,/PRIVATE_RAW/);h.ui.dispose();
 });
+
+async function applyGadget(h, token, skill) {
+    h.gadget.openSettings();h.q('[data-ka-token]').value=token;
+    if(skill!==undefined)h.q('[data-ka-skill]').value=skill;
+    h.q('[data-ka-apply]').click();for(let i=0;i<8;i++)await tick();
+    assert.equal(h.q('[data-ka-send]').disabled,false);
+}
+async function sendGadget(h, text) {
+    h.q('[data-ka-prompt]').value=text;h.q('[data-ka-composer]').dispatchEvent(new h.dom.window.Event('submit',{cancelable:true}));
+    for(let i=0;i<16;i++)await tick();
+}
+test('rotated known PATs stay redacted in questions settings outputs fragments model requests and persistence',async()=>{
+    const old='PAT_OLD."\\[synthetic]',current='PAT_NEW_SYNTHETIC',values=new Map(),requests=[];
+    const corpus='Private fragment '+old+' and '+current;let calls=0;
+    const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async url=>({ok:true,headers:{get:()=> 'application/json'},json:async()=>{
+        if(url.includes('myself'))return {key:'alice'};
+        if(url.includes('user/current'))return {type:'known',userKey:'confluence-a'};
+        return {id:'42',type:'page',title:'Rules '+old,space:{key:'DOC'},version:{number:1},body:{storage:{value:'<p>'+corpus+'</p>'}}};
+    }}),requestText:async request=>{requests.push(request);calls++;return {text:JSON.stringify(calls%2?{text:'',toolCalls:[{id:'read-'+calls,name:'read_page',arguments:{id:'42'}}]}:{text:'Echo '+old+' '+current+' [[confluence:42@0:'+corpus.length+']]',toolCalls:[]})};}});
+    try {
+        await applyGadget(h,old);await applyGadget(h,current,'Find rules '+old+' '+current);
+        await sendGadget(h,'Question '+old+' '+current);
+        const publicText=h.q('[data-ka-messages]').textContent;
+        assert.match(publicText,/Echo/);assert.equal(h.q('[data-ka-fragment]').textContent.includes('[скрыто]'),true);
+        function strings(value){if(typeof value==='string'){try{return [value,...strings(JSON.parse(value))];}catch(ignored){return [value];}}if(value && typeof value==='object')return Object.values(value).flatMap(strings);return [];}
+        const modelStrings=requests.flatMap(r=>[r.system,...strings(JSON.parse(r.user))]);
+        const storedStrings=[...values.values()].flatMap(raw=>strings(JSON.parse(raw)));
+        for(const secret of [old,current]) {
+            assert.equal(publicText.includes(secret),false,'UI question/output/source/fragment contains known PAT');
+            assert.equal(modelStrings.some(text=>text.includes(secret)),false,'model request including tool corpus contains known PAT');
+            assert.equal(storedStrings.some(text=>text.includes(secret)),false,'persistence contains known PAT');
+        }
+        h.gadget.openSettings();assert.doesNotMatch(h.q('[data-ka-skill]').value,/PAT_OLD|PAT_NEW/);
+        assert.equal(h.q('[data-ka-token]').value,'');
+    }finally{h.gadget.destroy();}
+});
+test('real Main preserves separate verified A B A transcripts through Apply saves and reload',async()=>{
+    const values=new Map(),storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};let conf='A';const checks=[];
+    const options={storage,fetchImpl:async url=>{checks.push(url);return {ok:true,headers:{get:()=> 'application/json'},json:async()=>url.includes('myself')?{key:'alice'}:{type:'known',userKey:conf}};},requestText:async()=>({text:JSON.stringify({text:'ANSWER_'+conf,toolCalls:[]})})};
+    let h=gadgetHarness(options);
+    try {
+        await applyGadget(h,'TOKEN_A');await sendGadget(h,'QUESTION_A');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
+        conf='B';await applyGadget(h,'TOKEN_B');assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_A|ANSWER_A/);
+        await sendGadget(h,'QUESTION_B');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_B/);
+        conf='A';await applyGadget(h,'TOKEN_A');assert.match(h.q('[data-ka-messages]').textContent,/QUESTION_A.*ANSWER_A/s);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_B|ANSWER_B/);
+        assert.equal(checks.length,6,'every Apply verifies Jira and Confluence before transcript access');
+        h.gadget.destroy();h=gadgetHarness(options);await applyGadget(h,'TOKEN_A');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
+        conf='B';await applyGadget(h,'TOKEN_B');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_B/);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
+    }finally{h.gadget.destroy();}
+});

@@ -10,7 +10,7 @@ define('_ujgKA_storage', [], function() {
         return out;
     }
     function history(value) {
-        return (Array.isArray(value) ? value : []).filter(function(m) {return m && /^(user|assistant)$/.test(m.role) && typeof m.text === 'string';}).slice(-100).map(function(m) {
+        return (Array.isArray(value) ? value : []).filter(function(m) {return m && /^(user|assistant)$/.test(m.role) && typeof m.text === 'string';}).map(function(m) {
             return {role:m.role,text:m.text,warnings:(Array.isArray(m.warnings) ? m.warnings : []).filter(function(w){return typeof w === 'string';}),sources:(Array.isArray(m.sources) ? m.sources : []).map(function(s) {
                 var out = {historical:true,confirmed:false};
                 ['key','sourceId','title','url','updatedAt','fetchedAt'].forEach(function(k) {if(typeof s[k] === 'string') out[k]=s[k];});
@@ -24,22 +24,46 @@ define('_ujgKA_storage', [], function() {
     }
     function createStore(options) {
         if (!options || !options.origin || !options.userKey) throw new Error('Verified knowledge identity required');
-        var key='ujg.knowledgeAssistant.v1:'+options.origin+':'+options.userKey, memory={settings:{},history:[]}, persistent=!!options.storage;
+        var key='ujg.knowledgeAssistant.v1:'+options.origin+':'+options.userKey;
+        var memory={settings:{},histories:Object.create(null)}, persistent=!!options.storage;
+        function redact(value) {
+            return typeof options.redact==='function' ? options.redact(value) : value;
+        }
+        function scrub(value){
+            if(typeof value==='string')return redact(value);
+            if(Array.isArray(value))return value.map(scrub);
+            if(value && typeof value==='object'){
+                var out=Object.create(null);
+                Object.keys(value).forEach(function(k){out[redact(k)]=scrub(value[k]);});return out;
+            }
+            return value;
+        }
         function sanitize(value) {
-            var result={settings:cleanSettings(value && value.settings),history:history(value && value.history),historyIdentity:value && typeof value.historyIdentity==='string' ? value.historyIdentity : ''};
-            // Redact a known tab credential even if a user pasted it into public prose.
-            function redact(value){if(typeof value==='string')return options.redact(value);if(Array.isArray(value))return value.map(redact);if(value && typeof value==='object'){var out={};Object.keys(value).forEach(function(k){out[k]=redact(value[k]);});return out;}return value;}
-            return typeof options.redact==='function' ? redact(result) : result;
+            value=value||{};
+            var histories=Object.create(null);
+            if(value.histories && typeof value.histories==='object' && !Array.isArray(value.histories)) {
+                Object.keys(value.histories).forEach(function(identity){histories[identity]=history(value.histories[identity]);});
+            }
+            // Migrate the previous single-transcript record without reassigning its identity.
+            if(typeof value.historyIdentity==='string' && Array.isArray(value.history) && !Object.prototype.hasOwnProperty.call(histories,value.historyIdentity)) {
+                histories[value.historyIdentity]=history(value.history);
+            }
+            return scrub({settings:cleanSettings(value.settings),histories:histories});
+        }
+        function read() {
+            if(persistent) try {var raw=options.storage.getItem(key);if(raw)memory=sanitize(JSON.parse(raw));} catch(ignored){persistent=false;}
         }
         function load() {
-            if(persistent) try {var raw=options.storage.getItem(key); if(raw) memory=sanitize(JSON.parse(raw));} catch(ignored) {persistent=false;}
-            var result=sanitize(memory);
-            if(options.settingsOnly || result.historyIdentity!==(options.historyKey||options.userKey))result.history=[];
-            return result;
+            read();var snapshot=sanitize(memory), identity=redact(options.historyKey||options.userKey);
+            // Never return the map: Jira-only discovery and each verified identity see their own view.
+            return {settings:snapshot.settings,history:options.settingsOnly?[]:snapshot.histories[identity]||[],historyIdentity:identity};
         }
         function save(value) {
-            memory=sanitize(Object.assign({},value,{historyIdentity:options.historyKey||options.userKey}));
-            if(persistent) try {options.storage.setItem(key,JSON.stringify(memory));} catch(ignored) {persistent=false;}
+            // Another verified identity's store may have saved since this store last loaded.
+            read();memory=sanitize(memory);memory.settings=scrub(cleanSettings(value && value.settings));
+            if(!options.settingsOnly)memory.histories[redact(options.historyKey||options.userKey)]=scrub(history(value && value.history));
+            // Keep the entire sanitized transcript in memory if the actual write fails (e.g. quota).
+            if(persistent)try{options.storage.setItem(key,JSON.stringify(memory));}catch(ignored){persistent=false;}
         }
         return {load:load,save:save,isPersistent:function(){return persistent;}};
     }
