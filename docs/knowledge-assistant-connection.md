@@ -39,6 +39,8 @@ Fixed endpoint and query allowlist:
 
 Search requests `summary,project,updated`; read requests `summary,description,project,updated`. The project field is required to enforce read scopes.
 
+The dashboard Main also rereads `myself` after Confluence verification, before the UI appends or saves a question, and at the chat context boundaries before and after model/tool work. Each boundary starts a fresh request; there is no identity-check coalescing, timed cache or background polling. A changed principal or failed identity check aborts the generation, clears displayed history and evidence, removes active PAT access, and requires explicit Apply verification. Stop aborts pending principal checks without accepting their late replies. The 180-second turn deadline includes initial identity preparation. Registration remains offline. Sanitized UI stores survive Apply in instance memory by verified composite identity, including unavailable/quota storage; restored sources remain historical. Destroy releases these stores. Evidence and raw runtime/tool messages are never retained in that cache. Source disclosures assemble each cited UTF-16 position once across overlapping or adjacent reads, then redact the assembled text.
+
 ## Python bridge mode for Confluence
 
 Configure the user's bridge URL, typically `http://127.0.0.1:8769`. HTTP is accepted only for `127.0.0.1`, `localhost`, or `[::1]`; HTTPS is accepted for configured bridge hosts. URL credentials, query/hash, encoded paths, backslashes, and traversal are rejected. The bridge is responsible for forwarding these read routes to its fixed Confluence upstream and permitting the Jira origin via CORS. Do not change Confluence CORS or reuse the old PowerShell script.

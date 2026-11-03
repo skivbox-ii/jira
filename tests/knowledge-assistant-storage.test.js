@@ -60,3 +60,18 @@ test('legacy bound transcript migrates under its original identity when another 
     const settings=mod.createStore({...opts,settingsOnly:true});settings.save({settings:{spaces:['SAVED']}});
     assert.equal(b.load().history[0].text,'B_ONLY');assert.equal(settings.load().history.length,0);
 });
+
+test('retained per-identity stores keep newer quota history above a stale snapshot without retaining corpus',()=>{
+    const mod=load(modulePath,{}),storage=backend(),opts={storage,origin:'jira',userKey:'alice',redact:s=>s.replaceAll('SYNTHETIC_PAT','[скрыто]')};
+    const a=mod.createStore({...opts,historyKey:'verified-A'});
+    a.save({history:[{role:'user',text:'Old A'}]});const stale=[...storage.data.values()][0];
+    storage.setItem=()=>{throw Error('quota');};
+    a.save({history:[{role:'user',text:'Old A'},{role:'assistant',text:'Latest A SYNTHETIC_PAT',toolResult:'RAW_CORPUS',sources:[{sourceId:'jira:DO-1',text:'RAW_CORPUS',confirmed:true}]}]});
+    const b=mod.createStore({...opts,historyKey:'verified-B'});assert.equal(b.load().history.length,0);
+    b.save({history:[{role:'assistant',text:'B only'}]});
+    assert.equal(a.load().history.at(-1).text,'Latest A [скрыто]');assert.equal(b.load().history[0].text,'B only');
+    assert.equal([...storage.data.values()][0],stale);
+    assert.doesNotMatch(JSON.stringify(a.load()),/RAW_CORPUS|toolResult|SYNTHETIC_PAT|B only/);
+    assert.equal(a.load().history.at(-1).sources[0].historical,true);
+    assert.equal(a.isPersistent(),false);assert.equal(b.isPersistent(),false);
+});

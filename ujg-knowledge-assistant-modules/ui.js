@@ -1,8 +1,8 @@
 define('_ujgKA_ui', [], function() {
     'use strict';
     function mount(root, options) {
-        var doc=root.ownerDocument, chat=options.chat, connection=options.connection, store=options.storage, identity=options.identity;
-        var dead=false, epoch=0, busy=false, lastQuestion='', lastNotice='', transcript=[], settings={}, returnFocus=null;
+        var doc=root.ownerDocument, win=doc.defaultView, chat=options.chat, connection=options.connection, store=options.storage, identity=options.identity;
+        var dead=false, epoch=0, busy=false, deadline=null, lastQuestion='', lastNotice='', transcript=[], settings={}, returnFocus=null;
         root.classList.add('ujg-knowledge-assistant');
         function el(tag, text, attrs, parent) {
             var node=doc.createElement(tag); if(text!=null) node.textContent=text;
@@ -89,22 +89,29 @@ define('_ujgKA_ui', [], function() {
             spaceChips();projectChips();panel.hidden=false;fields.bridge.focus();
         }
         function closeSettings(){panel.hidden=true;fields.token.value='';if(returnFocus && returnFocus.focus)returnFocus.focus();}
-        function invalidate(){epoch++;if(busy)chat.abort();busy=false;controls();}
+        function clearDeadline(){if(deadline!==null)win.clearTimeout(deadline);deadline=null;}
+        function invalidate(){epoch++;clearDeadline();if(busy)chat.abort();busy=false;controls();}
         async function submit(text){
             if(dead||busy||!identity||!identity.key||!text.trim())return;
             text=options.redact ? options.redact(text) : text;
-            var current=++epoch; busy=true; lastNotice=''; lastQuestion=text; prompt.value='';
-            // A new turn invalidates the evidence behind all previous displayed source ranges.
-            transcript.forEach(function(m){(m.sources||[]).forEach(function(s){s.historical=true;s.confirmed=false;});});
-            transcript.push({role:'user',text:text,sources:[]}); render();persist();controls();tell('Поиск и чтение источников…');
+            var current=++epoch; busy=true; lastNotice='';controls();
+            // The existing turn ceiling includes the new identity preparation, even if fetch hangs.
+            deadline=win.setTimeout(function(){if(dead||current!==epoch)return;invalidate();tell('Достигнут лимит времени хода (180 секунд). Уточните вопрос и повторите.');},180000);
             try {
+                // Cookie identity must be current before displaying or saving even the new question.
+                if(chat.prepare)await chat.prepare();
+                if(dead||current!==epoch)return;
+                lastQuestion=text;prompt.value='';
+                // A new turn invalidates the evidence behind all previous displayed source ranges.
+                transcript.forEach(function(m){(m.sources||[]).forEach(function(s){s.historical=true;s.confirmed=false;});});
+                transcript.push({role:'user',text:text,sources:[]}); render();persist();tell('Поиск и чтение источников…');
                 var result=await chat.prompt(text);
                 if(dead||current!==epoch)return;
                 if(result.answer) transcript.push({role:'assistant',text:result.answer,warnings:result.warnings||[],sources:result.sources||[]});
                 tell(lastNotice || (result.status==='complete'?'Ответ готов. Полнота указана у каждого источника.':result.status==='aborted'?'Запрос остановлен.':result.status==='limit'?'Достигнут лимит хода. Уточните вопрос и повторите.':'Не удалось получить ответ. Откройте настройки подключения и повторите.'));
                 render();persist();
             } catch(ignored){if(!dead&&current===epoch)tell('Не удалось получить ответ. Проверьте вход и PAT в настройках; повторите запрос.');}
-            finally{if(!dead&&current===epoch){busy=false;controls();prompt.focus();}}
+            finally{if(!dead&&current===epoch){clearDeadline();busy=false;controls();prompt.focus();}}
         }
         composer.onsubmit=function(e){e.preventDefault();submit(prompt.value);};
         stop.onclick=function(){invalidate();tell('Запрос остановлен.');prompt.focus();};
@@ -122,14 +129,17 @@ define('_ujgKA_ui', [], function() {
         panel.onkeydown=function(e){if(e.key==='Escape'){e.preventDefault();closeSettings();}if(e.key==='Tab'){var nodes=Array.from(panel.querySelectorAll('button,input,textarea')).filter(function(n){return !n.disabled;});var first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&doc.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&doc.activeElement===last){e.preventDefault();first.focus();}}};
         full.onclick=function(){var on=root.classList.toggle('ka-fullscreen');full.textContent=on?'Свернуть':'На весь экран';full.setAttribute('aria-pressed',String(on));};
         function setSession(value){
-            invalidate(); identity=value.identity; if(value.chat)chat=value.chat;if(value.storage)store=value.storage;
+            invalidate(); identity=value.identity; if(value.chat)chat=value.chat;if(Object.prototype.hasOwnProperty.call(value,'storage'))store=value.storage;
             settings=value.settings||settings; transcript=(value.history||[]).map(function(m){return Object.assign({},m,{sources:(m.sources||[]).map(function(s){return Object.assign({},s,{historical:true,confirmed:false});})});});lastQuestion='';
             scopeButton.textContent='Область: '+(settings.spaces||[]).concat(settings.projects||[]).join(', ');storageWarning.hidden=!(store && store.isPersistent && !store.isPersistent());render();controls();
         }
         var initial=store ? store.load() : {};
         setSession({identity:identity,settings:connection.getSettings ? connection.getSettings() : initial.settings,history:initial.history||[]});
         return {dispose:function(){if(dead)return;invalidate();dead=true;fields.token.value='';transcript=[];settings={};identity=null;store=null;root.replaceChildren();root.classList.remove('ka-fullscreen');},setSession:setSession,openSettings:openSettings,
-            onEvent:function(event){if(dead||!busy)return;if(event.type==='tool')tell('Чтение источников · '+event.name);if(event.type==='compaction')tell(event.message);if(event.type==='error'||event.type==='limit'){lastNotice=event.message+' Проверьте настройки и повторите.';tell(lastNotice);}}};
+            onEvent:function(event){if(dead)return;if(event.type==='identity-invalidated'){
+                setSession({identity:null,storage:null,history:[]});prompt.value='';fields.token.value='';
+                tell('Требуется авторизация: проверьте вход Jira и PAT Confluence в настройках и нажмите «Применить и проверить».');return;
+            }if(!busy)return;if(event.type==='tool')tell('Чтение источников · '+event.name);if(event.type==='compaction')tell(event.message);if(event.type==='error'||event.type==='limit'){lastNotice=event.message+' Проверьте настройки и повторите.';tell(lastNotice);}}};
     }
     return {mount:mount};
 });

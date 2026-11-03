@@ -69,8 +69,13 @@ test('main registration is offline; Apply verifies both identities; actual Pico 
     await h.gadget.ready; assert.equal(urls.length,0);assert.equal(h.q('[data-ka-send]').disabled,true);
     h.gadget.openSettings();h.q('[data-ka-token]').value='PAT_PRIVATE';h.q('[data-ka-apply]').click();
     for(let i=0;i<8;i++)await tick();
-    assert.equal(h.q('[data-ka-send]').disabled,false);assert.equal(urls.length,2);
-    for(let turn=0;turn<2;turn++){h.q('[data-ka-prompt]').value='Rules?';h.q('[data-ka-composer]').dispatchEvent(new h.dom.window.Event('submit',{cancelable:true}));for(let i=0;i<12;i++)await tick();}
+    assert.equal(h.q('[data-ka-send]').disabled,false);
+    assert.deepEqual(urls.map(url=>new URL(url).pathname),['/rest/api/2/myself','/rest/api/user/current','/rest/api/2/myself'],'Apply rechecks Jira after Confluence before restoring history');
+    for(let turn=0;turn<2;turn++){const before=urls.length;h.q('[data-ka-prompt]').value='Rules?';h.q('[data-ka-composer]').dispatchEvent(new h.dom.window.Event('submit',{cancelable:true}));for(let i=0;i<12;i++)await tick();
+        const during=urls.slice(before).map(url=>new URL(url).pathname), read=during.indexOf('/rest/api/content/42');
+        assert.equal(during[0],'/rest/api/2/myself','turn starts with a fresh principal check');
+        assert.ok(read>0 && during.slice(read+1).includes('/rest/api/2/myself'),'source settlement crosses a fresh principal check');
+    }
     assert.equal(reads,2); assert.match(h.q('[data-ka-messages]').textContent,/Use template/);
     assert.doesNotMatch(JSON.stringify(requests),/PAT_PRIVATE|Authorization/);assert.doesNotMatch([...values.values()].join(''),/PAT_PRIVATE|toolResult|body.storage/);
     h.gadget.destroy();assert.equal(h.q('.ujg-knowledge-assistant'),null);
@@ -188,8 +193,8 @@ test('real Main preserves separate verified A B A transcripts through Apply save
         await applyGadget(h,'TOKEN_A');await sendGadget(h,'QUESTION_A');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
         conf='B';await applyGadget(h,'TOKEN_B');assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_A|ANSWER_A/);
         await sendGadget(h,'QUESTION_B');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_B/);
-        conf='A';await applyGadget(h,'TOKEN_A');assert.match(h.q('[data-ka-messages]').textContent,/QUESTION_A.*ANSWER_A/s);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_B|ANSWER_B/);
-        assert.equal(checks.length,6,'every Apply verifies Jira and Confluence before transcript access');
+        conf='A';const before=checks.length;await applyGadget(h,'TOKEN_A');assert.match(h.q('[data-ka-messages]').textContent,/QUESTION_A.*ANSWER_A/s);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_B|ANSWER_B/);
+        assert.deepEqual(checks.slice(before).map(url=>new URL(url).pathname),['/rest/api/2/myself','/rest/api/user/current','/rest/api/2/myself'],'Apply verifies both identities and the final Jira principal before transcript access');
         h.gadget.destroy();h=gadgetHarness(options);await applyGadget(h,'TOKEN_A');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
         conf='B';await applyGadget(h,'TOKEN_B');assert.match(h.q('[data-ka-messages]').textContent,/ANSWER_B/);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/ANSWER_A/);
     }finally{h.gadget.destroy();}
@@ -235,3 +240,195 @@ test('actual Main Pico model envelopes preserve exact numeric JSON and code text
         }
     }finally{h.gadget.destroy();}
 });
+
+function jsonReply(data) {return {ok:true,headers:{get:()=> 'application/json'},json:async()=>data};}
+function submitGadget(h,text) {
+    h.q('[data-ka-prompt]').value=text;
+    h.q('[data-ka-composer]').dispatchEvent(new h.dom.window.Event('submit',{cancelable:true}));
+}
+for(const change of ['bob','auth-loss']) {
+    test('final fix Main gates new question persistence and old context after between-turn '+change,async()=>{
+        const values=new Map(),requests=[],checks=[];let principal='alice';
+        const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async url=>{
+            if(url.includes('myself')){checks.push(principal);return principal==='auth-loss'?{ok:false,status:401}:jsonReply({key:principal});}
+            return jsonReply({type:'known',userKey:'conf-a'});
+        },requestText:async request=>{requests.push(request);return {text:JSON.stringify({text:'ALICE_PRIVATE_ANSWER',toolCalls:[]})};}});
+        try {
+            await applyGadget(h,'SYNTHETIC_PAT');await sendGadget(h,'ALICE_PRIVATE_QUESTION');
+            const saved=[...values.values()].join(''), before=requests.length, beforeChecks=checks.length;
+            principal=change;await sendGadget(h,'NEW_PRINCIPAL_PRIVATE_QUESTION');
+            assert.equal(requests.length,before,'no old context reaches a model for the changed principal');
+            assert.ok(checks.length>beforeChecks,'turn freshly reads cookie-backed myself');
+            assert.equal([...values.values()].join(''),saved,'identity gate precedes even the user-question write');
+            assert.doesNotMatch([...values.values()].join(''),/NEW_PRINCIPAL_PRIVATE_QUESTION/);
+            assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/ALICE_PRIVATE|NEW_PRINCIPAL/);
+            assert.equal(h.q('[data-ka-send]').disabled,true);assert.equal(h.q('[data-ka-retry]').hidden,true);
+            assert.match(h.q('[data-ka-status]').textContent,/Jira.*PAT.*настройк|авторизац/);
+            // Invalidated sessions cannot silently reuse their retained active PAT.
+            h.gadget.openSettings();h.q('[data-ka-apply]').click();for(let i=0;i<10;i++)await tick();
+            assert.equal(h.q('[data-ka-send]').disabled,true);
+            principal='bob';await applyGadget(h,'NEW_SYNTHETIC_PAT');await sendGadget(h,'BOB_VERIFIED_QUESTION');
+            assert.doesNotMatch(requests.at(-1).user,/ALICE_PRIVATE_QUESTION|NEW_PRINCIPAL_PRIVATE_QUESTION/);
+            assert.doesNotMatch(values.get('ujg.knowledgeAssistant.v1:https://jira.example:alice'),/BOB_VERIFIED_QUESTION|NEW_PRINCIPAL_PRIVATE_QUESTION/);
+            assert.match(values.get('ujg.knowledgeAssistant.v1:https://jira.example:bob'),/BOB_VERIFIED_QUESTION/);
+        }finally{h.gadget.destroy();}
+    });
+    for(const pending of ['model','read','model-error','read-error']) {
+        test('final fix Main rejects '+pending+' settlement after principal '+change,async()=>{
+            let principal='alice',settle,phase='first',reads=0;const values=new Map(),requests=[];
+            const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async(url,options)=>{
+                if(url.includes('myself'))return principal==='auth-loss'?{ok:false,status:401}:jsonReply({key:principal});
+                if(url.includes('user/current'))return jsonReply({type:'known',userKey:'conf-a'});
+                reads++;assert.match(url,/issue\/DO-1/);
+                return new Promise((resolve,reject)=>{settle=()=>pending==='read-error'?reject(Error('RAW_SYNTHETIC_SOURCE_ERROR')):resolve(jsonReply({key:'DO-1',fields:{summary:'NEW_PRINCIPAL_TITLE',description:'NEW_PRINCIPAL_CORPUS',project:{key:'DO'},updated:'v1'}}));});
+            },requestText:async request=>{
+                requests.push(request);
+                if(phase==='first')return {text:JSON.stringify({text:'ALICE_HISTORY',toolCalls:[]})};
+                if(pending.startsWith('model'))return new Promise((resolve,reject)=>{settle=()=>pending==='model-error'?reject(Error('RAW_SYNTHETIC_MODEL_ERROR')):resolve({text:JSON.stringify({text:'NEW_PRINCIPAL_ANSWER',toolCalls:[{id:'late-read',name:'read_issue',arguments:{id:'DO-1'}}]})});});
+                return {text:JSON.stringify(requests.length===2?{text:'',toolCalls:[{id:'pending-read',name:'read_issue',arguments:{id:'DO-1'}}]}:{text:'NEW_PRINCIPAL_ANSWER [[jira:DO-1@0:19]]',toolCalls:[]})};
+            }});
+            try {
+                await applyGadget(h,'SYNTHETIC_PAT');await sendGadget(h,'ALICE_QUESTION');phase='pending';
+                await sendGadget(h,'A_STARTED_THIS_TURN');assert.equal(typeof settle,'function');
+                principal=change;settle();for(let i=0;i<24;i++)await tick();
+                assert.equal(requests.length,2,'no settled response or read corpus enters another model request');
+                assert.equal(reads,pending.startsWith('read')?1:0,'changed model result cannot dispatch tools');
+                assert.equal(requests[1].signal.aborted,true,'principal invalidation aborts the actual Pico request');
+                assert.equal(h.q('[data-ka-send]').disabled,true);assert.equal(h.q('[data-ka-source]'),null);
+                assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/ALICE_|NEW_PRINCIPAL/);
+                assert.doesNotMatch(h.dom.window.document.body.textContent,/RAW_SYNTHETIC/);
+                assert.doesNotMatch([...values.values()].join(''),/NEW_PRINCIPAL/);
+                assert.match(h.q('[data-ka-status]').textContent,/Jira.*PAT.*настройк|авторизац/);
+            }finally{h.gadget.destroy();}
+        });
+    }
+}
+
+for(const mode of ['memory','quota','stale-quota']) {
+    test('final fix Main retains same-identity and A B A sanitized UI history across Apply in '+mode,async()=>{
+        const values=new Map();let quota=false,conf='A',calls=0;
+        const storage=mode==='memory'?null:{getItem:k=>values.get(k),setItem:(k,v)=>{if(quota||mode==='quota')throw Error('quota');values.set(k,v);}};
+        const h=gadgetHarness({storage,fetchImpl:async url=>jsonReply(url.includes('myself')?{key:'alice'}:url.includes('user/current')?{type:'known',userKey:conf}:{key:'DO-1',fields:{summary:'Synthetic',description:'CORPUS_MUST_STAY_IN_EVIDENCE_ONLY',project:{key:'DO'},updated:'v1'}}),requestText:async()=>{
+            calls++;return {text:JSON.stringify(calls%2?{text:'',toolCalls:[{id:'read-'+calls,name:'read_issue',arguments:{id:'DO-1'}}]}:{text:'ANSWER_'+conf+' SYNTHETIC_PAT [[jira:DO-1@0:5]]',toolCalls:[]})};
+        }});
+        try {
+            await applyGadget(h,'SYNTHETIC_PAT');await sendGadget(h,'OLD_QUESTION_A');
+            quota=true;await sendGadget(h,'LATEST_QUESTION_A SYNTHETIC_PAT');
+            if(mode==='stale-quota')assert.doesNotMatch([...values.values()].join(''),/LATEST_QUESTION_A/);
+            assert.equal(h.q('[data-ka-storage-warning]').hidden,false);
+            await applyGadget(h,'SYNTHETIC_PAT','Edited skill');
+            assert.match(h.q('[data-ka-messages]').textContent,/OLD_QUESTION_A.*LATEST_QUESTION_A.*ANSWER_A/s);
+            assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/SYNTHETIC_PAT|CORPUS_MUST/);
+            assert.match(h.q('[data-ka-source]').textContent,/Исторический/);
+            conf='B';await applyGadget(h,'SYNTHETIC_PAT');assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_A|ANSWER_A/);
+            await sendGadget(h,'QUESTION_B');conf='A';await applyGadget(h,'SYNTHETIC_PAT');
+            assert.match(h.q('[data-ka-messages]').textContent,/LATEST_QUESTION_A.*ANSWER_A/s);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_B|ANSWER_B/);
+            conf='B';await applyGadget(h,'SYNTHETIC_PAT');assert.match(h.q('[data-ka-messages]').textContent,/QUESTION_B.*ANSWER_B/s);
+            assert.doesNotMatch([...values.values()].join(''),/SYNTHETIC_PAT|CORPUS_MUST/);
+            h.gadget.destroy();const fresh=gadgetHarness({storage:null});assert.equal(fresh.q('[data-ka-send]').disabled,true);assert.doesNotMatch(fresh.q('[data-ka-messages]').textContent,/QUESTION_|ANSWER_/);fresh.gadget.destroy();
+        }finally{h.gadget.destroy();}
+    });
+}
+
+for(const example of [
+    {name:'overlapping and contained',text:'abcdef',offsets:[3,0,2],start:0,end:6,want:'abcdef'},
+    {name:'clipped overlap',text:'abcdef',offsets:[0,3],start:1,end:5,want:'bcde'},
+    {name:'adjacent split UTF16 surrogate pair',text:'x'.repeat(7999)+'🔐SYNTHETIC_PATtail',offsets:[0,8000],start:7999,end:8018,want:'🔐[скрыто]tail'},
+    {name:'adjacent split secret',text:'x'.repeat(7990)+'🔐SYNTHETIC_PATtail',offsets:[0,8000],start:7990,end:8009,want:'🔐[скрыто]tail'}
+]) {
+    test('final fix actual Main Pico UI discloses '+example.name+' exactly once',async()=>{
+        let calls=0;const values=new Map();
+        const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async url=>jsonReply(url.includes('myself')?{key:'alice'}:url.includes('user/current')?{type:'known',userKey:'conf-a'}:{key:'DO-1',fields:{summary:'Synthetic',description:example.text,project:{key:'DO'},updated:'v1'}}),requestText:async()=>{
+            const offset=example.offsets[calls++];return {text:JSON.stringify(offset===undefined?{text:'Result [[jira:DO-1@'+example.start+':'+example.end+']]',toolCalls:[]}:{text:'',toolCalls:[{id:'range-'+calls,name:'read_issue',arguments:{id:'DO-1',offset}}]})};
+        }});
+        try {
+            await applyGadget(h,'SYNTHETIC_PAT');await sendGadget(h,'Read ranges');
+            assert.equal(h.q('[data-ka-fragment]').textContent,example.want);
+            assert.equal(h.q('[data-ka-source]').textContent.includes('диапазон '+example.start+'–'+example.end),true);
+            assert.doesNotMatch([...values.values()].join(''),/SYNTHETIC_PAT|abcdef|xxxxxxxx|🔐/);
+        }finally{h.gadget.destroy();}
+    });
+}
+
+for(const action of ['stop','apply','destroy']) {
+    test('final fix actual Main ignores late preparation after '+action,async()=>{
+        let pause=false,release,identitySignal,models=0;const values=new Map();
+        const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async(url,options)=>{
+            if(url.includes('myself')&&pause){pause=false;identitySignal=options.signal;return new Promise(resolve=>{release=()=>resolve(jsonReply({key:'alice'}));});}
+            return jsonReply(url.includes('myself')?{key:'alice'}:{type:'known',userKey:'conf-a'});
+        },requestText:async()=>{models++;return {text:JSON.stringify({text:'Answer',toolCalls:[]})};}});
+        try {
+            await applyGadget(h,'SYNTHETIC_PAT');const saved=[...values.values()].join('');
+            pause=true;submitGadget(h,'QUESTION_MUST_NOT_BE_SAVED');await tick();assert.equal(typeof release,'function');
+            assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/QUESTION_MUST_NOT_BE_SAVED/);
+            assert.equal([...values.values()].join(''),saved,'pending identity check cannot write the question');
+            if(action==='apply')await applyGadget(h,'NEW_SYNTHETIC_PAT');
+            else if(action==='stop')h.q('[data-ka-stop]').click();
+            else h.gadget.destroy();
+            assert.equal(identitySignal.aborted,true,'Stop/Apply/destroy abort the pending identity fetch');
+            release();for(let i=0;i<12;i++)await tick();
+            assert.equal(models,0);assert.doesNotMatch([...values.values()].join(''),/QUESTION_MUST_NOT_BE_SAVED/);
+            if(action!=='destroy')assert.equal(h.q('[data-ka-send]').disabled,false,'late preparation cannot disable the current valid session');
+        }finally{h.gadget.destroy();}
+    });
+}
+
+test('final fix Main rechecks Jira after pending Confluence verification before exposing cached history',async()=>{
+    let principal='alice',pause=false,release;const values=new Map();
+    const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async url=>{
+        if(url.includes('user/current')&&pause)return new Promise(resolve=>{release=()=>resolve(jsonReply({type:'known',userKey:'conf-a'}));});
+        return jsonReply(url.includes('myself')?{key:principal}:{type:'known',userKey:'conf-a'});
+    },requestText:async()=>({text:JSON.stringify({text:'ALICE_PRIVATE_HISTORY',toolCalls:[]})})});
+    try {
+        await applyGadget(h,'SYNTHETIC_PAT');await sendGadget(h,'ALICE_QUESTION');
+        pause=true;h.gadget.openSettings();h.q('[data-ka-apply]').click();for(let i=0;i<8;i++)await tick();
+        assert.equal(typeof release,'function');principal='bob';release();for(let i=0;i<12;i++)await tick();
+        assert.equal(h.q('[data-ka-send]').disabled,true);assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/ALICE_/);
+        assert.equal(values.has('ujg.knowledgeAssistant.v1:https://jira.example:bob'),false);
+    }finally{h.gadget.destroy();}
+});
+
+test('final fix new turn guard never reuses a prior turn pending principal request',async()=>{
+    let principal='alice',holdChecks=false,models=0;const reads=new Map(),checks=[],values=new Map();
+    const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async(url,options)=>{
+        if(url.includes('myself')){
+            const captured=principal;
+            if(holdChecks)return new Promise(resolve=>checks.push({signal:options.signal,resolve:()=>resolve(jsonReply({key:captured}))}));
+            return jsonReply({key:captured});
+        }
+        if(url.includes('user/current'))return jsonReply({type:'known',userKey:'conf-a'});
+        const id=new URL(url).pathname.split('/').at(-1);
+        return new Promise(resolve=>reads.set(id,()=>resolve(jsonReply({key:id,fields:{summary:'Private '+principal,description:'PRINCIPAL_SOURCE_'+principal,project:{key:'DO'},updated:'v1'}}))));
+    },requestText:async()=>{models++;return {text:JSON.stringify(models===1?{text:'',toolCalls:[{id:'pending-1',name:'read_issue',arguments:{id:'DO-1'}}]}:{text:'Should not reach this model',toolCalls:[]})};}});
+    try {
+        await applyGadget(h,'SYNTHETIC_PAT');await sendGadget(h,'Read first');assert.equal(reads.size,1);
+        holdChecks=true;reads.get('DO-1')();for(let i=0;i<8;i++)await tick();assert.equal(checks.length,1);
+        h.q('[data-ka-stop]').click();principal='bob';await sendGadget(h,'NEW_PRINCIPAL_QUESTION');
+        assert.equal(checks.length,2,'new boundary must not reuse the previous turn still-pending Alice check');
+        checks[1].resolve();for(let i=0;i<12;i++)await tick();
+        assert.equal(checks[0].signal.aborted,true);checks[0].resolve();for(let i=0;i<8;i++)await tick();
+        assert.equal(models,1);assert.equal(h.q('[data-ka-send]').disabled,true);assert.equal(h.q('[data-ka-source]'),null);
+        assert.doesNotMatch([...values.values()].join(''),/PRINCIPAL_SOURCE|Private bob|NEW_PRINCIPAL_QUESTION/);
+    }finally{h.gadget.destroy();checks.forEach(check=>check.resolve());}
+});
+
+for(const pending of ['identity','model']) {
+    test('final fix UI 180 second deadline includes pending initial '+pending+' guard work',async()=>{
+        let pause=false,release,signal,deadline,deadlines=0,models=0;const values=new Map();
+        const h=gadgetHarness({storage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetchImpl:async(url,options)=>{
+            if(url.includes('myself')&&pause&&pending==='identity'){signal=options.signal;return new Promise(resolve=>{release=()=>resolve(jsonReply({key:'alice'}));});}
+            return jsonReply(url.includes('myself')?{key:'alice'}:{type:'known',userKey:'conf-a'});
+        },requestText:async request=>{models++;signal=request.signal;return new Promise(resolve=>{release=()=>resolve({text:JSON.stringify({text:'LATE_ANSWER',toolCalls:[]})});});}});
+        try {
+            await applyGadget(h,'SYNTHETIC_PAT');const saved=[...values.values()].join('');
+            const realTimeout=h.dom.window.setTimeout.bind(h.dom.window);
+            h.dom.window.setTimeout=(callback,ms)=>{if(ms===180000){deadline=callback;deadlines++;return 999999;}return realTimeout(callback,ms);};
+            pause=true;await sendGadget(h,'QUESTION_AT_DEADLINE');assert.equal(typeof release,'function');
+            assert.equal(typeof deadline,'function','UI deadline starts before identity preparation');assert.equal(deadlines,1,'deadline is shared with the whole turn');
+            deadline();assert.equal(signal.aborted,true);release();for(let i=0;i<12;i++)await tick();
+            assert.equal(h.q('[data-ka-send]').disabled,false);assert.match(h.q('[data-ka-status]').textContent,/180/);
+            assert.doesNotMatch(h.q('[data-ka-messages]').textContent,/LATE_ANSWER/);
+            if(pending==='identity'){assert.equal(models,0);assert.equal([...values.values()].join(''),saved);}
+        }finally{h.gadget.destroy();}
+    });
+}
