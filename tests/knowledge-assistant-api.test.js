@@ -219,3 +219,116 @@ test('bridge failed credential callback clears previously verified identity', as
     broken = false;
     await assert.rejects(t.getJson('/rest/api/content/42'), code('not-configured'));
 });
+
+function deferred() {
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+}
+function deferredBridge() {
+    const requests = [];
+    const bridge = transport({ mode: 'bridge', baseUrl: 'http://127.0.0.1:8769', getToken: () => 'TEST_ONLY',
+        fetchImpl: (url, options) => { const pending = deferred(); requests.push({ url, options, ...pending }); return pending.promise; } });
+    return { bridge, requests };
+}
+const knownIdentity = () => response({ type: 'known', username: 'reader' });
+
+test('bridge rejects older identity success after newer identity failure', async () => {
+    const { bridge, requests } = deferredBridge();
+    const older = bridge.getJson('/rest/api/user/current');
+    const olderRejected = assert.rejects(older, code('not-configured'));
+    const newer = bridge.getJson('/rest/api/user/current');
+    requests[1].resolve(response({}, 401));
+    await assert.rejects(newer, code('unauthorized'));
+    requests[0].resolve(knownIdentity());
+    await olderRejected;
+    await assert.rejects(bridge.getJson('/rest/api/content/42'), code('not-configured'));
+    assert.equal(requests.length, 2);
+});
+test('bridge obsolete identity failure cannot invalidate newer identity success', async () => {
+    for (const status of [401, 403]) {
+        const { bridge, requests } = deferredBridge();
+        const older = bridge.getJson('/rest/api/user/current');
+        const olderRejected = assert.rejects(older, code('not-configured'));
+        const newer = bridge.getJson('/rest/api/user/current');
+        requests[1].resolve(knownIdentity()); await newer;
+        requests[0].resolve(response({}, status)); await olderRejected;
+        const content = bridge.getJson('/rest/api/content/42');
+        assert.equal(requests.length, 3);
+        requests[2].resolve(response({ id: '42' }));
+        assert.equal((await content).id, '42');
+    }
+});
+test('bridge rejects pending content after a parallel authorization failure', async () => {
+    const { bridge, requests } = deferredBridge();
+    const identity = bridge.getJson('/rest/api/user/current'); requests[0].resolve(knownIdentity()); await identity;
+    const content = bridge.getJson('/rest/api/content/42');
+    const contentRejected = assert.rejects(content, code('not-configured'));
+    const forbidden = bridge.getJson('/rest/api/content/43'); requests[2].resolve(response({}, 403));
+    await assert.rejects(forbidden, code('forbidden'));
+    requests[1].resolve(response({ id: '42', text: 'PRIVATE' })); await contentRejected;
+    await assert.rejects(bridge.getJson('/rest/api/content/44'), code('not-configured'));
+    assert.equal(requests.length, 3);
+});
+test('bridge rejects pending content when verification restarts, even after newer success', async () => {
+    const { bridge, requests } = deferredBridge();
+    const identity = bridge.getJson('/rest/api/user/current'); requests[0].resolve(knownIdentity()); await identity;
+    const content = bridge.getJson('/rest/api/content/42');
+    const contentRejected = assert.rejects(content, code('not-configured'));
+    const newer = bridge.getJson('/rest/api/user/current'); requests[2].resolve(knownIdentity()); await newer;
+    requests[1].resolve(response({ id: '42' })); await contentRejected;
+});
+test('bridge obsolete content failure cannot invalidate a newer verified connection', async () => {
+    const { bridge, requests } = deferredBridge();
+    const identity = bridge.getJson('/rest/api/user/current'); requests[0].resolve(knownIdentity()); await identity;
+    const older = bridge.getJson('/rest/api/content/42');
+    const olderRejected = assert.rejects(older, code('not-configured'));
+    const newer = bridge.getJson('/rest/api/user/current'); requests[2].resolve(knownIdentity()); await newer;
+    requests[1].resolve(response({}, 401)); await olderRejected;
+    const current = bridge.getJson('/rest/api/content/43'); assert.equal(requests.length, 4);
+    requests[3].resolve(response({ id: '43' })); assert.equal((await current).id, '43');
+});
+test('bridge checks authentication generation after deferred JSON decoding', async () => {
+    for (const path of ['/rest/api/user/current', '/rest/api/content/42']) {
+        const { bridge, requests } = deferredBridge();
+        const identity = bridge.getJson('/rest/api/user/current'); requests[0].resolve(knownIdentity()); await identity;
+        const body = deferred(), decoding = deferred();
+        const older = bridge.getJson(path);
+        const olderRejected = assert.rejects(older, code('not-configured'));
+        requests[1].resolve(response({}, 200, 'application/json', { json: () => { decoding.resolve(); return body.promise; } }));
+        await decoding.promise;
+        const newer = bridge.getJson('/rest/api/user/current'); requests[2].resolve(response({}, 403));
+        await assert.rejects(newer, code('forbidden'));
+        body.resolve(path.endsWith('/current') ? { type: 'known', username: 'reader' } : { id: '42' });
+        await olderRejected;
+    }
+});
+test('bridge stale fetch and JSON exceptions cannot invalidate newer verification', async () => {
+    for (const stage of ['fetch', 'json']) {
+        const { bridge, requests } = deferredBridge();
+        const older = bridge.getJson('/rest/api/user/current');
+        const olderRejected = assert.rejects(older, code('not-configured'));
+        const body = deferred(), decoding = deferred();
+        if (stage === 'json') {
+            requests[0].resolve(response({}, 200, 'application/json', { json: () => { decoding.resolve(); return body.promise; } }));
+            await decoding.promise;
+        }
+        const newer = bridge.getJson('/rest/api/user/current'); requests[1].resolve(knownIdentity()); await newer;
+        (stage === 'fetch' ? requests[0] : body).reject(Error('SECRET'));
+        await olderRejected;
+        const content = bridge.getJson('/rest/api/content/42'); assert.equal(requests.length, 3);
+        requests[2].resolve(response({ id: '42' })); assert.equal((await content).id, '42');
+    }
+});
+test('bridge authentication invalidation retains cancellation for pending requests', async () => {
+    const { bridge, requests } = deferredBridge();
+    const identity = bridge.getJson('/rest/api/user/current'); requests[0].resolve(knownIdentity()); await identity;
+    const controller = new AbortController();
+    const content = bridge.getJson('/rest/api/content/42', {}, { signal: controller.signal });
+    const cancelled = assert.rejects(content, code('aborted'));
+    assert.equal(requests[1].options.signal, controller.signal);
+    const newer = bridge.getJson('/rest/api/user/current'); requests[2].resolve(knownIdentity()); await newer;
+    controller.abort(); requests[1].resolve(response({ id: '42' })); await cancelled;
+    const current = bridge.getJson('/rest/api/content/43'); requests[3].resolve(response({ id: '43' }));
+    assert.equal((await current).id, '43');
+});

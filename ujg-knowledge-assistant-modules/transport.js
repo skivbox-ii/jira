@@ -15,7 +15,7 @@ define('_ujgKA_transport', [], function() {
     }
     function createTransport(config) {
         config = config || {};
-        var mode = config.mode, base, invalid = false, verified = false;
+        var mode = config.mode, base, invalid = false, verified = false, authGeneration = 0;
         var fetchImpl = config.fetchImpl || (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
         try {
             var raw = String(config.baseUrl || '');
@@ -34,6 +34,14 @@ define('_ujgKA_transport', [], function() {
             if (base.username || base.password) throw failure('invalid-request');
         } catch (ignore) { invalid = true; }
 
+        // Only requests from the current auth generation may change verification state.
+        function invalidateAuth(generation) {
+            if (mode === 'bridge' && generation === authGeneration) {
+                verified = false;
+                authGeneration += 1;
+            }
+        }
+
         async function getJson(path, query, options) {
             options = options || {}; query = query || {};
             if (invalid || !fetchImpl) throw failure(mode === 'bridge' ? 'not-configured' : 'invalid-request');
@@ -51,29 +59,40 @@ define('_ujgKA_transport', [], function() {
             if (!allowed || Object.keys(query).some(function(k) { return allowed.indexOf(k) === -1 || !['string', 'number'].includes(typeof query[k]); })) throw failure('invalid-request');
             var signal = options.signal;
             if (signal && signal.aborted) throw failure('aborted');
+            var generation = authGeneration;
+            function checkCurrent() {
+                if (signal && signal.aborted) throw failure('aborted');
+                if (mode === 'bridge' && generation !== authGeneration) throw failure('not-configured');
+            }
             var headers = { Accept: 'application/json' };
             if (mode === 'bridge') {
                 if (path !== '/rest/api/user/current' && !verified) throw failure('not-configured');
-                if (path === '/rest/api/user/current') verified = false;
+                if (path === '/rest/api/user/current') {
+                    invalidateAuth(generation);
+                    generation = authGeneration;
+                }
                 var token;
-                try { token = typeof config.getToken === 'function' ? config.getToken() : ''; } catch (ignore) { verified = false; throw failure('not-configured'); }
-                if (typeof token !== 'string' || !token.trim() || /[\r\n]/.test(token)) { verified = false; throw failure('not-configured'); }
+                try { token = typeof config.getToken === 'function' ? config.getToken() : ''; } catch (ignore) { invalidateAuth(generation); throw failure('not-configured'); }
+                if (typeof token !== 'string' || !token.trim() || /[\r\n]/.test(token)) { invalidateAuth(generation); throw failure('not-configured'); }
                 headers.Authorization = 'Bearer ' + token;
                 // Never store the token in transport state or attach it to returned errors.
                 token = null;
             }
+            checkCurrent();
             var url = new URL(base.href.replace(/\/+$/, '') + path);
             Object.keys(query).forEach(function(k) { url.searchParams.set(k, String(query[k])); });
             var resp;
             try {
                 resp = await fetchImpl(url.href, { method: 'GET', headers: headers, credentials: mode === 'bridge' ? 'omit' : 'same-origin', redirect: 'error', signal: signal });
             } catch (error) {
-                throw failure(signal && signal.aborted || error && error.name === 'AbortError' ? 'aborted' : 'network');
+                if (signal && signal.aborted || error && error.name === 'AbortError') throw failure('aborted');
+                checkCurrent();
+                throw failure('network');
             }
-            if (signal && signal.aborted) throw failure('aborted');
+            checkCurrent();
             if (!resp || resp.redirected) throw failure('invalid-response');
             if (!resp.ok) {
-                if (resp.status === 401 || resp.status === 403) verified = false;
+                if (resp.status === 401 || resp.status === 403) invalidateAuth(generation);
                 var retry = null;
                 if (resp.status === 429) {
                     var value = resp.headers && resp.headers.get('Retry-After');
@@ -87,8 +106,8 @@ define('_ujgKA_transport', [], function() {
             if (!type || !/^application\/(?:[\w.-]+\+)?json(?:\s*;|$)/i.test(type)) throw failure('invalid-response');
             var data;
             try { data = await resp.json(); }
-            catch (ignore) { throw failure(signal && signal.aborted ? 'aborted' : 'invalid-response'); }
-            if (signal && signal.aborted) throw failure('aborted');
+            catch (ignore) { checkCurrent(); throw failure('invalid-response'); }
+            checkCurrent();
             if (!data || typeof data !== 'object' || Array.isArray(data)) throw failure('invalid-response');
             if (mode === 'bridge' && path === '/rest/api/user/current') {
                 if (data.type !== 'known' || ![data.userKey, data.username, data.accountId].some(function(id) { return typeof id === 'string' && id.trim(); })) throw failure('not-configured');
