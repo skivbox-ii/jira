@@ -9,7 +9,8 @@ function builder() {
     return require('../build-knowledge-assistant');
 }
 function assets() {
-    builder().build();
+    const source=builder().build({write:false});
+    assert.equal(source,fs.readFileSync(path.join(root,'ujg-knowledge-assistant.js'),'utf8'),'committed knowledge source matches the scoped builder');
     return require('../build-widget-bootstrap-assets').buildAssets({widgets:['ujg-knowledge-assistant'],releaseRef:'6f8b282'});
 }
 
