@@ -37,6 +37,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if (field.kind === 'user' && ((field.id === 'assignee' && policy.allowAssignee !== true) || !Array.isArray(policy.explicitUserFields) || policy.explicitUserFields.indexOf(field.id) === -1)) return { ok: false, error: 'Explicit user selection and policy approval required' };
         if (value === null) return { ok: true, value: null };
         var kind = field.kind;
+        if (kind === 'timetracking') return fields.timeTrackingValue(value);
         if (kind === 'epic' || kind === 'sprint') return {ok:fields.relationAllowed(field,value) && !!policy.relations &&
             Object.prototype.hasOwnProperty.call(policy.relations,field.id) && policy.relations[field.id] === value, value:value,
             error:'Confirm the selected Jira relation again'};
@@ -110,5 +111,5 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue };
 });

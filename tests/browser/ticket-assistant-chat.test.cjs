@@ -63,7 +63,7 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
     });
 });
 
-test('chat repairs a misplaced question and keeps the subsequent prose and updated card visible', async t => {
+test('chat repairs a misplaced question and shows the question saved with the updated description', async t => {
     const {page, send, errors} = await browserFixture(t);
     await page.evaluate(async () => {
         const records = window.taPreview;
@@ -93,7 +93,7 @@ test('chat repairs a misplaced question and keeps the subsequent prose and updat
     assert.deepEqual(await page.evaluate(() => window.taPreview.cardAtRequest), [null, null, 'Восстановить доступ']);
     await page.locator('[data-ta-card-details] > summary').click();
     assert.match(await page.locator('[data-ta-card-field="description"]').innerText(), /Доступ к тестовому сервису/);
-    assert.match(await page.locator('[data-ta-chat-log]').innerText(), /В какой среде \(DEV, TEST, PREPROD\)/);
+    assert.equal(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),'В какой среде произошёл сбой?');
     assert.equal(await page.locator('[data-ta-chat-error]').isVisible(), false);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(), true);
     assert.deepEqual(errors, []);
@@ -152,8 +152,8 @@ test('default chat token popover reflects growing actual Pico turns instead of u
     await page.locator('[data-ta-tokens]').click();
     assert.match(await page.locator('[data-ta-token-summary]').innerText(),/Pico.*32768/);
     assert.match(await page.locator('[data-ta-token-breakdown]').innerText(),/4096/);
-    await send('Первый вопрос');const first=await page.locator('[data-ta-token-usage]').innerText();
-    await send('Второй вопрос с предыдущим ответом');
+    await send('Поясни первый вопрос');const first=await page.locator('[data-ta-token-usage]').innerText();
+    await send('Поясни второй вопрос с предыдущим ответом');
     const {estimates,manualEstimate,currentManual,usage}=await page.evaluate(()=>({estimates:window.taPreview.estimates,manualEstimate:window.taPreview.manualEstimate,
         currentManual:window.taPreview.instance.controller.getState().tokenPreflight.input,usage:window.taPreview.instance.chat.getState().lastTurnUsage}));
     assert.equal(estimates.length,2);assert.ok(estimates[1]>estimates[0]);assert.equal(currentManual,manualEstimate);
@@ -205,7 +205,7 @@ test('card and protected replacements resolve metadata labels for single/multipl
     assert.match(pending,/Сейчас: Backend/);assert.match(pending,/Предложено: Backend, ID: missing/);assert.match(pending,/Сейчас: TEST/);assert.match(pending,/Предложено: TEST/);
 });
 
-async function browserFixture(t,width=1440) {
+async function browserFixture(t,width=1440,query='') {
     const server=await startPreview({port:0}),browser=await chromium.launch({channel:'chrome',headless:true});
     t.after(async()=>{await browser.close();await server.close();});
     const page=await browser.newPage({viewport:{width,height:width===390?844:1000}}),errors=[],requests=[];
@@ -214,7 +214,7 @@ async function browserFixture(t,width=1440) {
         const request=route.request();requests.push({url:request.url(),method:request.method()});
         return request.url().startsWith(server.url) && request.method()==='GET'?route.continue():route.abort();
     });
-    await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
+    await page.goto(server.url+query);await page.waitForSelector('html[data-ta-preview-ready="true"]');
     page.setDefaultTimeout(5000);
     async function send(text) {
         await page.locator('[data-ta-chat-input]').fill(text);await page.locator('[data-ta-chat-input]').press('Enter');
@@ -397,7 +397,7 @@ test('default main bridges full Pico prompts and cancellation to the configured 
         await records.instance.ready;await records.instance.controller.selectProject('DEMO');await records.instance.controller.selectIssueType('10');await records.instance.controller.selectTemplate('task');
         const settings=records.instance.controller.getState().settings;settings.tokenBudget={context:131072,reserve:4096};await records.instance.controller.applySettings(settings);
     });
-    const source='PreserveCompletePrompt'.repeat(2200);
+    const source='Explain '+ 'PreserveCompletePrompt'.repeat(2200);
     await page.locator('[data-ta-chat-input]').fill(source);await page.locator('[data-ta-chat-input]').press('Enter');
     await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status==='error' || window.taPreview.instance.chat.getState().status!=='running' && !document.querySelector('[data-ta-chat-input]').value);
     assert.equal(await page.evaluate(()=>window.taPreview.instance.chat.getState().error),null);
@@ -493,4 +493,23 @@ test('retained manual editor opens as a focus-contained panel and restores the i
     close.dispatchEvent(new window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
     assert.equal(panel.hidden,true);assert.equal(window.document.activeElement,invoke);
     assert.equal(window.document.querySelector('[data-ta-field="summary"] input').value,'Manual title');
+});
+
+test('chat alone populates reporter, description and stated effort in the actual Jira create payload',async t=>{
+    const {page,send,state}=await browserFixture(t,1440,'?effort=required');
+    await send('При сохранении задача выдаёт ошибку API.');
+    await send('Тестовая среда, версия 1.0. Проверка: сохранение проходит.');
+    assert.equal(await page.locator('[data-ta-editor-panel]').isVisible(),false);
+    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),false);
+    assert.match(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),/оценку трудозатрат/);
+    const calls=await page.evaluate(()=>window.taPreview.chatRequests.length);
+    await send('2 часа');
+    assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),calls);
+    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true);
+    await page.locator('[data-ta-card-create]').click();
+    await page.waitForSelector('[data-ta-chat-issue-link]');
+    const fields=await page.evaluate(()=>window.taPreview.createdPayload.fields);
+    assert.deepEqual(fields.reporter,{name:'preview'});assert.deepEqual(fields.timetracking,{originalEstimate:'2h'});
+    assert.match(fields.description,/Тестовая среда/);assert.match(fields.summary,/ошибк/i);
+    assert.equal((await state()).draft.creation.status,'created');
 });

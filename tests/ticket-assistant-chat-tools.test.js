@@ -27,7 +27,7 @@ test('automatic patch protects manual fields and undo cannot clobber later human
 test('deterministic validation marks current draft checked without LLM and required questions block',async()=>{
     const {controller:c}=await harness();
     let result=await c.chatValidate(c.chatSnapshot());assert.equal(result.ok,false);assert.ok(result.validation.fieldErrors.summary);
-    await c.chatUpdate({fields:{summary:'Ready'},questions:[{id:'q',text:'Which?',required:true}]},c.chatSnapshot());
+    await c.chatUpdate({fields:{summary:'Ready',description:'Check service access in the requested environment.'},questions:[{id:'q',text:'Which?',required:true}]},c.chatSnapshot());
     result=await c.chatValidate(c.chatSnapshot());assert.equal(result.ok,false);assert.equal(c.getState().draft.checked,null);
     await c.chatUpdate({fields:{},questions:[]},c.chatSnapshot());result=await c.chatValidate(c.chatSnapshot());
     assert.equal(result.ok,true);assert.ok(c.getState().draft.checked);
@@ -67,7 +67,7 @@ test('relation confirmation cannot mark a later human revision checked',async()=
 });
 test('chat readiness permits exactly one existing guarded mocked creation',async()=>{
     const h=await harness(),c=h.controller;let calls=0;h.api.createIssue=async()=>{calls++;return {id:'1',key:'DO-1'};};
-    await c.chatUpdate({fields:{summary:'Create once'}},c.chatSnapshot());await c.chatValidate(c.chatSnapshot());
+    await c.chatUpdate({fields:{summary:'Create once',description:'Restore access to the unavailable service.'}},c.chatSnapshot());await c.chatValidate(c.chatSnapshot());
     await Promise.all([c.submit(),c.submit()]);assert.equal(calls,1);assert.equal(c.getState().draft.creation.issueKey,'DO-1');
     assert.equal((await c.chatUpdate({fields:{summary:'Overwrite'}},c.chatSnapshot())).ok,false);await c.submit();assert.equal(calls,1);
 });
@@ -109,9 +109,43 @@ test('conversation corruption and history quota cannot hide another store unknow
 });
 
 test('template Apply remains semantically pending across reload and deterministic validation cannot clear it',async()=>{
-    const h=await harness(),c=h.controller;await c.updateField('summary','Ready');await c.chatValidate(c.chatSnapshot());
+    const h=await harness(),c=h.controller;await c.updateField('summary','Ready');await c.updateField('description','Check access under the current template rules.');await c.chatValidate(c.chatSnapshot());
     assert.ok(c.getState().draft.checked);const result=await c.chatApplyTemplate({instructions:'Ask for required customer reference'},c.chatSnapshot());
     assert.equal(result.ok,true);assert.equal(result.reviewRequired,true);assert.equal(c.getState().draft.templateReviewPending,true);
     assert.equal((await c.chatValidate(c.chatSnapshot())).ok,false);assert.equal(c.getState().draft.checked,null);
     const restored=await harness(h.backend);assert.equal(restored.controller.getState().draft.templateReviewPending,true);assert.equal((await restored.controller.chatValidate(restored.controller.chatSnapshot())).ok,false);
+});
+
+test('effort context distinguishes estimated work from the duration of an outage or deployment window',()=>{
+    const fields=loadUnit('fields'),t=loadUnit('chat-tools',{_ujgTA_fields:fields});
+    const answer=question=>plain(t.statedEstimates([{role:'assistant',text:question},{role:'user',text:'2 часа'}]));
+    assert.deepEqual(answer('Сколько времени займёт окно выкладки?'),{});
+    assert.deepEqual(answer('Сколько времени займёт работа?'),{originalEstimate:'2h'});
+    assert.deepEqual(answer('Сколько часов уже потрачено?'),{});
+});
+test('model context hides stored reporter after changing to a type without a reporter field',()=>{
+    const fields=loadUnit('fields'),t=loadUnit('chat-tools',{_ujgTA_fields:fields});
+    const d={issueTypeId:'new',fields:{reporter:{name:'saved-user'},summary:'Visible'},pendingFields:{reporter:{name:'proposed-user'}}};
+    const data=t.taskForModel({draft:d,meta:{issueTypes:[{id:'new',fields:[{id:'summary',kind:'string'}]}]}});
+    assert.equal(data.fields.summary,'Visible');assert.doesNotMatch(JSON.stringify(data),/saved-user|proposed-user/);
+});
+
+test('original and remaining estimates have distinct questions; a bare duration cannot answer both',()=>{
+    const t=loadUnit('chat-tools',{_ujgTA_fields:loadUnit('fields')});
+    assert.equal(t.estimateTopic('Какова исходная оценка работы?'),'originalEstimate');
+    assert.equal(t.estimateTopic('Какова оставшаяся оценка работы?'),'remainingEstimate');
+    assert.equal(t.estimateFromAnswer('2 часа','Какая исходная оценка и какая оставшаяся оценка работы?'),null);
+});
+
+test('subsequent description rewrite preserves the reason supplied in a previous turn',async()=>{
+    const h=await harness(),Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields});
+    let userText='Версия не нужна. Причина: работы касаются доступа.';
+    const tools=Tools.create({controller:h.controller,getTurnText:()=>userText});
+    const update=tools.find(t=>t.name==='update_task');
+    await update.execute({fields:{description:'Недоступен стенд.'},questions:[]},{});
+    userText='Проверим по RDP.';
+    await update.execute({fields:{description:'Недоступен стенд. Критерий: подключение по RDP.'},questions:[]},{});
+    const desc=h.store.load('DO').draft.fields.description;
+    assert.match(desc,/RDP/);assert.match(desc,/Версия не нужна\. Причина: работы касаются доступа\./);
+    assert.equal(desc.split('Со слов пользователя:').length,2);
 });

@@ -70,7 +70,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
         var budgetCache = null, providerUsage = null;
-        var metadataReady = false;
+        var metadataReady = false, currentReporterName = null;
         var listeners = new Set();
         var relationConfirmations = Object.create(null), relationSearches = new Map();
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
@@ -200,20 +200,44 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 entry.revision = result.revision; entry.error = null;
             } catch (error) { entry.error = errorState(null, 'storage'); state.error = entry.error; }
         }
+        function fillMissingReporter(draft) {
+            if (!metadataReady || !currentReporterName || !draft || draft.protectedFields.reporter === true ||
+                draft.creation.issueKey || ['preflight','submitting','unknown','created'].indexOf(draft.creation.status) !== -1) return draft;
+            var reporter = fields.getField(state.meta,draft.issueTypeId,'reporter'), value = draft.fields.reporter;
+            if (!reporter || !reporter.supported || !reporter.writable || reporter.kind !== 'user') {
+                // Only the unprotected current-user default belongs to the app.
+                // Explicit manual values, even the same login, stay visible.
+                if (!isAutomaticReporter(draft)) return draft;
+                var removed=drafts.editField(draft,'reporter',null);
+                delete removed.fields.reporter;delete removed.protectedFields.reporter;
+                return removed;
+            }
+            if (value !== undefined && value !== null && value !== '') return draft;
+            var filled=drafts.editField(draft,'reporter',{name:currentReporterName});
+            delete filled.protectedFields.reporter;
+            return filled;
+        }
+        function isAutomaticReporter(draft) {
+            var value=draft.fields.reporter;
+            return !!currentReporterName && draft.protectedFields.reporter !== true && value &&
+                typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length===1 && value.name===currentReporterName;
+        }
         function edited(next) {
             if (locked() || durableGuard()) return emit();
             if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
-            stop(); state.draft = drafts.invalidateAssistance(next); state.validation = null; state.routeCandidates = [];
+            stop(); state.draft = fillMissingReporter(drafts.invalidateAssistance(next)); state.validation = null; state.routeCandidates = [];
             providerUsage=null;
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
         }
         function policy() {
             var p = profile();
-            return { relations:relationConfirmations, allowAssignee: !!p && p.allowAssignee === true, explicitUserFields: Object.keys(state.draft.protectedFields).filter(function(id) {
+            var explicit=Object.keys(state.draft.protectedFields).filter(function(id) {
                 var field = fields.getField(state.meta, state.draft.issueTypeId, id);
                 return state.draft.protectedFields[id] === true && field && field.kind === 'user';
-            }) };
+            });
+            if (isAutomaticReporter(state.draft))explicit.push('reporter');
+            return {relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit};
         }
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
@@ -263,6 +287,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             state.meta = fields.normalizeMeta(raw, key, { components: components, versions: versions });
             if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
             metadataReady = true;
+            if (!readOnly) state.draft = fillMissingReporter(state.draft);
             if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
                 var confirmed = await fields.confirmRelations(state.meta,state.draft.issueTypeId,state.draft.fields,api,request);
                 if (!current(run)) return false;
@@ -278,7 +303,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
-            budgetCache=null;providerUsage=null;metadataReady=false;
+            budgetCache=null;providerUsage=null;metadataReady=false;currentReporterName=null;
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
                 error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
             emit();
@@ -286,10 +311,13 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 var user = null;
                 try { user = await api.getCurrentUser({ signal: run.abort.signal }); } catch (error) { /* No identity means no persistent scope. */ }
                 if (!current(run)) return getState();
+                // Jira Server/DC create payloads require the login, not the
+                // account/storage key or display name. Retain no other /myself data.
+                currentReporterName = user && typeof user.name === 'string' && user.name.trim() && user.name.trim() === user.name ? user.name : null;
                 var key = user && (typeof user.key === 'string' && user.key.trim() ? user.key : typeof user.name === 'string' && user.name.trim() ? user.name : null);
                 if (!key) { key = null; identityWarning = errorState(null, 'identity'); state.error = identityWarning; }
                 store = options.createStore(key);
-                creator = creators.create({api:api,store:store,now:options.now});
+                creator = creators.create({api:api,store:store,now:options.now,currentReporterName:currentReporterName});
                 var projects = await api.getProjects({ signal: run.abort.signal });
                 if (!current(run)) return getState();
                 state.projects = projects.values.map(function(p) { return { id: String(p.id), key: String(p.key), name: String(p.name || p.key) }; });
@@ -755,6 +783,20 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 if (signal && signal.aborted || !chatFresh(snapshot) || state.meta !== meta) return chatFailure();
                 relationConfirmations=confirmed;
                 var result=validation.validateFields(meta,state.draft.issueTypeId,state.draft.fields,policy());
+                // Chat readiness includes content and unconfirmed replacements;
+                // native editor checks retain the underlying Jira requirements.
+                var description=fields.getField(meta,state.draft.issueTypeId,'description');
+                if (description && description.supported && description.writable &&
+                    (typeof state.draft.fields.description !== 'string' || !state.draft.fields.description.trim())) {
+                    result.ok=false;
+                    (result.fieldErrors.description || (result.fieldErrors.description=[])).push('Заполните описание задачи: укажите известные сведения и ожидаемый результат.');
+                }
+                Object.keys(state.draft.pendingFields).forEach(function(id) {
+                    if (state.draft.protectedFields[id] !== true) return;
+                    result.ok=false;
+                    var spec=fields.getField(meta,state.draft.issueTypeId,id);
+                    (result.fieldErrors[id] || (result.fieldErrors[id]=[])).push('Подтвердите или отклоните предложение для поля «'+(spec ? spec.name : id)+'» в карточке или редакторе.');
+                });
                 if (!compatible(state.draft.issueTypeId,state.draft.templateId)) {result.ok=false;result.fieldErrors.template=['Select a compatible template'];}
                 if (state.draft.questions.some(function(q) {return q.required;})) result.ok=false;
                 var reviewed=state.draft.templateReviewPending && reviewedTemplateRevision===state.draft.settingsRevision;

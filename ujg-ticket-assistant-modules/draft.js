@@ -18,7 +18,12 @@ define('_ujgTA_draft', [], function() {
         }
         return undefined;
     }
-    function fieldValue(value) {
+    function fieldValue(value, id) {
+        if (id==='timetracking' && record(value)) {
+            var keys=Object.keys(value),result={};
+            if (!keys.length || keys.some(function(key){return ['originalEstimate','remainingEstimate'].indexOf(key)===-1 || typeof value[key]!=='string';}))return undefined;
+            keys.forEach(function(key){result[key]=value[key];});return result;
+        }
         if (!Array.isArray(value)) return atom(value);
         var values = value.map(atom);
         return values.some(function(v) { return v === undefined; }) ? undefined : values;
@@ -26,7 +31,7 @@ define('_ujgTA_draft', [], function() {
     function fields(input, protectedOnly) {
         var result = {};
         if (record(input)) Object.keys(input).filter(safeKey).forEach(function(key) {
-            var value = protectedOnly ? (input[key] === true ? true : undefined) : fieldValue(input[key]);
+            var value = protectedOnly ? (input[key] === true ? true : undefined) : fieldValue(input[key],key);
             if (value !== undefined) result[key] = value;
         });
         return result;
@@ -159,7 +164,7 @@ define('_ujgTA_draft', [], function() {
         return Object.assign(changed(d), updates);
     }
     function editField(d, id, value) {
-        var normalized = fieldValue(value);
+        var normalized = fieldValue(value,id);
         if (!safeKey(id) || typeof id !== 'string' || normalized === undefined) throw new Error('Invalid field');
         var next = changed(d);
         next.fields[id] = normalized;

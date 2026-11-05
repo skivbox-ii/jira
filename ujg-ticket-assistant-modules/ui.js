@@ -12,7 +12,10 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
         }
-        function textValue(value) { return value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
+        function textValue(value) {
+            var estimate=typeof fieldUi.formatTimeTracking==='function'?fieldUi.formatTimeTracking(value):null;
+            return estimate!==null?estimate:value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+        }
         function iconButton(label, name, attrs) {return button(label,name,attrs).addClass('ta-icon-button');}
         function closeMenu() {
             if (!activeMenu) return;
@@ -189,7 +192,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var selectedTemplate = profile && profile.templates.find(function(t) {return t.id === d.templateId;});
             (state.meta && state.meta.issueTypes || []).forEach(function(t) {
                 if (t.subtask || d.issueTypeId && t.id !== d.issueTypeId || selectedTemplate && selectedTemplate.issueTypeId && t.id !== selectedTemplate.issueTypeId) return;
-                t.fields.forEach(function(f) {if (f.supported && f.writable && ['user','number','epic','sprint'].indexOf(f.kind)===-1 && f.id !== 'project' && f.id !== 'issuetype') result.set(f.id, f);});
+                t.fields.forEach(function(f) {if (f.supported && f.writable && ['user','number','epic','sprint','timetracking'].indexOf(f.kind)===-1 && f.id !== 'project' && f.id !== 'issuetype') result.set(f.id, f);});
             }); return result;
         }
         function makeSelection(host, id, name, action) {
@@ -449,13 +452,14 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
                     'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':
-                    field.kind==='number' && field.supported && field.writable?'Числовое значение задаётся вручную; AI его не рассчитывает.':'';
+                    field.kind==='number' && field.supported && field.writable?'Числовое значение задаётся вручную; AI его не рассчитывает.':
+                    field.kind==='timetracking' && field.supported && field.writable?'Указывайте только явно названные трудозатраты, например 2h или 1d 30m. Длительность окна выкладки не является оценкой.':'';
                 entry.help.text(help).prop('hidden',!help);
                 if(help) {
                     var control=entry.host.find('.ta-field-body').find('input,textarea,[data-ta-picker]').first(),helpId=control.attr('id')+'-help';
                     entry.help.attr('id',helpId);control.attr('aria-describedby',(control.attr('aria-describedby') || '')+' '+helpId);
                 }
-                var helperEligible=field.supported && field.writable && ['user','number','epic','sprint'].indexOf(field.kind)===-1;
+                var helperEligible=field.supported && field.writable && ['user','number','epic','sprint','timetracking'].indexOf(field.kind)===-1;
                 entry.helper.prop('hidden',!helperEligible);
                 // Ineligible fields expose no AI control, including in the accessibility tree.
                 if (!helperEligible) entry.helper.detach();else if(!entry.helper.parent().length)entry.host.prepend(entry.helper);

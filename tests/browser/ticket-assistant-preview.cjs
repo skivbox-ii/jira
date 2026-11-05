@@ -30,6 +30,10 @@
         labels:{name:'Метки',schema:{type:'array',items:'string',system:'labels'}},
         customfield_1:{name:'Оценка',schema:{type:'number',custom:'com.atlassian.jira.plugin.system.customfieldtypes:float'}}
     };
+    if(parameters.get('effort')==='required') {
+        rawFields.timetracking={name:'Учёт времени',required:true,schema:{system:'timetracking',type:'timetracking'}};
+        rawFields.reporter.required=true;
+    }
     if(review==='guided') {
         rawFields.environment={name:'Окружение',schema:{type:'string',system:'environment'}};
         rawFields.customfield_71={name:'Epic',schema:{type:'any',custom:'com.pyxis.greenhopper.jira:gh-epic-link'}};
@@ -65,7 +69,7 @@
         searchUsers:function(query) {return result('users',{values:[{name:'anna',displayName:'Анна Смирнова'},{name:'alex',displayName:'Алексей Петров'},{name:'irina',displayName:'Ирина Козлова'}].filter(function(u) {return (u.name+' '+u.displayName).toLowerCase().indexOf(query.toLowerCase()) !== -1;}),complete:false});},
         getAttachmentMeta:function() {return result('attachment-meta',{enabled:true,uploadLimit:10000000});},
         createIssue:function(payload) {
-            records.calls.push('create');var mode=scenario;
+            records.calls.push('create');records.createdPayload=payload;var mode=scenario;
             return new Promise(function(resolve,reject) {setTimeout(function() {
                 if(mode==='rejected')reject({outcome:'rejected',fieldErrors:{summary:['Synthetic field rejection.']}});
                 else if(mode==='lostresponse')reject({outcome:'unknown'});
@@ -133,7 +137,7 @@
                 function call(name,args){response={text:'',toolCalls:[{id:'offline_'+Date.now()+'_'+records.chatRequests.length,name:name,arguments:args}]};}
                 var current=input.authoritativeContext,template=current.template && current.template.template;
                 if(current.conversationForReview) {
-                    if(!toolResults.length)call('update_task',{fields:{},questions:current.draft.questions});
+                    if(!toolResults.length)call('update_task',{fields:current.draft.fields.description?{description:current.draft.fields.description}:{},questions:current.draft.questions});
                     else response.text='Сверка завершена.';
                 } else if(/покажи шаблон/i.test(text)) {
                     if(!toolResults.length)call('read_template',{});else response.text='Это точный текущий текст шаблона. Он не изменён.';

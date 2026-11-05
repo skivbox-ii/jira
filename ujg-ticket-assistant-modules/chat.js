@@ -2,6 +2,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
     'use strict';
     function copy(value) {return JSON.parse(JSON.stringify(value));}
     var failures={
+        'draft-update':{action:'retry',message:'Pico получил сообщение, но не записал сведения в карточку. Ваш ответ сохранён в чате. Нажмите «Повторить», чтобы заполнить поля.'},
         config:{action:'connection',message:'Подключение AI не настроено или некорректно. Откройте «Подключение AI» и проверьте URL, модель и ключ. Текст сохранён.'},
         response:{action:'retry',message:'Pico вернул ответ неверного формата. Действия из этого ответа не применены. Нажмите «Повторить». Текст сохранён.'},
         'response-repair':{action:'retry',message:'Pico не смог исправить формат ответа за одну попытку. Действия из этого ответа не применены. Нажмите «Повторить» или продолжите заполнение в редакторе. Текст сохранён.'},
@@ -21,7 +22,8 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         if(!Object.prototype.hasOwnProperty.call(failures,code)) {
             code=isLimit?'limit':'transport';
             if(typeof reason==='string') {
-                if(/^(?:AI config is invalid|Pico connection configuration invalid)$/.test(reason))code='config';
+                if(reason==='Pico draft update missing')code='draft-update';
+                else if(/^(?:AI config is invalid|Pico connection configuration invalid)$/.test(reason))code='config';
                 else if(reason==='Pico response correction failed')code='response-repair';
                 else if(/^(?:Pico response must be a JSON text envelope|Invalid Pico text envelope|Malformed Pico tool call|Duplicate Pico tool call id|Shared requestText returned no text|JSON nesting exceeds safety limit|Unsafe JSON property)$/.test(reason) || /^(?:Unknown Pico tool|Invalid arguments for Pico tool): /.test(reason))code='response';
                 else if(/^Pico model call limit reached(?: \(maximum \d+ per turn\))?\.$/.test(reason))code='model-calls';
@@ -46,14 +48,16 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         'summary — короткое название действия, подробности — в description; пользователю показывай только следующий вопрос или результат, без списков «Инструменты: [...]». '+
         'Если пользователь передаёт сведения для задачи, сначала примени уже известные summary и description через update_task, дождись результата и только затем задай один следующий содержательный вопрос о недостающих сведениях. Не откладывай заполнение известных полей до ответа на уточнение. '+
         'Используй только известные факты; не выдумывай содержание полей. Чистый запрос просмотра полей, чтения или изменения шаблона не является сведениями для задачи: выполняй только запрошенный просмотр или предложение шаблона, не меняя задачу и её источник. '+
+        'Перед каждым вопросом прочитай текущее draft.fields.description, уже заполненные поля Jira, сохранённые причины пропусков и все сведения из нового сообщения. Описание — основа карточки: обновляй его целиком, сохраняя применимые прежние факты. Один ответ может закрывать несколько вопросов. Если позднее пользователь изменил сведения, обнови актуальный итог; прежнюю цитату не выдавай за новое требование. Если значение не применимо, пользователь просит его не заполнять или объяснил отсутствие, зафиксируй это в description вместе с причиной, не спрашивай его вновь. Отметь, что ещё неизвестно. Jira всё равно проверяет обязательные поля. Не подставляй выдуманное значение. '+
+        'Перед следующим содержательным вопросом запиши итоговое description и полный актуальный список questions через update_task. Каждому вопросу дай reason: какую конкретную деталь не удалось найти в текущем описании и почему она нужна. Не повторяй вопрос, если уже есть ответ или объяснение его отсутствия. '+
         'Точный пример формата update_task: {"text":"","toolCalls":[{"id":"unique_update_id","name":"update_task","arguments":{"fields":{"summary":"Краткое название","description":"Известные факты"},"questions":[{"id":"q1","text":"Что ещё нужно уточнить?","required":true}]}}]}. questions находится только внутри arguments, никогда рядом с id/name/arguments; при отсутствии вопросов передай questions:[]. '+
         'Актуальное состояние приложения авторитетно. Не повторяй уже отвеченные вопросы. Используй update_task для полей и вопросов, validate_task для готовности. '+
         'Не пересказывай список фактов после каждого ответа. Текст при вызове инструментов оставляй пустым. В финальном сообщении укажи только новое: один вопрос, конкретное препятствие или результат проверки. '+
         'Ответ на уточнение запиши в подходящее поле (для сведений без поля — в description). Не подменяй состав работ версией ПО. Сохрани прежние сведения; сверяй с результатом инструмента, а не со своим пересказом. '+
         'Передавай полный обновлённый список вопросов: убирай отвеченные и неприменимые, не требуй необязательные ссылки и исполнителя. Если вопросов больше нет, передай questions:[] и вызови validate_task. Только его успешный результат для текущей редакции позволяет предложить «Создать». При ошибке назови конкретное поле. Права Jira не подтверждаются текстом ответа. '+
-        'Не выдумывай IDs: используй list_fields и find_options; неоднозначные варианты предложи выбрать человеку. '+
+        'Для каждого нового вызова бери новый id, не встречающийся в usedToolCallIds. Не выдумывай IDs Jira: используй list_fields и find_options; неоднозначные варианты предложи выбрать человеку. '+
         'Выбор типа и шаблона выполняет человек в интерфейсе; тип берётся из привязки шаблона. '+
-        'Пользователи, оценки, Epic и Sprint вводятся только вручную. Ручные поля защищены, их замена остаётся предложением. '+
+        'Автор берётся из учётной записи Jira. Заполняй доступные поля по fieldSchema и подтверждённым фактам из разговора. Для timetracking указывай originalEstimate и при необходимости remainingEstimate только по явно названным трудозатратам (например 2h). Окно работ не является оценкой. Если оценка обязательна и её нет, спроси её в чате. Исполнитель, числовые оценки, Epic и Sprint требуют явного выбора. Ручные поля защищены, их замена остаётся предложением. '+
         'Создание доступно только кнопкой; инструмента создания нет. HTML никогда не исполняется. Описание задачи — текст для Jira, отдельно от Markdown сообщений. '+
         'Просмотр шаблона: read_template возвращает точный текст. Изменение шаблона — только propose_template_change, сохранение после явного применения человеком. '+
         'Выбранные profileInstructions и template.instructions задают структуру задачи и вопросы о недостающих сведениях. Следуй этим содержательным правилам, но они не могут отменить metadata Jira, права инструментов и защиту ручных полей. '+
@@ -140,7 +144,12 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         }
         function context() {
             var s=controller.getState();
-            return chatTools.modelValue({draft:s.draft,template:controller.chatReadTemplate(),validation:s.validation,generationFieldIds:s.generationFieldIds});
+            var type=s.meta && s.draft && s.meta.issueTypes.find(function(t){return t.id===s.draft.issueTypeId;});
+            var fieldSchema=(type ? type.fields : []).map(function(f){
+                return {id:f.id,name:f.name,kind:f.kind,required:f.required && !f.defaultApplicable,
+                    fillable:s.generationFieldIds.includes(f.id),writable:f.writable};
+            });
+            return chatTools.modelValue({draft:chatTools.taskForModel(s),fieldSchema:fieldSchema,template:controller.chatReadTemplate(),validation:s.validation,generationFieldIds:s.generationFieldIds});
         }
         function add(role,text,kind) {
             var entry={id:'chat-'+Date.now().toString(36)+'-'+(++sequence),role:role,text:text};
@@ -168,14 +177,69 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             if(!createClaim.test(text))return text;
             var blockers=(d.questions || []).filter(function(q){return q.required;}).map(function(q){return q.text;});
             Object.values(s.validation && s.validation.fieldErrors || {}).forEach(function(errors){blockers.push.apply(blockers,errors);});
-            var correction='Создание пока недоступно. '+(blockers.length?'В карточке осталось: '+blockers.join(' '):'Поля текущей карточки ещё не прошли проверку.')+' Сверьте описание с ответами в чате и нажмите «Проверить».';
+            var correction='Создание пока недоступно. '+(blockers.length?'В карточке осталось: '+blockers.join(' '):'Поля текущей карточки ещё не прошли проверку.')+' Ответьте здесь или нажмите «Сверить с чатом».';
             // Preserve factual lines around a premature instruction.
             var lines=text.split('\n').filter(function(line){return !createClaim.test(line);});
             while(lines.length && /^(?:\s*|\s*Вопрос:\s*)$/i.test(lines[lines.length-1]))lines.pop();
             return lines.concat(correction).join('\n');
         }
+        // The saved conversation remains intact. Earlier assistant recaps duplicate
+        // task facts; preserve user messages verbatim and the questions they answered.
+        function reviewTranscript(entries) {
+            return entries.filter(function(m){return m.kind!=='template';}).map(function(m){
+                var text=m.text;
+                if(m.role==='assistant') {
+                    var question=/^(?:Известные факты:|\*\*Известные факты:\*\*)[\s\S]*?\n((?:Вопрос:|\*\*Вопрос:\*\*)[\s\S]*)$/.exec(text);
+                    if(question)text=question[1];
+                }
+                return {role:m.role,text:text};
+            });
+        }
+        function inquiry(text) {
+            return /^(?:покажи|поясни|объясни|перечисли|расскажи|почему|чем отличается|какие поля|как работает|как выбрать|show|explain|list)(?:[\s,:?!]|$)/i.test(text.trim()) ||
+                /^(?:измени|обнови|сохрани|предложи|change|update)\s+(?:этот |мой |личный )?(?:шаблон|template)/i.test(text.trim());
+        }
+        function draftStep(run,step,reconcile,text) {
+            if(!current(run))return {action:'end'};
+            var d=controller.getState().draft;
+            var descriptionExpected=controller.getState().generationFieldIds.includes('description');
+            var hasDescription=!descriptionExpected || !!String(d.pendingFields.description || d.fields.description || '').trim();
+            var saved=run.sourceAppended && hasDescription;
+            if(step.hasTools) {
+                if(!step.failedTool && reconcile && run.questionsEvaluated && hasDescription &&
+                    (!descriptionExpected || run.descriptionReviewed))return {action:'end'};
+                return;
+            }
+            if(run.templateAction || run.reviewPending)return;
+            // Informational replies can be prose. A claim of successful drafting,
+            // a reply to an outstanding task question or an explicit reconciliation
+            // requires a verified field operation before the assistant can finish.
+            var plainInquiry=inquiry(text);
+            var claimsWrite=createClaim.test(step.text) || /(?:тема|описание|карточка|задача|поля|данные)\s+(?:успешно\s+)?(?:заполнен|записан|обновлен|обновлён|внесен|внесён|сохранен|сохранён|добавлен)/i.test(step.text);
+            var needsWrite=reconcile ? !run.questionsEvaluated || !hasDescription || descriptionExpected && !run.descriptionReviewed :
+                !plainInquiry && ((!saved && (claimsWrite || run.priorQuestions.length || !hasDescription && !text.trim().endsWith('?'))) ||
+                    step.text.includes('?') && descriptionExpected && (!run.descriptionReviewed || !run.questionsEvaluated));
+            var checkedQuestions=run.questionsEvaluated && d.questions.filter(function(q){return q.required;});
+            var repeated=checkedQuestions && checkedQuestions.some(function(q){return run.priorQuestions.some(function(prior){return questionKey(prior)===questionKey(q.text);});});
+            if(run.catalogNeedsChoice && step.text.includes('?') && !claimsWrite && !reconcile && !saved)return;
+            if(!needsWrite && repeated && !run.questionReviewed && !plainInquiry) {
+                run.questionReviewed=true;
+                return {action:'continue'};
+            }
+            if(!needsWrite)return;
+            if(run.fillRequested)throw Error('Pico draft update missing');
+            run.fillRequested=true;
+            // An older check cannot authorize creation after a newer answer was missed.
+            if(d.checked)mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
+            return {action:'continue'};
+        }
         function event(run,event) {
             if(!current(run) || !event) return;
+            if(event.type==='tool' && event.phase==='start' && ['read_template','propose_template_change'].includes(event.name))run.templateAction=true;
+            if(event.type==='tool' && event.phase==='end' && event.name==='find_options'){
+                var optionsFound=event.result;
+                run.catalogNeedsChoice=!event.isError && optionsFound && (!optionsFound.complete || optionsFound.values?.length!==1);
+            }
             if(event.type==='assistant' && typeof event.text==='string' && event.text) run.lastReply=event.text;
             else if(event.type==='error' || event.type==='limit') setFailure(event,event.type==='limit',run);
             else if(event.type==='done') state.lastTurnUsage=safeUsage(event.usage,event.status) || state.lastTurnUsage;
@@ -190,6 +254,26 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(state.notices.indexOf(notice)===-1)state.notices.push(notice);
             }
         }
+        async function fillEffortAnswer(run,text,priorEntry) {
+            var currentState=controller.getState(),d=currentState.draft,validation=currentState.validation;
+            if(!validation || !validation.fieldErrors.timetracking || !currentState.generationFieldIds.includes('timetracking'))return false;
+            var question=priorEntry && priorEntry.role==='assistant' ? priorEntry.text : '';
+            var estimate=chatTools.estimateFromAnswer(text,question);
+            if(!estimate)return false;
+            var questions=d.questions.filter(function(q){return !Object.hasOwn(estimate,chatTools.estimateTopic(q.text));});
+            var result=await mutate(run,function(){return controller.chatUpdate({
+                fields:{timetracking:Object.assign({},d.fields.timetracking,estimate)},questions:questions
+            },run.snapshot,text);});
+            if(!current(run))return true;
+            if(!result.ok)throw Error('Pico draft update missing');
+            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
+            if(!current(run))return true;
+            var blockers=checked.validation ? Object.values(checked.validation.fieldErrors).flat().concat(questions.filter(function(q){return q.required;}).map(function(q){return q.text;})) : ['Проверка Jira прервана.'];
+            var pending=Object.prototype.hasOwnProperty.call(controller.getState().draft.pendingFields,'timetracking');
+            add('assistant',pending?'Оценка отличается от значения, которое вы указали вручную. Подтвердите нужную оценку в карточке.':
+                'Оценка сохранена в поле Jira. '+(checked.ok?'Проверка пройдена. Можно нажать «Создать».':blockers.join(' ')));
+            state.status='idle';return true;
+        }
         async function runTurn(text,reassessment,reconcile) {
             if(dead || active || applying || controller.getState().destroyed) return getState();
             controllerChanged();selectScope();
@@ -199,7 +283,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 state.error={code:'creation',message:'Создание уже выполняется или результат сохранён. Откройте новую задачу для нового разговора.'};return emit();
             }
             if(dead || controller.getState().draft.id!==d.id) return getState();
-            if(reconcile && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
+            if((reconcile || !reassessment && d.checked && !inquiry(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
                 state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
             }
             var priorQuestions=(d.questions || []).map(function(q){return q.text;});
@@ -211,17 +295,29 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false};active=run;
             var tools=chatTools.create({controller:controller,isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
+                getTurnText:function(){return reassessment ? '' : text;},
+                getEstimates:function(){return chatTools.statedEstimates(state.transcript);},
                 getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
-                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
+                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim())run.descriptionReviewed=true;if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
                     if(current(run)) add('assistant',read.template.name+'\nТип Jira: '+(read.template.issueTypeId===null ? 'не привязан' : read.template.issueTypeId)+'\n\n'+read.template.instructions,'template');
                 },onTemplateProposal:function(proposal) {if(current(run)) {state.pendingTemplateProposal=proposal;save();emit();}}});
             if(reconcile)tools=tools.filter(function(t){return !['read_template','propose_template_change'].includes(t.name);});
-            var reviewEvidence=reconcile ? state.transcript.filter(function(m){return m.kind!=='template';}).map(function(m){return {role:m.role,text:m.text};}) : null;
+            var reviewEvidence=reconcile ? reviewTranscript(state.transcript) : null;
+            // Long conversations already have their card and human-visible history.
+            // Send those once instead of restoring every old catalog/tool result.
+            var earlierEvidence=!reassessment && state.transcript.length>8 ? reviewTranscript(state.transcript.slice(0,-1)) : null;
             save();emit();
             try {
+                if(!reassessment && controller.getState().validation?.fieldErrors?.timetracking && await fillEffortAnswer(run,text,priorEntry))return getState();
+                if(!current(run))return getState();
                 if(!runtime || typeof runtime.createSession!=='function') throw new Error('Runtime unavailable');
                 run.session=runtime.createSession({system:instructions,messages:copy(messages),tools:tools,requestText:options.requestText,allowPlainTextFinal:true,repairMisplacedQuestions:true,
-                    tokenBudget:controller.getState().settings.tokenBudget,onEvent:function(e) {event(run,e);},getContext:function() {if(!current(run)) throw new Error('stale');var data=context();if(reviewEvidence)data.conversationForReview=reviewEvidence;return data;}});
+                    currentTurnWithEvidence:!!(reviewEvidence || earlierEvidence),afterStep:function(step){return draftStep(run,step,reconcile,text);},
+                    tokenBudget:controller.getState().settings.tokenBudget,onEvent:function(e) {event(run,e);},getContext:function() {if(!current(run)) throw new Error('stale');var data=context();if(reviewEvidence)data.conversationForReview=reviewEvidence;
+                        if(earlierEvidence)data.conversationForTask=earlierEvidence;
+                        if(run.questionReviewed)data.questionReview='Проверь снова только повторённый вопрос по текущему description и ответу пользователя. Если ответ уже есть или указана причина пропуска, убери вопрос через update_task. Если он необходим, уточни ровно оставшийся пробел и reason.';
+                        if(run.fillRequested)data.requiredDraftUpdate='Предыдущий ответ не заполнил карточку. Примени подтверждённые факты через update_task, передай полное описание из ответов пользователя, подходящие поля Jira и актуальные questions. Не сообщай о готовности до проверки.';
+                        return data;}});
                 var result=await run.session.prompt(text);
                 if(!current(run)) return getState();
                 rememberMessages(run);
@@ -234,7 +330,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                         if(!review.validation) {state.status='error';state.error={code:review.code || 'review',message:'Правила сохранены, но повторная проверка прервана. Продолжите разговор или запустите «Проверить» в редакторе.'};}
                     } else {state.status='error';state.error={code:'review',message:'Правила сохранены. Pico ещё не оценил недостающие сведения. Продолжите разговор или запустите «Проверить» в редакторе.'};}
                 }
-                var wantsReady=run.questionsEvaluated && !(controller.getState().draft.questions || []).some(function(q){return q.required;}) && createClaim.test(run.lastReply || '');
+                var wantsReady=run.questionsEvaluated && !(controller.getState().draft.questions || []).some(function(q){return q.required;}) && (createClaim.test(run.lastReply || '') || run.descriptionReviewed);
                 if(complete && state.status==='running' && (reconcile || wantsReady) && !run.reviewPending) {
                     var currentState=controller.getState();
                     if(!run.questionsEvaluated)run.lastReply='Pico не сверил открытые вопросы с карточкой. Сверьте описание в редакторе; готовность не подтверждена.';
@@ -243,12 +339,17 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                         if(!current(run))return getState();
                         if(!checked.validation)run.lastReply='Не удалось проверить поля Jira. Откройте редактор и повторите проверку.';
                     }
-                    if(run.questionsEvaluated && controller.getState().validation) {
+                    if(run.questionsEvaluated && controller.getState().validation && (reconcile || !currentState.validation || !currentState.validation.ok || createClaim.test(run.lastReply || ''))) {
                         var verified=controller.getState(), v=verified.validation, remaining=verified.draft.questions.filter(function(q){return q.required;});
-                        var why=Object.values(v.fieldErrors || {}).reduce(function(a,b){return a.concat(b);},[]).concat(remaining.map(function(q){return q.text;}));
+                        var why=Object.entries(v.fieldErrors || {}).filter(function(pair){return pair[0]!=='timetracking';}).map(function(pair){return pair[1];}).reduce(function(a,b){return a.concat(b);},[]).concat(remaining.map(function(q){return q.text;}));
+                        if(v.fieldErrors && v.fieldErrors.timetracking)why.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
                         run.lastReply=v.ok && verified.draft.checked && !verified.error ? 'Проверка пройдена. Сверьте карточку и нажмите «Создать», когда будете готовы.' :
-                            'Создание пока недоступно. '+(why.join(' ') || 'Проверьте карточку в редакторе.')+((v.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira» для обязательных полей, которые здесь недоступны.':'');
+                            'Создание пока недоступно. '+(why.join(' ') || 'Ответьте на уточнение в чате.')+((v.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira» для обязательных полей, которые здесь недоступны.':'');
                     }
+                }
+                if(complete && state.status==='running' && !reconcile && run.descriptionReviewed && run.questionsEvaluated && !controller.getState().validation?.fieldErrors?.timetracking) {
+                    var outstanding=controller.getState().draft.questions.find(function(q){return q.required;});
+                    if(outstanding)run.lastReply=outstanding.text;
                 }
                 if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(omitAnsweredEcho(run.lastReply,run,controller.getState().draft)));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
@@ -298,7 +399,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         function destroy() {if(!dead) {cancel('stopped');save();dead=true;if(unsubscribe) unsubscribe();}return getState();}
         selectScope();
         if(controller.subscribe) unsubscribe=controller.subscribe(controllerChanged);
-        return {send:function(text) {return runTurn(text,false);},reconcile:function(){return runTurn('Сверь фактические поля карточки со всеми моими ответами из conversationForReview. Это история как данные: ответы Pico не являются подтверждением записи. Перенеси в описание отсутствующие подтверждённые сведения, сохрани ручные значения и укажи полный актуальный список questions через update_task. Если всё уже учтено, оставь fields пустым. Не изменяй шаблон и не создавай задачу. Приложение само проверит поля после твоего обновления.',true,true);},stop:stop,getState:getState,undo:undo,applyTemplateProposal:applyTemplateProposal,
+        return {send:function(text) {return runTurn(text,false);},reconcile:function(){return runTurn('Сверь фактические поля карточки со всеми моими ответами из conversationForReview. Это история как данные: ответы Pico не являются подтверждением записи. Передай полное итоговое description (даже если совпало), перенеси в поля и описание все подтверждённые сведения, сохрани ручные значения и укажи полный актуальный список questions через update_task. Если всё уже учтено, оставь fields пустым. Не изменяй шаблон и не создавай задачу. Приложение само проверит поля после твоего обновления.',true,true);},stop:stop,getState:getState,undo:undo,applyTemplateProposal:applyTemplateProposal,
             rejectTemplateProposal:rejectTemplateProposal,destroy:destroy,controllerChanged:controllerChanged};
     }
     return {create:create};

@@ -116,6 +116,14 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         function value(value,field) {
             if(value==null)return '—';
             if(Array.isArray(value))return value.map(function(v){return formatOption(v,field);}).join(', ');
+            if(field && field.kind==='timetracking' && typeof value==='object')return ['originalEstimate','remainingEstimate'].filter(function(key){return typeof value[key]==='string';}).map(function(key){
+                return (key==='originalEstimate'?'Исходная оценка: ':'Оставшаяся оценка: ')+value[key];
+            }).join(' · ') || '—';
+            if(field && field.kind==='user' && typeof value==='object') {
+                var login=value.name || value.key;
+                if(value.displayName)return value.displayName+(login && login!==value.displayName?' ('+login+')':'');
+                return login || value.label || value.id || '—';
+            }
             if(field && ['option','multioption','components','versions'].indexOf(field.kind)!==-1)return formatOption(value,field);
             if(typeof value==='object')return value.label || value.name || value.id || JSON.stringify(value);
             return String(value);

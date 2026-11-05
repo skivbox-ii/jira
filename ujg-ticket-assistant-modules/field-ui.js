@@ -144,6 +144,18 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                         if (target) target.focus();
                     }
                 });
+            } else if (kind === 'timetracking') {
+                ['originalEstimate','remainingEstimate'].forEach(function(key,index) {
+                    var id=index?uid+'-remaining':uid,input=$('<input type="text" autocomplete="off">').attr({id:id,'data-ta-estimate':key,placeholder:'Например: 2h 30m'});
+                    body.append($('<div>').append($('<label>').attr('for',id).text(index?'Оставшаяся оценка':'Исходная оценка'),input));
+                });
+                control=body.find('[data-ta-estimate]');
+                control.on('input',function() {
+                    var value={};
+                    control.each(function(){if(this.value.trim())value[$(this).attr('data-ta-estimate')]=this.value;});
+                    if(!Object.keys(value).length)value=null;
+                    current.value=value;localEdit=JSON.stringify(value);options.onChange(current.field.id,value);
+                });
             } else if (kind === 'unsupported') {
                 control = $('<p class="ta-muted">'); body.append(control);
             } else {
@@ -179,7 +191,15 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
             var messages = current.errors || []; errors.text(messages.join(' '));
             control.attr({'aria-describedby': uid + '-errors', 'aria-invalid': String(messages.length > 0)}).prop('disabled', current.disabled === true);
             if (kind === 'picker') renderChoices();
-            else if (kind === 'unsupported') {
+            else if (kind === 'timetracking') {
+                if(localEdit===null || localEdit!==JSON.stringify(current.value)) {
+                    localEdit=null;
+                    control.each(function(){
+                        var key=$(this).attr('data-ta-estimate'),text=current.value && typeof current.value[key]==='string'?current.value[key]:'';
+                        if(this.value!==text)this.value=text;
+                    });
+                }
+            } else if (kind === 'unsupported') {
                 var value = current.value == null ? '—' : typeof current.value === 'object' ? JSON.stringify(current.value) : String(current.value);
                 control.text('Текущее значение: ' + value + '\nПоле недоступно в редакторе; используйте форму Jira.');
             } else {
@@ -216,5 +236,5 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
         }
         return {mount: mount, update: update, destroy: destroy};
     }
-    return {create: create, catalogUnavailable: fields.catalogUnavailable};
+    return {create: create, catalogUnavailable: fields.catalogUnavailable, formatTimeTracking:fields.formatTimeTracking};
 });

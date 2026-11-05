@@ -50,9 +50,13 @@ define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'],
             var profile = settings.profiles.find(function(p) {return p.id === settings.activeProfileId;});
             var template = profile && profile.templates.find(function(t) {return t.id === d.templateId;});
             if (!profile || !template || template.issueTypeId !== null && template.issueTypeId !== d.issueTypeId || settings.revision !== d.settingsRevision) throw new Error('policy');
-            return {allowAssignee:profile.allowAssignee === true,explicitUserFields:Object.keys(d.protectedFields).filter(function(id) {
+            var explicit=Object.keys(d.protectedFields).filter(function(id) {
                 var field = fields.getField(meta,d.issueTypeId,id); return d.protectedFields[id] === true && field && field.kind === 'user';
-            })};
+            });
+            var reporter=d.fields.reporter;
+            if (options.currentReporterName && d.protectedFields.reporter !== true && reporter && typeof reporter === 'object' &&
+                !Array.isArray(reporter) && Object.keys(reporter).length===1 && reporter.name===options.currentReporterName)explicit.push('reporter');
+            return {allowAssignee:profile.allowAssignee === true,explicitUserFields:explicit};
         }
         async function attachmentLimits(d, files) {
             var meta = await api.getAttachmentMeta();

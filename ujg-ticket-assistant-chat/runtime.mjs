@@ -56,7 +56,7 @@ function restore(messages) {
     return repairPairs(values);
 }
 
-export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false} = {}) {
+export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep} = {}) {
     if (typeof requestText !== 'function') throw Error('Pico requires the configured shared requestText callback');
     if (typeof system !== 'string' || typeof onEvent !== 'function' || (getContext !== undefined && typeof getContext !== 'function')) throw Error('Invalid Pico session options');
     const budget = validateBudget(tokenBudget), bounds = {};
@@ -117,7 +117,17 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                 let state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
                 live(run, signal);
                 const full = context.messages.filter(m => m.role !== 'system');
+                // A review request supplies the saved user conversation as authoritative
+                // evidence. Keep prior protocol messages for restore/ID guards without
+                // sending a second copy of that history on every review step.
                 let projected = full, compaction = null;
+                if (currentTurnWithEvidence && (Array.isArray(state?.conversationForReview) || Array.isArray(state?.conversationForTask))) {
+                    const start = full.findLastIndex(m => m.role === 'user');
+                    if (start > 0) {
+                        projected = full.slice(start);
+                        state.usedToolCallIds = [...seenIds];
+                    }
+                }
                 let request = makeRequest(system, tools, projected, state, compaction), size = requestSize(request);
                 const fits = () => size.tokens <= budget.context - budget.reserve && size.bytes <= MAX_PROMPT_BYTES;
                 if (!fits() && getContext) {
@@ -186,7 +196,13 @@ export function createSession({system = '', messages = [], tools = [], requestTe
             if (active.usage.toolCalls >= bounds.toolCalls) {stop('limit', 'Pico tool call limit reached.'); return {block: true, terminate: true, reason: active.reason};}
             active.usage.toolCalls++;
         },
-        finishTurn: () => active?.status ? {action: 'end'} : undefined});
+        finishTurn: ({message, toolResults}) => {
+            if (active?.status) return {action:'end'};
+            if (afterStep && !['error','aborted'].includes(message.stopReason)) {
+                return afterStep({hasTools:toolResults.length > 0, failedTool:toolResults.some(r=>r.isError),
+                    text:message.content.filter(c=>c.type==='text').map(c=>c.text).join('\n')});
+            }
+        }});
     const unsubscribe = agent.subscribe(event => {
         if (!active || active.status) return;
         if (event.type === 'message_end' && event.message.role === 'assistant') {

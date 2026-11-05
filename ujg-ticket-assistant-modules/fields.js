@@ -4,7 +4,7 @@ define('_ujgTA_fields', [], function() {
     var own = function(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); };
     var customPrefix = 'com.atlassian.jira.plugin.system.customfieldtypes:';
     var customKinds = { textfield: 'string', textarea: 'textarea', float: 'number', datepicker: 'date', datetime: 'datetime', select: 'option', multiselect: 'multioption', userpicker: 'user' };
-    var systems = { summary: 'string', description: 'textarea', environment: 'textarea', duedate: 'date', priority: 'option', components: 'components', versions: 'versions', fixVersions: 'versions', labels: 'labels', assignee: 'user', reporter: 'user' };
+    var systems = { summary: 'string', description: 'textarea', environment: 'textarea', duedate: 'date', priority: 'option', components: 'components', versions: 'versions', fixVersions: 'versions', labels: 'labels', assignee: 'user', reporter: 'user', timetracking: 'timetracking' };
 
     function kindFor(id, schema) {
         var kind;
@@ -15,7 +15,7 @@ define('_ujgTA_fields', [], function() {
             kind = customKinds[schema.custom.slice(customPrefix.length)];
         } else if (schema.system === id) kind = systems[id];
         if (kind === 'option' && schema.type === (schema.custom ? 'option' : 'priority')) return kind;
-        var shapes = { string: ['string'], textarea: ['string'], number: ['number'], date: ['date'], datetime: ['datetime'], user: ['user'], multioption: ['array', 'option'], components: ['array', 'component'], versions: ['array', 'version'], labels: ['array', 'string'] };
+        var shapes = { string: ['string'], textarea: ['string'], number: ['number'], date: ['date'], datetime: ['datetime'], user: ['user'], multioption: ['array', 'option'], components: ['array', 'component'], versions: ['array', 'version'], labels: ['array', 'string'], timetracking: ['timetracking'] };
         var shape = shapes[kind];
         return shape && schema.type === shape[0] && (!shape[1] || schema.items === shape[1]) ? kind : 'unknown';
     }
@@ -105,6 +105,40 @@ define('_ujgTA_fields', [], function() {
             field.optionsComplete === false && !(field.allowedValues || []).length;
     }
 
+    // No default unit or working-day conversion: Jira owns its w/d configuration.
+    // This is a value codec, not evidence that a duration was explicitly supplied.
+    function duration(value) {
+        if (typeof value !== 'string' || value.length > 128) return null;
+        var text=value.trim(),parts=text.match(/\d+[wdhm]/g);
+        if (!parts || parts.join('')!==text.replace(/\s+/g,'')) return null;
+        var previous=-1,valid=true;
+        var result=parts.map(function(part) {
+            var unit=part.slice(-1),index='wdhm'.indexOf(unit),amount=Number(part.slice(0,-1));
+            if (index<=previous || !Number.isSafeInteger(amount) || amount<0)valid=false;
+            previous=index;return String(amount)+unit;
+        });
+        return valid ? result.join(' ') : null;
+    }
+    function timeTrackingValue(value) {
+        var error='Укажите оценку трудозатрат явно: например 2h или 1d 30m. Окно выкладки не является оценкой.';
+        if (!value || typeof value!=='object' || Array.isArray(value))return {ok:false,error:error};
+        var keys=Object.keys(value),result={};
+        if (!keys.length || keys.some(function(key){return ['originalEstimate','remainingEstimate'].indexOf(key)===-1;}))return {ok:false,error:error};
+        for (var key of keys) {
+            var normalized=duration(value[key]);
+            if (normalized===null)return {ok:false,error:error};
+            result[key]=normalized;
+        }
+        return {ok:true,value:result};
+    }
+    function formatTimeTracking(value) {
+        var checked=timeTrackingValue(value);
+        if (!checked.ok)return null;
+        return ['originalEstimate','remainingEstimate'].filter(function(key){return own(checked.value,key);}).map(function(key){
+            return (key==='originalEstimate'?'Исходная оценка: ':'Оставшаяся оценка: ')+checked.value[key];
+        }).join(' · ');
+    }
+
     function relationValue(field, value) {
         return field.kind === 'epic' ? typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value) :
             field.kind === 'sprint' && Number.isSafeInteger(value) && value > 0;
@@ -133,6 +167,6 @@ define('_ujgTA_fields', [], function() {
         return result;
     }
 
-    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable,
+    return { normalizeMeta: normalizeMeta, getField: getField, resolveOption: resolveOption, catalogUnavailable: catalogUnavailable, timeTrackingValue:timeTrackingValue, formatTimeTracking:formatTimeTracking,
         relationValue:relationValue, relationAllowed:relationAllowed, hasRelationValues:hasRelationValues, confirmRelations:confirmRelations };
 });

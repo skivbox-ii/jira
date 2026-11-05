@@ -42,7 +42,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         return items.every(function(item) { if (item == null) return false; var key = getId(item); if (!id(key) || seen[key]) return false; seen[key] = true; return true; });
     }
     function currentField(field) { return field.id !== 'project' && field.id !== 'issuetype' && field.kind !== 'user' && field.supported === true; }
-    function generated(field) { return currentField(field) && field.writable === true && ['number','epic','sprint'].indexOf(field.kind) === -1; }
+    function generated(field) { return currentField(field) && field.writable === true && ['number','epic','sprint','timetracking'].indexOf(field.kind) === -1; }
     function normalizedValue(field, value) {
         if (value === null) return true;
         if (field.kind === 'option') return keys(value, ['id']) && id(value.id);
@@ -50,6 +50,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         if (field.kind === 'user') return keys(value, ['name']) && id(value.name);
         if (['string', 'textarea', 'date', 'datetime'].indexOf(field.kind) !== -1) return typeof value === 'string';
         if (field.kind === 'number') return typeof value === 'number' && isFinite(value);
+        if (field.kind === 'timetracking') return validation.normalizeTimeTracking(value).ok;
         if (field.kind === 'epic') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(value);
         if (field.kind === 'sprint') return Number.isSafeInteger(value) && value > 0;
         if (field.kind === 'labels') return Array.isArray(value) && value.every(function(item) { return typeof item === 'string'; });
@@ -77,7 +78,11 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             if (t.issueTypeId === null || t.issueTypeId === type.id) pairs.push({issueTypeId: type.id, templateId: t.id});
         }); });
         if (!pairs.length || input.allowFieldIds.some(function(fieldId) {
-            return !types.some(function(type) { return type.fields.some(function(f) { return f.id === fieldId && generated(f); }); });
+            return !types.some(function(type) { return type.fields.some(function(f) {
+                // Older saved generation scopes can still contain timetracking;
+                // retain it for current-value review, never for generation.
+                return f.id === fieldId && (generated(f) || kind!=='assist' && f.kind==='timetracking' && currentField(f) && f.writable===true);
+            }); });
         })) fail('input');
         if (kind === 'assist') {
             var target = types[0].fields.find(function(f) {return f.id === input.targetFieldId;});
@@ -97,7 +102,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         ctx.types[0].fields.forEach(function(field) {
             var human = field.kind === 'user' && Array.isArray(input.explicitUserFields) && input.explicitUserFields.indexOf(field.id) !== -1 &&
                 (field.id !== 'assignee' || ctx.profile.allowAssignee === true) && field.supported && field.writable;
-            var manual = currentField(field) && field.writable === true && ['number','epic','sprint'].indexOf(field.kind)!==-1;
+            var manual = currentField(field) && field.writable === true && ['number','epic','sprint','timetracking'].indexOf(field.kind)!==-1;
             if (!own(source, field.id) || (local ? !generated(field) && !human && !manual : !currentField(field))) return;
             if (!normalizedValue(field, source[field.id])) fail('input');
             result[field.id] = JSON.parse(JSON.stringify(source[field.id]));
@@ -114,7 +119,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
         'check: {schemaVersion:1,kind:"check",questions:[],warnings:[],evidence:[]}. Never return replacement fields on check.',
         'Questions always contain {id,text,reason,required:boolean}; warnings contain strings; evidence contains {fieldId,kind:"source"|"suggestion",quote:string}.',
         'Source quotes must be nonempty literal substrings of source. Suggestions are not facts. Ask about missing required information.',
-        'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype, user values, numeric estimates, Epic or Sprint relations. Humans enter estimates and select relations explicitly.',
+        'Only generate fields in fieldSchema with supported/writable true. Never generate project, issuetype, user values, numeric estimates, timetracking, Epic or Sprint relations. Preserve current timetracking for review only; deployment windows are not effort estimates. Humans enter estimates and select relations explicitly.',
         'Respect each field maxLength exactly. Produce a short Summary within its maxLength; never copy the entire source into Summary. Do not truncate source or current values.',
         'Review all current fields, including currentFieldContext entries outside generation scope. That minimal context grants no permission to generate those fields and contains no catalogs.',
         'Field shapes by kind: string/textarea/date/datetime -> string; number -> finite number; option -> {"id":"literal catalog ID"}; multioption/components/versions -> [{"id":"literal catalog ID"}]; labels -> string[]. Null is allowed. Never return labels or names in place of IDs, numeric IDs, extra object keys, HTML execution or nested commands.'
@@ -146,7 +151,7 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
                         allowedValues: f.allowedValues.map(function(v) { return {id: v.id, label: text(v.label)}; })};
                 }), requiredOutsideScope: kind === 'assist' ? [] : type.fields.filter(function(f) { return f.required && (!generated(f) || input.allowFieldIds.indexOf(f.id) === -1); }).map(function(f) { return f.id; })};
             }), fields: current, currentFieldContext: ctx.typeId === null ? [] : ctx.types[0].fields.filter(function(f) {
-                return own(current, f.id) && input.allowFieldIds.indexOf(f.id) === -1;
+                return own(current, f.id) && (input.allowFieldIds.indexOf(f.id) === -1 || !generated(f));
             }).map(function(f) { return {id: f.id, name: text(f.name), kind: f.kind}; })});
         var budget;
         try { budget=shared.validateTokenBudget(input.tokenBudget === undefined ? {context:32768,reserve:4096} : input.tokenBudget); }
