@@ -69,9 +69,10 @@ function reviewQuestions(missing, state, proposed) {
             (item.id!==undefined && typeof item.id!=='string') ||
             (item.required!==undefined && typeof item.required!=='boolean')) throw Error('Invalid missing question');
         const fieldId=typeof item.id==='string' && /^required:([a-zA-Z][a-zA-Z_0-9]*)$/.exec(item.id)?.[1];
-        const spec=fieldId && state.fieldSchema.find(f=>f.id===fieldId);
+        const asksAssignee=fieldId==='assignee' || (!fieldId && /(?:кто[^?]{0,35}исполнител|кого назначить|укажите исполнителя|нужно ли[^?]{0,32}исполнител|кто (?:выполнит|выполняет) работ)/i.test(item.text));
+        const spec=(fieldId || asksAssignee) && state.fieldSchema.find(f=>f.id===(fieldId || 'assignee'));
         if(spec && state.draft.userFieldsPresent?.[fieldId])continue;
-        if(spec && fieldId==='assignee' && !spec.required) {
+        if(spec && asksAssignee && !spec.required) {
             const userRemarks=state.conversationForReview.filter(m=>m.role==='user' && /исполнител|assignee/i.test(m.text));
             const last=userRemarks.at(-1)?.text || '';
             if(/не (?:нужно|надо|требуется|назначать)|без исполнителя/i.test(last)){

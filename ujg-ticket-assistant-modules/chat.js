@@ -333,14 +333,21 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(!current(run))return getState();
                 // A user can supply the finished description itself. Save it before
                 // any provider call; the model may then fill the remaining fields.
-                var direct=!reassessment && /^\s*описание(?: задачи)?\s*:\s*([\s\S]+)$/i.exec(text);
+                var direct=!reassessment && /^\s*описание(?: задачи)?\s*: ?([\s\S]+)$/i.exec(text);
                 if(direct && direct[1].trim() && controller.getState().generationFieldIds.includes('description')){
-                    run.verbatimDescription=direct[1].trim();
+                    run.verbatimDescription=direct[1];
                     var alreadySaved=d.fields.description===run.verbatimDescription || d.pendingFields.description===run.verbatimDescription;
                     var sourceText=alreadySaved && (d.source===text || d.source.endsWith('\n\n'+text)) ? undefined : text;
                     var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:run.verbatimDescription}},run.snapshot,sourceText);});
                     if(!current(run))return getState();
                     if(!applied.ok)throw Error('Pico draft update missing');
+                    // The literal is a direct user edit, including when it replaces
+                    // a previously protected value. Model-generated changes still
+                    // require the existing proposal/confirmation path.
+                    if(controller.getState().draft.pendingFields.description===run.verbatimDescription) {
+                        await mutate(run,function(){return controller.acceptField('description');});
+                        if(!current(run))return getState();
+                    }
                     run.sourceAppended=true;run.descriptionReviewed=true;
                 }
                 if(!runtime || typeof runtime.createSession!=='function') throw new Error('Runtime unavailable');

@@ -469,7 +469,8 @@ for(const validRetry of [true,false])test('flat draft review retries malformed o
 
 test('a complete description supplied in chat is durable before the provider answers and cannot be overwritten in that turn',async()=>{
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();
-    const exact='Среда DEV. Вход по RDP. Исполнитель не требуется.';
+    await h.controller.updateField('description','Ручная исходная версия');
+    const exact='  Среда DEV. Вход по RDP. Исполнитель не требуется.  \n';
     const gate=deferred();let n=0;
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{
         assert.equal(h.store.load('DO').draft.fields.description,exact);
@@ -491,7 +492,7 @@ test('live-style review saves verified description despite invalid optional fiel
         calls++;const request=JSON.parse(r.user);
         assert.ok(request.userAnswers.some(m=>m.text.includes('вход по RDP')));
         return {text:JSON.stringify({fields:{summary:'Доступ',description:'Стенд DEV. Проверка — вход по RDP.',timetracking:{enabled:true},priority:'invented'},
-            missing:[{id:'required:assignee',text:'Кто исполнитель?',reason:'Выберите исполнителя.'}]})};
+            missing:[{id:'required:assignee',text:'Кто исполнитель?',reason:'Выберите исполнителя.'},'Кто исполнитель?']})};
     }});
     await chat.reconcile();assert.equal(calls,1);assert.equal(chat.getState().error,null);
     const saved=h.store.load('DO').draft;
