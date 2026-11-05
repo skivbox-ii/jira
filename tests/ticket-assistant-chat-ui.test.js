@@ -76,6 +76,27 @@ test('pending reconciliation blocks competing sends and preserves composer throu
     h.chatState.status='running';h.ui.update(h.state);assert.equal(input.value,'Неотправленный ответ');
     h.chatState.status='idle';finish();await tick();assert.equal(input.value,'Неотправленный ответ');assert.equal(button.disabled,false);
 });
+test('retry after reconciliation error reruns reconciliation without resending old message or overwriting composer',async t=>{
+    const h=setup(t),input=h.doc.querySelector('[data-ta-chat-input]'),sent=[];let reconciles=0;
+    h.chat.send=async text=>{sent.push(text);h.chatState.status='idle';h.chatState.error=null;};
+    input.value='Ранее отправлено';input.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
+    h.chat.reconcile=async()=>{reconciles++;h.chatState.status='error';h.chatState.error={action:'retry',message:'Повторите сверку'};};
+    input.value='Неотправленные подробности';input.setSelectionRange(3,3);
+    h.doc.querySelector('[data-ta-card-check]').click();await tick();
+    const retry=h.doc.querySelector('[data-ta-chat-retry]');assert.equal(retry.hidden,false);retry.click();await tick();
+    assert.equal(reconciles,2);assert.deepEqual(sent,['Ранее отправлено']);assert.equal(input.value,'Неотправленные подробности');assert.equal(input.selectionStart,3);
+    h.doc.querySelector('[data-ta-card-edit]').click();h.ui.update(h.state);assert.equal(retry.hidden,true);
+});
+test('scope switch clears reconciliation retry while ordinary message retry retains its behavior',async t=>{
+    const h=setup(t),input=h.doc.querySelector('[data-ta-chat-input]'),sent=[];let reconciles=0;
+    h.chat.reconcile=async()=>{reconciles++;h.chatState.status='error';h.chatState.error={action:'retry'};};
+    h.doc.querySelector('[data-ta-card-check]').click();await tick();
+    h.state.draft={...h.state.draft,id:'other'};h.ui.update(h.state);
+    const retry=h.doc.querySelector('[data-ta-chat-retry]');assert.equal(retry.hidden,true);retry.click();await tick();assert.equal(reconciles,1);
+    h.chat.send=async text=>{sent.push(text);h.chatState.status='error';h.chatState.error={action:'retry'};};
+    input.value='Новый запрос';input.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
+    assert.equal(retry.hidden,false);retry.click();await tick();assert.deepEqual(sent,['Новый запрос','Новый запрос']);assert.equal(reconciles,1);
+});
 test('explicit facts/question history collapses only facts without losing text or hiding the question',t=>{
     const h=setup(t),facts='Известные факты:\n1. Ошибка в ENV (DEV: тестовая среда).\n2. Инструменты: ["update_task"]';
     h.chatState.transcript=[{id:'old',role:'assistant',text:facts+'\nВопрос: Когда появилась ошибка?'}];h.ui.update(h.state);

@@ -149,7 +149,19 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         }
         // Prose is display-only. A completion claim must agree with the same
         // revision and validation that enable Create; it never triggers a write.
-        var createClaim=/(?:задача|карточка|тикет)\s+готов[ао]?\s+к\s+созданию|(?:нажмите|нажми|нажать)\s+(?:на\s+)?(?:кнопку\s+)?[«"„]?создать(?:\s+задачу)?/i;
+        var createClaim=/(?:задача|карточка|тикет)\s+готов[ао]?\s+к\s+созданию|(?:можно|можете|осталось)\s+(?:уже\s+)?(?:созда(?:ть|вать)|завести|создайте)\s+(?:эту\s+)?(?:задачу|тикет)|(?:все\s+данные|карточка|поля)\s+(?:успешно\s+)?проверен[аы](?=$|[\s,.!])|(?:нажмите|нажми|нажать)\s+(?:на\s+)?(?:кнопку\s+)?[«"„]?создать(?:\s+задачу)?/i;
+        function questionKey(value) {
+            return String(value || '').toLocaleLowerCase('ru').replace(/^\s*(?:вопрос|уточнение)\s*:\s*/,'').replace(/[^а-яёa-z0-9]+/gi,' ').trim();
+        }
+        function omitAnsweredEcho(text,run,draft) {
+            if(!run.questionsEvaluated || !text || !text.includes('?'))return text;
+            var known=new Set((draft.questions || []).map(function(q){return questionKey(q.text);}));
+            var answered=run.priorQuestions.map(questionKey).filter(function(q){return q && !known.has(q);});
+            var lines=text.split('\n'),kept=lines.filter(function(line){return !line.includes('?') || !answered.includes(questionKey(line));});
+            if(kept.length===lines.length)return text;
+            while(kept.length && /^(?:\s*|\s*Вопрос:\s*)$/i.test(kept[kept.length-1]))kept.pop();
+            return kept.concat((draft.questions.find(function(q){return q.required;}) || {}).text || 'Ответ учтён в карточке.').join('\n');
+        }
         function groundedReply(text) {
             var s=controller.getState(), d=s.draft;
             if(!d || (d.checked && s.validation && s.validation.ok && !s.error))return text;
@@ -190,8 +202,12 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             if(reconcile && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
                 state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
             }
+            var priorQuestions=(d.questions || []).map(function(q){return q.text;});
+            var priorEntry=state.transcript[state.transcript.length-1];
+            if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
+                priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
             if(!reassessment) add('user',text);state.error=null;state.status='running';
-            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,
+            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false};active=run;
             var tools=chatTools.create({controller:controller,isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
@@ -234,7 +250,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                             'Создание пока недоступно. '+(why.join(' ') || 'Проверьте карточку в редакторе.')+((v.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira» для обязательных полей, которые здесь недоступны.':'');
                     }
                 }
-                if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(run.lastReply));
+                if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(omitAnsweredEcho(run.lastReply,run,controller.getState().draft)));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
                 if(result && ['error','limit'].indexOf(result.status)!==-1 && !state.error) setFailure(result,result.status==='limit',run);
             } catch(error) {

@@ -357,3 +357,20 @@ for(const fail of [false,true]) test('reconciliation invalidates a previously ch
     assert.equal(h.controller.getState().draft.checked,null);
     assert.equal(h.store.load('DO').draft.checked,null);h.chat.destroy();
 });
+
+test('alternative readiness phrasing cannot invite creating an unchecked draft',async()=>{
+    const h=await setup(async c=>c.onEvent({type:'assistant',text:'Все данные проверены, можно создавать задачу.'}));
+    await h.chat.send('Проверь');assert.equal(h.controller.getState().draft.checked,null);
+    assert.doesNotMatch(h.chat.getState().transcript.at(-1).text,/можно создавать/);h.chat.destroy();
+});
+test('an answered and removed canonical question is not asked again after applying its answer',async()=>{
+    let n=0;const question='На какой среде проверять?';
+    const h=await setup(async c=>{
+        const first=++n===1;
+        await c.tools.find(t=>t.name==='update_task').execute({fields:first?{summary:'Сервис'}:{description:'Проверить на DEV'},questions:first?[{id:'env',text:question,required:true}]:[]},{});
+        c.onEvent({type:'assistant',text:question});
+    });
+    await h.chat.send('Проверить сервис');await h.chat.send('На DEV.');
+    assert.doesNotMatch(h.chat.getState().transcript.at(-1).text,/На какой среде/);
+    assert.match(h.controller.getState().draft.fields.description,/DEV/);h.chat.destroy();
+});

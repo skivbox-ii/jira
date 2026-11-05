@@ -2587,7 +2587,19 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         }
         // Prose is display-only. A completion claim must agree with the same
         // revision and validation that enable Create; it never triggers a write.
-        var createClaim=/(?:задача|карточка|тикет)\s+готов[ао]?\s+к\s+созданию|(?:нажмите|нажми|нажать)\s+(?:на\s+)?(?:кнопку\s+)?[«"„]?создать(?:\s+задачу)?/i;
+        var createClaim=/(?:задача|карточка|тикет)\s+готов[ао]?\s+к\s+созданию|(?:можно|можете|осталось)\s+(?:уже\s+)?(?:созда(?:ть|вать)|завести|создайте)\s+(?:эту\s+)?(?:задачу|тикет)|(?:все\s+данные|карточка|поля)\s+(?:успешно\s+)?проверен[аы](?=$|[\s,.!])|(?:нажмите|нажми|нажать)\s+(?:на\s+)?(?:кнопку\s+)?[«"„]?создать(?:\s+задачу)?/i;
+        function questionKey(value) {
+            return String(value || '').toLocaleLowerCase('ru').replace(/^\s*(?:вопрос|уточнение)\s*:\s*/,'').replace(/[^а-яёa-z0-9]+/gi,' ').trim();
+        }
+        function omitAnsweredEcho(text,run,draft) {
+            if(!run.questionsEvaluated || !text || !text.includes('?'))return text;
+            var known=new Set((draft.questions || []).map(function(q){return questionKey(q.text);}));
+            var answered=run.priorQuestions.map(questionKey).filter(function(q){return q && !known.has(q);});
+            var lines=text.split('\n'),kept=lines.filter(function(line){return !line.includes('?') || !answered.includes(questionKey(line));});
+            if(kept.length===lines.length)return text;
+            while(kept.length && /^(?:\s*|\s*Вопрос:\s*)$/i.test(kept[kept.length-1]))kept.pop();
+            return kept.concat((draft.questions.find(function(q){return q.required;}) || {}).text || 'Ответ учтён в карточке.').join('\n');
+        }
         function groundedReply(text) {
             var s=controller.getState(), d=s.draft;
             if(!d || (d.checked && s.validation && s.validation.ok && !s.error))return text;
@@ -2628,8 +2640,12 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             if(reconcile && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
                 state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
             }
+            var priorQuestions=(d.questions || []).map(function(q){return q.text;});
+            var priorEntry=state.transcript[state.transcript.length-1];
+            if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
+                priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
             if(!reassessment) add('user',text);state.error=null;state.status='running';
-            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,
+            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false};active=run;
             var tools=chatTools.create({controller:controller,isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
@@ -2672,7 +2688,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                             'Создание пока недоступно. '+(why.join(' ') || 'Проверьте карточку в редакторе.')+((v.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira» для обязательных полей, которые здесь недоступны.':'');
                     }
                 }
-                if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(run.lastReply));
+                if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(omitAnsweredEcho(run.lastReply,run,controller.getState().draft)));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
                 if(result && ['error','limit'].indexOf(result.status)!==-1 && !state.error) setFailure(result,result.status==='limit',run);
             } catch(error) {
@@ -3878,12 +3894,14 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
     'use strict';
     function create(options) {
         var $=options.$,c=options.controller,chat=options.chat,root,host,log,input,card,proposal,state,dead=false;
-        var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false;
+        var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false,retryReconcileScope=null;
         var messageRows=new Map(),expandedDrafts=new Map(),lastFields=null,changedFields=[],jiraRetrying=false,reconciling=false;
         function button(label,name,attr,action) {
             return $('<button type="button">').attr(attr || {}).append(icon(name),$('<span>').text(label)).on('click',action);
         }
-        function run(action) {return Promise.resolve().then(action).catch(function() {if(!dead)host.find('[data-ta-chat-error]').text('Не удалось выполнить действие. Текст сохранён; повторите действие вручную.').prop('hidden',false);});}
+        function resetReconcileRetry() {if(retryReconcileScope!==null){retryReconcileScope=null;if(!dead && host)update(c.getState());}}
+        function openEditor(invoker) {resetReconcileRetry();options.editor.openEditor(invoker);}
+        function run(action,keepReconcileRetry) {if(!keepReconcileRetry)resetReconcileRetry();return Promise.resolve().then(action).catch(function() {if(!dead)host.find('[data-ta-chat-error]').text('Не удалось выполнить действие. Текст сохранён; повторите действие вручную.').prop('hidden',false);});}
         // Deliberately small Markdown subset. All source text becomes text nodes;
         // Jira description is rendered separately, without Markdown conversion.
         function markdown(target,text) {
@@ -3920,7 +3938,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             card.find('[data-ta-card-details]').on('toggle',function(){if(scope)expandedDrafts.set(scope,this.open);});
             var actions=$('<div class="ta-actions">').appendTo(card);
             actions.append(button('Сверить с чатом','Check',{'data-ta-card-check':'',title:'Сверить поля с сохранённым разговором и проверить недостающие сведения'},reconcile),
-                button('Редактировать','Settings',{'data-ta-card-edit':''},function(){options.editor.openEditor(this);}),
+                button('Редактировать','Settings',{'data-ta-card-edit':''},function(){openEditor(this);}),
                 button('Создать','Check',{'data-ta-card-create':''},function(){run(function(){return c.submit();});}).addClass('ta-primary'),
                 button('Отменить изменение','RefreshCw',{'data-ta-card-undo':''},function(){run(function(){return chat.undo();});}));
             proposal=$('<section class="ta-template-proposal" data-ta-template-proposal aria-label="Изменение личного шаблона" hidden>').appendTo(card.find('.ta-card-details-body'));
@@ -3929,9 +3947,9 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 button('Отклонить','X',{'data-ta-template-reject':''},function(){run(function(){return chat.rejectTemplateProposal();});}));
             host.append('<p data-ta-chat-status role="status" class="ta-muted"></p><p data-ta-chat-warning class="ta-warning" hidden></p><div data-ta-chat-error class="ta-error" role="alert" hidden></div>');
             host.append($('<div class="ta-actions" data-ta-chat-error-actions>').append(
-                button('Проверить подключение AI','Settings',{'data-ta-chat-configure':'',hidden:true},function(){options.editor.openConnection();}),
-                button('Бюджет контекста','Settings',{'data-ta-chat-error-budget':'',hidden:true},function(){options.editor.openSettings();}),
-                button('Продолжить в редакторе','Settings',{'data-ta-chat-error-edit':'',hidden:true},function(){options.editor.openEditor(this);})));
+                button('Проверить подключение AI','Settings',{'data-ta-chat-configure':'',hidden:true},function(){resetReconcileRetry();options.editor.openConnection();}),
+                button('Бюджет контекста','Settings',{'data-ta-chat-error-budget':'',hidden:true},function(){resetReconcileRetry();options.editor.openSettings();}),
+                button('Продолжить в редакторе','Settings',{'data-ta-chat-error-edit':'',hidden:true},function(){openEditor(this);})));
             host.append(button('Повторить загрузку Jira','RefreshCw',{'data-ta-jira-retry':'',hidden:true},function(){
                 if(jiraRetrying)return;jiraRetrying=true;update(c.getState());
                 run(function(){return state.draft?c.selectProject(state.draft.projectKey):c.init();}).finally(function(){
@@ -3943,7 +3961,12 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             input=$('<textarea rows="3" data-ta-chat-input aria-label="Сообщение Pico" placeholder="Опишите задачу или ответьте на вопрос…">').appendTo(form);
             var composerActions=$('<div class="ta-composer-actions">').appendTo(form);
             composerActions.append($('<span class="ta-muted">').text('Enter — отправить · Shift+Enter — новая строка'),
-                button('Повторить','RefreshCw',{'data-ta-chat-retry':'',hidden:true},function(){if(lastSent){input.val(lastSent);send();}}),
+                button('Повторить','RefreshCw',{'data-ta-chat-retry':'',hidden:true},function(){
+                    var d=c.getState().draft;
+                    if(dead || sending || reconciling || chat.getState().status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope)return;
+                    if(retryReconcileScope===scope)reconcile();
+                    else if(lastSent){input.val(lastSent);send();}
+                }),
                 button('Остановить','Square',{'data-ta-chat-stop':'',hidden:true},function(){chat.stop();input.trigger('focus');}),
                 button('Отправить','WandSparkles',{'data-ta-chat-send':'',type:'submit'},function(){}).addClass('ta-primary'));
             form.on('submit',function(event){event.preventDefault();send();});
@@ -3956,12 +3979,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         function reconcile() {
             if(dead || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
             var requestedScope=scope;
+            retryReconcileScope=requestedScope;lastSent='';
             reconciling=true;update(c.getState());
             run(function(){
                 var d=c.getState().draft;
                 if(dead || !d || JSON.stringify([d.projectKey,d.id])!==requestedScope || locked(d) || chat.getState().status==='running')return;
                 return chat.reconcile();
-            }).finally(function(){reconciling=false;if(!dead)update(c.getState());});
+            },true).finally(function(){
+                reconciling=false;
+                if(retryReconcileScope===requestedScope && ['error','stopped'].indexOf(chat.getState().status)===-1)retryReconcileScope=null;
+                if(!dead)update(c.getState());
+            });
         }
         function updateSend() {
             var busy=chat.getState().status==='running' || sending || reconciling;
@@ -3998,7 +4026,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             var s=chat.getState(),d=state.draft,newScope=d && JSON.stringify([d.projectKey,d.id]);
             if(scope!==newScope) {
                 if(scope!==null) {input.val('');expandedDrafts.set(scope,card.find('[data-ta-card-details]')[0].open);}
-                scope=newScope;lastSent='';lastFields=null;changedFields=[];cardKey=null;pendingKey=null;
+                scope=newScope;lastSent='';retryReconcileScope=null;lastFields=null;changedFields=[];cardKey=null;pendingKey=null;
                 card.find('[data-ta-card-details]').prop('open',expandedDrafts.get(scope)===true);
             }
             var entries=s.transcript || [],key=JSON.stringify(entries);
@@ -4032,7 +4060,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             host.find('[data-ta-chat-error]').prop('hidden',!error).text(error ? error.message || String(error) : '');
             host.find('[data-ta-chat-warning]').prop('hidden',!s.storageWarning).text(s.storageWarning || '');
             host.find('[data-ta-chat-stop]').prop('hidden',!busy);
-            host.find('[data-ta-chat-retry]').prop('hidden',busy || !lastSent || !(s.status==='stopped' || s.status==='error' && (!s.error || !s.error.action || s.error.action==='retry')));
+            host.find('[data-ta-chat-retry]').prop('hidden',busy || !(lastSent || retryReconcileScope===scope && scope!==null) || !(s.status==='stopped' || s.status==='error' && (!s.error || !s.error.action || s.error.action==='retry')));
             host.find('[data-ta-chat-configure]').prop('hidden',busy || !s.error || s.error.action!=='connection');
             host.find('[data-ta-chat-error-budget]').prop('hidden',busy || !s.error || s.error.action!=='budget').prop('disabled',!state.settings);
             host.find('[data-ta-chat-error-edit]').prop('hidden',busy || !d || !s.error || ['editor','connection'].indexOf(s.error.action)===-1);
