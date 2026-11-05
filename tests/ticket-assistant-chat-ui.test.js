@@ -111,6 +111,13 @@ test('ordinary replies, user text and exact templates keep their existing render
     assert.equal(h.doc.querySelectorAll('[data-ta-message-facts]').length,0);
     assert.equal(h.doc.querySelector('[data-ta-template-read]').textContent,text);assert.equal(h.doc.querySelector('[data-ta-message="ordinary"] strong').textContent,'Ответ:');
 });
+test('persisted skipped-field warnings remain visible outside collapsed details and are safely rendered',t=>{
+    const h=setup(t);h.state.draft.warnings=['При сверке пропущено поле «priority»: неверное значение.','<img src=x>'];
+    h.state.validation.warnings=['При сверке пропущено поле «priority»: неверное значение.'];h.ui.update(h.state);
+    const warnings=h.doc.querySelector('[data-ta-card-warnings]');assert.equal(warnings.hidden,false);assert.equal(warnings.querySelector('img'),null);
+    assert.equal(h.doc.querySelector('[data-ta-card-details]').contains(warnings),false);assert.match(warnings.textContent,/priority/);
+    assert.equal(warnings.textContent.split('priority').length,2);h.ui.update(h.state);assert.equal(warnings.hidden,false);
+});
 test('bold explicit facts/question headings collapse saved facts and preserve their rendering',t=>{
     const h=setup(t),facts='**Известные факты:**\n1. Literal <b>text</b> и **важная деталь**.\n';
     h.chatState.transcript=[{id:'saved',role:'assistant',text:facts+'**Вопрос:** Когда?'}];h.ui.update(h.state);

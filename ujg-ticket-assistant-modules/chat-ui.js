@@ -42,7 +42,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             root.find('.ta-header-tools').prepend(newButton);
             log=$('<div class="ta-chat-log" data-ta-chat-log role="log" aria-label="Сообщения" aria-live="polite" aria-relevant="additions text">').appendTo(host);
             card=$('<article class="ta-task-card" data-ta-task-card aria-label="Текущая задача">').appendTo(host);
-            card.append('<details data-ta-card-details><summary class="ta-card-summary"><span class="ta-card-heading"><span class="ta-card-title">Задача: <span data-ta-card-summary></span></span><span data-ta-card-type class="ta-muted"></span></span><span data-ta-card-reason class="ta-muted"></span><span data-ta-card-counts class="ta-muted"></span></summary><div class="ta-card-details-body"><div data-ta-card-values></div><div data-ta-card-questions></div><div data-ta-card-pending></div></div></details><div data-ta-card-creation role="status"></div>');
+            card.append('<details data-ta-card-details><summary class="ta-card-summary"><span class="ta-card-heading"><span class="ta-card-title">Задача: <span data-ta-card-summary></span></span><span data-ta-card-type class="ta-muted"></span></span><span data-ta-card-reason class="ta-muted"></span><span data-ta-card-counts class="ta-muted"></span></summary><div class="ta-card-details-body"><div data-ta-card-values></div><div data-ta-card-questions></div><div data-ta-card-pending></div></div></details><div data-ta-card-warnings class="ta-warning" role="status" hidden></div><div data-ta-card-creation role="status"></div>');
             card.find('[data-ta-card-details]').on('toggle',function(){if(scope)expandedDrafts.set(scope,this.open);});
             var actions=$('<div class="ta-actions">').appendTo(card);
             actions.append(button('Сверить с чатом','Check',{'data-ta-card-check':'',title:'Сверить поля с сохранённым разговором и проверить недостающие сведения'},reconcile),
@@ -201,6 +201,8 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             if(required)counts.push('Обязательных вопросов: '+required);
             if(proposed)counts.push('Предложений: '+proposed);
             card.find('[data-ta-card-counts]').text(counts.join(' · '));
+            var warnings=Array.from(new Set((d.warnings || []).concat(validation && validation.warnings || [])));
+            card.find('[data-ta-card-warnings]').prop('hidden',!warnings.length).text(warnings.join('\n'));
             card.find('[data-ta-card-type]').text(issue?issue.name:d.issueTypeId || 'Тип не выбран');
             var fieldState=JSON.stringify(d.fields);
             if(lastFields!==fieldState) {var prior=lastFields?JSON.parse(lastFields):null;changedFields=prior?Object.keys(d.fields).filter(function(id){return JSON.stringify(prior[id])!==JSON.stringify(d.fields[id]);}):[];lastFields=fieldState;}

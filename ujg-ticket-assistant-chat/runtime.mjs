@@ -1,6 +1,6 @@
 import { Agent } from '@earendil-works/pi-agent-core';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
-import { abortable, copy, emptyUsage, estimateTokens, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseEnvelope, requestSize, sameJson, validateBudget } from './transport.mjs';
+import { abortable, checkTree, copy, emptyUsage, estimateTokens, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseEnvelope, requestSize, sameJson, validateBudget } from './transport.mjs';
 
 export const VERSION = '1.4.0';
 export const LIMITS = Object.freeze({modelCalls: 8, toolCalls: 12, wallMs: 180000});
@@ -54,6 +54,37 @@ function restore(messages) {
         }
     }
     return repairPairs(values);
+}
+
+// Existing Jira-style questions may be returned with an id, reason and text.
+// Treat them only as gaps in a local proposal, never as commands.
+function reviewQuestions(missing, state, proposed) {
+    const questions=[],notes=[];
+    for (const entry of missing) {
+        const item=typeof entry==='string'?{text:entry}:entry;
+        if(!item || typeof item!=='object' || Array.isArray(item) ||
+            Object.keys(item).some(k=>!['id','text','reason','required'].includes(k)) ||
+            typeof item.text!=='string' || !item.text.trim() ||
+            (item.reason!==undefined && typeof item.reason!=='string') ||
+            (item.id!==undefined && typeof item.id!=='string') ||
+            (item.required!==undefined && typeof item.required!=='boolean')) throw Error('Invalid missing question');
+        const fieldId=typeof item.id==='string' && /^required:([a-zA-Z][a-zA-Z_0-9]*)$/.exec(item.id)?.[1];
+        const spec=fieldId && state.fieldSchema.find(f=>f.id===fieldId);
+        if(spec && state.draft.userFieldsPresent?.[fieldId])continue;
+        if(spec && fieldId==='assignee' && !spec.required) {
+            const userRemarks=state.conversationForReview.filter(m=>m.role==='user' && /исполнител|assignee/i.test(m.text));
+            const last=userRemarks.at(-1)?.text || '';
+            if(/не (?:нужно|надо|требуется|назначать)|без исполнителя/i.test(last)){
+                notes.push(last);continue;
+            }
+        }
+        if(!questions.some(q=>q.text===item.text.trim()))
+            questions.push({id:'gap_'+questions.length,text:item.text.trim(),reason:item.reason || '',required:item.required!==false});
+    }
+    if(notes.length && typeof proposed.description==='string')for(const note of notes) {
+        if(!proposed.description.includes(note))proposed.description+='\n\nСо слов пользователя: '+note;
+    }
+    return questions;
 }
 
 export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep, draftReviewPrompt} = {}) {
@@ -187,13 +218,13 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                 let {response, tokens} = await ask(), envelope;
                 if (draftReviewPrompt) {
                     const readDraft = raw => {
-                        const value = JSON.parse(raw);
+                        const value = JSON.parse(raw);checkTree(value);
                         if (!value || Object.keys(value).sort().join(',') !== 'fields,missing' ||
-                            !Array.isArray(value.missing) || !value.missing.every(q=>typeof q==='string' && q.trim())) throw Error('Invalid draft');
+                            !Array.isArray(value.missing)) throw Error('Invalid draft');
                         if (state.generationFieldIds.includes('description') && (typeof value.fields?.description!=='string' || !value.fields.description.trim())) throw Error('Missing description');
                         let seq=seenIds.size+1;
                         while(seenIds.has('draft_'+seq))seq++;
-                        const args={fields:value.fields,questions:[...new Set(value.missing)].map((text,i)=>({id:'gap_'+i,text,required:true}))};
+                        const args={fields:value.fields,questions:reviewQuestions(value.missing,state,value.fields)};
                         return parseEnvelope(JSON.stringify({text:'',toolCalls:[{id:'draft_'+seq,name:'update_task',arguments:args}]}),tools,seenIds);
                     };
                     try {envelope=readDraft(response.text);}

@@ -466,3 +466,36 @@ for(const validRetry of [true,false])test('flat draft review retries malformed o
     else {assert.equal(chat.getState().error.code,'draft-update');assert.equal(h.controller.getState().draft.fields.description,undefined);assert.equal(h.controller.getState().draft.checked,null);}
     chat.destroy();
 });
+
+test('a complete description supplied in chat is durable before the provider answers and cannot be overwritten in that turn',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();
+    const exact='Среда DEV. Вход по RDP. Исполнитель не требуется.';
+    const gate=deferred();let n=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{
+        assert.equal(h.store.load('DO').draft.fields.description,exact);
+        if(++n===1){await gate.promise;return {text:JSON.stringify({text:'',toolCalls:[{id:'write',name:'update_task',arguments:{fields:{summary:'Восстановить доступ',description:'Сокращено'},questions:[]}}]})};}
+        return {text:'Задача готова к созданию.'};
+    }});
+    const sending=chat.send('Описание: '+exact);
+    await new Promise(r=>setImmediate(r));assert.equal(h.controller.getState().draft.fields.description,exact);
+    gate.resolve();await sending;
+    assert.equal(chat.getState().error,null);assert.equal(h.store.load('DO').draft.fields.description,exact);chat.destroy();
+});
+
+test('live-style review saves verified description despite invalid optional fields and an obsolete assignee question',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();
+    await h.controller.chatUpdate({fields:{summary:'Доступ',description:'Стенд DEV'},questions:[]},h.controller.chatSnapshot());
+    await h.chat.send('Исполнителя назначать не нужно. Проверка восстановления — вход по RDP.');
+    h.chat.destroy();let calls=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        calls++;const request=JSON.parse(r.user);
+        assert.ok(request.userAnswers.some(m=>m.text.includes('вход по RDP')));
+        return {text:JSON.stringify({fields:{summary:'Доступ',description:'Стенд DEV. Проверка — вход по RDP.',timetracking:{enabled:true},priority:'invented'},
+            missing:[{id:'required:assignee',text:'Кто исполнитель?',reason:'Выберите исполнителя.'}]})};
+    }});
+    await chat.reconcile();assert.equal(calls,1);assert.equal(chat.getState().error,null);
+    const saved=h.store.load('DO').draft;
+    assert.match(saved.fields.description,/вход по RDP/);assert.match(saved.fields.description,/назначать не нужно/);
+    assert.equal(saved.fields.timetracking,undefined);assert.equal(saved.fields.priority,undefined);assert.equal(saved.questions.length,0);
+    assert.ok(saved.warnings.length>0);chat.destroy();
+});

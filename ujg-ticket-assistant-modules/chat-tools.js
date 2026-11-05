@@ -83,7 +83,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
             for(var j=i+1;j<sentences.length && /^(?:причина\s*[:—–-]|потому что|поскольку|так как)/i.test(sentences[j]);j++)note+=' '+sentences[j];
             notes.push(note);
         });
-        if(!notes.length && typeof args.taskException==='string' && args.taskException.trim())notes.push(args.taskException.trim());
+        if(typeof args.taskException==='string' && args.taskException.trim())notes.push(args.taskException.trim());
         // Preserve attributed user statements from the current canonical text
         // across generated rewrites. The free-form editor can explicitly edit them.
         var previous=state.draft.pendingFields.description || state.draft.fields.description || '';
@@ -139,16 +139,47 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                 fields:{type:'object',additionalProperties:true},questions:{type:'array',items:schema({id:{type:'string'},text:{type:'string'},reason:{type:'string'},required:{type:'boolean'}},['id','text','required'])},
                 warnings:{type:'array',items:{type:'string'}},taskException:{type:'string'}},['fields']),async function(args) {
                 argsOnly(args,['fields','questions','warnings','taskException']);
+                var explicitReview=options.explicitReview===true;
+                if(!object(args.fields))fail('input');
+                var literal=!explicitReview && typeof options.getVerbatimDescription==='function'?options.getVerbatimDescription():null;
+                if(typeof literal!=='string' || !literal.trim())literal=null;
+                if(literal!==null && Object.hasOwn(args.fields,'description'))args=Object.assign({},args,{fields:Object.assign({},args.fields,{description:literal})});
+                if(explicitReview) {
+                    var filtered=controller.chatFilterReviewFields(args.fields,snapshot());
+                    if(!filtered.ok)fail(filtered.code);
+                    if(args.warnings!==undefined && (!Array.isArray(args.warnings) || args.warnings.some(function(w){return typeof w!=='string';})))fail('input');
+                    args=Object.assign({},args,{fields:filtered.fields,warnings:Array.from(new Set((args.warnings || []).concat(controller.getState().draft.warnings || [],filtered.warnings)))});
+                }
+                function omitReviewField(id,reason,partial) {
+                    var next=Object.assign({},args.fields);delete next[id];
+                    args=Object.assign({},args,{fields:next,warnings:Array.from(new Set((args.warnings || []).concat('При сверке пропущено поле «'+id+'»'+(partial?' (частично)':'')+': '+reason+'; прежние значения сохранены.')))});
+                }
                 if(Object.prototype.hasOwnProperty.call(args.fields || {},'timetracking')) {
                     var proposed=fields.timeTrackingValue(args.fields.timetracking);
                     if(!proposed.ok)fail('value');
                     var evidence=options.getEstimates ? options.getEstimates() : {};
                     var existing=controller.getState().draft.fields.timetracking || {};
-                    if(Object.keys(proposed.value).some(function(k){return proposed.value[k]!==existing[k] && proposed.value[k]!==evidence[k];}))
-                        return {ok:false,reason:'Трудозатраты не подтверждены пользователем. Сохрани остальные поля без timetracking и спроси исходную оценку в чате.'};
-                    args=Object.assign({},args,{fields:Object.assign({},args.fields,{timetracking:Object.assign({},existing,proposed.value)})});
+                    if(Object.keys(proposed.value).some(function(k){return proposed.value[k]!==existing[k] && proposed.value[k]!==evidence[k];})) {
+                        if(explicitReview)omitReviewField('timetracking','трудозатраты не подтверждены ответами пользователя');
+                        else return {ok:false,reason:'Трудозатраты не подтверждены пользователем. Сохрани остальные поля без timetracking и спроси исходную оценку в чате.'};
+                    } else args=Object.assign({},args,{fields:Object.assign({},args.fields,{timetracking:Object.assign({},existing,proposed.value)})});
                 }
-                args=keepTaskNote(args,controller.getState(),options.getTurnText ? options.getTurnText() : '');
+                if(explicitReview && Object.hasOwn(args.fields,'labels')) {
+                    var old=controller.getState().draft.fields.labels || [],labels=args.fields.labels;
+                    if(!Array.isArray(old))old=[];
+                    var userText=String(typeof options.reviewUserText==='function'?options.reviewUserText():options.reviewUserText || '');
+                    if(Array.isArray(labels)) {
+                        var skipped=false,accepted=labels.filter(function(label){
+                            if(old.includes(label))return true;
+                            var escaped=label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+                            var grounded=new RegExp('(^|[^\\p{L}\\p{N}_-])'+escaped+'($|[^\\p{L}\\p{N}_-])','u').test(userText);
+                            if(!grounded)skipped=true;return grounded;
+                        });
+                        if(skipped)omitReviewField('labels','неподтверждённые новые метки не применены',true);
+                        if(!skipped || accepted.length)args=Object.assign({},args,{fields:Object.assign({},args.fields,{labels:Array.from(new Set(old.concat(accepted)))})});
+                    }
+                }
+                if(literal===null)args=keepTaskNote(args,controller.getState(),options.getTurnText ? options.getTurnText() : '');
                 var result=await mutate(function() {return controller.chatUpdate(args,snapshot(),options.getSourceText ? options.getSourceText() : undefined);});
                 if(!result.ok) fail(result.code);if(options.onSourceApplied) options.onSourceApplied();if(options.onTaskUpdated) options.onTaskUpdated(args);return Object.assign(result,{task:task()});
             }),

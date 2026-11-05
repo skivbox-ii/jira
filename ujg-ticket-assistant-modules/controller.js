@@ -590,7 +590,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     if (kind === 'check') {
                         // This explicit AI check used the current selected rules and passed the snapshot guard.
                         if(Array.isArray(result.questions)) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
-                        state.validation.warnings = (result.warnings || []).filter(function(w) { return typeof w === 'string'; });
+                        state.validation.warnings = warningUnion((result.warnings || []).filter(function(w) { return typeof w === 'string'; }),retainedReviewWarnings(state.draft.warnings));
                         state.draft = drafts.markChecked(state.draft, state.validation, result.questions, snapshot);
                         // Reuse the nested whitelist without advancing the checked content revision.
                         state.draft = JSON.parse(drafts.serialize(Object.assign({}, state.draft, { evidence: result.evidence })));
@@ -729,6 +729,37 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 !(state.error && state.error.code === 'conflict');
         }
         function chatFailure(code) { return {ok:false,code:code || 'stale'}; }
+        function retainedReviewWarnings(warnings) {
+            return (warnings || []).filter(function(w){return typeof w==='string' && w.startsWith('При сверке пропущено поле');});
+        }
+        function warningUnion(a,b) {return Array.from(new Set((a || []).concat(b || [])));}
+        // Shared read-only codec for strict chat updates and explicit review filtering.
+        function validatedChatField(id,value) {
+            var spec=fields.getField(state.meta,state.draft.issueTypeId,id);
+            if (!spec || !spec.supported || !spec.writable || ['user','number','epic','sprint'].indexOf(spec.kind)!==-1 ||
+                ['project','issuetype','__proto__','constructor','prototype'].indexOf(id)!==-1 || state.generationFieldIds.indexOf(id)===-1)return {ok:false};
+            var single={};single[id]=value;
+            var partial={projectId:state.meta.projectId,issueTypes:[{id:state.draft.issueTypeId,subtask:false,fields:[Object.assign({},spec,{required:false})]}]};
+            try {return {ok:true,value:validation.buildCreatePayload(partial,state.draft.issueTypeId,single,policy()).fields[id]};}
+            catch(error){return {ok:false};}
+        }
+        function chatFilterReviewFields(values,snapshot) {
+            if(!chatFresh(snapshot))return chatFailure();
+            if(!compatible(state.draft.issueTypeId,state.draft.templateId) || !values || typeof values!=='object' || Array.isArray(values) ||
+                Object.keys(values).some(function(id){return ['__proto__','constructor','prototype'].includes(id);}))return chatFailure('input');
+            var patch={},warnings=[],valid=true;
+            Object.keys(values).forEach(function(id){
+                var core=id==='summary' || id==='description',checked=validatedChatField(id,values[id]);
+                if(core && (typeof values[id]!=='string' || !values[id].trim()))checked={ok:false};
+                // An explicit review may add validated facts, not silently clear
+                // existing optional values via a model-produced null.
+                if(!core && values[id]===null)checked={ok:false};
+                if(checked.ok)patch[id]=checked.value;
+                else if(core)valid=false;
+                else warnings.push('При сверке пропущено поле «'+(/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(id)?id:'неизвестное поле')+'»: значение неверно или недоступно для автоматического заполнения; прежнее значение не изменено.');
+            });
+            return valid?{ok:true,fields:patch,warnings:warnings}:chatFailure('value');
+        }
         function chatBeginReview(snapshot) {
             if(!chatFresh(snapshot))return chatFailure();
             state.draft=Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1});
@@ -747,24 +778,19 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (proposal.taskException !== undefined && typeof proposal.taskException !== 'string') return chatFailure('input');
             var patch = {}, ids = Object.keys(proposal.fields), valid = true;
             ids.forEach(function(id) {
-                var spec = fields.getField(state.meta,state.draft.issueTypeId,id);
-                if (!spec || !spec.supported || !spec.writable || ['user','number','epic','sprint'].indexOf(spec.kind) !== -1 ||
-                    ['project','issuetype','__proto__','constructor','prototype'].indexOf(id) !== -1 || state.generationFieldIds.indexOf(id) === -1) {valid=false;return;}
-                var single = {}; single[id] = proposal.fields[id];
-                var partial = {projectId:state.meta.projectId,issueTypes:[{id:state.draft.issueTypeId,subtask:false,fields:[Object.assign({},spec,{required:false})]}]};
-                try { patch[id] = validation.buildCreatePayload(partial,state.draft.issueTypeId,single,policy()).fields[id]; }
-                catch (error) { valid=false; }
+                var checked=validatedChatField(id,proposal.fields[id]);
+                if(checked.ok)patch[id]=checked.value;else valid=false;
             });
             if (!valid) return chatFailure('value');
             if(sourceText!==undefined && typeof sourceText!=='string') return chatFailure('input');
             var before = sourceText===undefined ? state.draft : drafts.setSource(state.draft,state.draft.source+(state.draft.source ? '\n\n' : '')+sourceText);
             var next = drafts.applyProposal(before,{fields:patch,questions:proposal.questions === undefined ? before.questions : proposal.questions,
-                warnings:proposal.warnings === undefined ? before.warnings : proposal.warnings,evidence:before.evidence},drafts.snapshot(before));
+                warnings:warningUnion(proposal.warnings === undefined ? before.warnings : proposal.warnings,retainedReviewWarnings(before.warnings)),evidence:before.evidence},drafts.snapshot(before));
             if (proposal.taskException !== undefined) next.taskExceptions = before.taskExceptions.concat([proposal.taskException]);
             // Install before emitting so subscribers can inspect undo during this update.
             next=drafts.recordAutomaticChange(next,before);
             edited(next);
-            return {ok:true,snapshot:chatSnapshot(),pendingFields:copy(state.draft.pendingFields)};
+            return {ok:true,snapshot:chatSnapshot(),pendingFields:copy(state.draft.pendingFields),warnings:copy(state.draft.warnings)};
         }
         function chatCanUndo() { return !!state.draft && !!state.draft.automaticUndo && metadataReady && drafts.isCurrent(state.draft,state.draft.automaticUndo.after) && !locked() && state.draft.creation.status!=='preflight'; }
         async function chatUndo() {
@@ -804,6 +830,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены Pico.'];
                 }
                 if(reviewed) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
+                result.warnings=warningUnion(result.warnings,retainedReviewWarnings(state.draft.warnings));
                 state.validation=result;
                 state.draft=drafts.markChecked(state.draft,result,state.draft.questions,snapshot);
                 save();emit();return {ok:result.ok,validation:copy(result),questions:copy(state.draft.questions),snapshot:chatSnapshot()};
@@ -832,7 +859,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return {ok:true,snapshot:chatSnapshot(),reviewRequired:true};
         }
         return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
-            getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
+            getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatFilterReviewFields:chatFilterReviewFields,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
             chatValidate:chatValidate,chatCompleteTemplateReview:function(snapshot,templateRevision,request) {
                 if(!state.draft || !state.draft.templateReviewPending || templateRevision!==state.draft.settingsRevision) return Promise.resolve(chatFailure());
                 return chatValidate(snapshot,request,templateRevision);
