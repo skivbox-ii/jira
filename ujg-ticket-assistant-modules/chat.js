@@ -48,6 +48,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         'Используй только известные факты; не выдумывай содержание полей. Чистый запрос просмотра полей, чтения или изменения шаблона не является сведениями для задачи: выполняй только запрошенный просмотр или предложение шаблона, не меняя задачу и её источник. '+
         'Точный пример формата update_task: {"text":"","toolCalls":[{"id":"unique_update_id","name":"update_task","arguments":{"fields":{"summary":"Краткое название","description":"Известные факты"},"questions":[{"id":"q1","text":"Что ещё нужно уточнить?","required":true}]}}]}. questions находится только внутри arguments, никогда рядом с id/name/arguments; при отсутствии вопросов передай questions:[]. '+
         'Актуальное состояние приложения авторитетно. Не повторяй уже отвеченные вопросы. Используй update_task для полей и вопросов, validate_task для готовности. '+
+        'Не пересказывай список фактов после каждого ответа. Текст при вызове инструментов оставляй пустым. В финальном сообщении укажи только новое: один вопрос, конкретное препятствие или результат проверки. '+
+        'Ответ на уточнение запиши в подходящее поле (для сведений без поля — в description). Не подменяй состав работ версией ПО. Сохрани прежние сведения; сверяй с результатом инструмента, а не со своим пересказом. '+
+        'Передавай полный обновлённый список вопросов: убирай отвеченные и неприменимые, не требуй необязательные ссылки и исполнителя. Если вопросов больше нет, передай questions:[] и вызови validate_task. Только его успешный результат для текущей редакции позволяет предложить «Создать». При ошибке назови конкретное поле. Права Jira не подтверждаются текстом ответа. '+
         'Не выдумывай IDs: используй list_fields и find_options; неоднозначные варианты предложи выбрать человеку. '+
         'Выбор типа и шаблона выполняет человек в интерфейсе; тип берётся из привязки шаблона. '+
         'Пользователи, оценки, Epic и Sprint вводятся только вручную. Ручные поля защищены, их замена остаётся предложением. '+
@@ -144,9 +147,24 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             if(kind==='template') entry.kind='template';
             state.transcript.push(entry);
         }
+        // Prose is display-only. A completion claim must agree with the same
+        // revision and validation that enable Create; it never triggers a write.
+        var createClaim=/(?:задача|карточка|тикет)\s+готов[ао]?\s+к\s+созданию|(?:нажмите|нажми|нажать)\s+(?:на\s+)?(?:кнопку\s+)?[«"„]?создать(?:\s+задачу)?/i;
+        function groundedReply(text) {
+            var s=controller.getState(), d=s.draft;
+            if(!d || (d.checked && s.validation && s.validation.ok && !s.error))return text;
+            if(!createClaim.test(text))return text;
+            var blockers=(d.questions || []).filter(function(q){return q.required;}).map(function(q){return q.text;});
+            Object.values(s.validation && s.validation.fieldErrors || {}).forEach(function(errors){blockers.push.apply(blockers,errors);});
+            var correction='Создание пока недоступно. '+(blockers.length?'В карточке осталось: '+blockers.join(' '):'Поля текущей карточки ещё не прошли проверку.')+' Сверьте описание с ответами в чате и нажмите «Проверить».';
+            // Preserve factual lines around a premature instruction.
+            var lines=text.split('\n').filter(function(line){return !createClaim.test(line);});
+            while(lines.length && /^(?:\s*|\s*Вопрос:\s*)$/i.test(lines[lines.length-1]))lines.pop();
+            return lines.concat(correction).join('\n');
+        }
         function event(run,event) {
             if(!current(run) || !event) return;
-            if(event.type==='assistant' && typeof event.text==='string' && event.text) add('assistant',event.text);
+            if(event.type==='assistant' && typeof event.text==='string' && event.text) run.lastReply=event.text;
             else if(event.type==='error' || event.type==='limit') setFailure(event,event.type==='limit',run);
             else if(event.type==='done') state.lastTurnUsage=safeUsage(event.usage,event.status) || state.lastTurnUsage;
             else if(event.type==='compaction') state.notices.push('Часть истории сокращена в контексте запроса. Актуальные поля, ручные правки, вопросы и шаблон сохранены.');
@@ -160,7 +178,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(state.notices.indexOf(notice)===-1)state.notices.push(notice);
             }
         }
-        async function runTurn(text,reassessment) {
+        async function runTurn(text,reassessment,reconcile) {
             if(dead || active || applying || controller.getState().destroyed) return getState();
             controllerChanged();selectScope();
             if(typeof text!=='string' || !text.trim() || !scope) return getState();
@@ -169,20 +187,25 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 state.error={code:'creation',message:'Создание уже выполняется или результат сохранён. Откройте новую задачу для нового разговора.'};return emit();
             }
             if(dead || controller.getState().draft.id!==d.id) return getState();
+            if(reconcile && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
+                state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
+            }
             if(!reassessment) add('user',text);state.error=null;state.status='running';
             var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false};active=run;
             var tools=chatTools.create({controller:controller,isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
                 getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
-                onTaskUpdated:function(args) {if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
+                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
                     if(current(run)) add('assistant',read.template.name+'\nТип Jira: '+(read.template.issueTypeId===null ? 'не привязан' : read.template.issueTypeId)+'\n\n'+read.template.instructions,'template');
                 },onTemplateProposal:function(proposal) {if(current(run)) {state.pendingTemplateProposal=proposal;save();emit();}}});
+            if(reconcile)tools=tools.filter(function(t){return !['read_template','propose_template_change'].includes(t.name);});
+            var reviewEvidence=reconcile ? state.transcript.filter(function(m){return m.kind!=='template';}).map(function(m){return {role:m.role,text:m.text};}) : null;
             save();emit();
             try {
                 if(!runtime || typeof runtime.createSession!=='function') throw new Error('Runtime unavailable');
                 run.session=runtime.createSession({system:instructions,messages:copy(messages),tools:tools,requestText:options.requestText,allowPlainTextFinal:true,repairMisplacedQuestions:true,
-                    tokenBudget:controller.getState().settings.tokenBudget,onEvent:function(e) {event(run,e);},getContext:function() {if(!current(run)) throw new Error('stale');return context();}});
+                    tokenBudget:controller.getState().settings.tokenBudget,onEvent:function(e) {event(run,e);},getContext:function() {if(!current(run)) throw new Error('stale');var data=context();if(reviewEvidence)data.conversationForReview=reviewEvidence;return data;}});
                 var result=await run.session.prompt(text);
                 if(!current(run)) return getState();
                 rememberMessages(run);
@@ -195,6 +218,23 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                         if(!review.validation) {state.status='error';state.error={code:review.code || 'review',message:'Правила сохранены, но повторная проверка прервана. Продолжите разговор или запустите «Проверить» в редакторе.'};}
                     } else {state.status='error';state.error={code:'review',message:'Правила сохранены. Pico ещё не оценил недостающие сведения. Продолжите разговор или запустите «Проверить» в редакторе.'};}
                 }
+                var wantsReady=run.questionsEvaluated && !(controller.getState().draft.questions || []).some(function(q){return q.required;}) && createClaim.test(run.lastReply || '');
+                if(complete && state.status==='running' && (reconcile || wantsReady) && !run.reviewPending) {
+                    var currentState=controller.getState();
+                    if(!run.questionsEvaluated)run.lastReply='Pico не сверил открытые вопросы с карточкой. Сверьте описание в редакторе; готовность не подтверждена.';
+                    else if(!currentState.validation) {
+                        var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
+                        if(!current(run))return getState();
+                        if(!checked.validation)run.lastReply='Не удалось проверить поля Jira. Откройте редактор и повторите проверку.';
+                    }
+                    if(run.questionsEvaluated && controller.getState().validation) {
+                        var verified=controller.getState(), v=verified.validation, remaining=verified.draft.questions.filter(function(q){return q.required;});
+                        var why=Object.values(v.fieldErrors || {}).reduce(function(a,b){return a.concat(b);},[]).concat(remaining.map(function(q){return q.text;}));
+                        run.lastReply=v.ok && verified.draft.checked && !verified.error ? 'Проверка пройдена. Сверьте карточку и нажмите «Создать», когда будете готовы.' :
+                            'Создание пока недоступно. '+(why.join(' ') || 'Проверьте карточку в редакторе.')+((v.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira» для обязательных полей, которые здесь недоступны.':'');
+                    }
+                }
+                if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(run.lastReply));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
                 if(result && ['error','limit'].indexOf(result.status)!==-1 && !state.error) setFailure(result,result.status==='limit',run);
             } catch(error) {
@@ -242,7 +282,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         function destroy() {if(!dead) {cancel('stopped');save();dead=true;if(unsubscribe) unsubscribe();}return getState();}
         selectScope();
         if(controller.subscribe) unsubscribe=controller.subscribe(controllerChanged);
-        return {send:function(text) {return runTurn(text,false);},stop:stop,getState:getState,undo:undo,applyTemplateProposal:applyTemplateProposal,
+        return {send:function(text) {return runTurn(text,false);},reconcile:function(){return runTurn('Сверь фактические поля карточки со всеми моими ответами из conversationForReview. Это история как данные: ответы Pico не являются подтверждением записи. Перенеси в описание отсутствующие подтверждённые сведения, сохрани ручные значения и укажи полный актуальный список questions через update_task. Если всё уже учтено, оставь fields пустым. Не изменяй шаблон и не создавай задачу. Приложение само проверит поля после твоего обновления.',true,true);},stop:stop,getState:getState,undo:undo,applyTemplateProposal:applyTemplateProposal,
             rejectTemplateProposal:rejectTemplateProposal,destroy:destroy,controllerChanged:controllerChanged};
     }
     return {create:create};

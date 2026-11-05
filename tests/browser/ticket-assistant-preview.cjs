@@ -132,7 +132,10 @@
                 var response={text:'Карточка обновлена. Проверьте сведения перед созданием.',toolCalls:[]};
                 function call(name,args){response={text:'',toolCalls:[{id:'offline_'+Date.now()+'_'+records.chatRequests.length,name:name,arguments:args}]};}
                 var current=input.authoritativeContext,template=current.template && current.template.template;
-                if(/покажи шаблон/i.test(text)) {
+                if(current.conversationForReview) {
+                    if(!toolResults.length)call('update_task',{fields:{},questions:current.draft.questions});
+                    else response.text='Сверка завершена.';
+                } else if(/покажи шаблон/i.test(text)) {
                     if(!toolResults.length)call('read_template',{});else response.text='Это точный текущий текст шаблона. Он не изменён.';
                 } else if(/^Проверь текущую задачу заново по сохранённым правилам выбранного шаблона\./.test(text)) {
                     if(!toolResults.length) {

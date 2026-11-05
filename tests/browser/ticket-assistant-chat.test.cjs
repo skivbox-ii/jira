@@ -91,6 +91,7 @@ test('chat repairs a misplaced question and keeps the subsequent prose and updat
     });
     await send('Доступ к сервису прерван. Нужно его восстановить.');
     assert.deepEqual(await page.evaluate(() => window.taPreview.cardAtRequest), [null, null, 'Восстановить доступ']);
+    await page.locator('[data-ta-card-details] > summary').click();
     assert.match(await page.locator('[data-ta-card-field="description"]').innerText(), /Доступ к тестовому сервису/);
     assert.match(await page.locator('[data-ta-chat-log]').innerText(), /В какой среде \(DEV, TEST, PREPROD\)/);
     assert.equal(await page.locator('[data-ta-chat-error]').isVisible(), false);
@@ -223,6 +224,40 @@ async function browserFixture(t,width=1440) {
     return {page,errors,requests,server,send,state:()=>page.evaluate(()=>window.taPreview.instance.controller.getState())};
 }
 
+test('collapsed card supports keyboard disclosure and reconciliation preserves unsent text on mobile',async t=>{
+    const {page,errors,state}=await browserFixture(t,390);
+    const details=page.locator('[data-ta-card-details]'),summary=details.locator(':scope > summary');
+    assert.equal(await details.evaluate(el=>el.open),false);
+    assert.equal(await page.locator('[data-ta-card-values]').isVisible(),false);
+    const badge=await page.locator('[data-ta-card-type]').evaluate(el=>{
+        const original=el.textContent;el.textContent='Задача';
+        const style=getComputedStyle(el),short={whiteSpace:style.whiteSpace,shrink:style.flexShrink,height:el.getBoundingClientRect().height};
+        el.textContent='Очень длинный тип задачи '.repeat(12);
+        const long={height:el.getBoundingClientRect().height,truncated:el.scrollWidth>el.clientWidth};el.textContent=original;
+        return {short,long};
+    });
+    assert.equal(badge.short.whiteSpace,'nowrap');assert.equal(badge.short.shrink,'0');
+    assert.equal(badge.long.height,badge.short.height);assert.equal(badge.long.truncated,true);
+    for(const name of ['check','edit','create','undo'])assert.equal(await page.locator('[data-ta-card-'+name+']').isVisible(),true);
+    await summary.focus();await summary.press('Enter');assert.equal(await details.evaluate(el=>el.open),true);
+    assert.equal(await page.locator('[data-ta-card-values]').isVisible(),true);
+    await summary.press('Space');assert.equal(await details.evaluate(el=>el.open),false);
+    const before=await state();
+    await page.evaluate(()=>{
+        window.taPreview.reconciles=0;
+        window.taPreview.instance.chat.reconcile=async()=>{window.taPreview.reconciles++;};
+    });
+    await page.locator('[data-ta-chat-input]').fill('Ещё не отправлено');
+    await page.locator('[data-ta-card-check]').click();
+    await page.waitForFunction(()=>window.taPreview.reconciles===1);
+    assert.equal(await page.locator('[data-ta-chat-input]').inputValue(),'Ещё не отправлено');
+    assert.deepEqual((await state()).draft,before.draft);
+    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
+    assert.equal(await details.evaluate(el=>el.open),false);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    assert.deepEqual(errors,[]);
+});
+
 for(const width of [1440,390])test('real Pico offline chat, editor, template, reload and one creation at '+width,async t=>{
     const {page,errors,requests,server,send,state}=await browserFixture(t,width);
     assert.equal(await page.locator('[data-ta-chat-input]').isVisible(),true);
@@ -232,6 +267,7 @@ for(const width of [1440,390])test('real Pico offline chat, editor, template, re
     assert.equal((await state()).draft.fields.summary,'Исправить ошибку API при сохранении');
     assert.equal(await page.locator('[data-ta-task-card]').count(),1);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
+    await page.locator('[data-ta-card-details] > summary').click();
     assert.match(await page.locator('[data-ta-card-questions]').innerText(),/среде/);
     assert.equal(await page.locator('[data-ta-chat-log] img').count(),0);
     await send('Тестовая среда, версия 2026.11. Сохранение должно завершиться без ошибки.');
@@ -334,7 +370,9 @@ test('real Pico stop ignores late results; retry preserves text; ambiguous optio
     assert.match(await page.locator('[data-ta-chat-log]').innerText(),/API, Интерфейс, Инфраструктура/);
     await send('Выбираю API');assert.deepEqual((await state()).draft.fields.components,[{id:'31'}]);
     const revision=(await state()).settings.revision;
-    await send('Измени шаблон: укажи среду проверки');await page.locator('[data-ta-template-reject]').click();
+    await send('Измени шаблон: укажи среду проверки');
+    await page.locator('[data-ta-card-details] > summary').click();
+    await page.locator('[data-ta-template-reject]').click();
     assert.equal((await state()).settings.revision,revision);
     assert.equal(await page.locator('[data-ta-template-proposal]').isHidden(),true);
     assert.equal(await page.locator('[data-ta-chat-input]').evaluate(el=>document.activeElement===el),true);
@@ -378,6 +416,7 @@ test('old form drafts migrate into the chat card without invoking Pico',async t=
     await page.locator('[data-ta-source]').fill('Сохранённый исходник старой формы');
     await page.locator('[data-ta-field="summary"] input').fill('Ручной старый черновик');
     await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
+    await page.locator('[data-ta-card-details] > summary').click();
     assert.equal(await page.locator('[data-ta-card-field="summary"]').innerText(),'Тема\nРучной старый черновик');
     assert.match(await page.locator('.ta-chat-intro').innerText(),/Черновик восстановлен/);
     assert.equal(await page.locator('[data-ta-message]').count(),0);
@@ -421,6 +460,7 @@ test('chat keeps one canonical card, safe message text, composer and proposal fo
     assert.equal(window.document.activeElement,composer);assert.equal(composer.value,'Unsent text');assert.equal(composer.selectionStart,2);
     assert.equal(window.document.querySelector('[data-ta-task-card]'),card);
     chatState.pendingTemplateProposal={before:{instructions:'old <b>',issueTypeId:'10'},after:{instructions:'new <b>',issueTypeId:'10'}};ui.update(state);
+    window.document.querySelector('[data-ta-card-details]').open=true;
     const apply=window.document.querySelector('[data-ta-template-apply]');apply.focus();ui.update(state);assert.equal(window.document.activeElement,apply);
     assert.equal(window.document.querySelector('[data-ta-template-before]').textContent.includes('old <b>'),true);
     composer.focus();composer.dispatchEvent(new window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await new Promise(resolve=>setImmediate(resolve));

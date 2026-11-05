@@ -293,3 +293,67 @@ test('stopped review and late final relation check keep semantic readiness pendi
     assert.equal(h.controller.getState().draft.templateReviewPending,true);assert.equal(h.controller.getState().draft.checked,null);
     assert.ok(h.chat.getState().notices.some(n=>n.includes('Проверить')));
 });
+
+test('one reply per turn, with server readiness claims grounded in the actual draft',async()=>{
+    const h=await setup(async c=>{
+        const update=c.tools.find(t=>t.name==='update_task');
+        c.onEvent({type:'assistant',text:'Записал сведения. Кто проверяет?'});
+        await update.execute({fields:{summary:'Доступ',description:'Нет подключения'},questions:[{id:'who',text:'Кто проверяет?',required:true}]},{});
+        c.onEvent({type:'assistant',text:'Задача готова к созданию. Подтвердите, что все данные корректны, и нажмите кнопку «Создать задачу» в интерфейсе.'});
+    });
+    await h.chat.send('Нет подключения');
+    const replies=h.chat.getState().transcript.filter(m=>m.role==='assistant');
+    assert.equal(replies.length,1);assert.doesNotMatch(replies[0].text,/готова к созданию|нажмите кнопку «Создать/i);
+    assert.match(replies[0].text,/Кто проверяет/);assert.equal(h.controller.getState().draft.checked,null);h.chat.destroy();
+});
+
+test('explicit chat reconciliation reviews saved turns, checks an evaluated draft and never appends its own command to source',async()=>{
+    let turns=0;
+    const h=await setup(async c=>{
+        if(!turns++){c.onEvent({type:'assistant',text:'Когда проверить?'});return;}
+        assert.deepEqual(Array.from(c.getContext().conversationForReview,m=>m.text),['Сервис на DEV.','Когда проверить?','Завтра утром.','Ответ записан.']);
+        assert.ok(!c.tools.some(t=>t.name==='propose_template_change'));
+        await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Проверить сервис',description:'DEV, завтра утром.'},questions:[]},{});
+        c.onEvent({type:'assistant',text:'Задача готова к созданию.'});
+    });
+    await h.chat.send('Сервис на DEV.');
+    const sess=h.runtime.createSession;
+    h.runtime.createSession=c=>{const session=sess(c);session.prompt=async()=>c.onEvent({type:'assistant',text:'Ответ записан.'});return session;};
+    await h.chat.send('Завтра утром.');h.runtime.createSession=sess;
+    const source=h.controller.getState().draft.source;
+    await h.chat.reconcile();
+    assert.equal(h.controller.getState().draft.source,source);assert.ok(h.controller.getState().draft.checked);
+    assert.equal(h.chat.getState().transcript.filter(m=>m.role==='user').length,2);h.chat.destroy();
+});
+
+test('completed task update and explicit create invitation run the real check without creating',async()=>{
+    const h=await setup(async c=>{
+        await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Доступ'},questions:[]},{});
+        c.onEvent({type:'assistant',text:'Задача готова к созданию.'});
+    });
+    await h.chat.send('Восстановить доступ');
+    assert.equal(h.controller.getState().validation.ok,true);assert.ok(h.controller.getState().draft.checked);
+    assert.equal(h.controller.getState().draft.creation.issueKey,null);
+    assert.match(h.chat.getState().transcript.at(-1).text,/Проверка пройдена/);h.chat.destroy();
+});
+
+test('reconcile cannot make a prose-only claim ready by validating before it reviews outstanding questions',async()=>{
+    let validations=0;
+    const h=await setup(async c=>{
+        const result=await c.tools.find(t=>t.name==='validate_task').execute({},{});
+        assert.equal(result.ok,false);validations++;
+        c.onEvent({type:'assistant',text:'Задача готова к созданию.'});
+    });
+    await h.controller.updateField('summary','Заполненная тема');
+    await h.chat.reconcile();
+    assert.equal(validations,1);assert.equal(h.controller.getState().draft.checked,null);
+    assert.match(h.chat.getState().transcript.at(-1).text,/не сверил/);h.chat.destroy();
+});
+
+for(const fail of [false,true]) test('reconciliation invalidates a previously checked draft even without an update, transport failure='+fail,async()=>{
+    const h=await setup(async c=>{if(fail)throw Error('transport');c.onEvent({type:'assistant',text:'Задача готова к созданию.'});});
+    await h.controller.updateField('summary','Тема');await h.controller.chatValidate(h.controller.chatSnapshot());
+    assert.ok(h.controller.getState().draft.checked);await h.chat.reconcile();
+    assert.equal(h.controller.getState().draft.checked,null);
+    assert.equal(h.store.load('DO').draft.checked,null);h.chat.destroy();
+});

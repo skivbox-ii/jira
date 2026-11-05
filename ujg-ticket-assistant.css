@@ -77,6 +77,17 @@
 .ujg-ticket-assistant .ta-message-text code { background: #edf2f6; padding: 1px 4px; border-radius: 3px; }
 .ujg-ticket-assistant .ta-task-card { padding: 16px; margin: 14px 0; border: 1px solid #cbd6df; border-radius: 8px; background: #fafcfd; min-width: 0; }
 .ujg-ticket-assistant .ta-card-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ujg-ticket-assistant .ta-card-summary { cursor: pointer; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-card-summary .ta-card-heading { display: inline-flex; width: calc(100% - 24px); vertical-align: top; }
+.ujg-ticket-assistant .ta-card-heading [data-ta-card-type] { flex-shrink: 0; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ujg-ticket-assistant .ta-card-title { font-weight: 600; min-width: 0; }
+.ujg-ticket-assistant .ta-card-summary [data-ta-card-reason], .ujg-ticket-assistant .ta-card-summary [data-ta-card-counts] { display: block; margin-top: 6px; }
+.ujg-ticket-assistant .ta-card-summary [data-ta-card-counts]:empty { display: none; }
+.ujg-ticket-assistant .ta-card-summary:focus-visible, .ujg-ticket-assistant .ta-message-facts > summary:focus-visible { outline: 2px solid #216cb5; outline-offset: 3px; border-radius: 3px; }
+.ujg-ticket-assistant .ta-card-details-body { margin-top: 12px; border-top: 1px solid #dce1e5; padding-top: 4px; }
+.ujg-ticket-assistant .ta-task-card > .ta-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ujg-ticket-assistant .ta-message-facts > summary { cursor: pointer; color: #53636f; }
+.ujg-ticket-assistant .ta-message-facts + [data-ta-message-question] { margin-top: 6px; }
 .ujg-ticket-assistant .ta-card-field { margin: 8px 0 12px; min-width: 0; }
 .ujg-ticket-assistant .ta-change-label { color: #276b48; font-size: 12px; }
 .ujg-ticket-assistant .ta-card-value { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -701,6 +701,12 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 !(state.error && state.error.code === 'conflict');
         }
         function chatFailure(code) { return {ok:false,code:code || 'stale'}; }
+        function chatBeginReview(snapshot) {
+            if(!chatFresh(snapshot))return chatFailure();
+            state.draft=Object.assign({},state.draft,{checked:null,draftRevision:state.draft.draftRevision+1});
+            state.validation=null;save();emit();
+            return state.error && ['storage','conflict'].includes(state.error.code)?chatFailure(state.error.code):{ok:true};
+        }
         async function chatUpdate(proposal, snapshot, sourceText) {
             if (!chatFresh(snapshot)) return chatFailure();
             if (!compatible(state.draft.issueTypeId,state.draft.templateId) || !proposal || typeof proposal !== 'object' || Array.isArray(proposal) ||
@@ -784,7 +790,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return {ok:true,snapshot:chatSnapshot(),reviewRequired:true};
         }
         return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
-            getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
+            getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
             chatValidate:chatValidate,chatCompleteTemplateReview:function(snapshot,templateRevision,request) {
                 if(!state.draft || !state.draft.templateReviewPending || templateRevision!==state.draft.settingsRevision) return Promise.resolve(chatFailure());
                 return chatValidate(snapshot,request,templateRevision);

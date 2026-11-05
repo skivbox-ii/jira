@@ -69,7 +69,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                 if(options.onTemplateProposal) options.onTemplateProposal(copy(proposal));return {ok:true,pending:true,proposal:proposal};
             }),
             tool('validate_task','Validate required fields, allowed values and live Jira relations deterministically. Required questions block creation. Does not create an issue.',schema(),function(args,request) {
-                argsOnly(args,[]);return controller.chatValidate(snapshot(),request);
+                argsOnly(args,[]);var notice=options.validationNotice && options.validationNotice();if(notice)return {ok:false,pending:true,reason:notice};return controller.chatValidate(snapshot(),request);
             })
         ];
     }
