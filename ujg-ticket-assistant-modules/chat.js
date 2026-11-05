@@ -34,7 +34,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 else if(reason==='Runtime unavailable')code='runtime';
             }
         }
-        return {code:code,action:failures[code].action,message:failures[code].message};
+        var http=code==='transport' && typeof reason==='string' && /^Pico HTTP ([45]\d{2})$/.exec(reason);
+        return {code:code,action:failures[code].action,message:http?
+            'Сервис модели вернул HTTP '+http[1]+'. Сообщение сохранено.':failures[code].message};
     }
     function safeUsage(value,status) {
         var keys=['modelCalls','toolCalls','inputTokens','outputTokens','compactions','elapsedMs'];
@@ -212,6 +214,16 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             return /^(?:покажи|поясни|объясни|перечисли|расскажи|почему|чем отличается|какие поля|как работает|как выбрать|show|explain|list)(?:[\s,:?!]|$)/i.test(text.trim()) ||
                 /^(?:измени|обнови|сохрани|предложи|change|update)\s+(?:этот |мой |личный )?(?:шаблон|template)/i.test(text.trim());
         }
+        function connectionCommand(text) {
+            var value=text.trim();
+            if(/^(?:модель|model|url|api\s*key|api\s*token|ключ api)\s*[:=]/i.test(value))return true;
+            var command=/^(?:set|configure|change|update|use|настрой|измени|обнови|поменяй|установи|сохрани|проверь)\s+(?:the\s+)?([\s\S]*)$/i.exec(value);
+            if(!command)return false;
+            return /^(?:api\s*key|api\s*token|ключ api|токен api)(?=$|[\s:=])/i.test(command[1]) ||
+                /^(?:(?:подключение|настройки|конфигурацию|модель|connection|settings|model)\s+(?:AI|ИИ|Pico|OpenAI)|AI\s+(?:connection|settings|model))(?=$|[\s:=])/i.test(command[1]) ||
+                /^(?:модель|model|url|ключ|токен)\s*[:=]/i.test(command[1]) ||
+                /^(?:подключение|connection|модель|model|url)$/i.test(command[1]);
+        }
         function draftStep(run,step,reconcile,text) {
             if(!current(run))return {action:'end'};
             var d=controller.getState().draft;
@@ -294,6 +306,60 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 'Оценка сохранена в поле Jira. '+(checked.ok?'Проверка пройдена. Можно нажать «Создать».':blockers.join(' ')));
             state.status='idle';return true;
         }
+        function emptyChatField(s,id) {
+            var d=s.draft;
+            return s.generationFieldIds.includes(id) && !d.protectedFields[id] &&
+                !Object.prototype.hasOwnProperty.call(d.pendingFields,id) && !String(d.fields[id] || '').trim();
+        }
+        async function deriveSummary(run) {
+            if(!current(run))return;
+            var s=controller.getState(), description=s.draft.fields.description;
+            if(!emptyChatField(s,'summary') || typeof description!=='string' || !description.trim())return;
+            var first=description.trim().split(/\r?\n/).find(function(line){return line.trim();}).trim();
+            var summary=(first.match(/^.*?[.!?](?=\s|$)/) || [first])[0].slice(0,255);
+            await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot);});
+        }
+        async function recoverUnavailable(run,text,reassessment,reconcile) {
+            if(!current(run) || reassessment || reconcile || run.templateAction ||
+                !state.error || !['transport','runtime'].includes(state.error.code) || inquiry(text) || connectionCommand(text))return;
+            var s=controller.getState(), d=s.draft, patch={};
+            if(run.sourceAppended && (!run.descriptionReviewed ||
+                run.initialDescription && d.fields.description===run.initialDescription && !run.verbatimDescription)) {
+                // Appending the correction to source, or echoing the old description,
+                // is not evidence that the card incorporated it.
+                if(d.checked)mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
+                return;
+            }
+            // Only an initial narrative can be copied without a semantic review.
+            // Later answers must not authorize creation while their facts are missing.
+            var description=d.fields.description;
+            if(!run.sourceAppended) {
+                if(d.source || run.priorQuestions.length || !emptyChatField(s,'description') || text.trim().endsWith('?') ||
+                    state.transcript.filter(function(m){return m.role==='user' && !inquiry(m.text);}).length!==1)return;
+                description=text;patch.description=description;
+            }
+            if(typeof description!=='string' || !description.trim())return;
+            if(Object.keys(patch).length) {
+                var applied=await mutate(run,function(){return controller.chatUpdate({fields:patch},run.snapshot,run.sourceAppended ? undefined : text);});
+                if(!current(run) || !applied.ok)return;
+                run.sourceAppended=true;
+            }
+            await deriveSummary(run);
+            if(!current(run))return;
+            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
+            if(!current(run) || !checked.validation)return;
+            var verified=controller.getState();
+            if(checked.ok && verified.draft.checked && !verified.error) {
+                // Keep the safe provider diagnostic as a notice. It is no longer
+                // a blocking error once this exact card passed the local check.
+                var http=/\bHTTP ([45]\d{2})\b/.exec(state.error.message);
+                var diagnostic=(http?'Сервис модели вернул HTTP '+http[1]+'.':
+                    state.error.code==='runtime'?'Pico недоступен.':'Не удалось получить ответ Pico.')+' Карточка прошла локальную проверку Jira.';
+                if(!state.notices.includes(diagnostic))state.notices.push(diagnostic);
+                state.error=null;state.status='idle';
+                add('assistant','Pico недоступен. Проверка пройдена. Сверьте карточку и нажмите «Создать», когда будете готовы.');
+            }
+        }
         async function runTurn(text,reassessment,reconcile) {
             if(dead || active || applying || controller.getState().destroyed) return getState();
             controllerChanged();selectScope();
@@ -303,7 +369,13 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 state.error={code:'creation',message:'Создание уже выполняется или результат сохранён. Откройте новую задачу для нового разговора.'};return emit();
             }
             if(dead || controller.getState().draft.id!==d.id) return getState();
-            if((reconcile || !reassessment && d.checked && !inquiry(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
+            // Intercept before transcript, model history, source capture or checks.
+            // Only the generic settings hint is safe to retain and replay.
+            if(!reassessment && connectionCommand(text)) {
+                add('assistant','Откройте «Подключение AI», чтобы изменить URL, модель или ключ.');
+                state.error=null;state.status='idle';save();return emit();
+            }
+            if((reconcile || !reassessment && d.checked && !inquiry(text) && !connectionCommand(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
                 state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
             }
             var priorQuestions=(d.questions || []).map(function(q){return q.text;});
@@ -312,7 +384,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
             if(!reassessment) add('user',text);state.error=null;state.status='running';
             var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,
-                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false};active=run;
+                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || ''};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
                 getVerbatimDescription:function(){return run.verbatimDescription;},
@@ -363,6 +435,10 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 rememberMessages(run);
                 state.lastTurnUsage=safeUsage(result && result.usage,result && result.status) || state.lastTurnUsage;
                 var complete=!result || result.status==='complete' || result.status==='completed';
+                if(complete && state.status==='running' && run.descriptionReviewed && !run.templateAction) {
+                    await deriveSummary(run);
+                    if(!current(run))return getState();
+                }
                 if(complete && state.status==='running' && run.reviewPending) {
                     if(run.questionsEvaluated) {
                         var review=await controller.chatCompleteTemplateReview(run.snapshot,run.templateRevision,{signal:run.aborter.signal});
@@ -394,10 +470,12 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(omitAnsweredEcho(run.lastReply,run,controller.getState().draft)));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
                 if(result && ['error','limit'].indexOf(result.status)!==-1 && !state.error) setFailure(result,result.status==='limit',run);
+                await recoverUnavailable(run,text,reassessment,reconcile);
             } catch(error) {
                 if(!current(run)) return getState();
                 rememberMessages(run);state.status='error';
                 if(!state.error) setFailure(error,false,run);
+                await recoverUnavailable(run,text,reassessment,reconcile);
             } finally {
                 if(active===run) {active=null;if(run.session) run.session.dispose();save();emit();}
             }

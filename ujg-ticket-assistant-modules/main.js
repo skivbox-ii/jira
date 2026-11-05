@@ -60,11 +60,14 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                     var endpoint=new URL(config.apiBase);
                     if(!/^https?:$/.test(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash)throw new Error('config');
                 } catch(ignored) {return Promise.reject(new Error('Pico connection configuration invalid'));}
-                var settings=controller.getState().settings,budget=settings && settings.tokenBudget;
+                var settings=controller.getState().settings,budget=settings && settings.tokenBudget,httpStatus;
                 return Promise.resolve().then(function(){return shared.requestText(config,{systemPrompt:request.system,userPrompt:request.user,preservePrompt:true,
                     tokenBudget:budget,signal:request.signal,allowProtocolFallback:false},function(url,fetchOptions) {
-                    return (deps.fetchImpl || window.fetch.bind(window))(url,Object.assign({},fetchOptions,{signal:request.signal}));
-                });}).catch(function(){throw new Error('Pico transport failed');});
+                    return Promise.resolve((deps.fetchImpl || window.fetch.bind(window))(url,Object.assign({},fetchOptions,{signal:request.signal}))).then(function(response){
+                        if(response && response.status>=400 && response.status<=599)httpStatus=response.status;
+                        return response;
+                    });
+                });}).catch(function(){throw new Error(httpStatus?'Pico HTTP '+httpStatus:'Pico transport failed');});
             },onChange:function(){if(!dead && chatUi){chatUi.update(controller.getState());ui.updateChatUsage();scheduleResize();}}});
             chatUi=chatUiModule.create({$: $,controller:controller,chat:chat,editor:ui,baseUrl:baseUrl});
             chatUi.mount(root[0]);

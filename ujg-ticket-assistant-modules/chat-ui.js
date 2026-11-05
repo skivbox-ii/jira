@@ -4,6 +4,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         var $=options.$,c=options.controller,chat=options.chat,root,host,log,input,card,proposal,state,dead=false;
         var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false,retryReconcileScope=null;
         var messageRows=new Map(),expandedDrafts=new Map(),lastFields=null,changedFields=[],jiraRetrying=false,reconciling=false;
+        var localCheck=null;
         function button(label,name,attr,action) {
             return $('<button type="button">').attr(attr || {}).append(icon(name),$('<span>').text(label)).on('click',action);
         }
@@ -46,6 +47,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             card.find('[data-ta-card-details]').on('toggle',function(){if(scope)expandedDrafts.set(scope,this.open);});
             var actions=$('<div class="ta-actions">').appendTo(card);
             actions.append(button('Сверить с чатом','Check',{'data-ta-card-check':'',title:'Сверить поля с сохранённым разговором и проверить недостающие сведения'},reconcile),
+                button('Проверить поля без Pico','Check',{'data-ta-card-local-check':'',hidden:true,title:'Проверить текущие значения карточки по правилам Jira. Сообщения чата заново не обрабатываются.'},checkCurrentFields),
                 button('Редактировать','Settings',{'data-ta-card-edit':''},function(){openEditor(this);}),
                 button('Создать','Check',{'data-ta-card-create':''},function(){run(function(){return c.submit();});}).addClass('ta-primary'),
                 button('Отменить изменение','RefreshCw',{'data-ta-card-undo':''},function(){run(function(){return chat.undo();});}));
@@ -84,8 +86,32 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             update(c.getState());
         }
         function locked(d) {return !!d && (!!d.creation.issueKey || ['preflight','submitting','unknown','created'].indexOf(d.creation.status)!==-1);}
+        function canCheckFields(d) {
+            return !!d && !locked(d) && !d.checked && d.issueTypeId && d.templateId &&
+                typeof d.fields.summary==='string' && d.fields.summary.trim() &&
+                typeof d.fields.description==='string' && d.fields.description.trim();
+        }
+        async function checkCurrentFields() {
+            var s=chat.getState(),d=c.getState().draft;
+            if(dead || localCheck || sending || reconciling || s.status==='running' || c.getState().error || !canCheckFields(d))return;
+            var check=new AbortController();
+            var snapshot=c.chatSnapshot();
+            localCheck=check;update(c.getState());
+            var failed=false;
+            try {
+                var result=await c.chatValidate(snapshot,{signal:check.signal});
+                failed=result.code==='metadata';
+            } catch(error) {
+                failed=true;
+            } finally {
+                localCheck=null;if(!dead)update(c.getState());
+                if(failed && !dead && !check.signal.aborted && c.getState().draft?.id===d.id) {
+                    host.find('[data-ta-chat-error]').text('Не удалось проверить поля в Jira. Повторите проверку, когда Jira будет доступна.').prop('hidden',false);
+                }
+            }
+        }
         function reconcile() {
-            if(dead || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
+            if(dead || localCheck || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
             var requestedScope=scope;
             retryReconcileScope=requestedScope;lastSent='';
             reconciling=true;update(c.getState());
@@ -100,11 +126,11 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             });
         }
         function updateSend() {
-            var busy=chat.getState().status==='running' || sending || reconciling;
+            var busy=chat.getState().status==='running' || sending || reconciling || !!localCheck;
             host.find('[data-ta-chat-send]').prop('disabled',busy || !state || !state.draft || locked(state.draft) || !input.val().trim());
         }
         function send() {
-            var text=input.val();if(sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
+            var text=input.val();if(localCheck || sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
             lastSent=text;sending=true;updateSend();
             run(function(){return chat.send(text);}).then(function(){
                 if(dead)return;sending=false;
@@ -232,8 +258,10 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             card.find('[data-ta-card-reason]').text(reason || 'Готово к созданию.');
             card.find('[data-ta-card-create]').prop('disabled',!d.checked || !validation || !validation.ok || !!reason || !!state.error);
             card.find('[data-ta-card-edit]').prop('disabled',false);
-            card.find('[data-ta-card-check]').prop('disabled',reconciling || sending || s.status==='running' || locked(d) || typeof chat.reconcile!=='function');
+            card.find('[data-ta-card-check]').prop('disabled',!!localCheck || reconciling || sending || s.status==='running' || locked(d) || typeof chat.reconcile!=='function');
             card.find('[data-ta-card-undo]').prop('disabled',!s.canUndo || reconciling || s.status==='running' || locked(d));
+            card.find('[data-ta-card-local-check]').prop('hidden',!canCheckFields(d))
+                .prop('disabled',!!localCheck || !!state.error || reconciling || sending || s.status==='running');
             card.find('[data-ta-chat-accept],[data-ta-chat-reject]').prop('disabled',reconciling || s.status==='running' || locked(d));
             var status=card.find('[data-ta-card-creation]'),creationKey=JSON.stringify(creation);
             if(status.attr('data-state')!==creationKey) {
@@ -242,7 +270,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(creation.issueKey && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(creation.issueKey))status.append($('<a target="_blank" rel="noopener" data-ta-chat-issue-link>').attr('href',(options.baseUrl || '').replace(/\/+$/,'')+'/browse/'+encodeURIComponent(creation.issueKey)).text(creation.issueKey));
             }
         }
-        function destroy(){dead=true;messageRows.clear();expandedDrafts.clear();if(host)host.remove();if(root){root.removeClass('ta-chat-mode');root.find('[data-ta-chat-new]').remove();}}
+        function destroy(){dead=true;if(localCheck)localCheck.abort();messageRows.clear();expandedDrafts.clear();if(host)host.remove();if(root){root.removeClass('ta-chat-mode');root.find('[data-ta-chat-new]').remove();}}
         return {mount:mount,update:update,destroy:destroy};
     }
     return {create:create};

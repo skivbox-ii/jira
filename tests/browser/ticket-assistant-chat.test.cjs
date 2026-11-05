@@ -35,7 +35,8 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
         let invoked;const editor={openEditor(){invoked='editor';},openConnection(){invoked='connection';},openSettings(){invoked='budget';}};
         ui=loadUnit('chat-ui',{'_ujgTA_icons':loadUnit('icons',{},globals)},globals).create({$,controller:h.controller,chat,editor});ui.mount(window.document.querySelector('#root'));
         try {
-            window.document.querySelector('[data-ta-chat-input]').value='Текст запроса должен сохраниться';
+            const userText=scenario.name==='transport'?'Покажи доступные поля':'Текст запроса должен сохраниться';
+            window.document.querySelector('[data-ta-chat-input]').value=userText;
             $('[data-ta-chat-input]').trigger('input');
             window.document.querySelector('[data-ta-chat-send]').click();
             await new Promise(resolve=>setImmediate(resolve));
@@ -43,7 +44,7 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
             const state=chat.getState();
             assert.equal(state.status,'error');assert.equal(state.error.code,scenario.code);assert.equal(state.error.action,scenario.action);
             assert.match(state.error.message,scenario.message);assert.match(window.document.querySelector('[data-ta-chat-error]').textContent,scenario.message);
-            assert.equal(state.transcript[0].text,'Текст запроса должен сохраниться');
+            assert.equal(state.transcript[0].text,userText);
             assert.doesNotMatch(JSON.stringify(state),/PRIVATE_PROVIDER_BODY|synthetic-secret|secret\.invalid|Bearer/);
             if(['model','tools','time'].includes(scenario.name))assert.doesNotMatch(state.error.message,/бюджет|резерв|сократите контекст/i);
             if(scenario.calls!==undefined)assert.equal(calls,scenario.calls);
@@ -512,4 +513,93 @@ test('chat alone populates reporter, description and stated effort in the actual
     assert.deepEqual(fields.reporter,{name:'preview'});assert.deepEqual(fields.timetracking,{originalEstimate:'2h'});
     assert.match(fields.description,/Тестовая среда/);assert.match(fields.summary,/ошибк/i);
     assert.equal((await state()).draft.creation.status,'created');
+});
+
+test('chat reports a visible HTTP 502 without disclosing gateway content or guessing a CORS status',async t=>{
+    const {page}=await browserFixture(t);
+    for(const visible of [true,false]) {
+        await page.evaluate(async visible=>{
+            const fixture=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');
+            fixture.instance.destroy();
+            fixture.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{
+                api:fixture.api,storage:null,
+                readConfig:()=>({apiBase:'https://example.test',model:'offline',apiKey:'private-test-key'}),
+                fetchImpl:async()=>{
+                    if(visible)return new Response('private-gateway-body',{status:502});
+                    throw new TypeError('private-network-details');
+                }
+            });
+            await fixture.instance.ready;
+            await fixture.instance.controller.selectProject('DEMO');
+            await fixture.instance.controller.selectIssueType('10');
+            await fixture.instance.controller.selectTemplate('task');
+        },visible);
+        await page.locator('[data-ta-chat-input]').fill('Покажи шаблон');
+        await page.locator('[data-ta-chat-input]').press('Enter');
+        await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status==='error');
+        const message=await page.locator('[data-ta-chat-error]').innerText();
+        assert.doesNotMatch(message,/private-|example\.test/);
+        if(visible)assert.match(message,/HTTP 502/);
+        else assert.doesNotMatch(message,/502/);
+    }
+});
+
+test('a gateway outage still allows exactly one explicit issue creation from the chat card',async t=>{
+    const {page,state,errors}=await browserFixture(t);
+    await page.evaluate(async()=>{
+        const fixture=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');
+        fixture.instance.destroy();
+        fixture.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{
+            api:fixture.api,storage:null,
+            readConfig:()=>({apiBase:'https://example.test',model:'offline',apiKey:'fixture-key'}),
+            fetchImpl:async()=>new Response('',{status:502})
+        });
+        await fixture.instance.ready;
+        await fixture.instance.controller.selectProject('DEMO');
+        await fixture.instance.controller.selectIssueType('10');
+        await fixture.instance.controller.selectTemplate('deployment');
+    });
+    const description='Проверить карточку развёртывания в DEV. Пример для стенда DEV, сборка 1.0. Приёмка: открыть карточку и сверить описание. Работы на сервере не требуются.';
+    const composer=page.locator('[data-ta-chat-input]');
+    await composer.fill(description);await composer.press('Enter');
+    await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
+    const draft=(await state()).draft;
+    assert.equal(draft.fields.description,description);
+    assert.match(draft.fields.summary,/Проверить карточку развёртывания в DEV/);
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),0);
+    const create=page.locator('[data-ta-card-create]');
+    assert.equal(await create.isEnabled(),true);
+    await create.click();
+    await page.waitForSelector('[data-ta-chat-issue-link]');
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),1);
+    assert.equal(await page.evaluate(()=>window.taPreview.createdPayload.fields.description),description);
+    assert.equal(await create.isDisabled(),true);
+    assert.deepEqual(errors,[]);
+});
+
+test('after a transport failure a user can validate the current edited card without asking Pico again',async t=>{
+    const {page}=await browserFixture(t);
+    await page.evaluate(async()=>{
+        const fixture=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');
+        fixture.instance.destroy();
+        fixture.gatewayCalls=0;
+        fixture.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{
+            api:fixture.api,storage:null,requestText:async()=>{fixture.gatewayCalls++;throw Error('Pico transport failed');}
+        });
+        await fixture.instance.ready;
+        const c=fixture.instance.controller;
+        await c.selectProject('DEMO');await c.selectIssueType('10');await c.selectTemplate('deployment');
+        await c.updateField('summary','Моя тема');
+        await c.updateField('description','Моё описание для проверки карточки в Jira.');
+    });
+    await page.locator('[data-ta-chat-input]').fill('Сверь детали карточки');
+    await page.locator('[data-ta-chat-input]').press('Enter');
+    const local=page.locator('[data-ta-card-local-check]');
+    await local.waitFor({state:'visible',timeout:2000});
+    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
+    await local.click();
+    await page.waitForFunction(()=>!!window.taPreview.instance.controller.getState().draft.checked);
+    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true);
+    assert.equal(await page.evaluate(()=>window.taPreview.gatewayCalls),1);
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),0);
 });
