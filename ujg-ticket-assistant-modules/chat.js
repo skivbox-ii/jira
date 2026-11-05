@@ -3,7 +3,8 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
     function copy(value) {return JSON.parse(JSON.stringify(value));}
     var failures={
         config:{action:'connection',message:'Подключение AI не настроено или некорректно. Откройте «Подключение AI» и проверьте URL, модель и ключ. Текст сохранён.'},
-        response:{action:'connection',message:'Pico вернул ответ неверной структуры. Проверьте, поддерживает ли выбранная модель формат инструментов Pico, или заполните задачу в редакторе. Текст сохранён.'},
+        response:{action:'retry',message:'Pico вернул ответ неверного формата. Действия из этого ответа не применены. Нажмите «Повторить». Текст сохранён.'},
+        'response-repair':{action:'retry',message:'Pico не смог исправить формат ответа за одну попытку. Действия из этого ответа не применены. Нажмите «Повторить» или продолжите заполнение в редакторе. Текст сохранён.'},
         'model-calls':{action:'editor',message:'Достигнут предел запросов к модели за один ход (не более 8). Уточните задачу в следующем сообщении или продолжите в редакторе. Текст сохранён.'},
         'tool-calls':{action:'editor',message:'Достигнут предел вызовов инструментов за один ход (не более 12). Уточните следующий шаг или продолжите в редакторе. Текст сохранён.'},
         elapsed:{action:'editor',message:'Истекло время работы Pico за один ход. Отправьте более конкретный запрос или продолжите в редакторе. Текст сохранён.'},
@@ -21,6 +22,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             code=isLimit?'limit':'transport';
             if(typeof reason==='string') {
                 if(/^(?:AI config is invalid|Pico connection configuration invalid)$/.test(reason))code='config';
+                else if(reason==='Pico response correction failed')code='response-repair';
                 else if(/^(?:Pico response must be a JSON text envelope|Invalid Pico text envelope|Malformed Pico tool call|Duplicate Pico tool call id|Shared requestText returned no text|JSON nesting exceeds safety limit|Unsafe JSON property)$/.test(reason) || /^(?:Unknown Pico tool|Invalid arguments for Pico tool): /.test(reason))code='response';
                 else if(/^Pico model call limit reached(?: \(maximum \d+ per turn\))?\.$/.test(reason))code='model-calls';
                 else if(/^Pico tool call limit reached(?: \(maximum \d+ per turn\))?\.$/.test(reason))code='tool-calls';
@@ -40,7 +42,11 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         return usage;
     }
     var sequence=0;
-    var instructions='Ты Pico, помощник подготовки одной задачи Jira. Пиши по-русски. Сначала извлеки известные факты, затем задай один следующий содержательный вопрос. '+
+    var instructions='Ты Pico, помощник подготовки одной задачи Jira. Пиши по-русски. '+
+        'summary — короткое название действия, подробности — в description; пользователю показывай только следующий вопрос или результат, без списков «Инструменты: [...]». '+
+        'Если пользователь передаёт сведения для задачи, сначала примени уже известные summary и description через update_task, дождись результата и только затем задай один следующий содержательный вопрос о недостающих сведениях. Не откладывай заполнение известных полей до ответа на уточнение. '+
+        'Используй только известные факты; не выдумывай содержание полей. Чистый запрос просмотра полей, чтения или изменения шаблона не является сведениями для задачи: выполняй только запрошенный просмотр или предложение шаблона, не меняя задачу и её источник. '+
+        'Точный пример формата update_task: {"text":"","toolCalls":[{"id":"unique_update_id","name":"update_task","arguments":{"fields":{"summary":"Краткое название","description":"Известные факты"},"questions":[{"id":"q1","text":"Что ещё нужно уточнить?","required":true}]}}]}. questions находится только внутри arguments, никогда рядом с id/name/arguments; при отсутствии вопросов передай questions:[]. '+
         'Актуальное состояние приложения авторитетно. Не повторяй уже отвеченные вопросы. Используй update_task для полей и вопросов, validate_task для готовности. '+
         'Не выдумывай IDs: используй list_fields и find_options; неоднозначные варианты предложи выбрать человеку. '+
         'Выбор типа и шаблона выполняет человек в интерфейсе; тип берётся из привязки шаблона. '+
@@ -175,7 +181,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             save();emit();
             try {
                 if(!runtime || typeof runtime.createSession!=='function') throw new Error('Runtime unavailable');
-                run.session=runtime.createSession({system:instructions,messages:copy(messages),tools:tools,requestText:options.requestText,
+                run.session=runtime.createSession({system:instructions,messages:copy(messages),tools:tools,requestText:options.requestText,allowPlainTextFinal:true,repairMisplacedQuestions:true,
                     tokenBudget:controller.getState().settings.tokenBudget,onEvent:function(e) {event(run,e);},getContext:function() {if(!current(run)) throw new Error('stale');return context();}});
                 var result=await run.session.prompt(text);
                 if(!current(run)) return getState();

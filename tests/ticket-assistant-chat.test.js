@@ -17,6 +17,88 @@ async function setup(prompt) {
     const chat=Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{throw Error('No live');},onChange:s=>changes.push(s)});
     return {...h,Chat,runtime,sessions,chat,changes};
 }
+
+test('primary task chat keeps list_fields, envelope final and later Russian prose without mutating task',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
+    const h=await setup();h.chat.destroy();
+    await h.controller.updateField('summary','Ручное название');
+    const before=JSON.stringify(h.controller.getState().draft), requests=[];
+    const prose='Известные факты:\n1. Ошибка запуска (DEV, TEST, PREPROD).\nИнструменты: ["update_task"]';
+    const answers=[JSON.stringify({text:'Проверяю доступные поля',toolCalls:[{id:'fields',name:'list_fields',arguments:{}}]}),
+        JSON.stringify({text:'Как воспроизвести ошибку?',toolCalls:[]}), prose];
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{requests.push(r);return {text:answers.shift()};}});
+    await chat.send('Покажи поля'); assert.equal(chat.getState().error,null);
+    await chat.send('При запуске');
+    assert.equal(chat.getState().error,null);assert.equal(chat.getState().status,'idle');
+    assert.equal(chat.getState().transcript.at(-1).text,prose);
+    assert.equal(JSON.stringify(h.controller.getState().draft),before);assert.equal(requests.length,3);
+    assert.equal(chat.getState().lastTurnUsage.toolCalls,0);
+    chat.destroy();
+    const restored=h.Chat.create({controller:h.controller,runtime,store:h.store});
+    assert.equal(restored.getState().transcript.at(-1).text,prose);restored.destroy();
+});
+
+test('real task chat applies known fields before final and preserves manual summary on later updates',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
+    const h=await setup();h.chat.destroy();let n=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        n++;
+        if(n===1 || n===3) return {text:JSON.stringify({text:'',toolCalls:[{id:'write'+n,name:'update_task',arguments:{fields:{summary:'Ошибка запуска',description:n===1?'Приложение не запускается':'Ошибка повторяется'},questions:[]}}]})};
+        const state=h.controller.getState();
+        assert.equal(state.draft.fields.summary,n===2?'Ошибка запуска':'Ручное название');
+        assert.equal(state.draft.fields.description,n===2?'Приложение не запускается':'Ошибка повторяется');
+        assert.match(r.user,/toolResult/);return {text:'Когда впервые появилась ошибка?'};
+    }});
+    await chat.send('Приложение не запускается');assert.equal(chat.getState().error,null);
+    await h.controller.updateField('summary','Ручное название');
+    await chat.send('Ошибка повторяется');assert.equal(chat.getState().error,null);assert.equal(n,4);chat.destroy();
+});
+
+test('real task chat template read plus plain final preserves the canonical draft',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
+    const h=await setup();h.chat.destroy();let n=0;const before=JSON.stringify(h.controller.getState().draft);
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>({text:++n===1?
+        JSON.stringify({text:'',toolCalls:[{id:'read',name:'read_template',arguments:{}}]}):'Шаблон показан выше.'})});
+    await chat.send('Покажи шаблон');assert.equal(chat.getState().error,null);
+    assert.ok(chat.getState().transcript.some(m=>m.kind==='template'));
+    assert.equal(JSON.stringify(h.controller.getState().draft),before);chat.destroy();
+});
+
+for(const correction of ['valid','malformed','changed','prose']) test('primary chat safely corrects misplaced call_6 questions: '+correction,async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
+    const h=await setup();h.chat.destroy();let n=0;
+    const before=JSON.stringify(h.controller.getState().draft);
+    const misplaced={text:'',toolCalls:[{id:'call_6',name:'update_task',arguments:{fields:{summary:'Ошибка запуска',description:'Приложение не запускается'}},questions:[{id:'q1',text:'Когда появилась ошибка?',required:true}]}]};
+    const fixed=JSON.parse(JSON.stringify(misplaced));fixed.toolCalls[0].arguments.questions=fixed.toolCalls[0].questions;delete fixed.toolCalls[0].questions;
+    if(correction==='changed')fixed.toolCalls[0].arguments.fields.summary='Другое значение';
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{
+        n++;if(n===2)assert.equal(JSON.stringify(h.controller.getState().draft),before);
+        return {text:n===1?JSON.stringify(misplaced):n===2?(correction==='malformed'?JSON.stringify(misplaced):correction==='prose'?'Когда появилась ошибка?':JSON.stringify(fixed)):'Когда появилась ошибка?'};
+    }});
+    await chat.send('Приложение не запускается');
+    if(correction==='valid') {
+        assert.equal(chat.getState().error,null);assert.equal(n,3);
+        const d=h.controller.getState().draft;assert.equal(d.fields.summary,'Ошибка запуска');assert.equal(d.fields.description,'Приложение не запускается');
+        assert.equal(d.questions[0].text,'Когда появилась ошибка?');assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
+    } else {
+        assert.equal(chat.getState().error.code,'response-repair');assert.equal(chat.getState().error.action,'retry');
+        assert.match(chat.getState().error.message,/Повторить/);assert.equal(n,2);
+        assert.equal(chat.getState().transcript.length,1);assert.equal(JSON.stringify(h.controller.getState().draft),before);
+    }
+    chat.destroy();
+});
+
+for(const bad of ['Ответ\n{"toolCalls":', 'update_task(summary="Changed")',
+    JSON.stringify({text:'Нельзя показывать частичный ответ',toolCalls:[{id:'good',name:'update_task',arguments:{fields:{summary:'Changed'}}},{id:'bad',name:'unknown',arguments:{}}]})]) {
+    test('primary task chat rejects malformed output without transcript or task partial effects: '+bad.slice(0,35),async()=>{
+        const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
+        const h=await setup();h.chat.destroy();let n=0;const before=JSON.stringify(h.controller.getState().draft);
+        const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{n++;return {text:bad};}});
+        await chat.send('Проверка');assert.equal(chat.getState().status,'error');assert.equal(chat.getState().error.code,'response');
+        assert.equal(chat.getState().transcript.length,1);assert.equal(n,1);
+        assert.equal(JSON.stringify(h.controller.getState().draft),before);chat.destroy();
+    });
+}
 test('chat tools progressively fill one canonical task, preserve source and unlock existing creator',async()=>{
     const h=await setup(async(c,s,text)=>{
         await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Investigate failure'},questions:[]},{});

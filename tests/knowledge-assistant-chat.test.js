@@ -34,6 +34,14 @@ function setup(script, options = {}) {
 const searchRead = (_r, n) => n === 1 ? envelope('', [call('search', 'search_confluence', {text: 'DevOps'})]) :
     n === 2 ? envelope('', [call('read', 'read_page', {id: 'confluence:42', offset: 0})]) : envelope('Use the template [[confluence:42@0:19]]');
 
+test('knowledge caller keeps strict envelope default with regenerated shared vendor', async () => {
+    const h = setup(() => ({text:'Обычный русский ответ без оболочки.'}));
+    const result = await h.chat.prompt('Правила?');
+    assert.equal(result.status, 'error'); assert.equal(h.requests.length, 1);
+    assert.equal(h.events.some(e=>e.type==='assistant'), false); assert.equal(h.reads.length, 0);
+    h.chat.dispose();
+});
+
 test('actual vendored Pico searches, reads and emits only sanitized text and plain source cards', async () => {
     const h = setup(searchRead);
     const result = await h.chat.prompt('How do I create a DevOps task?');

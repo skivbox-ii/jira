@@ -32,10 +32,32 @@ export function checkTree(value, depth = 0) {
 }
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => record(value) && Object.keys(value).every(k => keys.includes(k)) && keys.every(k => Object.hasOwn(value, k));
-export function parseEnvelope(raw, tools, seenIds) {
+// Compatibility is explicit and applies only to unstructured final text. Never
+// salvage JSON, unwrap fences, extract calls, or infer a write from prose.
+function isPlainProse(raw, tools) {
+    const text = raw.trim();
+    if (!text || /^["'\[]/.test(text) || /[{}`<>\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return false;
+    if (/["']?\b(?:tool_?calls?|function_?calls?|arguments|text|name|id)\b["']?\s*:/i.test(text)) return false;
+    if (tools.some(t => new RegExp('\\b' + t.name + '\\s*\\(').test(text)) ||
+        /\b[a-zA-Z_]\w*\s*\([^\n)]*=/.test(text)) return false;
+    // Benign inline lists (including tool names) are display data. Incomplete or
+    // nested structured fragments still fail closed; no list becomes a call.
+    let listsValid = true;
+    const rest = text.replace(/\[[^\[\]]*\]/g, list => {
+        try {
+            if (!JSON.parse(list).every(v => v === null || ['string', 'number', 'boolean'].includes(typeof v))) listsValid = false;
+        } catch {listsValid = false;}
+        return '';
+    });
+    return listsValid && !/[\[\]]/.test(rest);
+}
+export function parseEnvelope(raw, tools, seenIds, allowPlainTextFinal = false) {
     if (typeof raw !== 'string' || raw.length > MAX_PROMPT_BYTES) throw Error('Invalid Pico text envelope');
     let value;
-    try {value = JSON.parse(raw);} catch {throw Error('Pico response must be a JSON text envelope');}
+    try {value = JSON.parse(raw);} catch {
+        if (allowPlainTextFinal === true && isPlainProse(raw, tools)) return {text: raw, toolCalls: []};
+        throw Error('Pico response must be a JSON text envelope');
+    }
     checkTree(value);
     if (!exact(value, ['text', 'toolCalls']) || typeof value.text !== 'string' || !Array.isArray(value.toolCalls) ||
         (!value.text.trim() && !value.toolCalls.length)) throw Error('Invalid Pico text envelope');
@@ -52,6 +74,28 @@ export function parseEnvelope(raw, tools, seenIds) {
         if (!Value.Check(tool.parameters, call.arguments)) throw Error('Invalid arguments for Pico tool: ' + call.name);
     }
     return value;
+}
+// Recognize exactly the observed misplaced member. This candidate is validation
+// evidence for a reformat request only; it is never published or executed.
+export function misplacedQuestionsCandidate(raw, tools, seenIds) {
+    try {
+        const candidate = JSON.parse(raw); checkTree(candidate);
+        if (!exact(candidate, ['text', 'toolCalls']) || !Array.isArray(candidate.toolCalls)) return null;
+        let found = false;
+        for (const call of candidate.toolCalls) {
+            if (!Object.hasOwn(call, 'questions')) continue;
+            if (!exact(call, ['id', 'name', 'arguments', 'questions']) || call.name !== 'update_task' ||
+                !record(call.arguments) || Object.hasOwn(call.arguments, 'questions')) return null;
+            call.arguments.questions = call.questions; delete call.questions; found = true;
+        }
+        return found ? parseEnvelope(JSON.stringify(candidate), tools, seenIds) : null;
+    } catch {return null;}
+}
+export function sameJson(a, b) {
+    if (a === b) return true;
+    if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(k => Object.hasOwn(b, k) && sameJson(a[k], b[k]));
 }
 export function makeRequest(system, tools, messages, authoritativeContext, compaction) {
     const instructions = 'You are Pico, a Jira task preparation assistant. Follow application rules. ' +

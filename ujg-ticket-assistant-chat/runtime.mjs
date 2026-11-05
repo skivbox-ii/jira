@@ -1,6 +1,6 @@
 import { Agent } from '@earendil-works/pi-agent-core';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
-import { abortable, copy, emptyUsage, estimateTokens, makeRequest, MAX_PROMPT_BYTES, parseEnvelope, requestSize, validateBudget } from './transport.mjs';
+import { abortable, copy, emptyUsage, estimateTokens, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseEnvelope, requestSize, sameJson, validateBudget } from './transport.mjs';
 
 export const VERSION = '1.4.0';
 export const LIMITS = Object.freeze({modelCalls: 8, toolCalls: 12, wallMs: 180000});
@@ -56,7 +56,7 @@ function restore(messages) {
     return repairPairs(values);
 }
 
-export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}} = {}) {
+export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false} = {}) {
     if (typeof requestText !== 'function') throw Error('Pico requires the configured shared requestText callback');
     if (typeof system !== 'string' || typeof onEvent !== 'function' || (getContext !== undefined && typeof getContext !== 'function')) throw Error('Invalid Pico session options');
     const budget = validateBudget(tokenBudget), bounds = {};
@@ -114,7 +114,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
             try {
                 live(run, signal);
                 if (run.usage.modelCalls >= bounds.modelCalls) limit('Pico model call limit reached (maximum ' + bounds.modelCalls + ' per turn).');
-                const state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
+                let state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
                 live(run, signal);
                 const full = context.messages.filter(m => m.role !== 'system');
                 let projected = full, compaction = null;
@@ -133,16 +133,37 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                 }
                 if (!fits()) limit('Pico context limit reached: instructions, tools, current turn and authoritative state must fit with the configured response reserve. History is preserved.');
                 if (compaction) {run.usage.compactions++; emit({type: 'compaction', ...compaction});}
-                run.usage.modelCalls++; run.usage.inputTokens += size.tokens;
-                const response = await abortable(Promise.resolve().then(() => {
-                    live(run, signal); return requestText({...request, signal});
-                }), signal);
-                live(run, signal);
-                if (!response || typeof response.text !== 'string') throw Error('Shared requestText returned no text');
-                const tokens = estimateTokens(response.text);
-                run.usage.outputTokens += tokens;
-                if (tokens > budget.reserve) limit('Pico response reserve exceeded. Response was not applied; history is preserved.');
-                const envelope = parseEnvelope(response.text, tools, seenIds);
+                async function ask() {
+                    live(run, signal);
+                    if (run.usage.modelCalls >= bounds.modelCalls) limit('Pico model call limit reached (maximum ' + bounds.modelCalls + ' per turn).');
+                    if (!fits()) limit('Pico context limit reached: corrective request must fit with the configured response reserve. History is preserved.');
+                    run.usage.modelCalls++; run.usage.inputTokens += size.tokens;
+                    const response = await abortable(Promise.resolve().then(() => {
+                        live(run, signal); return requestText({...request, signal});
+                    }), signal);
+                    live(run, signal);
+                    if (!response || typeof response.text !== 'string') throw Error('Shared requestText returned no text');
+                    const tokens = estimateTokens(response.text);
+                    run.usage.outputTokens += tokens;
+                    if (tokens > budget.reserve) limit('Pico response reserve exceeded. Response was not applied; history is preserved.');
+                    return {response, tokens};
+                }
+                let {response, tokens} = await ask(), envelope;
+                try {envelope = parseEnvelope(response.text, tools, seenIds, allowPlainTextFinal);} catch (error) {
+                    const candidate = repairMisplacedQuestions === true && !run.reformatted ? misplacedQuestionsCandidate(response.text, tools, seenIds) : null;
+                    if (!candidate) throw error;
+                    run.reformatted = true;
+                    state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
+                    live(run, signal);
+                    request = makeRequest(system + '\nReformat the previous invalid response exactly once. No tools from it were executed. Move update_task questions inside arguments; preserve all text, IDs, names and argument values. Return the complete original batch in a strict JSON envelope, with no extra members or prose.',
+                        tools, [...projected, {role:'assistant', content:[{type:'text', text:response.text}]}], state, compaction);
+                    size = requestSize(request);
+                    try {
+                        ({response, tokens} = await ask());
+                        envelope = parseEnvelope(response.text, tools, seenIds);
+                        if (!sameJson(envelope, candidate)) throw Error('Changed correction');
+                    } catch {throw Error('Pico response correction failed');}
+                }
                 if (envelope.toolCalls.length > bounds.toolCalls - run.usage.toolCalls) limit('Pico tool call limit reached (maximum ' + bounds.toolCalls + ' per turn).');
                 for (const c of envelope.toolCalls) seenIds.add(c.id);
                 const content = [...(envelope.text ? [{type: 'text', text: envelope.text}] : []), ...envelope.toolCalls.map(c => ({type: 'toolCall', ...c}))];

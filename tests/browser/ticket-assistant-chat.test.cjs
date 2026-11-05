@@ -12,7 +12,7 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
     const actual=await import('../../ujg-ticket-assistant-chat/runtime.mjs');
     const cases=[
         {name:'config',code:'config',message:/подключени/i,action:'connection',request:()=>{throw Error('Pico connection configuration invalid');}},
-        {name:'response',code:'response',message:/структур/i,action:'connection',request:()=>({text:'PRIVATE_PROVIDER_BODY <b>Bearer synthetic-secret</b>'})},
+        {name:'response',code:'response',message:/формат/i,action:'retry',request:()=>({text:'PRIVATE_PROVIDER_BODY <b>Bearer synthetic-secret</b>'})},
         {name:'model',code:'model-calls',message:/модели/i,action:'editor',calls:8,loop:1},
         {name:'tools',code:'tool-calls',message:/инструмент/i,action:'editor',calls:7,loop:2},
         {name:'time',code:'elapsed',message:/врем/i,action:'editor',limits:{wallMs:20},request:()=>new Promise(()=>{})},
@@ -35,7 +35,12 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
         let invoked;const editor={openEditor(){invoked='editor';},openConnection(){invoked='connection';},openSettings(){invoked='budget';}};
         ui=loadUnit('chat-ui',{'_ujgTA_icons':loadUnit('icons',{},globals)},globals).create({$,controller:h.controller,chat,editor});ui.mount(window.document.querySelector('#root'));
         try {
-            await chat.send('Текст запроса должен сохраниться');const state=chat.getState();
+            window.document.querySelector('[data-ta-chat-input]').value='Текст запроса должен сохраниться';
+            $('[data-ta-chat-input]').trigger('input');
+            window.document.querySelector('[data-ta-chat-send]').click();
+            await new Promise(resolve=>setImmediate(resolve));
+            while(chat.getState().status==='running')await new Promise(resolve=>setImmediate(resolve));
+            const state=chat.getState();
             assert.equal(state.status,'error');assert.equal(state.error.code,scenario.code);assert.equal(state.error.action,scenario.action);
             assert.match(state.error.message,scenario.message);assert.match(window.document.querySelector('[data-ta-chat-error]').textContent,scenario.message);
             assert.equal(state.transcript[0].text,'Текст запроса должен сохраниться');
@@ -45,10 +50,52 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
             if(scenario.action!=='retry') {
                 const selector={connection:'[data-ta-chat-configure]',budget:'[data-ta-chat-error-budget]',editor:'[data-ta-chat-error-edit]'}[scenario.action];
                 const action=window.document.querySelector(selector);assert.equal(action.hidden,false);action.click();assert.equal(invoked,scenario.action);
+            } else {
+                assert.equal(window.document.querySelector('[data-ta-chat-retry]').hidden,false);
+                assert.equal(window.document.querySelector('[data-ta-chat-configure]').hidden,true);
+                if(scenario.name==='response') {
+                    assert.match(state.error.message,/Текст сохранён/);
+                    assert.doesNotMatch(state.error.message,/подключени|URL|ключ/i);
+                }
             }
             assert.equal(h.controller.getState().draft.checked,null);
         } finally {ui.destroy();chat.destroy();h.controller.destroy();window.close();}
     });
+});
+
+test('chat repairs a misplaced question and keeps the subsequent prose and updated card visible', async t => {
+    const {page, send, errors} = await browserFixture(t);
+    await page.evaluate(async () => {
+        const records = window.taPreview;
+        const Gadget = window.taRequire('_ujgTicketAssistantRuntime');
+        const fields = {summary:'Восстановить доступ', description:'Доступ к тестовому сервису прерван.'};
+        const questions = [{id:'env', text:'В какой среде произошёл сбой?', required:true}];
+        const call = {id:'update_1', name:'update_task', arguments:{fields}};
+        const responses = [
+            JSON.stringify({text:'', toolCalls:[{...call, questions}]}),
+            JSON.stringify({text:'', toolCalls:[{...call, arguments:{fields, questions}}]}),
+            'Известные факты:\n1. Доступ прерван.\nВ какой среде (DEV, TEST, PREPROD) произошёл сбой?'
+        ];
+        records.cardAtRequest = [];
+        records.instance = new Gadget({getGadgetContentEl:() => window.jQuery('#ticket-assistant')}, {
+            api:records.api, storage:null,
+            requestText:async () => {
+                records.cardAtRequest.push(records.instance.controller.getState().draft.fields.summary || null);
+                return {text:responses.shift()};
+            }
+        });
+        await records.instance.ready;
+        await records.instance.controller.selectProject('DEMO');
+        await records.instance.controller.selectIssueType('10');
+        await records.instance.controller.selectTemplate('task');
+    });
+    await send('Доступ к сервису прерван. Нужно его восстановить.');
+    assert.deepEqual(await page.evaluate(() => window.taPreview.cardAtRequest), [null, null, 'Восстановить доступ']);
+    assert.match(await page.locator('[data-ta-card-field="description"]').innerText(), /Доступ к тестовому сервису/);
+    assert.match(await page.locator('[data-ta-chat-log]').innerText(), /В какой среде \(DEV, TEST, PREPROD\)/);
+    assert.equal(await page.locator('[data-ta-chat-error]').isVisible(), false);
+    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(), true);
+    assert.deepEqual(errors, []);
 });
 
 test('default shared bridge identifies missing/invalid configuration before HTTP and opens connection settings',async t=>{

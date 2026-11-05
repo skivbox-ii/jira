@@ -23,7 +23,8 @@ AMD module `_ujgTA_picoRuntime` has no dependencies. Registration and factory
 resolution do not touch browser/Node globals. Pi initializes lazily on the first
 `createSession`. Actual sessions use standard modern browser APIs (AbortController,
 TextEncoder, structuredClone, performance, timers, Web Crypto), targeting ES2022.
-The bundle creates no window/global runtime variable. Other widgets are unchanged.
+The bundle creates no window/global runtime variable. The knowledge widget also
+embeds this shared vendor, under its own AMD name; its caller keeps strict defaults.
 
 ## Session contract
 
@@ -129,7 +130,7 @@ settles promptly and discards late results from an uncooperative callback.
 Domain execute callbacks still own cancellation/revision checks before writes;
 the runtime cannot undo arbitrary external side effects inside host callbacks.
 
-Every response is exactly one JSON text envelope, no fences:
+By default every response must be exactly one JSON text envelope, no fences:
 
 ```json
 {"text":"Next question?","toolCalls":[]}
@@ -137,6 +138,41 @@ Every response is exactly one JSON text envelope, no fences:
 
 ```json
 {"text":"","toolCalls":[{"id":"lookup_1","name":"get_task","arguments":{}}]}
+```
+
+Task chat explicitly enables `allowPlainTextFinal:true`: genuine unstructured
+prose can terminate a response as inert assistant text with zero tools. Empty
+output, JSON values, malformed structured output, fences and tool-like syntax
+remain errors. This conservative fallback does not extract or infer tool calls.
+Numbered facts, parentheses such as `ENV (DEV, TEST, PREPROD)`, bare tool-name
+mentions and benign inline primitive lists such as `Инструменты: ["update_task"]`
+remain inert prose. Embedded objects and direct calls such as `update_task(...)`
+are rejected rather than extracted.
+The model is still instructed to use envelopes. Other callers, including knowledge,
+do not opt in and continue rejecting plain text.
+An invalid response is reported as a format error with retained user text and a
+“Повторить” button. Only configuration failures point to connection settings.
+
+Task chat also enables `repairMisplacedQuestions:true`. At most once per user
+turn, a JSON envelope with `questions` mistakenly next to an `update_task` call's
+`arguments` can trigger one corrective model request. Every other member and the
+whole batch must already validate when that member is relocated for inspection;
+conflicting questions, unknown members/tools, unsafe keys and invalid arguments
+are rejected immediately. The inspection candidate is never executed. Only a
+strict provider-returned envelope preserving all text, IDs, tools and values
+(apart from that relocation) can execute. Invalid or changed corrections stop
+with a safe error and a visible “Повторить” action. No malformed text or calls are
+published to transcript/history, and no IDs are reserved before full validation.
+The corrective request uses the same transport, refreshed authoritative context,
+model-call/time/context/response bounds and token accounting. Knowledge and other
+callers keep correction disabled by default.
+
+Task instructions require applying known summary and description with
+`update_task` before asking for missing facts, while preserving manual fields and
+pure template/read requests. Example (questions belongs inside arguments):
+
+```json
+{"text":"","toolCalls":[{"id":"update_1","name":"update_task","arguments":{"fields":{"summary":"Ошибка запуска","description":"Приложение не запускается"},"questions":[{"id":"q1","text":"Когда появилась ошибка?","required":true}]}}]}
 ```
 
 IDs contain 1–128 ASCII letters/digits/underscore/hyphen and must be unique across
@@ -174,8 +210,9 @@ questions, task exceptions and template revisions; it is refreshed for every
 model request. The full transcript remains available through `getMessages()`.
 This is deterministic context projection, not model-generated summarization.
 Without a supplier, or when the current turn/state/instructions alone do not fit,
-the runtime stops visibly and preserves the transcript. No automatic model retry
-or tool replay occurs. Host-supplied full draft/source data may itself exhaust the
+the runtime stops visibly and preserves the transcript. Except for the explicit
+single reformat request described above, no automatic model retry occurs; tools
+are never replayed. Host-supplied full draft/source data may itself exhaust the
 budget; it is never silently shortened.
 
 All runtime tests use mocked text/fetch/tools, with actual Pi Core execution;

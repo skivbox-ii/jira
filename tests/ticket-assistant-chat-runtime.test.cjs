@@ -11,6 +11,78 @@ const tool = (execute = async () => ({summary: 'Current task'})) => ({name: 'get
 function deferred() { let resolve; const promise = new Promise(r => {resolve = r;}); return {promise, resolve}; }
 const tick = () => new Promise(r => setImmediate(r));
 
+test('scoped correction reformats misplaced update_task questions once before executing',async()=>{
+    const {createSession}=await runtime();let requests=0,executed=0;const events=[];
+    const parameters={type:'object',properties:{fields:{type:'object'},questions:{type:'array',items:{type:'object'}}},required:['fields'],additionalProperties:false};
+    const misplaced={text:'',toolCalls:[{id:'call_6',name:'update_task',arguments:{fields:{summary:'Ошибка',description:'Не запускается'}},questions:[{id:'q1',text:'Когда?',required:true}]}]};
+    const fixed={text:'',toolCalls:[{id:'call_6',name:'update_task',arguments:{...misplaced.toolCalls[0].arguments,questions:misplaced.toolCalls[0].questions}}]};
+    const s=createSession({repairMisplacedQuestions:true,tools:[{name:'update_task',parameters,execute:args=>{executed++;assert.deepEqual(args,fixed.toolCalls[0].arguments);return {ok:true};}}],onEvent:e=>events.push(e),
+        requestText:async r=>{requests++;if(requests===2){assert.equal(executed,0);assert.equal(events.some(e=>e.type==='tool'),false);assert.match(r.system,/questions.*arguments/);assert.match(r.user,/call_6/);}return requests===1?{text:JSON.stringify(misplaced)}:requests===2?{text:JSON.stringify(fixed)}:envelope('Готово');}});
+    const result=await s.prompt('Ошибка');assert.equal(result.status,'complete');assert.equal(executed,1);assert.equal(result.usage.modelCalls,3);assert.equal(result.usage.toolCalls,1);s.dispose();
+});
+
+for(const limits of [{},{modelCalls:1}]) test('failed scoped correction is bounded and has zero effects '+JSON.stringify(limits),async()=>{
+    const {createSession}=await runtime();let requests=0,executed=0;
+    const s=createSession({repairMisplacedQuestions:true,limits,tools:[{name:'update_task',parameters:{type:'object',properties:{fields:{type:'object'},questions:{type:'array'}},required:['fields'],additionalProperties:false},execute:()=>{executed++;}}],
+        requestText:async()=>{requests++;return {text:JSON.stringify({text:'',toolCalls:[{id:'call_6',name:'update_task',arguments:{fields:{summary:'Ошибка',description:'Не запускается'}},questions:[]}]})};}});
+    const result=await s.prompt('Ошибка');assert.equal(result.status,limits.modelCalls?'limit':'error');assert.equal(executed,0);assert.equal(requests,limits.modelCalls?1:2);s.dispose();
+});
+
+for(const variant of ['default','extra','conflict','invalid','unknown','duplicate']) test('correction cannot relax strict call validation: '+variant,async()=>{
+    const {createSession}=await runtime();let requests=0,executed=0;
+    const c={id:'call_6',name:'update_task',arguments:{fields:{summary:'Ошибка'}},questions:[]};
+    if(variant==='extra')c.extra=true;
+    if(variant==='conflict')c.arguments.questions=[];
+    if(variant==='invalid')c.questions='not an array';
+    if(variant==='unknown')c.name='unknown';
+    const s=createSession({repairMisplacedQuestions:variant!=='default',tools:[{name:'update_task',parameters:{type:'object',properties:{fields:{type:'object'},questions:{type:'array'}},required:['fields'],additionalProperties:false},execute:()=>{executed++;}}],
+        requestText:async()=>{requests++;return envelope('',variant==='duplicate'?[c,c]:[c]);}});
+    assert.equal((await s.prompt('Ошибка')).status,'error');assert.equal(executed,0);assert.equal(requests,1);s.dispose();
+});
+
+test('corrective response respects reserve and reports both model calls',async()=>{
+    const {createSession}=await runtime();let requests=0,executed=0;
+    const s=createSession({repairMisplacedQuestions:true,tokenBudget:{context:12000,reserve:512},tools:[{name:'update_task',parameters:{type:'object',properties:{fields:{type:'object'},questions:{type:'array'}},required:['fields'],additionalProperties:false},execute:()=>{executed++;}}],
+        requestText:async()=>++requests===1?envelope('',[{id:'call_6',name:'update_task',arguments:{fields:{}},questions:[]}]):{text:'я'.repeat(600)}});
+    const result=await s.prompt('Ошибка');assert.equal(result.status,'limit');assert.match(result.reason,/reserve/);assert.equal(result.usage.modelCalls,2);assert.equal(executed,0);s.dispose();
+});
+
+test('opted-in prose is an inert final after tools and on subsequent turns', async () => {
+    const {createSession} = await runtime(), events = []; let requests = 0, executed = 0;
+    const prose = 'Известные сведения сохранены. Когда возникает ошибка?';
+    const s = createSession({allowPlainTextFinal:true, tools:[tool(() => {executed++; return {ok:true};})],
+        onEvent:e=>events.push(e), requestText:async()=>++requests===1 ? envelope('Проверяю поля', [call('lookup')]) : {text:prose}});
+    assert.equal((await s.prompt('Ошибка запуска')).status, 'complete');
+    assert.equal((await s.prompt('При каждом запуске')).status, 'complete');
+    assert.equal(executed, 1); assert.equal(requests, 3);
+    assert.equal(events.filter(e=>e.type==='assistant').at(-1).text, prose);
+    assert.deepEqual(s.getMessages().at(-1).content, [{type:'text', text:prose}]); s.dispose();
+});
+
+for(const prose of ['Известные факты:\n1. Ошибка запуска (DEV, TEST, PREPROD).\nИнструменты: ["update_task"]',
+    'Известные факты: ENV (DEV: тестовая среда). Когда появилась ошибка?',
+    '1. Проверить ENV (DEV, TEST, PREPROD).\n2. Известные факты сохранены.',
+    'Использован update_task. Проверка ENV (DEV) завершена.']) test('hybrid human prose remains inert: '+prose.slice(0,45),async()=>{
+    const {createSession}=await runtime();let executed=0;const events=[];
+    const s=createSession({allowPlainTextFinal:true,tools:[{...tool(()=>{executed++;}),name:'update_task'}],onEvent:e=>events.push(e),requestText:async()=>({text:prose})});
+    assert.equal((await s.prompt('Факты')).status,'complete');assert.equal(executed,0);
+    assert.equal(events.find(e=>e.type==='assistant').text,prose);assert.equal(events.some(e=>e.type==='tool'),false);s.dispose();
+});
+
+for (const bad of ['', '  ', '{}', '[]', 'null', '"Ответ"', 'true', '123',
+    '{"text":"Ответ","toolCalls":', 'Ответ\n{"toolCalls":[]}', '```json\n{}\n```',
+    'toolCalls: nope', 'update_task(summary="Changed")', '<tool_call>get_task</tool_call>',
+    'function_call: update_task', '{"text":"Ответ","toolCalls":[{"id":"a","name":"get_task","arguments":{}},{"id":"b","name":"missing","arguments":{}}]}',
+    JSON.stringify({text:'Ответ',toolCalls:[call('a'),call('b','get_task',{extra:true})]}),
+    '{"text":"Ответ","toolCalls":[],"__proto__":{}}']) {
+    test('prose opt-in still rejects structured/tool-like output atomically: '+bad.slice(0,50), async()=>{
+        const {createSession} = await runtime(); let executed=0, requests=0; const events=[];
+        const s=createSession({allowPlainTextFinal:true,tools:[tool(()=>{executed++;return {};})],onEvent:e=>events.push(e),requestText:async()=>{requests++;return {text:bad};}});
+        assert.equal((await s.prompt('Проверка')).status,'error'); assert.equal(executed,0); assert.equal(requests,1);
+        assert.equal(events.some(e=>e.type==='assistant'||e.type==='tool'),false);s.dispose();
+    });
+}
+
 test('Pi handles multi-turn tools, reports every result, and preserves a defensive history', async () => {
     const {createSession} = await runtime(), events = [], requests = [];
     let executed = 0;
