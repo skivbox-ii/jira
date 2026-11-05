@@ -396,12 +396,14 @@ test('reconcile projects saved user evidence once, then checks the accepted fiel
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();
     let calls=0,reviewCalls=0;
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
-        calls++;const data=JSON.parse(r.user),review=data.authoritativeContext.conversationForReview;
+        calls++;const data=JSON.parse(r.user),review=data.userAnswers;
         if(review) {
-            reviewCalls++;assert.equal(data.messages.length,1);
-            assert.ok(review.some(m=>m.role==='user' && m.text==='Версия неизвестна; среда DEV'));
-            assert.ok(data.authoritativeContext.fieldSchema.some(f=>f.id==='description' && f.fillable));
-            return {text:JSON.stringify({text:'',toolCalls:[{id:'review',name:'update_task',arguments:{fields:{description:'В среде DEV отсутствует доступ. Версия неизвестна.'},questions:[]}}]})};
+            reviewCalls++;assert.equal(data.previousToolResults.length,0);
+            assert.ok(review.some(m=>m.text==='Версия неизвестна; среда DEV'));
+            assert.ok(data.fields.some(f=>f.id==='description' && f.fillable));
+            assert.equal(data.openQuestions[0].id,'version');
+            assert.ok(data.fields.find(f=>f.id==='components').choices.some(v=>v.id==='DO-9' && v.label==='Backend'));
+            return {text:JSON.stringify({fields:{description:'В среде DEV отсутствует доступ. Версия неизвестна.'},missing:[]})};
         }
         return {text:calls===1 ? JSON.stringify({text:'',toolCalls:[{id:'begin',name:'update_task',arguments:{fields:{summary:'Проверить доступ',description:'Среда DEV'},questions:[{id:'version',text:'Какая версия?',required:true}]}}]}) : 'Какая версия?'};
     }});
@@ -447,4 +449,20 @@ test('reading options cannot substitute for a claimed write to the Jira descript
     }});
     await chat.send('Компонент Backend не отвечает.');assert.equal(chat.getState().error,null);
     assert.equal(h.controller.getState().draft.fields.description,'Компонент Backend не отвечает.');chat.destroy();
+});
+
+for(const validRetry of [true,false])test('flat draft review retries malformed output once and applies only checked field data: '+validRetry,async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();
+    await h.controller.updateField('summary','Ручная тема');
+    let calls=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        calls++;
+        assert.match(r.system,/полный итоговый текст/);assert.ok(Array.isArray(JSON.parse(r.user).userAnswers));
+        assert.equal(h.controller.getState().draft.fields.description,undefined);
+        return {text:calls===1 ? '{"text":"готово","toolCalls":[}]' : validRetry ? '{"fields":{"description":"Среда DEV. Критерий: доступ по RDP."},"missing":[]}' : '{"fields":{"foreign":"x"},"missing":[]}'};
+    }});
+    await chat.reconcile();assert.equal(calls,2);assert.equal(h.controller.getState().draft.fields.summary,'Ручная тема');
+    if(validRetry){assert.match(h.controller.getState().draft.fields.description,/RDP/);assert.ok(h.controller.getState().draft.checked);}
+    else {assert.equal(chat.getState().error.code,'draft-update');assert.equal(h.controller.getState().draft.fields.description,undefined);assert.equal(h.controller.getState().draft.checked,null);}
+    chat.destroy();
 });

@@ -124,7 +124,12 @@
         fetchImpl:function(){throw new Error('Offline preview prohibits fetch');},
         requestText:function(request) {
             // Actual Pi runtime + domain tools; only the text transport is scripted.
-            var input=JSON.parse(request.user),messages=input.messages,last=-1;
+            var input=JSON.parse(request.user);
+            if(input.userAnswers) {
+                records.calls.push('pico');records.chatRequests.push(input);
+                return Promise.resolve({text:JSON.stringify({fields:{description:input.current.description || 'Подготовлено по обращению.'},missing:[]})});
+            }
+            var messages=input.messages,last=-1;
             messages.forEach(function(message,index){if(message.role==='user')last=index;});
             var content=messages[last].content,text=typeof content==='string'?content:content.filter(function(c){return c.type==='text';}).map(function(c){return c.text;}).join('\n');
             var toolResults=messages.slice(last+1).filter(function(message){return message.role==='toolResult';});

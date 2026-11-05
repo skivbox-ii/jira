@@ -56,7 +56,7 @@ function restore(messages) {
     return repairPairs(values);
 }
 
-export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep} = {}) {
+export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep, draftReviewPrompt} = {}) {
     if (typeof requestText !== 'function') throw Error('Pico requires the configured shared requestText callback');
     if (typeof system !== 'string' || typeof onEvent !== 'function' || (getContext !== undefined && typeof getContext !== 'function')) throw Error('Invalid Pico session options');
     const budget = validateBudget(tokenBudget), bounds = {};
@@ -128,9 +128,34 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                         state.usedToolCallIds = [...seenIds];
                     }
                 }
-                let request = makeRequest(system, tools, projected, state, compaction), size = requestSize(request);
+                function buildRequest() {
+                    if (!draftReviewPrompt) return makeRequest(system, tools, projected, state, compaction);
+                    // Reconciliation is a single, scoped local field update. The
+                    // model supplies field data; the application owns call IDs and
+                    // runs the same schema, scope and concurrency checks as chat.
+                    let priorQuestion='';
+                    const userAnswers=[];
+                    for (const entry of state.conversationForReview) {
+                        if(entry.role==='assistant') {
+                            priorQuestion=entry.text.split('\n').filter(line=>line.includes('?')).pop() || '';
+                        } else if(entry.role==='user') {
+                            userAnswers.push({text:entry.text, ...(priorQuestion?{inReplyTo:priorQuestion}:{})});
+                            priorQuestion='';
+                        }
+                    }
+                    return {system:draftReviewPrompt, user:JSON.stringify({
+                        template:state.template, fields:state.fieldSchema, current:state.draft.fields,
+                        scope:{project:state.draft.projectKey,type:state.draft.issueTypeId},
+                        protected:state.draft.protectedFields, proposals:state.draft.pendingFields, usersPresent:state.draft.userFieldsPresent,
+                        openQuestions:state.draft.questions,
+                        exceptions:state.draft.taskExceptions, source:state.draft.source,
+                        userAnswers, problems:state.validation,
+                        previousToolResults:projected.filter(m=>m.role==='toolResult').map(m=>m.content)
+                    })};
+                }
+                let request = buildRequest(), size = requestSize(request);
                 const fits = () => size.tokens <= budget.context - budget.reserve && size.bytes <= MAX_PROMPT_BYTES;
-                if (!fits() && getContext) {
+                if (!fits() && getContext && !draftReviewPrompt) {
                     // Compact only complete older user turns. Keep the current user turn,
                     // all its tool-call/result pairs, and fresh authoritative application state.
                     const starts = full.flatMap((m, i) => m.role === 'user' ? [i] : []);
@@ -145,6 +170,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                 if (compaction) {run.usage.compactions++; emit({type: 'compaction', ...compaction});}
                 async function ask() {
                     live(run, signal);
+                    if(draftReviewPrompt && run.usage.modelCalls>=2)throw Error('Pico draft update missing');
                     if (run.usage.modelCalls >= bounds.modelCalls) limit('Pico model call limit reached (maximum ' + bounds.modelCalls + ' per turn).');
                     if (!fits()) limit('Pico context limit reached: corrective request must fit with the configured response reserve. History is preserved.');
                     run.usage.modelCalls++; run.usage.inputTokens += size.tokens;
@@ -159,7 +185,27 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                     return {response, tokens};
                 }
                 let {response, tokens} = await ask(), envelope;
-                try {envelope = parseEnvelope(response.text, tools, seenIds, allowPlainTextFinal);} catch (error) {
+                if (draftReviewPrompt) {
+                    const readDraft = raw => {
+                        const value = JSON.parse(raw);
+                        if (!value || Object.keys(value).sort().join(',') !== 'fields,missing' ||
+                            !Array.isArray(value.missing) || !value.missing.every(q=>typeof q==='string' && q.trim())) throw Error('Invalid draft');
+                        if (state.generationFieldIds.includes('description') && (typeof value.fields?.description!=='string' || !value.fields.description.trim())) throw Error('Missing description');
+                        let seq=seenIds.size+1;
+                        while(seenIds.has('draft_'+seq))seq++;
+                        const args={fields:value.fields,questions:[...new Set(value.missing)].map((text,i)=>({id:'gap_'+i,text,required:true}))};
+                        return parseEnvelope(JSON.stringify({text:'',toolCalls:[{id:'draft_'+seq,name:'update_task',arguments:args}]}),tools,seenIds);
+                    };
+                    try {envelope=readDraft(response.text);}
+                    catch {
+                        if(run.reformatted)throw Error('Pico draft update missing');
+                        run.reformatted=true;
+                        request={...request,system:request.system+' Предыдущий ответ не применён. Напиши один корректный JSON с двумя ключами fields и missing. Без служебных команд, префиксов или Markdown.'};
+                        size=requestSize(request);
+                        ({response,tokens}=await ask());
+                        try {envelope=readDraft(response.text);} catch {throw Error('Pico draft update missing');}
+                    }
+                } else try {envelope = parseEnvelope(response.text, tools, seenIds, allowPlainTextFinal);} catch (error) {
                     const candidate = repairMisplacedQuestions === true && !run.reformatted ? misplacedQuestionsCandidate(response.text, tools, seenIds) : null;
                     if (!candidate) throw error;
                     run.reformatted = true;
