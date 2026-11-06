@@ -41,6 +41,13 @@ define('_ujgTA_draft', [], function() {
             return str(q.id) && str(q.text) ? { id: q.id, text: q.text, reason: str(q.reason) || '', required: q.required === true } : null;
         });
     }
+    function includeReviewedQuestions(current, reviewed) {
+        var result=questions(current);
+        questions(reviewed).forEach(function(item) {
+            result=result.filter(function(q) {return q.id!==item.id;});result.push(item);
+        });
+        return result;
+    }
     function evidence(input, source) {
         return list(input, function(e) {
             if (!str(e.fieldId) || !str(e.quote) || ['source', 'suggestion'].indexOf(e.kind) === -1) return null;
@@ -84,7 +91,7 @@ define('_ujgTA_draft', [], function() {
         snapshotKeys.forEach(function(k) {after[k]=input.after[k];});
         var before=input.before;
         return {after:after,before:{fields:fields(before.fields),pendingFields:fields(before.pendingFields),protectedFields:fields(before.protectedFields,true),
-            questions:questions(before.questions),warnings:strings(before.warnings),evidence:evidence(before.evidence,source),taskExceptions:strings(before.taskExceptions),templateReviewPending:before.templateReviewPending===true}};
+            questions:questions(before.questions),warnings:strings(before.warnings),evidence:evidence(before.evidence,source),taskExceptions:strings(before.taskExceptions),appManagedQuestions:before.appManagedQuestions===true,templateReviewPending:before.templateReviewPending===true}};
     }
     function recordAutomaticChange(next, before) {
         var result=Object.assign({},next);
@@ -97,17 +104,18 @@ define('_ujgTA_draft', [], function() {
         var source = str(input.source) || '';
         var result = {
             schemaVersion: 1, id: str(input.id), projectKey: str(input.projectKey), issueTypeId: str(input.issueTypeId), templateId: str(input.templateId),
-            source: source, templateReviewPending:input.templateReviewPending===true, automaticUndo:automaticUndo(input.automaticUndo,source), fields: fields(input.fields), protectedFields: fields(input.protectedFields, true), pendingFields: fields(input.pendingFields),
+            source: source, appManagedQuestions:input.appManagedQuestions===true, templateReviewPending:input.templateReviewPending===true, automaticUndo:automaticUndo(input.automaticUndo,source), fields: fields(input.fields), protectedFields: fields(input.protectedFields, true), pendingFields: fields(input.pendingFields),
             pendingAssistance: record(input.pendingAssistance) && safeKey(input.pendingAssistance.fieldId) &&
                 typeof input.pendingAssistance.fieldId === 'string' && ['generate', 'improve', 'shorten'].indexOf(input.pendingAssistance.action) !== -1 &&
                 Object.prototype.hasOwnProperty.call(fields(input.pendingFields), input.pendingAssistance.fieldId) ?
                 {fieldId: input.pendingAssistance.fieldId, action: input.pendingAssistance.action} : null,
             taskExceptions: strings(input.taskExceptions),
-            questions: questions(input.questions), warnings: strings(input.warnings), evidence: evidence(input.evidence, source),
+            reviewedTemplateQuestions:questions(input.reviewedTemplateQuestions), questions: questions(input.questions), warnings: strings(input.warnings), evidence: evidence(input.evidence, source),
             sourceRevision: revision(input.sourceRevision), settingsRevision: revision(input.settingsRevision), draftRevision: revision(input.draftRevision),
             metaSignature: str(input.metaSignature), checked: checked(input.checked), creation: creation(input.creation), attachments: attachments(input.attachments)
         };
-        if(result.templateReviewPending) result.checked=null;
+        result.questions=includeReviewedQuestions(result.questions,result.reviewedTemplateQuestions);
+        if(result.templateReviewPending || result.reviewedTemplateQuestions.some(function(q) {return q.required;})) result.checked=null;
         if (result.checked && !revisionKeys.every(function(k) { return result.checked[k] === result[k]; })) result.checked = null;
         return result;
     }
@@ -225,16 +233,17 @@ define('_ujgTA_draft', [], function() {
         });
         return setSource(d, source);
     }
-    function applyProposal(d, proposal, requestSnapshot) {
+    function applyProposal(d, proposal, requestSnapshot, options) {
         if (!isCurrent(d, requestSnapshot)) return d;
-        var next = changed(d), proposed = fields(proposal.fields);
+        var next = changed(d), proposed = fields(proposal.fields),keepPending=!!options && options.preservePendingFields===true;
+        if(keepPending)next.pendingFields=fields(d.pendingFields);
         Object.keys(proposed).forEach(function(id) {
-            if (next.protectedFields[id]) {
+            if (next.protectedFields[id] || keepPending && Object.prototype.hasOwnProperty.call(d.pendingFields,id)) {
                 if (JSON.stringify(next.fields[id]) !== JSON.stringify(proposed[id])) next.pendingFields[id] = proposed[id];
-                else delete next.pendingFields[id];
+                else if(!keepPending || !Object.prototype.hasOwnProperty.call(d.pendingFields,id))delete next.pendingFields[id];
             } else next.fields[id] = proposed[id];
         });
-        next.questions = questions(proposal.questions);
+        next.questions = includeReviewedQuestions(proposal.questions,next.reviewedTemplateQuestions);
         next.warnings = strings(proposal.warnings);
         next.evidence = evidence(proposal.evidence, next.source);
         return next;
@@ -259,7 +268,7 @@ define('_ujgTA_draft', [], function() {
         var next = changed(d);
         next.pendingFields = {}; next.pendingFields[id] = proposed[id];
         next.pendingAssistance = {fieldId: id, action: action};
-        next.questions = questions(proposal.questions);
+        next.questions = includeReviewedQuestions(proposal.questions,next.reviewedTemplateQuestions);
         next.warnings = strings(proposal.warnings);
         next.evidence = evidence(proposal.evidence, next.source);
         return next;
@@ -268,9 +277,9 @@ define('_ujgTA_draft', [], function() {
         if (!isCurrent(d, requestSnapshot)) return d;
         var next = persistent(d);
         next.attachments = (d.attachments || []).map(function(a) { return Object.assign({}, a); });
-        next.questions = questions(currentQuestions);
+        next.questions = includeReviewedQuestions(currentQuestions,next.reviewedTemplateQuestions);
         next.warnings = strings(validation.warnings);
-        var valid = !next.templateReviewPending && validation.ok === true && !strings(validation.unsupportedRequired).length &&
+        var valid = !next.templateReviewPending && !next.reviewedTemplateQuestions.some(function(q) {return q.required;}) && validation.ok === true && !strings(validation.unsupportedRequired).length &&
             !Object.keys(validation.fieldErrors || {}).some(function(k) { return validation.fieldErrors[k].length; }) &&
             !next.questions.some(function(q) { return q.required; });
         next.checked = valid ? checked(d) : null;

@@ -3,6 +3,11 @@ const assert=require('node:assert/strict');
 const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
+function taskDescription(goal,work,location,acceptance) {
+    return 'Цель: '+goal+'\nЧто сделать: '+work+'\nГде: '+location+'\nКритерии приёмки: '+acceptance;
+}
+const accessDescription=taskDescription('Восстановить доступ команды к сервису.','Восстановить подключение по RDP.','Сервис на DEV.','Успешный вход по RDP.');
+const accessNarrative='На DEV нет доступа к сервису. Восстановить подключение по RDP для команды. Проверка: успешный вход по RDP.';
 async function setup(prompt) {
     const h=await harness(),sessions=[];
     const runtime={createSession(config) {
@@ -38,20 +43,24 @@ test('primary task chat keeps list_fields, envelope final and later Russian pros
     assert.equal(restored.getState().transcript.at(-1).text,prose);restored.destroy();
 });
 
-test('real task chat applies known fields before final and preserves manual summary on later updates',async()=>{
+test('real task chat applies known fields in one request per turn and preserves manual summary on later updates',async()=>{
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
     const h=await setup();h.chat.destroy();let n=0;
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
         n++;
-        if(n===1 || n===3) return {text:JSON.stringify({text:'',toolCalls:[{id:'write'+n,name:'update_task',arguments:{fields:{summary:'Ошибка запуска',description:n===1?'Приложение не запускается':'Ошибка повторяется'},questions:[]}}]})};
         const state=h.controller.getState();
-        assert.equal(state.draft.fields.summary,n===2?'Ошибка запуска':'Ручное название');
-        assert.equal(state.draft.fields.description,n===2?'Приложение не запускается':'Ошибка повторяется');
-        assert.match(r.user,/toolResult/);return {text:'Когда впервые появилась ошибка?'};
+        assert.equal(state.draft.fields.summary,n===1?undefined:'Ручное название');
+        if(n===2)assert.equal(state.draft.fields.description,'Приложение не запускается');
+        assert.equal(JSON.parse(r.user).authoritativeContext.appManagedPatch,true);
+        return {text:JSON.stringify({text:'Когда впервые появилась ошибка?',toolCalls:[{id:'write'+n,name:'update_task',arguments:{fields:{summary:'Ошибка запуска',description:n===1?'Приложение не запускается':'Ошибка повторяется'},questions:[]}}]})};
     }});
     await chat.send('Приложение не запускается');assert.equal(chat.getState().error,null);
     await h.controller.updateField('summary','Ручное название');
-    await chat.send('Ошибка повторяется');assert.equal(chat.getState().error,null);assert.equal(n,4);chat.destroy();
+    await chat.send('Ошибка повторяется');assert.equal(chat.getState().error,null);assert.equal(n,2);
+    const state=h.controller.getState();assert.equal(state.draft.fields.summary,'Ручное название');assert.equal(state.draft.pendingFields.summary,'Ошибка запуска');
+    assert.equal(state.draft.fields.description,'Ошибка повторяется');assert.equal(state.draft.checked,null);
+    assert.ok(chat.getState().transcript.at(-1).text.includes(state.draft.questions[0].text));
+    assert.equal(chat.getState().transcript.filter(m=>m.role==='assistant').length,2);chat.destroy();
 });
 
 test('real task chat template read plus plain final preserves the canonical draft',async()=>{
@@ -77,16 +86,25 @@ for(const correction of ['valid','malformed','changed','prose']) test('primary c
     }});
     await chat.send('Приложение не запускается');
     if(correction==='valid') {
-        assert.equal(chat.getState().error,null);assert.equal(n,3);
+        assert.equal(chat.getState().error,null);assert.equal(n,2);
         const d=h.controller.getState().draft;assert.equal(d.fields.summary,'Ошибка запуска');assert.equal(d.fields.description,'Приложение не запускается');
-        assert.equal(d.questions[0].text,'Когда появилась ошибка?');assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
+        assert.equal(d.questions[0].id,'template:goal');assert.equal(d.questions.some(q=>q.id==='q1'),false);
+        assert.ok(chat.getState().transcript.at(-1).text.includes(d.questions[0].text));assert.equal(d.checked,null);
+        assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
     } else {
         assert.equal(chat.getState().error,null);assert.equal(n,2);
         const d=h.controller.getState().draft;
         assert.equal(d.fields.summary,'Приложение не запускается');assert.equal(d.fields.description,'Приложение не запускается');
-        assert.equal(d.source,'Приложение не запускается');assert.equal(d.questions.length,0);assert.ok(d.checked);
+        assert.equal(d.source,'Приложение не запускается');
+        assert.deepEqual(Array.from(d.questions,q=>q.id),['template:goal','template:work','template:location','template:acceptance']);
+        assert.ok(d.questions.every(q=>q.required));assert.equal(d.questions.some(q=>q.id==='q1'),false);
+        assert.equal(d.appManagedQuestions,true);assert.equal(h.controller.getState().validation.ok,false);assert.equal(d.checked,null);
+        const reply=chat.getState().transcript.at(-1).text;
+        assert.ok(reply.includes(d.questions[0].text));assert.doesNotMatch(reply,/Когда появилась ошибка|Проверка пройдена|нажмите.*Создать/);
         assert.equal(chat.getState().lastTurnUsage.toolCalls,0);
         assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
+        const saved=h.store.loadConversation('DO',d.id);
+        assert.equal(saved.value.messages.some(m=>m.role==='toolResult' && m.toolCallId==='call_6'),false);
     }
     chat.destroy();
 });
@@ -104,12 +122,12 @@ for(const bad of ['Ответ\n{"toolCalls":', 'update_task(summary="Changed")',
 }
 test('chat tools progressively fill one canonical task, preserve source and unlock existing creator',async()=>{
     const h=await setup(async(c,s,text)=>{
-        await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Investigate failure',description:'Production service is unavailable; restore access.'},questions:[]},{});
+        await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Investigate failure',description:taskDescription('Restore access for the team.','Restore the unavailable production service.','Production service.','Users can sign in to the service.')},questions:[]},{});
         await c.tools.find(t=>t.name==='validate_task').execute({},{});
         c.onEvent({type:'assistant',text:'Ready'});s.messages.push({role:'assistant',content:[{type:'text',text:'Ready'}]});c.onEvent({type:'done',status:'completed'});
     });
-    await h.chat.send('Production failure');
-    assert.equal(h.chat.getState().status,'idle');assert.equal(h.chat.getState().transcript.at(-1).text,'Ready');
+    await h.chat.send('Production failure: restore the unavailable production service so the team can sign in.');
+    assert.equal(h.chat.getState().status,'idle');assert.match(h.chat.getState().transcript.at(-1).text,/Проверка пройдена/);
     assert.equal(h.controller.getState().draft.fields.summary,'Investigate failure');assert.ok(h.controller.getState().draft.checked);
     assert.match(h.controller.getState().draft.source,/Production failure/);assert.equal(h.chat.getState().canUndo,true);
     assert.equal(h.sessions[0].config.requestText instanceof Function,true);
@@ -171,17 +189,19 @@ test('project revisits preserve unsaved local conversation after an external con
     assert.ok(h.chat.getState().transcript.some(m=>m.text==='Unsaved local'));
 });
 
-test('real Pi runtime executes domain tools against scripted text transport and restores without replay',async()=>{
+test('real Pi runtime applies the task and app validates in one request, restoring without replay',async()=>{
     const {pathToFileURL}=require('node:url');const path=require('node:path');
     const runtime=await import(pathToFileURL(path.resolve(__dirname,'../ujg-ticket-assistant-chat/runtime.mjs')).href);
     const h=await setup();h.chat.destroy();let requests=0;
-    const responses=[{text:'',toolCalls:[{id:'real_1',name:'update_task',arguments:{fields:{summary:'Scripted task',description:'Check the service against the supplied task facts.'},questions:[]}}]},
-        {text:'',toolCalls:[{id:'real_2',name:'validate_task',arguments:{}}]},{text:'Ready from Pi',toolCalls:[]}];
+    const responses=[{text:'',toolCalls:[{id:'real_1',name:'update_task',arguments:{fields:{summary:'Scripted task',description:accessDescription},questions:[]}}]}];
     const requestText=async request=>{assert.ok(request.signal);assert.match(request.system,/Pico/);requests++;return {text:JSON.stringify(responses.shift())};};
-    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText});await chat.send('Facts for actual Pi');
-    assert.equal(chat.getState().error,null);assert.ok(h.controller.getState().draft.checked);assert.equal(chat.getState().transcript.at(-1).text,'Ready from Pi');assert.equal(requests,3);
-    chat.destroy();const restored=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText});assert.equal(requests,3);
-    assert.equal(restored.getState().transcript.at(-1).text,'Ready from Pi');restored.destroy();
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText});await chat.send(accessNarrative);
+    assert.equal(chat.getState().error,null);assert.ok(h.controller.getState().draft.checked);assert.equal(h.controller.getState().validation.ok,true);
+    assert.match(chat.getState().transcript.at(-1).text,/Проверка пройдена/);assert.equal(requests,1);
+    assert.equal(h.controller.getState().draft.source,accessNarrative);
+    const reply=chat.getState().transcript.at(-1).text;
+    chat.destroy();const restored=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText});assert.equal(requests,1);
+    assert.equal(restored.getState().transcript.at(-1).text,reply);restored.destroy();
 });
 
 test('template-only read and proposal preserve canonical source, fields, checked state and revisions',async()=>{
@@ -301,13 +321,40 @@ test('one reply per turn, with server readiness claims grounded in the actual dr
     const h=await setup(async c=>{
         const update=c.tools.find(t=>t.name==='update_task');
         c.onEvent({type:'assistant',text:'Записал сведения. Кто проверяет?'});
-        await update.execute({fields:{summary:'Доступ',description:'Нет подключения'},questions:[{id:'who',text:'Кто проверяет?',required:true}]},{});
+        await update.execute({fields:{summary:'Доступ',description:taskDescription('Восстановить доступ команды.','Восстановить подключение.','Сервис на DEV.','')},questions:[{id:'who',text:'Кто проверяет?',required:true}]},{});
         c.onEvent({type:'assistant',text:'Задача готова к созданию. Подтвердите, что все данные корректны, и нажмите кнопку «Создать задачу» в интерфейсе.'});
     });
-    await h.chat.send('Нет подключения');
+    await h.chat.send('На DEV нет подключения к сервису, восстановить доступ команды.');
     const replies=h.chat.getState().transcript.filter(m=>m.role==='assistant');
     assert.equal(replies.length,1);assert.doesNotMatch(replies[0].text,/готова к созданию|нажмите кнопку «Создать/i);
-    assert.match(replies[0].text,/Кто проверяет/);assert.equal(h.controller.getState().draft.checked,null);h.chat.destroy();
+    assert.equal(h.controller.getState().draft.questions[0].id,'template:acceptance');
+    assert.ok(replies[0].text.includes(h.controller.getState().draft.questions[0].text));assert.doesNotMatch(replies[0].text,/Кто проверяет/);
+    assert.equal(h.controller.getState().draft.checked,null);h.chat.destroy();
+});
+
+test('a selected personal template keeps its model-required questions and conversation rounds',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();
+    const settings=h.controller.getState().settings;
+    const instructions='Для доступа требуется согласование DBA. Спроси его, если оно ещё не получено.';
+    settings.profiles.find(p=>p.id==='universal').templates.push({id:'personal-access',name:'Доступ с DBA',whenToUse:'Восстановление доступа.',instructions,issueTypeId:'10'});
+    await h.controller.applySettings(settings);await h.controller.selectTemplate('personal-access');
+    let calls=0,creates=0;h.api.createIssue=async()=>{creates++;throw Error('Creation requires the user button');};
+    const question='Получено согласование DBA?';
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        const ctx=JSON.parse(r.user).authoritativeContext;assert.equal(ctx.appManagedPatch,false);
+        assert.equal(ctx.template.template.id,'personal-access');assert.equal(ctx.template.template.instructions,instructions);
+        calls++;
+        if(calls===1)return {text:JSON.stringify({text:'',toolCalls:[{id:'personal-1',name:'update_task',arguments:{
+            fields:{summary:'Восстановить доступ на DEV',description:'Восстановить доступ на DEV. Согласование DBA пока не получено.'},
+            questions:[{id:'custom:dba',text:question,required:true}]
+        }}]})};
+        return {text:question};
+    }});
+    await chat.send('Восстановить доступ на DEV. Согласование DBA пока не получено.');
+    assert.equal(calls,2);assert.equal(chat.getState().error,null);assert.equal(h.controller.getState().draft.questions[0].id,'custom:dba');
+    assert.equal(h.controller.getState().draft.checked,null);assert.equal(chat.getState().transcript.at(-1).text,question);
+    assert.equal(creates,0);assert.equal(h.controller.getState().draft.source,'Восстановить доступ на DEV. Согласование DBA пока не получено.');
+    assert.equal(chat.getState().transcript.filter(m=>m.role==='assistant').length,1);chat.destroy();
 });
 
 test('explicit chat reconciliation reviews saved turns, checks an evaluated draft and never appends its own command to source',async()=>{
@@ -331,12 +378,14 @@ test('explicit chat reconciliation reviews saved turns, checks an evaluated draf
 
 test('completed task update and explicit create invitation run the real check without creating',async()=>{
     const h=await setup(async c=>{
-        await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Доступ',description:'Восстановить доступ к сервису.'},questions:[]},{});
+        await c.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Доступ',description:accessDescription},questions:[]},{});
         c.onEvent({type:'assistant',text:'Задача готова к созданию.'});
     });
-    await h.chat.send('Восстановить доступ');
+    let creates=0;h.api.createIssue=async()=>{creates++;throw Error('Creation requires the user button');};
+    await h.chat.send(accessDescription);
     assert.equal(h.controller.getState().validation.ok,true);assert.ok(h.controller.getState().draft.checked);
     assert.equal(h.controller.getState().draft.creation.issueKey,null);
+    assert.equal(creates,0);
     assert.match(h.chat.getState().transcript.at(-1).text,/Проверка пройдена/);h.chat.destroy();
 });
 
@@ -386,13 +435,13 @@ test('a conversation claiming the description was filled must actually apply it 
         if(n===1)return {text:'Описание заполнено. Задача готова к созданию.'};
         if(n===2){
             assert.match(req.user,/requiredDraftUpdate/);
-            return {text:JSON.stringify({text:'',toolCalls:[{id:'fill',name:'update_task',arguments:{fields:{summary:'Восстановить доступ',description:'На стенде DEV отсутствует доступ по RDP.'},questions:[]}}]})};
+            return {text:JSON.stringify({text:'',toolCalls:[{id:'fill',name:'update_task',arguments:{fields:{summary:'Восстановить доступ',description:accessDescription},questions:[]}}]})};
         }
         return {text:'Задача готова к созданию.'};
     }});
-    await chat.send('На стенде DEV отсутствует доступ по RDP.');
-    assert.equal(h.controller.getState().draft.fields.description,'На стенде DEV отсутствует доступ по RDP.');
-    assert.ok(h.controller.getState().draft.checked);chat.destroy();
+    await chat.send(accessDescription);
+    assert.equal(h.controller.getState().draft.fields.description,accessDescription);
+    assert.equal(n,2);assert.ok(h.controller.getState().draft.checked);chat.destroy();
 });
 
 test('reconcile projects saved user evidence once, then checks the accepted fields without a second LLM round-trip',async()=>{
@@ -402,41 +451,43 @@ test('reconcile projects saved user evidence once, then checks the accepted fiel
         calls++;const data=JSON.parse(r.user),review=data.userAnswers;
         if(review) {
             reviewCalls++;assert.equal(data.previousToolResults.length,0);
-            assert.ok(review.some(m=>m.text==='Версия неизвестна; среда DEV'));
+            assert.ok(review.some(m=>m.text===accessDescription+'\nВерсия неизвестна; среда DEV'));
             assert.ok(data.fields.some(f=>f.id==='description' && f.fillable));
-            assert.equal(data.openQuestions[0].id,'version');
+            assert.equal(data.openQuestions[0].id,'template:goal');
             assert.ok(data.fields.find(f=>f.id==='components').choices.some(v=>v.id==='DO-9' && v.label==='Backend'));
-            return {text:JSON.stringify({fields:{description:'В среде DEV отсутствует доступ. Версия неизвестна.'},missing:[]})};
+            return {text:JSON.stringify({fields:{description:accessDescription+'\nВерсия неизвестна.'},missing:[]})};
         }
         return {text:calls===1 ? JSON.stringify({text:'',toolCalls:[{id:'begin',name:'update_task',arguments:{fields:{summary:'Проверить доступ',description:'Среда DEV'},questions:[{id:'version',text:'Какая версия?',required:true}]}}]}) : 'Какая версия?'};
     }});
-    await chat.send('Версия неизвестна; среда DEV');await chat.reconcile();
-    assert.equal(reviewCalls,1);assert.equal(chat.getState().error,null);
-    assert.match(h.controller.getState().draft.fields.description,/Версия неизвестна/);assert.ok(h.controller.getState().draft.checked);
+    await chat.send(accessDescription+'\nВерсия неизвестна; среда DEV');await chat.reconcile();
+    assert.equal(reviewCalls,1);assert.equal(calls,2);assert.equal(chat.getState().error,null);
+    assert.match(h.controller.getState().draft.fields.description,/Версия неизвестна/);
+    assert.ok(h.controller.getState().draft.checked,JSON.stringify({validation:h.controller.getState().validation,questions:h.controller.getState().draft.questions}));
     assert.equal(h.store.loadConversation('DO',h.controller.getState().draft.id).value.messages.filter(m=>m.role==='user').length,2);
     chat.destroy();
 });
 
-test('the next question sees the saved description, several new facts and the stated reason for skipping a value',async()=>{
+test('one data turn preserves saved facts and skip reasons and asks the app-generated missing estimate',async()=>{
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();
-    const initial='Окружение: DEV. Нужно восстановить доступ.';
+    const read=h.api.getCreateMeta;h.api.getCreateMeta=async key=>{const raw=await read(key);raw.projects[0].issuetypes.forEach(type=>{
+        type.fields.timetracking={name:'Оценка трудозатрат',required:true,schema:{type:'timetracking',system:'timetracking'}};
+    });return raw;};await h.controller.selectProject('DO');
+    const initial=taskDescription('Восстановить доступ команды к сервису.','Восстановить подключение по RDP.','Сервис на DEV.','');
     await h.controller.chatUpdate({fields:{summary:'Восстановить доступ',description:initial},questions:[]},h.controller.chatSnapshot());
     let n=0;
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
         const ctx=JSON.parse(r.user).authoritativeContext;
-        if(++n===1){assert.equal(ctx.draft.fields.description,initial);return {text:'Какая версия ПО?'};}
-        if(n===2){
-            assert.ok(ctx.requiredDraftUpdate);
-            return {text:JSON.stringify({text:'',toolCalls:[{id:'answers',name:'update_task',arguments:{
-                fields:{description:initial+' Проверка: вход по RDP. Дата: 6 ноября.'},
+        n++;assert.equal(ctx.draft.fields.description,initial);assert.equal(ctx.appManagedPatch,true);
+        return {text:JSON.stringify({text:'Какая версия ПО?',toolCalls:[{id:'answers',name:'update_task',arguments:{
+                fields:{description:accessDescription+'\nДата: 6 ноября.'},
                 questions:[{id:'effort',required:true,text:'На сколько оценить работу?',reason:'В описании есть дата, но нет трудозатрат.'}]
             }}]})};
-        }
-        assert.match(ctx.draft.fields.description,/Версия не нужна. Причина: восстанавливаем доступ/);
-        return {text:'Какая версия ПО?'};
     }});
     await chat.send('Версия не нужна. Причина: восстанавливаем доступ. Проверка: вход по RDP. Дата: 6 ноября.');
-    assert.equal(chat.getState().error,null);assert.equal(chat.getState().transcript.at(-1).text,'На сколько оценить работу?');
+    assert.equal(chat.getState().error,null);assert.equal(n,1);
+    assert.match(chat.getState().transcript.at(-1).text,/исходную оценку трудозатрат/);
+    assert.doesNotMatch(chat.getState().transcript.at(-1).text,/Какая версия|На сколько оценить/);
+    assert.ok(h.controller.getState().validation.fieldErrors.timetracking);assert.equal(h.controller.getState().draft.checked,null);
     const saved=h.store.load('DO').draft.fields.description;assert.match(saved,/DEV/);assert.match(saved,/RDP/);assert.match(saved,/6 ноября/);assert.match(saved,/Причина: восстанавливаем доступ/);chat.destroy();
 });
 
@@ -507,20 +558,21 @@ test('live-style review saves verified description despite invalid optional fiel
 for(const malformed of ['```json\n{"fields":{"description":"UNTRUSTED"},"missing":[]}\n```','{"answer":"UNTRUSTED","actions":[]}'])
 test('invalid ordinary envelope triggers fresh model draft extraction and a checked formatted task: '+malformed.slice(0,12),async()=>{
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
-    const formatted='Проблема: на DEV отсутствует RDP.\n\nПроверка: вход по RDP восстановлен.';
+    const formatted=accessDescription;
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
         if(++calls===1)return {text:malformed};
         assert.equal(h.controller.getState().draft.fields.description,undefined);
         const data=JSON.parse(r.user);
-        assert.deepEqual(data.userAnswers.map(m=>m.text),['На DEV нет RDP; проверить восстановлением входа.']);
+        assert.deepEqual(data.userAnswers.map(m=>m.text),[accessNarrative]);
         assert.ok(data.fields.find(f=>f.id==='components').choices.some(v=>v.id==='DO-9'));
         assert.doesNotMatch(r.user,/UNTRUSTED/);
         return {text:JSON.stringify({fields:{summary:'Восстановить RDP на DEV',description:formatted,components:[{id:'DO-9'}]},missing:[]})};
     }});
-    await chat.send('На DEV нет RDP; проверить восстановлением входа.');
+    await chat.send(accessNarrative);
     assert.equal(calls,2);assert.equal(chat.getState().error,null);
     const draft=h.controller.getState().draft;
     assert.equal(draft.fields.description,formatted);assert.equal(draft.fields.summary,'Восстановить RDP на DEV');
+    assert.equal(draft.source,accessNarrative);
     assert.ok(draft.checked);assert.equal(draft.questions.length,0);
     assert.match(chat.getState().transcript.at(-1).text,/Карточка заполнена по вашему сообщению/);
     assert.doesNotMatch(chat.getState().notices.join(' '),/Ответ Pico отклонён/);
@@ -564,13 +616,13 @@ test('invalid informational or configuration turn cannot authorize draft extract
 
 for(const reconcile of [true,false])test('live nested fields.missing is normalized atomically for '+(reconcile?'reconcile':'recovery'),async()=>{
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
-    const formatted='Среда: DEV.\n\nПроверка: вход по RDP.';
+    const formatted=accessDescription;
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{
         calls++;
         if(!reconcile && calls===1)return {text:'{}'};
         return {text:JSON.stringify({fields:{summary:'Восстановить доступ',description:formatted,missing:[]}})};
     }});
-    if(reconcile)await chat.reconcile();else await chat.send('На DEV нет доступа; проверить входом по RDP.');
+    if(reconcile)await chat.reconcile();else await chat.send(accessDescription);
     assert.equal(calls,reconcile?1:2);assert.equal(chat.getState().error,null);
     assert.equal(h.controller.getState().draft.fields.description,formatted);assert.ok(h.controller.getState().draft.checked);
     chat.destroy();
@@ -591,9 +643,9 @@ test('recovery preserves unsaved earlier facts and reply-to across reload; ordin
         assert.ok(data.userAnswers.some(m=>m.text==='Требуется исправить конфигурацию.'));
         assert.ok(data.userAnswers.some(m=>m.text==='Backend. Стенд DEV.' && m.inReplyTo==='Какой компонент?'));
         assert.deepEqual(data.fields.find(f=>f.id==='components').choices,[{id:'DO-9',label:'Backend'}]);
-        return {text:JSON.stringify({fields:{summary:'Исправить Backend',description:'Конфигурация Backend. Среда DEV. Проверка: вход по RDP.',components:[{id:'DO-9'}]},missing:[]})};
+        return {text:JSON.stringify({fields:{summary:'Исправить Backend',description:taskDescription('Восстановить доступ команды к Backend.','Исправить конфигурацию Backend.','Backend на DEV.','Успешный вход по RDP.'),components:[{id:'DO-9'}]},missing:[]})};
     }});
-    await chat.send('Критерий: вход по RDP.');assert.equal(calls,2);assert.equal(chat.getState().error,null);
+    await chat.send('Нужен доступ команды к Backend. Критерий: вход по RDP.');assert.equal(calls,2);assert.equal(chat.getState().error,null);
     assert.match(h.controller.getState().draft.fields.description,/Backend/);assert.ok(h.controller.getState().draft.checked);chat.destroy();
 });
 
@@ -605,9 +657,9 @@ for(const reconcile of [false,true])test('actual Jira type name and selected tem
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
         requests.push(JSON.parse(r.user));
         if(!reconcile && requests.length===1)return {text:'{}'};
-        return {text:JSON.stringify({fields:{summary:'Развернуть сервис',description:'Среда DEV. Проверка: вход.'},missing:[]})};
+        return {text:JSON.stringify({fields:{summary:'Развернуть сервис',description:taskDescription('Обеспечить доступ команды к сервису.','Развернуть сервис.','Сервис на DEV.','Команда может войти в сервис.')},missing:[]})};
     }});
-    if(reconcile)await chat.reconcile();else await chat.send('Развернуть сервис на DEV. Проверка: вход.');
+    if(reconcile)await chat.reconcile();else await chat.send('Развернуть сервис на DEV для доступа команды. Проверка: команда может войти в сервис.');
     if(!reconcile)assert.equal(requests[0].authoritativeContext.issueType.name,'Задача развертывания');
     const data=requests.at(-1);assert.equal(data.scope.type,'10');assert.equal(data.scope.typeName,'Задача развертывания');
     assert.deepEqual(data.template.template,template.template);
@@ -645,19 +697,22 @@ for(const mode of ['recovered','blocked','ordinary','invalid'])test('verified AI
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,onChange:s=>snapshots.push(s),requestText:async()=>{
         calls++;
         if(mode==='invalid' || mode!=='ordinary' && calls===1)return {text:'{}'};
-        const fields={summary:'Восстановить RDP',description:'Среда DEV. Проверка: вход по RDP.'};
+        const fields={summary:'Восстановить RDP',description:accessDescription};
         const missing=mode==='blocked'?[{text:'Когда проверить доступ?',required:true}]:[];
         return {text:mode==='ordinary'?JSON.stringify(calls===1?{text:'',toolCalls:[{id:'fresh_ai',name:'update_task',arguments:{fields,questions:[]}}]}:{text:'Проверка пройдена.',toolCalls:[]}):JSON.stringify({fields:{...fields,missing}})};
     }});
-    await chat.send('На DEV нет доступа. Проверить вход по RDP.');
+    await chat.send(accessDescription);
     const state=chat.getState();assert.deepEqual(state.transcript[0],oldTranscript[0]);assert.ok(state.notices.includes(unrelated));
     if(mode==='invalid') {for(const notice of obsolete)assert.ok(state.notices.includes(notice));}
     else {
         assert.equal(state.error,null);for(const notice of obsolete)assert.equal(state.notices.includes(notice),false);
         const reply=state.transcript.at(-1).text;
         if(mode!=='ordinary')assert.match(reply,/Карточка заполнена по вашему сообщению/);
-        if(mode==='blocked'){assert.match(reply,/исходную оценку трудозатрат/);assert.match(reply,/Когда проверить доступ/);assert.equal(h.controller.getState().draft.checked,null);}
+        if(mode==='blocked'){assert.match(reply,/исходную оценку трудозатрат/);assert.doesNotMatch(reply,/Когда проверить доступ/);
+            assert.ok(h.controller.getState().validation.fieldErrors.timetracking);assert.equal(h.controller.getState().draft.questions.some(q=>q.text==='Когда проверить доступ?'),false);
+            assert.equal(h.controller.getState().draft.checked,null);}
         else assert.ok(h.controller.getState().draft.checked);
+        assert.equal(calls,mode==='ordinary'?1:2);
     }
     // A fresh rejection creates no new persistent notice at any point.
     assert.ok(snapshots.every(s=>s.notices.filter(n=>n.startsWith('Ответ Pico отклонён:')).length<=1));

@@ -88,7 +88,7 @@ function reviewQuestions(missing, state, proposed) {
     return questions;
 }
 
-export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep, draftReviewPrompt, draftExtractionPrompt} = {}) {
+export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, appManagedPatch = false, currentTurnWithEvidence = false, afterStep, draftReviewPrompt, draftExtractionPrompt} = {}) {
     if (typeof requestText !== 'function') throw Error('Pico requires the configured shared requestText callback');
     if (typeof system !== 'string' || typeof onEvent !== 'function' || (getContext !== undefined && typeof getContext !== 'function')) throw Error('Invalid Pico session options');
     const budget = validateBudget(tokenBudget), bounds = {};
@@ -161,7 +161,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                     }
                 }
                 function buildRequest() {
-                    if (!draftReviewPrompt) return makeRequest(system, tools, projected, state, compaction);
+                    if (!draftReviewPrompt) return makeRequest(system, tools, projected, state, compaction, appManagedPatch);
                     // Reconciliation is a single, scoped local field update. The
                     // model supplies field data; the application owns call IDs and
                     // runs the same schema, scope and concurrency checks as chat.
@@ -176,7 +176,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                     for (const index of starts.slice(1)) {
                         projected = full.slice(index);
                         compaction = {removedMessages: index, message: 'Earlier complete turns omitted from model context. Full transcript remains stored; use current authoritative task, manual fields, open questions and template revisions.'};
-                        request = makeRequest(system, tools, projected, state, compaction); size = requestSize(request);
+                        request = makeRequest(system, tools, projected, state, compaction, appManagedPatch); size = requestSize(request);
                         if (fits()) break;
                     }
                 }
@@ -220,7 +220,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                         ({response,tokens}=await ask());
                         try {envelope=readDraft(response.text);} catch {throw Error('Pico draft update missing');}
                     }
-                } else try {envelope = parseEnvelope(response.text, tools, seenIds, allowPlainTextFinal);} catch (error) {
+                } else try {envelope = parseEnvelope(response.text, tools, seenIds, allowPlainTextFinal, appManagedPatch);} catch (error) {
                     const code = error.message==='Duplicate Pico tool call id' ? 'duplicate-call-id' :
                         error.message.startsWith('Invalid arguments for Pico tool:') ? 'tool-schema' : 'envelope';
                     emit({type:'response-rejected', code});

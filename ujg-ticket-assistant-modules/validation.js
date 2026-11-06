@@ -101,6 +101,59 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return {id:s.id,label:s.label,question:s.question};
         })};
     }
+    function descriptionSectionDefinitions(meta,typeId,templateId) {
+        var requirements=devopsRequirements(meta,typeId),kind=requirements && requirements.kind;
+        if(!kind && ['task','bug','deployment'].indexOf(templateId)!==-1)kind=templateId;
+        var ids={task:['goal','work','location','acceptance','links','impact','extra'],
+            bug:['actual','expected','steps','location','evidence','configuration','version','conditions','acceptance','links','buildLog','impact','extra'],
+            deployment:['location','release','order','window','verification','verifier','links','impact','extra']}[kind];
+        if(!ids)return [];
+        var required={task:['goal','work','location','acceptance'],bug:['actual','expected','steps','location','evidence','acceptance'],
+            deployment:['location','release','order','window','verification']}[kind];
+        return ids.map(function(id) {
+            var section=devopsSections.find(function(item) {return item.id===id;});
+            return {id:id,label:id==='location' && kind==='deployment'?'Среда':section.label,
+                question:section.question,required:requirements ? requirements.sections.some(function(item) {return item.id===id;}) : required.indexOf(id)!==-1};
+        });
+    }
+    function mergeDescriptionSections(meta,typeId,description,updates,templateId) {
+        var result={description:description,applied:[],rejected:[]},definitions=descriptionSectionDefinitions(meta,typeId,templateId);
+        if(typeof description!=='string' || !updates || typeof updates!=='object' || Array.isArray(updates)) {
+            result.rejected.push({id:'descriptionSections',message:'Ожидается объект разделов описания с текстовыми значениями.'});return result;
+        }
+        var spec=fields.getField(meta,typeId,'description'),newline=description.indexOf('\r\n')!==-1?'\r\n':'\n';
+        Object.keys(updates).forEach(function(id) {
+            var definition=definitions.find(function(section) {return section.id===id;});
+            if(!definition || ['__proto__','constructor','prototype'].indexOf(id)!==-1 || typeof updates[id]!=='string') {
+                result.rejected.push({id:id,message:'Раздел неизвестен выбранному шаблону или значение не является текстом.'});return;
+            }
+            var value=updates[id],candidate=result.description,headers=descriptionHeaders(candidate);
+            var targets=headers.filter(function(header) {
+                var section=devopsSections.find(function(item) {return item.id===id;});
+                return [section.label].concat(section.aliases).some(function(label) {return sectionKey(label)===header.key;});
+            });
+            if(targets.length) {
+                targets.slice().reverse().forEach(function(header) {
+                    var index=headers.indexOf(header),end=index+1<headers.length?headers[index+1].start:candidate.length;
+                    var content=header===targets[0]?value:'';
+                    if(end<candidate.length)content+=newline+newline;
+                    var prefix=candidate.slice(0,header.content);
+                    if(!header.inline && prefix && !prefix.endsWith('\n'))prefix+=newline;
+                    candidate=prefix+content+candidate.slice(end);
+                });
+            } else {
+                var extra=headers.find(function(header) {return header.key===sectionKey('Дополнительно');});
+                var position=extra?extra.start:candidate.length,prefix=candidate.slice(0,position),suffix=candidate.slice(position);
+                if(prefix && !prefix.endsWith(newline+newline))prefix+=prefix.endsWith(newline)?newline:newline+newline;
+                candidate=prefix+definition.label+': '+value+(suffix?newline+newline+suffix:'');
+            }
+            if(spec && spec.maxLength && candidate.length>spec.maxLength) {
+                result.rejected.push({id:id,message:'После обновления раздела превышен лимит длины описания Jira.'});return;
+            }
+            result.description=candidate;result.applied.push(id);
+        });
+        return result;
+    }
     function unresolvedInstruction(value) {
         return /не\s+(?:нужн|надо|требу|согласован|определ[её]н|извест|выполн|провед|провер|ожида|подтвержд|будет|будут)|неизвест|отмен[её]н|уточн(?:им|ить)/i.test(value || '');
     }
@@ -287,10 +340,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             /^ссылк[аи]\s+на\s+(?:репозиторий|репу|документацию|базу знаний)(?:\s+для примера)?\s+(?:нет|не указана|не предоставлена|отсутствует)\.?$/i.test(text) ||
             /^неизвестно:\s*ссылка на (?:репозиторий|документацию|базу знаний)(?:,\s*(?:репозиторий|документацию|базу знаний))*(?:\s+или\s+(?:репозиторий|документацию|базу знаний))?(?:\s*\(требуется для создания\))?\.?$/i.test(text);
     }
-    function mergeDevopsReference(description,value) {
-        var parsed=parseDevopsReferenceAnswer(value);
-        if(!parsed.ok || typeof description!=='string')return {ok:false,description:description,code:parsed.code || 'description',message:parsed.message || 'Описание задачи должно быть текстом.'};
-        var newline=description.indexOf('\r\n')!==-1?'\r\n':'\n',headers=[],offset=0,lines=description.split('\n');
+    function descriptionHeaders(description) {
+        var headers=[],offset=0,lines=description.split('\n');
         lines.forEach(function(line,index) {
             var raw=line.replace(/\r$/,''),colon=raw.indexOf(':'),marked=/^\s*(?:#{1,6}\s|h[1-6]\.\s|\*{1,2}|__)/.test(raw);
             var label=(colon===-1?raw:raw.slice(0,colon)).replace(/^\s*(?:#{1,6}\s*|h[1-6]\.\s*)/,'');
@@ -303,6 +354,12 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             }
             offset+=line.length+1;
         });
+        return headers;
+    }
+    function mergeDevopsReference(description,value) {
+        var parsed=parseDevopsReferenceAnswer(value);
+        if(!parsed.ok || typeof description!=='string')return {ok:false,description:description,code:parsed.code || 'description',message:parsed.message || 'Описание задачи должно быть текстом.'};
+        var newline=description.indexOf('\r\n')!==-1?'\r\n':'\n',headers=descriptionHeaders(description);
         var index=headers.findIndex(function(header) {return header.key===sectionKey('Ссылки') || header.key==='links';});
         if(index===-1) {
             var extra=headers.find(function(header) {return header.key===sectionKey('Дополнительно');});
@@ -329,11 +386,15 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     }
     function validateDevops(meta,typeId,values,policy,result,error) {
         var requirements=devopsRequirements(meta,typeId);
+        if(!requirements && policy.appManagedQuestions===true) {
+            var definitions=descriptionSectionDefinitions(meta,typeId,policy.templateId);
+            if(definitions.length)requirements={kind:policy.templateId,sections:definitions.filter(function(section) {return section.required;})};
+        }
         if(!requirements)return;
         result.questions=[];
         function missing(id,text,field) {
             error(field || 'description',text);
-            result.questions.push({id:'devops:'+id,text:text,required:true});
+            result.questions.push({id:(meta.projectKey==='DEVOPS'?'devops:':'template:')+id,text:text,required:true});
         }
         if(requirements.kind==='unsupported')missing('type','Для DEVOPS выберите тип «Задача», «Ошибка» или «Задача развёртывания».','issuetype');
         var sections=readSections(values.description),summary=typeof values.summary==='string'?values.summary.trim():'';
@@ -343,7 +404,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if(s.id==='evidence')return;
             if(!meaningful(sections[s.id]))missing(s.id,s.question);
         });
-        if(meaningful(sections.links)) {
+        if(requirements.sections.some(function(section) {return section.id==='links';}) && meaningful(sections.links)) {
             var references=referenceCandidates(sections.links);
             if(!references.some(function(reference) {return reference.ok;}))
                 missing('links',references.some(function(reference) {return reference.code==='dashboard';}) ? dashboardMessage : devopsSections.find(function(s) {return s.id==='links';}).question);
@@ -370,6 +431,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 !(meaningful(sections.buildLog) && (url(sections.buildLog) || attached || /фрагмент|error|failed/i.test(sections.buildLog)) && /шаг|stage|step|job/i.test(sections.buildLog)))
                 missing('buildLog',devopsSections.find(function(s) {return s.id==='buildLog';}).question);
         }
+        if(meta.projectKey!=='DEVOPS')return;
         var priority=fields.getField(meta,typeId,'priority');
         var value=Object.prototype.hasOwnProperty.call(values,'priority') ? values.priority : priority && priority.defaultApplicable && priority.defaultValue;
         var resolved=priority && value && fields.resolveOption(priority,value);
@@ -441,5 +503,5 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
 });

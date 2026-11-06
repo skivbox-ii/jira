@@ -65,18 +65,17 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
     });
 });
 
-test('chat repairs a misplaced question and shows the question saved with the updated description', async t => {
+test('managed chat repairs a misplaced model question atomically and shows the application-owned missing requirement', async t => {
     const {page, send, errors} = await browserFixture(t);
     await page.evaluate(async () => {
         const records = window.taPreview;
         const Gadget = window.taRequire('_ujgTicketAssistantRuntime');
-        const fields = {summary:'Восстановить доступ', description:'Доступ к тестовому сервису прерван.'};
+        const fields = {summary:'Восстановить доступ', description:'Цель: восстановить доступ к сервису.\n\nЧто сделать: Доступ к тестовому сервису прерван. Восстановить подключение.\n\nКритерии приёмки: Пользователь успешно подключается к сервису.'};
         const questions = [{id:'env', text:'В какой среде произошёл сбой?', required:true}];
         const call = {id:'update_1', name:'update_task', arguments:{fields}};
         const responses = [
             JSON.stringify({text:'', toolCalls:[{...call, questions}]}),
-            JSON.stringify({text:'', toolCalls:[{...call, arguments:{fields, questions}}]}),
-            'Известные факты:\n1. Доступ прерван.\nВ какой среде (DEV, TEST, PREPROD) произошёл сбой?'
+            JSON.stringify({text:'', toolCalls:[{...call, arguments:{fields, questions}}]})
         ];
         records.cardAtRequest = [];
         records.instance = new Gadget({getGadgetContentEl:() => window.jQuery('#ticket-assistant')}, {
@@ -92,9 +91,14 @@ test('chat repairs a misplaced question and shows the question saved with the up
         await records.instance.controller.selectTemplate('task');
     });
     await send('Доступ к сервису прерван. Нужно его восстановить.');
-    assert.deepEqual(await page.evaluate(() => window.taPreview.cardAtRequest), [null, null, 'Восстановить доступ']);
+    assert.deepEqual(await page.evaluate(() => window.taPreview.cardAtRequest), [null, null]);
+    assert.equal(await page.locator('[data-ta-field="summary"] input').inputValue(),'Восстановить доступ');
     assert.match(await page.locator('[data-ta-field="description"] textarea').inputValue(), /Доступ к тестовому сервису/);
-    assert.equal(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),'В какой среде произошёл сбой?');
+    const questions=await page.evaluate(()=>window.taPreview.instance.controller.getState().validation.questions);
+    assert.deepEqual(questions.map(q=>q.id),['template:location']);
+    assert.ok((await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText()).includes(questions[0].text));
+    assert.doesNotMatch(await page.locator('[data-ta-chat-log]').innerText(),/В какой среде произошёл сбой\?/);
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(op=>op==='create').length),0);
     assert.equal(await page.locator('[data-ta-chat-error]').isVisible(), false);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(), true);
     assert.deepEqual(errors, []);
@@ -260,10 +264,14 @@ for(const width of [1440,390])test('real Pico offline chat, editor, template, re
     assert.equal(await page.locator('[data-ta-editor-panel]').isHidden(),true);
     await page.screenshot({path:'/tmp/ticket-assistant-chat-'+width+'-initial.png'});
     await send('При сохранении задача выдаёт ошибку API. <img src=x onerror=alert(1)>');
+    assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),1,'application-owned questions need no second model turn');
+    assert.equal(await page.evaluate(()=>window.taPreview.chatRequests[0].authoritativeContext.appManagedPatch),true);
     assert.equal((await state()).draft.fields.summary,'Исправить ошибку API при сохранении');
     assert.equal(await page.locator('[data-ta-task-card]').count(),1);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
-    assert.match(await page.locator('[data-ta-card-questions]').innerText(),/среде/);
+    const firstQuestions=(await state()).validation.questions;
+    assert.deepEqual(firstQuestions.map(q=>q.id),['template:location']);
+    assert.ok((await page.locator('[data-ta-card-questions]').innerText()).includes(firstQuestions[0].text));
     assert.equal(await page.locator('[data-ta-chat-log] img').count(),0);
     await send('Тестовая среда, версия 2026.11. Сохранение должно завершиться без ошибки.');
     await send('Выбираю API');
@@ -320,7 +328,14 @@ for(const width of [1440,390])test('real Pico offline chat, editor, template, re
     assert.equal(await page.locator('[data-ta-message]').count(),transcriptCount);
     assert.equal((await page.locator('[data-ta-template-read]').innerText()).includes(exact),true,'literal template display survives reload');
     assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),0,'reload never invokes runtime or replays tools');
+    const beforeConfirmation=await state();
     await send('Подтверди готовность задачи.');
+    const ready=await state();
+    const requestReview=await page.evaluate(()=>{const last=window.taPreview.chatRequests.at(-1),c=last && last.authoritativeContext;return c?{managed:c.appManagedPatch,pendingReview:c.draft.templateReviewPending}:null;});
+    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true,JSON.stringify({before:{pendingReview:beforeConfirmation.draft.templateReviewPending,checked:!!beforeConfirmation.draft.checked},requestReview,pendingReview:ready.draft.templateReviewPending,pendingFields:Object.keys(ready.draft.pendingFields),validation:ready.validation,lastReply:await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText()}));
+    assert.equal(ready.draft.templateReviewPending,false);
+    assert.deepEqual(ready.draft.fields,beforeConfirmation.draft.fields,'a readiness-only command must not rewrite accepted fields');
+    assert.equal(ready.draft.source,beforeConfirmation.draft.source,'a readiness-only command contains no new task facts');
     await page.locator('[data-ta-card-create]').click();
     await page.waitForSelector('[data-ta-issue-link]');
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
@@ -555,7 +570,14 @@ test('a gateway outage still allows exactly one explicit issue creation from the
         await fixture.instance.controller.selectIssueType('10');
         await fixture.instance.controller.selectTemplate('deployment');
     });
-    const description='Проверить карточку развёртывания в DEV. Пример для стенда DEV, сборка 1.0. Приёмка: открыть карточку и сверить описание. Работы на сервере не требуются.';
+    const description=[
+        'Проверить карточку развёртывания в DEV.',
+        'Среда: DEV, сервис demo-api.',
+        'Версия и состав: Образ demo-api версии 1.0.',
+        'Порядок: Проверить образ, обновить deployment и дождаться готовности сервиса.',
+        'Окно: Рабочие часы с 10:00 до 11:00.',
+        'Проверка: Постановщик проверит HTTP 200 на /health и сверит версию 1.0.'
+    ].join('\n\n');
     const composer=page.locator('[data-ta-chat-input]');
     await composer.fill(description);await composer.press('Enter');
     await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
@@ -585,8 +607,14 @@ test('after a transport failure a user can validate the current edited card with
         await fixture.instance.ready;
         const c=fixture.instance.controller;
         await c.selectProject('DEMO');await c.selectIssueType('10');await c.selectTemplate('deployment');
-        await c.updateField('summary','Моя тема');
-        await c.updateField('description','Моё описание для проверки карточки в Jira.');
+        await c.updateField('summary','Проверить развёртывание demo-api в DEV');
+        await c.updateField('description',[
+            'Среда: DEV, сервис demo-api.',
+            'Версия и состав: Образ demo-api версии 1.0.',
+            'Порядок: Обновить deployment и дождаться готовности сервиса.',
+            'Окно: Рабочие часы.',
+            'Проверка: Постановщик проверит HTTP 200 на /health.'
+        ].join('\n\n'));
     });
     await page.locator('[data-ta-chat-input]').fill('Сверь детали карточки');
     await page.locator('[data-ta-chat-input]').press('Enter');
@@ -613,7 +641,13 @@ test('invalid Pico JSON preserves the incident narrative and a required Jira est
         const c=fixture.instance.controller;
         await c.selectProject('DEMO');await c.selectIssueType('10');await c.selectTemplate('task');
     });
-    const narrative='Добрый день!\nС утра отсутствует доступ к тестовому серверу.\nПо проблеме зарегистрированы заявки SD0001 и SD0002.\nПрошу восстановить доступ.';
+    const narrative=[
+        'Добрый день!\nС утра отсутствует доступ к тестовому серверу.\nПо проблеме зарегистрированы заявки SD0001 и SD0002.\nПрошу восстановить доступ.',
+        'Цель: Восстановить доступ к тестовому серверу для продолжения проверки.',
+        'Что сделать: Проверить причину отказа подключения и восстановить доступ к серверу.',
+        'Где: Тестовый сервер DEV, доступ по RDP.',
+        'Критерии приёмки: Постановщик успешно подключается к тестовому серверу по RDP.'
+    ].join('\n\n');
     const composer=page.locator('[data-ta-chat-input]');
     await composer.fill(narrative);await composer.press('Enter');
     await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
@@ -650,7 +684,7 @@ test('after a malformed tool batch the source widget displays the model-authored
                 ]})};
                 return {text: JSON.stringify({fields:{
                     summary:'Обновить API в TEST до 1.0',
-                    description:'Цель: обновить компонент API в TEST до 1.0. Проверка: health возвращает 200.',
+                    description:'Среда: TEST, компонент API.\n\nВерсия и состав: API версии 1.0.\n\nПорядок: Обновить образ API и дождаться готовности сервиса.\n\nОкно: Рабочие часы.\n\nПроверка: Постановщик проверит результат. Проверка: health возвращает 200.',
                     components:[{id:'31'}],
                     missing:[]
                 }})};
@@ -685,7 +719,12 @@ test('visible HTTP 429 retry uses the saved chat and preserves unsent text acros
             fetchImpl:async () => {
                 f.attempts++;
                 if (f.attempts < 3) return new Response('private-quota-details', {status:429});
-                const card = {fields:{summary:'Обновить demo-api в DEV', description:'Обновить demo-api до 1.0 в DEV. Проверить /health.'}, missing:[]};
+                const card = {fields:{summary:'Обновить demo-api в DEV', description:[
+                    'Цель: Проверить обновление demo-api до версии 1.0.',
+                    'Что сделать: Обновить образ demo-api до 1.0 и дождаться готовности сервиса.',
+                    'Где: DEV, сервис demo-api.',
+                    'Критерии приёмки: Постановщик проверит HTTP 200 на /health и версию 1.0.'
+                ].join('\n\n')}, missing:[]};
                 return Response.json({choices:[{message:{content:JSON.stringify(card)}}]});
             }
         });
@@ -696,7 +735,13 @@ test('visible HTTP 429 retry uses the saved chat and preserves unsent text acros
         await controller.selectTemplate('task');
     });
     const composer = page.locator('[data-ta-chat-input]');
-    const source = 'На DEV нужен demo-api версии 1.0, после обновления проверить /health.';
+    const source = [
+        'На DEV нужен demo-api версии 1.0, после обновления проверить /health.',
+        'Цель: Проверить обновление demo-api до версии 1.0.',
+        'Что сделать: Обновить образ demo-api до 1.0 и дождаться готовности сервиса.',
+        'Где: DEV, сервис demo-api.',
+        'Критерии приёмки: Постановщик проверит HTTP 200 на /health и версию 1.0.'
+    ].join('\n\n');
     await composer.fill(source);
     await composer.press('Enter');
     await page.waitForFunction(() => !!window.taPreview.instance.controller.getState().draft.checked);
@@ -716,4 +761,39 @@ test('visible HTTP 429 retry uses the saved chat and preserves unsent text acros
     assert.equal((await state()).draft.fields.summary, 'Обновить demo-api в DEV');
     assert.equal(await page.evaluate(() => window.taPreview.calls.filter(x => x === 'create').length), 0);
     assert.deepEqual(errors, []);
+});
+
+test('read-only template inspection after custom rule edits preserves pending review without failing or authorizing a write',async t=>{
+    const {page,send,state,errors}=await browserFixture(t);
+    await send('При сохранении задача выдаёт ошибку API на стенде TEST.');
+    await page.evaluate(async()=>{
+        const c=window.taPreview.instance.controller,settings=c.getState().settings;
+        settings.profiles.find(p=>p.id===settings.activeProfileId).templates.find(t=>t.id==='task').instructions+='\nПроверь журнал API перед созданием.';
+        await c.applySettings(settings);
+    });
+    const before=await state();assert.equal(before.draft.templateReviewPending,true);assert.equal(before.draft.checked,null);
+    await send('Покажи шаблон');
+    const after=await state();assert.equal(after.draft.templateReviewPending,true);assert.equal(after.draft.checked,null);
+    assert.deepEqual(after.draft.fields,before.draft.fields);assert.equal(after.draft.source,before.draft.source);assert.deepEqual(after.settings,before.settings);
+    assert.equal(await page.locator('[data-ta-template-read]').isVisible(),true);assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),false);
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(op=>op==='create').length),0);assert.deepEqual(errors,[]);
+});
+
+for(const failure of ['502','malformed'])test('incomplete '+failure+' fallback keeps generic template requirements blocking creation',async t=>{
+    const {page,state,errors}=await browserFixture(t);
+    await page.evaluate(async failure=>{
+        const f=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');f.instance.destroy();
+        f.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{api:f.api,storage:null,requestText:async()=>{
+            if(failure==='502')throw Error('Pico HTTP 502');
+            return {text:'{"toolCalls":[{"name":"update_task","arguments":{"fields":{"summary":"UNTRUSTED"}}}'};
+        }});
+        await f.instance.ready;await f.instance.controller.selectProject('DEMO');await f.instance.controller.selectIssueType('10');await f.instance.controller.selectTemplate('task');
+    },failure);
+    const source='Восстановить доступ на DEV.',composer=page.locator('[data-ta-chat-input]');
+    await composer.fill(source);await composer.press('Enter');await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
+    const s=await state();assert.equal(s.draft.fields.description,source);assert.equal(s.draft.source,source);assert.equal(s.draft.checked,null);
+    assert.equal(s.validation.ok,false);assert.ok(s.validation.questions.some(q=>q.id.startsWith('template:')));
+    assert.ok((await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText()).includes(s.validation.questions[0].text));
+    assert.doesNotMatch(JSON.stringify(s.draft.fields),/UNTRUSTED/);assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),false);
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(op=>op==='create').length),0);assert.deepEqual(errors,[]);
 });

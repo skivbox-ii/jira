@@ -293,6 +293,24 @@ function extractionContext() {
 function extractionTool(execute) {
     return {name:'update_task',parameters:{type:'object',properties:{fields:{type:'object'},questions:{type:'array'}},required:['fields','questions'],additionalProperties:false},execute};
 }
+test('a field-only reply uses one schema-checked update on a data turn and cannot smuggle other actions',async()=>{
+    const {createSession}=await runtime();
+    const patch={fields:{summary:'Обновить demo-api'},descriptionSections:{window:'После 18:00'}};
+    const updates=[];
+    const run=async (reply,enabled)=>{
+        const s=createSession({appManagedPatch:enabled,afterStep:()=>({action:'end'}),
+            tools:[{name:'update_task',parameters:{type:'object',properties:{fields:{type:'object'},descriptionSections:{type:'object'}},
+                additionalProperties:false},execute:args=>{updates.push(args);return {ok:true};}}],
+            requestText:async()=>({text:JSON.stringify(reply)})});
+        try{return await s.prompt('Обновить demo-api после 18:00');}finally{s.dispose();}
+    };
+    assert.equal((await run(patch,false)).status,'error');
+    assert.equal((await run({...patch,toolCalls:[]},true)).status,'error');
+    assert.equal((await run({...patch,fields:[]},true)).status,'error');
+    const done=await run(patch,true);
+    assert.equal(done.status,'complete');assert.equal(done.usage.modelCalls,1);
+    assert.deepEqual(updates,[patch]);
+});
 for(const bad of [
     {fields:{description:'Итог',foreign:'x'},missing:[]},
     {fields:{description:'Итог',components:[{id:'OTHER-9'}]},missing:[]},

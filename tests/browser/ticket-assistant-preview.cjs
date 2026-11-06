@@ -160,14 +160,32 @@
                 } else {
                     if(!toolResults.length) {
                         var fields={},questions=[];
+                        var managed=current.appManagedPatch===true,sections={};
                         if(/предложи другую тему/i.test(text))fields.summary='Проверить обработку ошибок API';
                         else if(/выбираю API/i.test(text))fields.components=[{id:'31'}];
-                        else if(/добавь/i.test(text))fields.description=(current.draft.fields.description || '')+'\n'+text;
+                        else if(/добавь/i.test(text)) {
+                            if(managed)sections.acceptance='Сохранение завершается без ошибки.\n'+text;
+                            else fields.description=(current.draft.fields.description || '')+'\n'+text;
+                        }
                         else if(!current.draft.fields.summary) {
-                            fields.summary='Исправить ошибку API при сохранении';fields.description='Фактическое поведение\n'+text+'\n\nОжидаемое поведение\nСохранение завершается без ошибки.';
-                            questions=[{id:'environment',text:'В какой среде воспроизводится ошибка?',reason:'Среда не указана.',required:true}];
-                        } else fields.description=(current.draft.fields.description || '')+'\n\nУточнение\n'+text;
-                        call('update_task',{fields:fields,questions:questions,warnings:[]});
+                            fields.summary='Исправить ошибку API при сохранении';
+                            if(managed) {
+                                // These are the synthetic incident's known facts. Leave
+                                // the environment absent until the human supplies it.
+                                sections.goal='Восстановить успешное сохранение задачи через API.';
+                                sections.work='Устранить ошибку API при сохранении задачи.\n'+text;
+                                sections.acceptance='Сохранение завершается без ошибки.';
+                            } else {
+                                fields.description='Фактическое поведение\n'+text+'\n\nОжидаемое поведение\nСохранение завершается без ошибки.';
+                                questions=[{id:'environment',text:'В какой среде воспроизводится ошибка?',reason:'Среда не указана.',required:true}];
+                            }
+                        } else if(managed && /подтверди готовность/i.test(text))fields.description=current.draft.fields.description;
+                        else if(!managed)fields.description=(current.draft.fields.description || '')+'\n\nУточнение\n'+text;
+                        if(managed && /тестов\S* сред|\b(?:DEV|TEST|PREPROD)\b/i.test(text))sections.location=text;
+                        var patch={fields:fields,warnings:[]};
+                        if(Object.keys(sections).length)patch.descriptionSections=sections;
+                        if(!managed)patch.questions=questions;
+                        call('update_task',patch);
                     } else if(toolResults.length===1)call('validate_task',{});
                     else response.text=current.draft.questions.length?'В какой среде воспроизводится ошибка?':'Карточка обновлена и проверена. Можно отредактировать или создать задачу.';
                 }

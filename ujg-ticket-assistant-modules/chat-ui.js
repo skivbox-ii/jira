@@ -366,13 +366,16 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         function renderCard(d,s) {
             card.attr('data-ta-task-card-id',d.id);
             var issue=state.meta && state.meta.issueTypes.find(function(t){return t.id===d.issueTypeId;}),validation=state.validation;
-            var reason=!d.issueTypeId?'Выберите тип Jira в редакторе.':!d.templateId?'Выберите шаблон.':!validation?'Текущие поля ещё не проверены.':!validation.ok?Object.keys(validation.fieldErrors || {}).map(function(id){return (validation.fieldErrors[id] || []).join(' ');}).join(' ') || 'Ответьте на обязательные вопросы.':!d.checked?'Текущие изменения требуют проверки.':'';
+            var fieldErrors=Object.values(validation && validation.fieldErrors || {}).flat();
+            var requiredQuestions=(d.questions || []).filter(function(q){return q.required;});
+            var nextReason=liveEditor?(fieldErrors[0] || requiredQuestions[0]?.text):fieldErrors.join(' ');
+            var reason=!d.issueTypeId?'Выберите тип Jira в редакторе.':!d.templateId?'Выберите шаблон.':!validation?'Текущие поля ещё не проверены.':!validation.ok?(nextReason || 'Проверьте обязательные поля.') :!d.checked?'Текущие изменения требуют проверки.':'';
             if(validation && validation.unsupportedRequired && validation.unsupportedRequired.length)reason+=' Откройте «Редактировать», затем «Открыть форму Jira» для обязательных полей.';
             if(s.status==='running' || reconciling)reason='Дождитесь ответа или остановите запрос.';
             var creation=d.creation,labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Ожидаем результат создания…',created:'Задача создана.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.',rejected:'Создание отклонено.'};
             if(locked(d))reason=labels[creation.status] || 'Создание заблокировано.';
             card.find('[data-ta-card-summary]').text(d.fields.summary || 'Тема пока не заполнена');
-            var required=(d.questions || []).filter(function(q){return q.required;}).length,
+            var required=requiredQuestions.length,
                 proposed=Object.keys(d.pendingFields || {}).length+(s.pendingTemplateProposal?1:0),counts=[];
             if(required)counts.push('Обязательных вопросов: '+required);
             if(proposed)counts.push('Предложений: '+proposed);
@@ -415,7 +418,8 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             if(liveEditor) {
                 var hasAnswers=(s.transcript || []).some(function(m){return m.role==='user';});
                 card.find('[data-ta-card-check]').prop('hidden',!hasAnswers || !!d.checked || locked(d) || hasRateLimit(s));
-                card.find('[data-ta-card-local-check]').prop('hidden',!canCheckFields(d) || hasAnswers && !s.error && s.status!=='stopped');
+                var locallyComplete=validation && validation.ok && !d.templateReviewPending;
+                card.find('[data-ta-card-local-check]').prop('hidden',!canCheckFields(d) || hasAnswers && !locallyComplete && !s.error && s.status!=='stopped');
                 card.find('[data-ta-card-undo]').prop('hidden',!s.canUndo || locked(d));
             }
             card.find('[data-ta-chat-accept],[data-ta-chat-reject]').prop('disabled',reconciling || s.status==='running' || locked(d));

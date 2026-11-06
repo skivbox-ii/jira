@@ -4,6 +4,7 @@ const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
 const narrative='Восстановить доступ к сервису на DEV. Проверка: вход по RDP.';
+const completeNarrative=narrative+'\nЦель: вернуть команде доступ для проверки сервиса.\nЧто сделать: восстановить доступ к сервису по RDP.\nГде: сервис на стенде DEV.\nКритерии приёмки: команда успешно входит по RDP.';
 async function setup(t,mode='throw') {
     const h=await harness();
     const Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields});
@@ -22,10 +23,10 @@ async function setup(t,mode='throw') {
 for(const mode of ['throw','event','missing'])for(const prefix of ['', 'Описание: '])
 test('unavailable '+mode+' checks a real description and derives an empty summary: '+prefix,async t=>{
     const h=await setup(t,mode);let creates=0;
-    h.api.createIssue=async payload=>{creates++;assert.equal(payload.fields.description,narrative);return {id:'123',key:'DO-123'};};
-    await h.chat.send(prefix+narrative);
+    h.api.createIssue=async payload=>{creates++;assert.equal(payload.fields.description,completeNarrative);return {id:'123',key:'DO-123'};};
+    await h.chat.send(prefix+completeNarrative);
     const s=h.controller.getState();
-    assert.equal(s.draft.fields.description,narrative);
+    assert.equal(s.draft.fields.description,completeNarrative);
     assert.equal(s.draft.fields.summary,'Восстановить доступ к сервису на DEV.');
     assert.equal(s.validation.ok,true);assert.ok(s.draft.checked);
     assert.equal(h.store.load('DO').draft.checked.draftRevision,s.draft.draftRevision);
@@ -36,7 +37,7 @@ test('unavailable '+mode+' checks a real description and derives an empty summar
 });
 test('fallback preserves a manually entered summary',async t=>{
     const h=await setup(t);await h.controller.updateField('summary','Моя тема');
-    await h.chat.send('Описание: '+narrative);
+    await h.chat.send('Описание: '+completeNarrative);
     assert.equal(h.controller.getState().draft.fields.summary,'Моя тема');assert.ok(h.controller.getState().draft.checked);
 });
 for(const blocker of ['question','proposal','required','review','protected-empty'])
@@ -46,14 +47,15 @@ test('unavailability cannot bypass '+blocker,async t=>{
         const read=h.api.getCreateMeta;h.api.getCreateMeta=async(...args)=>{const raw=await read(...args);raw.projects[0].issuetypes.forEach(x=>x.fields.customfield_2.required=true);return raw;};
         await c.selectProject('DO');
     }
-    if(blocker==='question')await c.chatUpdate({fields:{},questions:[{id:'semantic',text:'Какой результат нужен?',required:true}]},c.chatSnapshot());
+    if(blocker==='question')await c.chatUpdate({fields:{},questions:[{id:'template:goal',text:'Зачем нужна эта работа и какой результат она должна дать?',required:true}]},c.chatSnapshot());
     if(blocker==='proposal'){
         await c.updateField('summary','Моя тема');await c.chatUpdate({fields:{summary:'Предложение'}},c.chatSnapshot());
     }
     if(blocker==='protected-empty')await c.updateField('summary','');
     if(blocker==='review')await c.chatApplyTemplate({instructions:'Новые правила'},c.chatSnapshot());
-    await h.chat.send('Описание: '+narrative);
+    await h.chat.send('Описание: '+(blocker==='question'?narrative:completeNarrative));
     assert.equal(c.getState().draft.checked,null);
+    if(blocker==='question')assert.ok(c.getState().validation.questions.some(q=>q.id==='template:goal'));
     if(blocker==='proposal')assert.equal(c.getState().draft.pendingFields.summary,'Предложение');
     if(blocker==='protected-empty')assert.equal(c.getState().draft.fields.summary,'');
     if(blocker==='review')assert.equal(c.getState().draft.templateReviewPending,true);
@@ -70,13 +72,26 @@ test('later narrative cannot silently replace a user description or check missed
 });
 test('malformed initial response recovers user facts; reconciliation without evidence stays blocked',async t=>{
     const h=await setup(t,async config=>{config.onEvent({type:'error',code:'response'});return {status:'error'};});
-    await h.chat.send(narrative);
-    assert.equal(h.controller.getState().draft.fields.description,narrative);
+    await h.chat.send(completeNarrative);
+    assert.equal(h.controller.getState().draft.fields.description,completeNarrative);
     assert.ok(h.controller.getState().draft.checked);
     const h2=await setup(t);await h2.chat.reconcile();assert.equal(h2.controller.getState().draft.checked,null);
 });
 
 const greeted='Добрый день!\nНа стендах DEV, TEST и PREPROD приложение не запускается. Нужно восстановить запуск. Проверка: успешный вход.';
+for(const failure of ['Pico HTTP 502','Invalid Pico text envelope'])for(const prefix of ['', 'Описание: '])
+test('incomplete first-turn fallback keeps template blockers: '+failure+' / '+prefix,async t=>{
+    const h=await setup(t,async()=>{throw Error(failure);});
+    await h.chat.send(prefix+narrative);
+    const s=h.controller.getState();
+    assert.equal(s.draft.fields.description,narrative);assert.equal(s.draft.source,prefix+narrative);
+    assert.equal(s.draft.fields.summary,'Восстановить доступ к сервису на DEV.');
+    assert.equal(s.draft.checked,null);assert.equal(s.validation.ok,false);
+    assert.ok(s.validation.questions.some(q=>q.id==='template:goal'));
+    assert.equal(h.chat.getState().error,null);
+    assert.match(h.chat.getState().transcript.at(-1).text,/Создание пока недоступно\. Зачем нужна эта работа и какой результат она должна дать\?/);
+    assert.doesNotMatch(h.chat.getState().transcript.at(-1).text,/Проверка пройдена/);
+});
 async function requireEstimate(h) {
     const read=h.api.getCreateMeta;
     h.api.getCreateMeta=async(...args)=>{const raw=await read(...args);for(const type of raw.projects[0].issuetypes)
@@ -134,7 +149,7 @@ test('summary greeting removal respects Russian word boundaries',async t=>{
     assert.equal(h.controller.getState().draft.fields.summary,'Приветствие не отображается на странице входа.');
 });
 test('missing estimate after malformed recovery can be answered locally without another model request',async t=>{
-    const h=await setup(t);await requireEstimate(h);const r=await restoreMalformed(t,h,[greeted,greeted,greeted]);
+    const h=await setup(t);await requireEstimate(h);const r=await restoreMalformed(t,h,[completeNarrative,completeNarrative,completeNarrative]);
     await r.chat.reconcile();assert.equal(h.controller.getState().draft.checked,null);
     const calls=r.calls();await r.chat.send('Оценка: 2 часа');
     assert.equal(r.calls(),calls);assert.equal(h.controller.getState().draft.fields.timetracking.originalEstimate,'2h');
@@ -179,7 +194,7 @@ test('late failed provider cannot change a newer manual edit',async t=>{
 });
 test('Jira preflight network error does not become successful create',async t=>{
     const h=await setup(t);let creates=0;h.api.createIssue=async()=>{creates++;return {key:'DO-1'};};
-    await h.chat.send(narrative);assert.ok(h.controller.getState().draft.checked);
+    await h.chat.send(completeNarrative);assert.ok(h.controller.getState().draft.checked);
     h.api.getCreateMeta=async()=>{throw Error('Jira unavailable');};await h.controller.submit();
     assert.equal(creates,0);assert.equal(h.controller.getState().draft.creation.issueKey,null);
     assert.ok(h.controller.getState().draft.creation.error);
@@ -188,14 +203,16 @@ test('Jira preflight network error does not become successful create',async t=>{
 test('plain API incident narrative is task data, not a connection command',async t=>{
     const h=await setup(t);await h.chat.send('Исправить API на DEV. Проверка: ответ 200.');
     assert.equal(h.controller.getState().draft.fields.description,'Исправить API на DEV. Проверка: ответ 200.');
-    assert.ok(h.controller.getState().draft.checked);
+    assert.equal(h.controller.getState().draft.checked,null);
+    assert.equal(h.controller.getState().validation.ok,false);
+    assert.match(h.chat.getState().transcript.at(-1).text,/Зачем нужна эта работа/);
 });
 for(const failure of ['transport','response'])for(const cancel of ['stop','edit','switch','destroy'])test('late Jira relation check cannot check a '+cancel+' turn after '+failure,async t=>{
     const h=await setup(t,async()=>{throw Error(failure==='response'?'Invalid Pico text envelope':'provider unavailable');}),c=h.controller,read=h.api.getCreateMeta,gate=deferred();let started=false,signal;
     h.api.getCreateMeta=async(...args)=>{const raw=await read(...args);raw.projects[0].issuetypes.forEach(x=>x.fields.customfield_923={name:'Epic',schema:{type:'any',custom:'com.pyxis.greenhopper.jira:gh-epic-link'}});return raw;};
     await c.selectProject('DO');await c.updateField('customfield_923','DO-42');
     h.api.getEpic=(project,key,request)=>{started=true;signal=request.signal;return gate.promise;};
-    const sending=h.chat.send(narrative);
+    const sending=h.chat.send(completeNarrative);
     for(let i=0;i<40&&!started;i++)await Promise.resolve();assert.equal(started,true);
     if(cancel==='stop')h.chat.stop();
     if(cancel==='edit')await c.updateField('summary','Моя новая тема');
@@ -209,13 +226,13 @@ test('Jira relation network error blocks fallback readiness',async t=>{
     const h=await setup(t),c=h.controller,read=h.api.getCreateMeta;
     h.api.getCreateMeta=async(...args)=>{const raw=await read(...args);raw.projects[0].issuetypes.forEach(x=>x.fields.customfield_923={name:'Epic',schema:{type:'any',custom:'com.pyxis.greenhopper.jira:gh-epic-link'}});return raw;};
     await c.selectProject('DO');await c.updateField('customfield_923','DO-42');
-    h.api.getEpic=async()=>{throw Error('Jira unavailable');};await h.chat.send(narrative);
+    h.api.getEpic=async()=>{throw Error('Jira unavailable');};await h.chat.send(completeNarrative);
     assert.equal(c.getState().draft.checked,null);assert.ok(!h.chat.getState().transcript.some(m=>/Проверка пройдена/.test(m.text)));
 });
 test('concurrent send is ignored while recovering a failed model turn',async t=>{
     const gate=deferred();let calls=0;const h=await setup(t,async()=>{calls++;await gate.promise;throw Error('transport');});
-    const sending=h.chat.send(narrative);await h.chat.send('Другой запрос');gate.resolve();await sending;
-    assert.equal(calls,1);assert.equal(h.controller.getState().draft.fields.description,narrative);
+    const sending=h.chat.send(completeNarrative);await h.chat.send('Другой запрос');gate.resolve();await sending;
+    assert.equal(calls,1);assert.equal(h.controller.getState().draft.fields.description,completeNarrative);
     assert.equal(h.chat.getState().transcript.filter(m=>m.role==='user').length,1);assert.ok(h.controller.getState().draft.checked);
 });
 
@@ -224,7 +241,7 @@ test('READY chat card permits explicit create and shows recovered transport as a
     const h=await setup(t),dom=new JSDOM('<div id="root"><div class="ta-layout"><header class="ta-header"><div class="ta-header-tools"></div></header></div></div>',{url:'https://jira.test/'});
     const window=dom.window,$=jquery(window),globals={window,document:window.document};let creates=0;
     h.api.createIssue=async()=>{creates++;return {id:'123',key:'DO-123'};};
-    await h.chat.send('Описание: '+narrative);assert.equal(h.chat.getState().error,null);
+    await h.chat.send('Описание: '+completeNarrative);assert.equal(h.chat.getState().error,null);
     const ui=loadUnit('chat-ui',{_ujgTA_icons:loadUnit('icons',{},globals)},globals).create({$,controller:h.controller,chat:h.chat,editor:{openEditor(){}}});
     ui.mount(window.document.querySelector('#root'));t.after(()=>{ui.destroy();window.close();});
     const button=window.document.querySelector('[data-ta-card-create]');assert.equal(button.disabled,false);
@@ -237,21 +254,28 @@ test('READY chat card permits explicit create and shows recovered transport as a
 });
 
 for(const questions of [[],undefined])test('successful description-only model response derives summary; questions='+JSON.stringify(questions),async t=>{
+    const description=questions?completeNarrative:narrative;
     const h=await setup(t,async config=>{
-        await config.tools.find(x=>x.name==='update_task').execute({fields:{description:narrative},...(questions?{questions}:{})},{});
+        await config.tools.find(x=>x.name==='update_task').execute({fields:{description},...(questions?{questions}:{})},{});
         config.onEvent({type:'assistant',text:'Описание сохранено.'});
     });
-    await h.chat.send('Восстановить доступ');const s=h.controller.getState();
-    assert.equal(s.draft.fields.summary,'Восстановить доступ к сервису на DEV.');assert.equal(s.draft.fields.description,narrative);
-    if(questions)assert.ok(s.draft.checked);else assert.equal(s.draft.checked,null);
+    await h.chat.send(description);const s=h.controller.getState();
+    assert.equal(s.draft.fields.summary,'Восстановить доступ к сервису на DEV.');assert.equal(s.draft.fields.description,description);
+    assert.equal(s.draft.source,description);
+    if(questions) {assert.ok(s.draft.checked);assert.equal(s.validation.ok,true);}
+    else {
+        assert.equal(s.draft.checked,null);assert.equal(s.validation.ok,false);
+        assert.equal(h.chat.getState().transcript.at(-1).text,'Создание пока недоступно. Зачем нужна эта работа и какой результат она должна дать?');
+    }
 });
 test('successful model description does not replace manual summary',async t=>{
-    const h=await setup(t,async config=>{await config.tools.find(x=>x.name==='update_task').execute({fields:{description:narrative},questions:[]},{});});
-    await h.controller.updateField('summary','Моя тема');await h.chat.send('Восстановить доступ');
+    const h=await setup(t,async config=>{await config.tools.find(x=>x.name==='update_task').execute({fields:{description:completeNarrative},questions:[]},{});});
+    await h.controller.updateField('summary','Моя тема');await h.chat.send(completeNarrative);
+    assert.equal(h.controller.getState().draft.fields.description,completeNarrative);assert.equal(h.controller.getState().draft.source,completeNarrative);
     assert.equal(h.controller.getState().draft.fields.summary,'Моя тема');assert.ok(h.controller.getState().draft.checked);
 });
 test('successful local validation turns provider diagnostic into a notice without a red stale blocker',async t=>{
-    const h=await setup(t,async()=>{throw Error('Pico HTTP 502');});await h.chat.send('Описание: '+narrative);
+    const h=await setup(t,async()=>{throw Error('Pico HTTP 502');});await h.chat.send('Описание: '+completeNarrative);
     const s=h.chat.getState();assert.equal(s.error,null);assert.equal(s.status,'idle');assert.ok(h.controller.getState().draft.checked);
     assert.match(s.notices.join(' '),/HTTP 502/);assert.doesNotMatch(s.notices.join(' '),/Остальные поля требуют проверки/);
 });
@@ -299,9 +323,10 @@ test('real runtime description-only success derives summary before final readine
     const Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields});
     const Chat=loadUnit('chat',{_ujgTA_chatTools:Tools,_ujgTA_draft:h.drafts},{AbortController});let calls=0;
     const chat=Chat.create({controller:h.controller,store:h.store,runtime,requestText:async()=>({text:++calls===1?
-        JSON.stringify({text:'',toolCalls:[{id:'description-only',name:'update_task',arguments:{fields:{description:narrative},questions:[]}}]}):'Задача готова к созданию.'})});
-    t.after(()=>chat.destroy());await chat.send('Восстановить доступ');
+        JSON.stringify({text:'',toolCalls:[{id:'description-only',name:'update_task',arguments:{fields:{description:completeNarrative},questions:[]}}]}):'Задача готова к созданию.'})});
+    t.after(()=>chat.destroy());await chat.send(completeNarrative);
     assert.equal(chat.getState().error,null);assert.equal(h.controller.getState().draft.fields.summary,'Восстановить доступ к сервису на DEV.');
+    assert.equal(h.controller.getState().draft.fields.description,completeNarrative);assert.equal(h.controller.getState().draft.source,completeNarrative);
     assert.ok(h.controller.getState().draft.checked);assert.match(chat.getState().transcript.at(-1).text,/Проверка пройдена/);
 });
 
@@ -326,7 +351,7 @@ test('ordinary task request is not hijacked as model connection setup: '+task,as
 });
 for(const mode of ['throw','missing',async()=>{throw Error('Pico HTTP 502');}])
 test('successful fallback notice describes recovery without retry instructions: '+String(mode),async t=>{
-    const h=await setup(t,mode);await h.chat.send(narrative);
+    const h=await setup(t,mode);await h.chat.send(completeNarrative);
     const notices=h.chat.getState().notices.join(' ');
     assert.match(notices,/провер|Провер/);assert.doesNotMatch(notices,/повтор|обновите|продолжите.*редактор|требуют проверки|проверьте доступность/i);
 });

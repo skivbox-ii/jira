@@ -100,6 +100,15 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         });
         return Object.assign({},args,{fields:Object.assign({},args.fields,{description:description})});
     }
+    function applicationQuestions(state) {
+        var errors=Object.values(state.validation && state.validation.fieldErrors || {}).flat();
+        return (state.validation && state.validation.questions || []).filter(function(question){return /^(?:app:|template:|devops:)/.test(question.id || '') && errors.includes(question.text);});
+    }
+    function descriptionSectionDefinitions(controller) {
+        if(typeof controller.chatDescriptionSections==='function')return controller.chatDescriptionSections();
+        var requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
+        return requirements && requirements.sections || [];
+    }
     function create(options) {
         var controller=options.controller;
         function fresh(request) {
@@ -107,9 +116,11 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         }
         function snapshot() {return options.getSnapshot ? options.getSnapshot() : controller.chatSnapshot();}
         function mutate(fn) {return options.mutate ? options.mutate(fn) : fn();}
+        function appManagedQuestions() {return typeof options.appManagedQuestions==='function' ? options.appManagedQuestions()===true : options.appManagedQuestions===true;}
         function task() {
-            var state=controller.getState();
-            return {draft:taskForModel(state),revision:controller.chatSnapshot(),validation:state.validation,generationFieldIds:state.generationFieldIds,
+            var state=controller.getState(),draft=taskForModel(state),definitions=descriptionSectionDefinitions(controller);
+            if(appManagedQuestions() && draft)draft.questions=applicationQuestions(state);
+            return {draft:draft,descriptionSectionDefinitions:definitions,descriptionSectionIds:definitions.map(function(section){return section.id;}),revision:controller.chatSnapshot(),validation:state.validation,generationFieldIds:state.generationFieldIds,
                 devopsRequirements:controller.chatDevopsRequirements ? controller.chatDevopsRequirements() : null};
         }
         function readTemplate() {var result=controller.chatReadTemplate();if(!result) fail('selection');return result;}
@@ -136,15 +147,23 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                 var matches=(spec.allowedValues || []).filter(function(v) {return (v.id+' '+v.label).toLowerCase().indexOf(query)!==-1;});
                 return {fieldId:spec.id,values:matches.slice(0,limit),complete:spec.optionsComplete===true && matches.length<=limit,total:matches.length};
             }),
-            tool('update_task','Apply a validated local patch; replacements of manual fields remain proposals. For timetracking use explicit user-stated effort with Jira units, such as {originalEstimate:"2h"}. Never set users, numeric estimates, Epic or Sprint. Questions omitted are retained.',schema({
-                fields:{type:'object',additionalProperties:true},questions:{type:'array',items:schema({id:{type:'string'},text:{type:'string'},reason:{type:'string'},required:{type:'boolean'}},['id','text','required'])},
-                warnings:{type:'array',items:{type:'string'}},taskException:{type:'string'}},['fields']),async function(args) {
-                argsOnly(args,['fields','questions','warnings','taskException']);
-                var explicitReview=options.explicitReview===true;
+            tool('update_task','Propose all known field changes and partial descriptionSections in one local patch. Section keys are IDs from descriptionSectionIds; unchanged sections are preserved. fields is optional when descriptionSections is supplied. Manual replacements remain proposals. Only explicit user-stated Jira effort units are allowed. Never set users, numeric estimates, Epic or Sprint. In appManagedPatch mode the application owns missing questions.',Object.assign(schema({
+                fields:{type:'object',additionalProperties:true},descriptionSections:{type:'object',minProperties:1,additionalProperties:{type:'string'}},questions:{type:'array',items:schema({id:{type:'string'},text:{type:'string'},reason:{type:'string'},required:{type:'boolean'}},['id','text','required'])},
+                warnings:{type:'array',items:{type:'string'}},taskException:{type:'string'}}),{anyOf:[{required:['fields']},{required:['descriptionSections']}]}),async function(args) {
+                argsOnly(args,['fields','descriptionSections','questions','warnings','taskException']);
+                var explicitReview=options.explicitReview===true,managed=appManagedQuestions(),localRejected=[];
+                var hasSections=Object.hasOwn(args,'descriptionSections');
+                if(!Object.hasOwn(args,'fields') && !hasSections)fail('input');
+                if(hasSections && (!object(args.descriptionSections) || !Object.keys(args.descriptionSections).length || Object.keys(args.descriptionSections).some(function(id){return typeof args.descriptionSections[id]!=='string';})))fail('input');
+                if(args.fields===undefined)args=Object.assign({},args,{fields:{}});
                 if(!object(args.fields))fail('input');
+                if(managed){args=Object.assign({},args);delete args.questions;}
+                if(managed && !Object.keys(args.fields).length && !hasSections)return {ok:false,reason:'Передай изменения полей или descriptionSections. Вопросы и проверку выполняет приложение.'};
                 var literal=!explicitReview && typeof options.getVerbatimDescription==='function'?options.getVerbatimDescription():null;
                 if(typeof literal!=='string' || !literal.trim())literal=null;
-                if(literal!==null && Object.hasOwn(args.fields,'description'))args=Object.assign({},args,{fields:Object.assign({},args.fields,{description:literal})});
+                if(literal!==null && (Object.hasOwn(args.fields,'description') || hasSections)) {
+                    args=Object.assign({},args,{fields:Object.assign({},args.fields,{description:literal})});delete args.descriptionSections;hasSections=false;
+                }
                 if(explicitReview) {
                     var filtered=controller.chatFilterReviewFields(args.fields,snapshot());
                     if(!filtered.ok)fail(filtered.code);
@@ -156,11 +175,13 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                     args=Object.assign({},args,{fields:next,warnings:Array.from(new Set((args.warnings || []).concat('При сверке пропущено поле «'+id+'»'+(partial?' (частично)':'')+': '+reason+'; прежние значения сохранены.')))});
                 }
                 if(Object.prototype.hasOwnProperty.call(args.fields || {},'timetracking')) {
-                    var proposed=fields.timeTrackingValue(args.fields.timetracking);
-                    if(!proposed.ok)fail('value');
-                    var evidence=options.getEstimates ? options.getEstimates() : {};
-                    var existing=controller.getState().draft.fields.timetracking || {};
-                    if(Object.keys(proposed.value).some(function(k){return proposed.value[k]!==existing[k] && proposed.value[k]!==evidence[k];})) {
+                    var proposed=fields.timeTrackingValue(args.fields.timetracking),evidence=options.getEstimates ? options.getEstimates() : {},existing=controller.getState().draft.fields.timetracking || {};
+                    var grounded=proposed.ok && !Object.keys(proposed.value).some(function(k){return proposed.value[k]!==existing[k] && proposed.value[k]!==evidence[k];});
+                    if(managed && !grounded) {
+                        var next=Object.assign({},args.fields);delete next.timetracking;args=Object.assign({},args,{fields:next});
+                        localRejected.push({id:'timetracking',message:proposed.ok?'Трудозатраты не подтверждены пользователем.':'Укажите оценку в единицах Jira, например 2h или 30m.'});
+                    } else if(!proposed.ok)fail('value');
+                    else if(!grounded) {
                         if(explicitReview)omitReviewField('timetracking','трудозатраты не подтверждены ответами пользователя');
                         else return {ok:false,reason:'Трудозатраты не подтверждены пользователем. Сохрани остальные поля без timetracking и спроси исходную оценку в чате.'};
                     } else args=Object.assign({},args,{fields:Object.assign({},args.fields,{timetracking:Object.assign({},existing,proposed.value)})});
@@ -180,9 +201,20 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                         if(!skipped || accepted.length)args=Object.assign({},args,{fields:Object.assign({},args.fields,{labels:Array.from(new Set(old.concat(accepted)))})});
                     }
                 }
-                if(literal===null)args=keepTaskNote(args,controller.getState(),options.getTurnText ? options.getTurnText() : '');
-                var result=await mutate(function() {return controller.chatUpdate(args,snapshot(),options.getSourceText ? options.getSourceText() : undefined);});
-                if(!result.ok) fail(result.code);if(options.onSourceApplied) options.onSourceApplied();if(options.onTaskUpdated) options.onTaskUpdated(args);return Object.assign(result,{task:task()});
+                if(literal===null) {
+                    var withNotes=keepTaskNote(args,controller.getState(),options.getTurnText ? options.getTurnText() : '');
+                    if(hasSections && Object.hasOwn(withNotes.fields,'description') && !Object.hasOwn(args.fields,'description')) {
+                        var d=controller.getState().draft,old=String(d.pendingFields.description || d.fields.description || ''),noteText=withNotes.fields.description;
+                        var added=noteText.startsWith(old)?noteText.slice(old.length).trim():noteText;
+                        if(added && !added.split(/\n\n(?=Со слов пользователя: )/).every(function(note){var statement=note.replace(/^Со слов пользователя: /,'');return Object.values(args.descriptionSections).some(function(value){return value.includes(statement);});}))
+                            return {ok:false,reason:'Сохрани оговорку пользователя в подходящем descriptionSections, включая полный текст раздела extra при его изменении: '+added};
+                    } else args=withNotes;
+                }
+                var result=await mutate(function() {
+                    var source=options.getSourceText ? options.getSourceText() : undefined;
+                    return managed ? controller.chatUpdate(args,snapshot(),source,{appManagedQuestions:true}) : controller.chatUpdate(args,snapshot(),source);
+                });
+                if(!result.ok) fail(result.code);if(localRejected.length)result=Object.assign({},result,{rejected:(result.rejected || []).concat(localRejected)});if(options.onSourceApplied) options.onSourceApplied();if(options.onTaskUpdated) options.onTaskUpdated(args,{appManagedQuestions:managed,result:result});return Object.assign(result,{task:task()});
             }),
             tool('read_template','Read the exact selected personal template text, binding and revision.',schema(),function(args) {
                 argsOnly(args,[]);var result=readTemplate();
@@ -201,5 +233,5 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
             })
         ];
     }
-    return {create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
+    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
 });

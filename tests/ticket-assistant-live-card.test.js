@@ -25,7 +25,7 @@ test('manual field protection, proposals, local verification and one explicit cr
     assert.equal(creates,1);assert.equal(h.controller.getState().draft.creation.issueKey,'DO-1');assert.equal(summary.disabled,true);
 });
 test('429 fallback keeps the live card editable and ready, with recovery actions available only when needed',async t=>{
-    const h=await liveFixture(t);assert.ok(h.doc.querySelector('[data-ta-live-editor]'));await h.chat.send('Восстановить доступ на DEV. Проверить вход по RDP.');
+    const h=await liveFixture(t);assert.ok(h.doc.querySelector('[data-ta-live-editor]'));await h.chat.send('Восстановить доступ на DEV. Проверить вход по RDP.\nЦель: вернуть доступ для проверки сервиса.\nЧто сделать: восстановить доступ по RDP.\nГде: сервер на DEV.\nКритерии приёмки: команда входит по RDP.');
     assert.equal(h.doc.querySelector('[data-ta-chat-rate-retry]').hidden,false);assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,false);
     assert.equal(h.doc.querySelector('[data-ta-card-check]').hidden,true);assert.equal(h.doc.querySelector('[data-ta-card-local-check]').hidden,true);
     h.ui.openEditor();assert.equal(h.doc.querySelector('[data-ta-editor-panel]').hidden,true);

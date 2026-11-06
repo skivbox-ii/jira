@@ -5,7 +5,7 @@ const jquery=require('jquery');
 const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
-const narrative='Восстановить доступ к сервису на DEV. Проверка: вход по RDP.';
+const narrative='Восстановить доступ к сервису на DEV. Проверка: вход по RDP.\nЦель: вернуть доступ для проверки сервиса.\nЧто сделать: восстановить доступ по RDP.\nГде: сервер на DEV.\nКритерии приёмки: команда входит по RDP.';
 const legacyNotice='Сервис модели вернул HTTP 429. Карточка прошла локальную проверку Jira.';
 async function setup(t,{persisted=false}={}) {
     const h=await harness(),dom=new JSDOM('<div id="root"><div class="ta-layout"><header class="ta-header"><div class="ta-header-tools"></div></header></div></div>',{url:'https://jira.test/'});

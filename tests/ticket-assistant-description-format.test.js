@@ -4,6 +4,13 @@ const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const raw='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
 const modified=raw.replace('Ссылки на репозиторий для примера нет.','')+'\nНеизвестно: ссылка на репозиторий отсутствует.';
+const linkQuestion='Добавьте ссылку на репозиторий, документацию или базу знаний. Правило DEVOPS требует ссылку перед созданием; причина её отсутствия сохраняется в описании.';
+function assertMissingLink(h,chat) {
+    const s=h.controller.getState();
+    assert.equal(s.draft.checked,null);assert.equal(s.validation.ok,false);
+    assert.equal(s.validation.questions[0].id,'devops:links');assert.equal(s.validation.questions[0].text,linkQuestion);
+    assert.equal(chat.getState().transcript.at(-1).text,'Карточка заполнена по вашему сообщению. Создание пока недоступно. '+linkQuestion);
+}
 async function setup(t,actual=false) {
     const h=await harness();h.calls=[];
     if(!actual)h.validation.formatDevopsDescription=(meta,typeId,description)=>{h.calls.push({project:meta.projectKey,typeId,description});return description.startsWith('Отформатировано: ')?description:'Отформатировано: '+description;};
@@ -20,7 +27,7 @@ test('normal automatic model update formats the actual Jira field and keeps appl
         config.afterStep({hasTools:true,failedTool:false,draftExtracted:true});
     });t.after(()=>chat.destroy());await chat.send(raw);
     assert.equal(c.getState().draft.fields.description,'Отформатировано: '+raw);assert.equal(c.getState().draft.source,raw);
-    assert.equal(chat.getState().error,null);assert.match(chat.getState().transcript.at(-1).text,/Карточка заполнена/);
+    assert.equal(chat.getState().error,null);assertMissingLink(h,chat);
     assert.ok(h.calls.some(x=>x.typeId==='12' && x.description===raw));
 });
 test('malformed fallback and exact retry use the actual formatted field without duplicate user messages',async t=>{
@@ -67,7 +74,8 @@ for(const structured of [false,true])for(const placeholder of [false,true])test(
     });t.after(()=>chat.destroy());await chat.send(raw);
     assert.equal(c.getState().draft.fields.description,formatted);
     assert.equal(c.getState().draft.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время.');
-    assert.equal(chat.getState().error,null);assert.match(chat.getState().transcript.at(-1).text,/Карточка заполнена/);
+    assert.equal(c.getState().draft.source,raw);
+    assert.equal(chat.getState().error,null);assertMissingLink(h,chat);
 });
 test('opposite model facts never become source-equivalent or authorize local readiness on malformed retry',async t=>{
     const h=await setup(t,true),c=h.controller,source=raw+' Миграции не выполнять.';
