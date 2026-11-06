@@ -545,6 +545,24 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     function unresolvedInstruction(value) {
         return /не\s+(?:нужн|надо|требу|согласован|определ[её]н|извест|выполн|провед|провер|ожида|подтвержд|будет|будут)|неизвест|отмен[её]н|уточн(?:им|ить)/i.test(value || '');
     }
+    function proseClause(text,fact,offset) {
+        var start=text.indexOf(fact,offset),from=0,boundary,pattern=/[.!?](?=\s|$)|\n/g;
+        if(start<0)return {text:'',prefix:''};
+        var before=text.slice(0,start);
+        while((boundary=pattern.exec(before)))from=boundary.index+boundary[0].length;
+        return {text:(text.slice(from).match(/^[\s\S]*?(?:[.!?](?=\s|$)|\n|$)/) || [''])[0],prefix:text.slice(from,start)};
+    }
+    function assertedProse(text,fact,offset) {
+        var sentence=proseClause(text,fact,offset).text;
+        return !!sentence && !/[?？][»"')]*\s*$/.test(sentence) && !unresolvedInstruction(sentence) &&
+            !/(?:^|[\s,:])(?:если|возможно|вероятно|например|при условии|при наличии|или|либо)(?=$|[\s,:])/i.test(sentence) &&
+            !/(?:^|[\s,:])(?:не|нельзя|запрещено)\s+(?:развер\p{L}*|разворач\p{L}*|обнов\p{L}*|выкат\p{L}*|устан\p{L}*|использ\p{L}*)/iu.test(sentence);
+    }
+    function targetCommit(text,match) {
+        var prefix=proseClause(text,match[0],match.index).prefix;
+        return /^\s*(?:(?:нужно|необходимо|требуется|прошу)\s+)?(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|deploy|upgrade|rollout)\s/i.test(prefix) &&
+            !/(?:^|[\s,:])(?:текущ\p{L}*|исходн\p{L}*|предыдущ\p{L}*|стар\p{L}*|уже|раньше)(?=$|[\s,:])/iu.test(prefix);
+    }
     function normalizedDescriptionText(description) {
         return String(description || '').replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70}):\2/g,'$1\n$3:')
             .replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70})\2\s*:/g,'$1\n$3:');
@@ -589,15 +607,21 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if(!alternativeLocation && targets.length===1)result.location=locations[0][0];
         }
         if(!meaningful(result.release) && /обнов|разверн|разв[её]рт|выкат|установ|deploy|upgrade|rollout/i.test(facts)) {
-            // Only an explicitly stated target version or tag identifies a release.
+            // Only an explicitly stated target version, tag or commit identifies a release.
             // A current/source version is useful context, never the target by itself.
             var release=/(?:до\s+версии|на\s+версию)\s+([vV]?\d[\w.-]*)|(?:из\s+)?тег[а]?\s+[`"']?([\w][\w./-]*)/i.exec(facts);
+            var commit=false;
+            if(!release) {
+                release=/(?:из|на)\s+коммит[а]?\s+([a-f0-9]{7,40})(?![a-z0-9_-])/i.exec(facts);
+                commit=!!release;
+            }
             var unknownTarget=/(?:целевая|новая|нужная)\s+версия\s+(?:пока\s+)?(?:неизвестна|не определена|не указана)/i.test(facts);
             if(release) {
                 var beforeRelease=facts.slice(0,release.index),afterRelease=facts.slice(release.index+release[0].length);
                 var alternativeRelease=/^\s*(?:или|либо|\/)\s*(?:(?:до|на|из)\s+)?(?:(?:версии|версию|тега)\s+)?[\w\d]/i.test(afterRelease);
                 var placeholderTag=release[2] && /^(?:tbd|todo|unknown|none|n\/a)[.!?]*$/i.test(release[2]);
-                if(!unknownTarget && !alternativeRelease && !placeholderTag && !/(?:не|нет|уточнить)\s*$/i.test(beforeRelease))result.release=release[0];
+                if(!unknownTarget && !alternativeRelease && !placeholderTag && !/(?:не|нет|уточнить|например)\s*$/i.test(beforeRelease) &&
+                    (!commit || targetCommit(facts,release) && assertedProse(facts,release[0],release.index)))result.release=release[0];
             }
         }
         if(!meaningful(result.window)) {
@@ -608,14 +632,17 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         // explicit operational steps and an attributed observable check verbatim.
         var paragraph=intro.join('\n');
         if(!meaningful(result.order)) {
-            var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*)[^.!?\n]*|перезапустить\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
+            var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*|скрипт\S*|файл\S*|пакет\S*|бандл\S*)[^.!?\n]*|(?:перезапустить|перезагрузить)\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
             var unresolvedOrder=/(?:порядок(?:\s+действий)?)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н)|неизвест)/i.test(paragraph);
-            if(operation && !unresolvedOrder && !unresolvedInstruction(operation[1]))result.order=operation[1];
+            if(operation && !unresolvedOrder && !unresolvedInstruction(operation[1]) && assertedProse(paragraph,operation[1],operation.index))result.order=operation[1];
         }
         if(!meaningful(result.verification)) {
-            var attributedCheck=/(?:^|[.!?\n])\s*((?:постановщик|заказчик|QA|DevOps|команда\s+[\wА-Яа-яЁё-]+)\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/i.exec(paragraph);
+            var attributedCheck=/(?:^|[.!?\n])\s*((?:постановщик|заказчик|дежурный|QA|DevOps|команда\s+[\wА-Яа-яЁё-]+)\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/i.exec(paragraph) ||
+                /(?:^|[.!?\n])\s*((?:[А-ЯЁ][а-яё-]+\s+){1,2}[А-ЯЁ][а-яё-]+\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/.exec(paragraph);
             var unresolvedCheck=/(?:проверка|результат(?:\s+проверки)?|ожидаемый\s+код|код\s+ответа)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н|извест)|неизвест|отмен[её]н)/i.test(paragraph);
-            if(attributedCheck && !unresolvedCheck && !unresolvedInstruction(attributedCheck[1]) && /\bHTTP\s+[1-5]\d{2}\b/i.test(attributedCheck[1]))result.verification=attributedCheck[1];
+            if(attributedCheck && !unresolvedCheck && !unresolvedInstruction(attributedCheck[1]) && assertedProse(paragraph,attributedCheck[1],attributedCheck.index) &&
+                (/\bHTTP\s+[1-5]\d{2}\b/i.test(attributedCheck[1]) ||
+                    /(?:^|\s)(?:открыти[ея]|отображени[ея]|появлени[ея]|загрузк[ауи]|запуск[ау]?)\s+(?!(?:чего|что|результат)(?:\s|[.-]))[\wА-Яа-яЁё/-]{2,}/i.test(attributedCheck[1])))result.verification=attributedCheck[1];
         }
         if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
