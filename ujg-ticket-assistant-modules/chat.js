@@ -464,13 +464,27 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         async function deriveSummary(run,placeholderOnly) {
             if(!current(run))return;
             var s=controller.getState(), description=s.draft.fields.description;
-            var repair=placeholderSummary(s.draft.fields.summary) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary');
-            if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
+            var heading=s.standardDescriptionTemplate && (controller.chatDescriptionSections ? controller.chatDescriptionSections():[]).some(function(section){
+                return String(s.draft.fields.summary || '').replace(/[*_`#]/g,'').trim().replace(/:$/,'').trim().toLocaleLowerCase('ru')===section.label.toLocaleLowerCase('ru');
+            });
             var sourceMatches=controller.chatDescriptionMatchesSource && controller.chatDescriptionMatchesSource(s.draft.source);
-            var summary=narrativeSummary(sourceMatches ? s.draft.source : description);
+            var sourceSummary=heading && !sourceMatches && savedNarrative()===s.draft.source && controller.chatSourceSummary ? controller.chatSourceSummary():null;
+            var repair=(placeholderSummary(s.draft.fields.summary) || heading && (sourceMatches || sourceSummary)) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary') && !s.draft.pendingAssistance;
+            if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
+            var summary=narrativeSummary(sourceSummary || (sourceMatches ? s.draft.source : description));
             if((s.draft.projectKey==='DEVOPS' || run.appManagedPatch) && /^[^:\n]{1,80}:\s/.test(summary))return;
             if(!summary || summary===s.draft.fields.summary)return;
             await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot,undefined,placeholderOnly?undefined:{appManagedQuestions:run.appManagedPatch});});
+        }
+        async function fillOriginalEstimate(run,text) {
+            var s=controller.getState(),d=s.draft;
+            if(!run.originalDescriptionPreferred || !current(run) || !s.generationFieldIds.includes('timetracking') ||
+                d.protectedFields.timetracking || Object.hasOwn(d.pendingFields,'timetracking') || d.fields.timetracking)return;
+            // Preserve explicit units through the same parser used for chat
+            // answers; sentence boundaries do not turn the work window into effort.
+            var estimate=chatTools.statedEstimates([{role:'user',text:text.replace(/(?<=[.!?])\s+/g,'\n')}]);
+            if(!Object.keys(estimate).length)return;
+            await mutate(run,function(){return controller.chatUpdate({fields:{timetracking:estimate}},run.snapshot,undefined,{appManagedQuestions:run.appManagedPatch});});
         }
         function recoveryQuestions(draft,validation,priorEntry) {
             // Only questions freshly produced by local DEVOPS validation may be
@@ -662,6 +676,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
                 validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args,info) {
                     var result=info && info.result,appliedFields=result && result.appliedFields,appliedSections=result && result.appliedSections;
+                    if(result && result.originalDescriptionPreferred)run.originalDescriptionPreferred=true;
                     var managed=!!(info && info.appManagedQuestions),hasPatch=(Array.isArray(appliedFields) || Array.isArray(appliedSections)) ?
                         !!((appliedFields || []).length || (appliedSections || []).length) : !!(Object.keys(args.fields || {}).length || Object.keys(args.descriptionSections || {}).length);
                     if(managed) {
@@ -738,6 +753,8 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 var complete=!result || result.status==='complete' || result.status==='completed';
                 var allRejected=run.appManagedAttempted && !run.appManagedUpdated && (run.patchRejections || []).length>0;
                 if(complete && state.status==='running' && run.descriptionReviewed && !run.templateAction) {
+                    await fillOriginalEstimate(run,text);
+                    if(!current(run))return getState();
                     await deriveSummary(run);
                     if(!current(run))return getState();
                 }

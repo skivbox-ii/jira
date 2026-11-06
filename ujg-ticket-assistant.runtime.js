@@ -3072,6 +3072,51 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function descriptionMatches(value) {
             return !!state.draft && (state.draft.fields.description===value || formattedDescription(state.draft,value).value===state.draft.fields.description);
         }
+        function sectionOnlySummary(value) {
+            var heading=String(value || '').replace(/[*_`#]/g,'').trim().replace(/:$/,'').trim().toLocaleLowerCase('ru');
+            return !!heading && validation.descriptionSectionDefinitions(state.meta,state.draft.issueTypeId,state.draft.templateId).some(function(section) {
+                return section.label.toLocaleLowerCase('ru')===heading;
+            });
+        }
+        function chatSourceSummary() {
+            var d=state.draft;
+            if(!d || !d.source || !canFormatDescription(d))return null;
+            var original=formattedDescription(d,d.source),summary=drafts.narrativeSummary(d.source);
+            if(!original.automatic || !summary || sectionOnlySummary(summary))return null;
+            var result=validation.validateFields(state.meta,d.issueTypeId,Object.assign({},d.fields,{description:original.value,summary:summary}),
+                Object.assign({},policy(),{templateId:d.templateId,requireStructuredDescription:true}));
+            if((result.fieldErrors.description || []).length)return null;
+            var checked=validatedChatField('summary',summary);
+            return checked.ok?checked.value:null;
+        }
+        function reconcileInitialDescription(patch,sourceText,literal) {
+            var d=state.draft;
+            if(literal || typeof sourceText!=='string' || !sourceText.trim() || d.source ||
+                !Object.prototype.hasOwnProperty.call(patch,'description') || String(d.fields.description || '').trim() ||
+                !canFormatDescription(d) || state.generationFieldIds.indexOf('description')===-1 || d.templateReviewPending ||
+                d.pendingAssistance || d.taskExceptions.length || (d.unresolvedChatFacts || []).length ||
+                d.questions.some(function(q){return q.required && !/^(?:app:|template:|devops:)/.test(q.id);}))return false;
+            var original=formattedDescription(d,sourceText);
+            if(!original.automatic)return false;
+            var p=Object.assign({},policy(),{templateId:d.templateId,requireStructuredDescription:true});
+            function errors(description) {
+                return validation.validateFields(state.meta,d.issueTypeId,Object.assign({},d.fields,patch,{description:description}),p).fieldErrors.description || [];
+            }
+            var fromSource=errors(original.value),fromModel=errors(patch.description);
+            // Description completeness is independent of priority, estimates and
+            // other required Jira fields. Their normal validation still applies.
+            if(fromSource.length && !(fromSource.length<fromModel.length && fromSource.every(function(error){return fromModel.includes(error);})))return false;
+            var checked=validatedChatField('description',original.value);
+            if(!checked.ok)return false;
+            patch.description=checked.value;
+            var summary=Object.prototype.hasOwnProperty.call(patch,'summary')?patch.summary:d.fields.summary;
+            if((!String(summary || '').trim() || sectionOnlySummary(summary)) && !d.protectedFields.summary &&
+                !Object.prototype.hasOwnProperty.call(d.pendingFields,'summary') && !String(d.fields.summary || '').trim()) {
+                var derived=drafts.narrativeSummary(sourceText),checkedSummary=derived && !sectionOnlySummary(derived) && validatedChatField('summary',derived);
+                if(checkedSummary && checkedSummary.ok)patch.summary=checkedSummary.value;
+            }
+            return true;
+        }
         function eligible() {
             var ids = [];
             if (state.meta) state.meta.issueTypes.forEach(function(type) {
@@ -3894,6 +3939,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 }
             }
             if(!form && rejected.length)return chatFailure('value');
+            var originalDescriptionPreferred=reconcileInitialDescription(patch,sourceText,literal);
             reviewedTemplateQuestions();
             var original=state.draft,before=sourceText===undefined?original:drafts.setSource(original,original.source+(original.source?'\n\n':'')+sourceText);
             if(form)before=Object.assign({},before,{pendingFields:copy(original.pendingFields)});
@@ -3930,7 +3976,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             edited(next,{reviewQuestions:explicitQuestions});
             if(explicitQuestions!==undefined)templateQuestionCandidate={snapshot:chatSnapshot(),questions:copy(explicitQuestions)};
             return {ok:true,snapshot:chatSnapshot(),pendingFields:copy(state.draft.pendingFields),warnings:copy(state.draft.warnings),
-                appliedFields:Object.keys(patch),appliedSections:appliedSections,rejected:rejected,validation:copy(state.validation),questions:copy(state.draft.questions)};
+                appliedFields:Object.keys(patch),appliedSections:appliedSections,rejected:rejected,originalDescriptionPreferred:originalDescriptionPreferred,validation:copy(state.validation),questions:copy(state.draft.questions)};
         }
         function chatCanUndo() { return !!state.draft && !!state.draft.automaticUndo && metadataReady && drafts.isCurrent(state.draft,state.draft.automaticUndo.after) && !locked() && state.draft.creation.status!=='preflight'; }
         async function chatUndo() {
@@ -3996,7 +4042,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
             chatDevopsReferenceAnswer:chatDevopsReferenceAnswer,
-            chatDescriptionMatchesSource:descriptionMatchesSource,chatDescriptionMatches:descriptionMatches,
+            chatDescriptionMatchesSource:descriptionMatchesSource,chatDescriptionMatches:descriptionMatches,chatSourceSummary:chatSourceSummary,
             getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatFilterReviewFields:chatFilterReviewFields,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
             chatDescriptionSections:function() {return state.draft?validation.descriptionSectionDefinitions(state.meta,state.draft.issueTypeId,state.draft.templateId):[];},
             chatDevopsRequirements:function() {return validation.devopsRequirements(state.meta,state.draft && state.draft.issueTypeId);},
@@ -4809,13 +4855,27 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         async function deriveSummary(run,placeholderOnly) {
             if(!current(run))return;
             var s=controller.getState(), description=s.draft.fields.description;
-            var repair=placeholderSummary(s.draft.fields.summary) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary');
-            if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
+            var heading=s.standardDescriptionTemplate && (controller.chatDescriptionSections ? controller.chatDescriptionSections():[]).some(function(section){
+                return String(s.draft.fields.summary || '').replace(/[*_`#]/g,'').trim().replace(/:$/,'').trim().toLocaleLowerCase('ru')===section.label.toLocaleLowerCase('ru');
+            });
             var sourceMatches=controller.chatDescriptionMatchesSource && controller.chatDescriptionMatchesSource(s.draft.source);
-            var summary=narrativeSummary(sourceMatches ? s.draft.source : description);
+            var sourceSummary=heading && !sourceMatches && savedNarrative()===s.draft.source && controller.chatSourceSummary ? controller.chatSourceSummary():null;
+            var repair=(placeholderSummary(s.draft.fields.summary) || heading && (sourceMatches || sourceSummary)) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary') && !s.draft.pendingAssistance;
+            if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
+            var summary=narrativeSummary(sourceSummary || (sourceMatches ? s.draft.source : description));
             if((s.draft.projectKey==='DEVOPS' || run.appManagedPatch) && /^[^:\n]{1,80}:\s/.test(summary))return;
             if(!summary || summary===s.draft.fields.summary)return;
             await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot,undefined,placeholderOnly?undefined:{appManagedQuestions:run.appManagedPatch});});
+        }
+        async function fillOriginalEstimate(run,text) {
+            var s=controller.getState(),d=s.draft;
+            if(!run.originalDescriptionPreferred || !current(run) || !s.generationFieldIds.includes('timetracking') ||
+                d.protectedFields.timetracking || Object.hasOwn(d.pendingFields,'timetracking') || d.fields.timetracking)return;
+            // Preserve explicit units through the same parser used for chat
+            // answers; sentence boundaries do not turn the work window into effort.
+            var estimate=chatTools.statedEstimates([{role:'user',text:text.replace(/(?<=[.!?])\s+/g,'\n')}]);
+            if(!Object.keys(estimate).length)return;
+            await mutate(run,function(){return controller.chatUpdate({fields:{timetracking:estimate}},run.snapshot,undefined,{appManagedQuestions:run.appManagedPatch});});
         }
         function recoveryQuestions(draft,validation,priorEntry) {
             // Only questions freshly produced by local DEVOPS validation may be
@@ -5007,6 +5067,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
                 validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args,info) {
                     var result=info && info.result,appliedFields=result && result.appliedFields,appliedSections=result && result.appliedSections;
+                    if(result && result.originalDescriptionPreferred)run.originalDescriptionPreferred=true;
                     var managed=!!(info && info.appManagedQuestions),hasPatch=(Array.isArray(appliedFields) || Array.isArray(appliedSections)) ?
                         !!((appliedFields || []).length || (appliedSections || []).length) : !!(Object.keys(args.fields || {}).length || Object.keys(args.descriptionSections || {}).length);
                     if(managed) {
@@ -5083,6 +5144,8 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 var complete=!result || result.status==='complete' || result.status==='completed';
                 var allRejected=run.appManagedAttempted && !run.appManagedUpdated && (run.patchRejections || []).length>0;
                 if(complete && state.status==='running' && run.descriptionReviewed && !run.templateAction) {
+                    await fillOriginalEstimate(run,text);
+                    if(!current(run))return getState();
                     await deriveSummary(run);
                     if(!current(run))return getState();
                 }
