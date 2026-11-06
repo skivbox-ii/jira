@@ -5,6 +5,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false,retryReconcileScope=null;
         var messageRows=new Map(),expandedDrafts=new Map(),lastFields=null,changedFields=[],jiraRetrying=false,reconciling=false;
         var localCheck=null;
+        var liveEditor=false,chatLayout=null,releaseEditor=null;
         var assigneeHost,assigneeRequest=null,assigneePicker=null;
         function cancelAssignee() {
             if(assigneeRequest)assigneeRequest.abort.abort();assigneeRequest=null;
@@ -132,7 +133,9 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         function mount(el) {
             root=$(el).addClass('ta-chat-mode');
-            host=$('<section class="ta-chat" aria-label="Подготовка задачи">').appendTo(root.children('.ta-layout'));
+            liveEditor=typeof options.editor.mountLiveEditor==='function';
+            if(liveEditor)chatLayout=$('<div class="ta-chat-workspace" data-ta-chat-workspace>').appendTo(root.children('.ta-layout'));
+            host=$('<section class="ta-chat" aria-label="Подготовка задачи">').appendTo(chatLayout || root.children('.ta-layout'));
             root.find('.ta-header h2').text('Помощник по задачам');
             var newButton=button('Новый разговор','Plus',{'data-ta-chat-new':'','aria-label':'Новый разговор',title:'Новый разговор'},function() {
                 cancelAssignee();run(function(){chat.stop();return c.newDraft();});
@@ -149,7 +152,18 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 button('Редактировать','Settings',{'data-ta-card-edit':''},function(){openEditor(this);}),
                 button('Создать','Check',{'data-ta-card-create':''},function(){run(function(){return c.submit();});}).addClass('ta-primary'),
                 button('Отменить изменение','RefreshCw',{'data-ta-card-undo':''},function(){run(function(){return chat.undo();});}));
+            if(liveEditor) {
+                card.addClass('ta-live-card').appendTo(chatLayout);
+                var heading=$('<header class="ta-live-card-heading">').prependTo(card);
+                heading.append(card.find('.ta-card-heading'),card.find('[data-ta-card-reason]'),card.find('[data-ta-card-counts]'));
+                card.find('[data-ta-card-details]').prop('hidden',true);
+                var editorHost=$('<div class="ta-live-editor" data-ta-live-editor>').insertBefore(card.find('[data-ta-card-warnings]'));
+                releaseEditor=options.editor.mountLiveEditor(editorHost[0]);
+                card.find('[data-ta-card-questions]').insertBefore(actions);
+                card.find('[data-ta-card-edit],[data-ta-card-creation]').prop('hidden',true);
+            }
             proposal=$('<section class="ta-template-proposal" data-ta-template-proposal aria-label="Изменение личного шаблона" hidden>').appendTo(card.find('.ta-card-details-body'));
+            if(liveEditor)proposal.insertBefore(actions);
             proposal.append('<h3>Предложение для шаблона</h3><p class="ta-muted">Сохранится только после применения. Текущая версия действует до этого.</p><div class="ta-template-diff"><div><h4>Сейчас</h4><pre data-ta-template-before></pre></div><div><h4>После применения</h4><pre data-ta-template-after></pre></div></div>');
             proposal.append(button('Применить к шаблону','Check',{'data-ta-template-apply':''},function(){run(function(){return chat.applyTemplateProposal();});}),
                 button('Отклонить','X',{'data-ta-template-reject':''},function(){run(function(){return chat.rejectTemplateProposal();});}));
@@ -398,6 +412,12 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             card.find('[data-ta-card-undo]').prop('disabled',!s.canUndo || reconciling || s.status==='running' || locked(d));
             card.find('[data-ta-card-local-check]').prop('hidden',!canCheckFields(d))
                 .prop('disabled',!!localCheck || !!state.error || reconciling || sending || s.status==='running');
+            if(liveEditor) {
+                var hasAnswers=(s.transcript || []).some(function(m){return m.role==='user';});
+                card.find('[data-ta-card-check]').prop('hidden',!hasAnswers || !!d.checked || locked(d) || hasRateLimit(s));
+                card.find('[data-ta-card-local-check]').prop('hidden',!canCheckFields(d) || hasAnswers && !s.error && s.status!=='stopped');
+                card.find('[data-ta-card-undo]').prop('hidden',!s.canUndo || locked(d));
+            }
             card.find('[data-ta-chat-accept],[data-ta-chat-reject]').prop('disabled',reconciling || s.status==='running' || locked(d));
             var status=card.find('[data-ta-card-creation]'),creationKey=JSON.stringify(creation);
             if(status.attr('data-state')!==creationKey) {
@@ -406,7 +426,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(creation.issueKey && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(creation.issueKey))status.append($('<a target="_blank" rel="noopener" data-ta-chat-issue-link>').attr('href',(options.baseUrl || '').replace(/\/+$/,'')+'/browse/'+encodeURIComponent(creation.issueKey)).text(creation.issueKey));
             }
         }
-        function destroy(){dead=true;cancelAssignee();if(localCheck)localCheck.abort();messageRows.clear();expandedDrafts.clear();if(host)host.remove();if(root){root.removeClass('ta-chat-mode');root.find('[data-ta-chat-new]').remove();}}
+        function destroy(){dead=true;cancelAssignee();if(localCheck)localCheck.abort();messageRows.clear();expandedDrafts.clear();if(releaseEditor)releaseEditor();if(chatLayout)chatLayout.remove();if(host)host.remove();if(root){root.removeClass('ta-chat-mode');root.find('[data-ta-chat-new]').remove();}}
         return {mount:mount,update:update,destroy:destroy};
     }
     return {create:create};

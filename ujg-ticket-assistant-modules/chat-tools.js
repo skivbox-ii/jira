@@ -109,7 +109,8 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         function mutate(fn) {return options.mutate ? options.mutate(fn) : fn();}
         function task() {
             var state=controller.getState();
-            return {draft:taskForModel(state),revision:controller.chatSnapshot(),validation:state.validation,generationFieldIds:state.generationFieldIds};
+            return {draft:taskForModel(state),revision:controller.chatSnapshot(),validation:state.validation,generationFieldIds:state.generationFieldIds,
+                devopsRequirements:controller.chatDevopsRequirements ? controller.chatDevopsRequirements() : null};
         }
         function readTemplate() {var result=controller.chatReadTemplate();if(!result) fail('selection');return result;}
         function tool(name, description, parameters, execute) {
@@ -195,7 +196,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                 var proposal={before:read.template,after:after,snapshot:snapshot()};
                 if(options.onTemplateProposal) options.onTemplateProposal(copy(proposal));return {ok:true,pending:true,proposal:proposal};
             }),
-            tool('validate_task','Validate required fields, allowed values and live Jira relations deterministically. Required questions block creation. Does not create an issue.',schema(),function(args,request) {
+            tool('validate_task','Validate required Jira fields, DEVOPS substantive labelled description sections, evidence, links, priority and live Jira relations deterministically. Returns actionable current missing questions. Required questions block creation. Does not create an issue.',schema(),function(args,request) {
                 argsOnly(args,[]);var notice=options.validationNotice && options.validationNotice();if(notice)return {ok:false,pending:true,reason:notice};return controller.chatValidate(snapshot(),request);
             })
         ];

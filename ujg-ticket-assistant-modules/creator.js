@@ -103,9 +103,32 @@ define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'],
                 var confirmed = await fields.confirmRelations(meta,d.issueTypeId,d.fields,api,{});
                 if (!stillCurrent(ctx,snap)) return;
                 var p = policy(d,ctx.settings,meta); p.relations=confirmed;
+                p.attachments=request.withoutAttachments ? [] : d.attachments.filter(function(a) {
+                    var entry=(request.files || []).find(function(f) {return f.id===a.id;});
+                    return a.status==='uploaded' || entry && entry.file && entry.file.name===a.name && entry.file.size===a.size;
+                });
                 var valid = validation.validateFields(meta,d.issueTypeId,d.fields,p);
-                if (!valid.ok || d.questions.some(function(q) {return q.required;})) throw new Error('validation');
+                if (!valid.ok) {
+                    ctx.draft.checked=null;ctx.draft.creation.status='idle';
+                    ctx.draft.creation.error=Object.values(valid.fieldErrors).flat().join(' ');
+                    if(Array.isArray(valid.questions))ctx.draft.questions=ctx.draft.questions.filter(function(q) {return q.id.indexOf('devops:')!==0;}).concat(valid.questions);
+                    persist(ctx,{fieldErrors:valid.fieldErrors});return;
+                }
+                if (d.questions.some(function(q) {return q.required;})) throw new Error('validation');
                 var payload = validation.buildCreatePayload(meta,d.issueTypeId,d.fields,p);
+                if (d.projectKey==='DEVOPS') {
+                    var external=await api.checkDevopsIssue(d,meta,{});
+                    if (!stillCurrent(ctx,snap)) return;
+                    var errors=Object.values(external.fieldErrors).flat();
+                    if (errors.length) {
+                        ctx.draft.checked=null;
+                        ctx.draft.creation.status='idle';
+                        ctx.draft.creation.error=errors.join(' ');
+                        persist(ctx,{fieldErrors:external.fieldErrors});
+                        return;
+                    }
+                    if (external.link)payload.update={issuelinks:[{add:external.link}]};
+                }
                 if (d.attachments.length && !request.withoutAttachments) {
                     try {await attachmentLimits(d,request.files || []);} catch (ignore) {
                         ctx.draft.creation.status='idle';ctx.draft.creation.error='Не удалось проверить вложения. Повторите проверку файлов или явно создайте без вложений.';

@@ -68,6 +68,23 @@
 .ujg-ticket-assistant .ta-primary-actions .ta-actions, .ujg-ticket-assistant .ta-primary-actions .ta-footer { margin: 0; padding: 0; border: 0; }
 .ujg-ticket-assistant.ta-fullscreen { position: fixed; inset: 0; z-index: 900; overflow-y: auto; }
 .ujg-ticket-assistant .ta-chat { max-width: 940px; margin: 0 auto; padding: 8px 0 0; min-width: 0; }
+.ujg-ticket-assistant .ta-chat-workspace { display: grid; grid-template-columns: minmax(0,1fr); gap: 16px; align-items: start; }
+.ujg-ticket-assistant .ta-chat-workspace > .ta-chat { width: 100%; max-width: none; margin: 0; padding: 0; }
+.ujg-ticket-assistant .ta-chat-workspace > .ta-live-card { margin: 0; padding: 12px; background: #fff; }
+.ujg-ticket-assistant .ta-live-card-heading { padding-bottom: 10px; border-bottom: 1px solid #dce1e5; }
+.ujg-ticket-assistant .ta-live-card-heading > .ta-card-heading { font-size: 14px; }
+.ujg-ticket-assistant .ta-live-card-heading [data-ta-card-reason], .ujg-ticket-assistant .ta-live-card-heading [data-ta-card-counts] { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.ujg-ticket-assistant .ta-live-card-heading [data-ta-card-counts]:empty { display: none; }
+.ujg-ticket-assistant .ta-live-editor .ta-draft-area { border: 0; padding: 12px 0 0; }
+.ujg-ticket-assistant .ta-live-editor .ta-draft-heading { display: none; }
+.ujg-ticket-assistant .ta-live-editor [data-ta-fields], .ujg-ticket-assistant .ta-live-editor [data-ta-optional-fields] { grid-template-columns: minmax(0,1fr); gap: 8px; }
+.ujg-ticket-assistant .ta-live-editor .ta-field { margin-bottom: 4px; }
+.ujg-ticket-assistant .ta-live-editor [data-ta-field="description"] textarea { min-height: 132px; }
+.ujg-ticket-assistant .ta-live-editor .ta-attachments { border-top: 1px solid #dce1e5; margin-top: 8px; padding-top: 8px; }
+.ujg-ticket-assistant .ta-live-card > .ta-actions { border-top: 1px solid #dce1e5; padding-top: 10px; }
+@container (min-width: 760px) {
+    .ujg-ticket-assistant .ta-chat-workspace { grid-template-columns: minmax(0,1fr) minmax(360px,1fr); gap: 20px; }
+}
 .ujg-ticket-assistant .ta-chat-log { min-height: 48px; }
 .ujg-ticket-assistant .ta-chat-intro { color: #53636f; padding: 12px 0; }
 .ujg-ticket-assistant .ta-message { padding: 10px 0; max-width: 100%; }

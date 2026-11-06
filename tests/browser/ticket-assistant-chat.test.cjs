@@ -5,6 +5,7 @@ const jquery = require('jquery');
 const {loadUnit, metadataFixture} = require('../helpers/ticket-assistant-fixture');
 const {chromium}=require('playwright');
 const {startPreview}=require('./ticket-assistant-preview-server.cjs');
+const {sourcePreviewResponse}=require('../helpers/ticket-assistant-source-preview.cjs');
 const fs=require('node:fs');
 const {harness}=require('../helpers/ticket-assistant-chat-fixture');
 
@@ -92,8 +93,7 @@ test('chat repairs a misplaced question and shows the question saved with the up
     });
     await send('Доступ к сервису прерван. Нужно его восстановить.');
     assert.deepEqual(await page.evaluate(() => window.taPreview.cardAtRequest), [null, null, 'Восстановить доступ']);
-    await page.locator('[data-ta-card-details] > summary').click();
-    assert.match(await page.locator('[data-ta-card-field="description"]').innerText(), /Доступ к тестовому сервису/);
+    assert.match(await page.locator('[data-ta-field="description"] textarea').inputValue(), /Доступ к тестовому сервису/);
     assert.equal(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),'В какой среде произошёл сбой?');
     assert.equal(await page.locator('[data-ta-chat-error]').isVisible(), false);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(), true);
@@ -207,13 +207,15 @@ test('card and protected replacements resolve metadata labels for single/multipl
 });
 
 async function browserFixture(t,width=1440,query='') {
-    const server=await startPreview({port:0}),browser=await chromium.launch({channel:'chrome',headless:true});
+    const server=await startPreview({port:0,sourceAssets:false}),browser=await chromium.launch({channel:'chrome',headless:true});
     t.after(async()=>{await browser.close();await server.close();});
     const page=await browser.newPage({viewport:{width,height:width===390?844:1000}}),errors=[],requests=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',route=>{
         const request=route.request();requests.push({url:request.url(),method:request.method()});
-        return request.url().startsWith(server.url) && request.method()==='GET'?route.continue():route.abort();
+        if(!request.url().startsWith(server.url) || request.method()!=='GET')return route.abort();
+        const source=sourcePreviewResponse(new URL(request.url()).pathname);
+        return source?route.fulfill(source):route.continue();
     });
     await page.goto(server.url+query);await page.waitForSelector('html[data-ta-preview-ready="true"]');
     page.setDefaultTimeout(5000);
@@ -225,11 +227,12 @@ async function browserFixture(t,width=1440,query='') {
     return {page,errors,requests,server,send,state:()=>page.evaluate(()=>window.taPreview.instance.controller.getState())};
 }
 
-test('collapsed card supports keyboard disclosure and reconciliation preserves unsent text on mobile',async t=>{
-    const {page,errors,state}=await browserFixture(t,390);
-    const details=page.locator('[data-ta-card-details]'),summary=details.locator(':scope > summary');
-    assert.equal(await details.evaluate(el=>el.open),false);
-    assert.equal(await page.locator('[data-ta-card-values]').isVisible(),false);
+test('live card supports keyboard editing and reconciliation preserves unsent text on mobile',async t=>{
+    const {page,errors,state,send}=await browserFixture(t,390);
+    const summary=page.locator('[data-ta-field="summary"] input');
+    assert.equal(await summary.isVisible(),true);assert.equal(await summary.isEditable(),true);
+    assert.equal(await page.locator('[data-ta-card-edit]').isHidden(),true);
+    assert.equal(await page.locator('[data-ta-card-check]').isHidden(),true);
     const badge=await page.locator('[data-ta-card-type]').evaluate(el=>{
         const original=el.textContent;el.textContent='Задача';
         const style=getComputedStyle(el),short={whiteSpace:style.whiteSpace,shrink:style.flexShrink,height:el.getBoundingClientRect().height};
@@ -237,26 +240,18 @@ test('collapsed card supports keyboard disclosure and reconciliation preserves u
         const long={height:el.getBoundingClientRect().height,truncated:el.scrollWidth>el.clientWidth};el.textContent=original;
         return {short,long};
     });
-    assert.equal(badge.short.whiteSpace,'nowrap');assert.equal(badge.short.shrink,'0');
-    assert.equal(badge.long.height,badge.short.height);assert.equal(badge.long.truncated,true);
-    for(const name of ['check','edit','create','undo'])assert.equal(await page.locator('[data-ta-card-'+name+']').isVisible(),true);
-    await summary.focus();await summary.press('Enter');assert.equal(await details.evaluate(el=>el.open),true);
-    assert.equal(await page.locator('[data-ta-card-values]').isVisible(),true);
-    await summary.press('Space');assert.equal(await details.evaluate(el=>el.open),false);
+    assert.equal(badge.short.whiteSpace,'nowrap');assert.equal(badge.short.shrink,'0');assert.equal(badge.long.height,badge.short.height);assert.equal(badge.long.truncated,true);
+    await summary.focus();await summary.press('Tab');assert.equal(await page.locator('[data-ta-live-editor]').evaluate(el=>el.contains(document.activeElement)),true);
+    await send('При сохранении задача выдаёт ошибку API.');
     const before=await state();
-    await page.evaluate(()=>{
-        window.taPreview.reconciles=0;
-        window.taPreview.instance.chat.reconcile=async()=>{window.taPreview.reconciles++;};
-    });
+    await page.evaluate(()=>{window.taPreview.reconciles=0;window.taPreview.instance.chat.reconcile=async()=>{window.taPreview.reconciles++;};});
     await page.locator('[data-ta-chat-input]').fill('Ещё не отправлено');
-    await page.locator('[data-ta-card-check]').click();
+    await page.locator('[data-ta-card-check]').focus();await page.locator('[data-ta-card-check]').press('Enter');
     await page.waitForFunction(()=>window.taPreview.reconciles===1);
-    assert.equal(await page.locator('[data-ta-chat-input]').inputValue(),'Ещё не отправлено');
-    assert.deepEqual((await state()).draft,before.draft);
-    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
-    assert.equal(await details.evaluate(el=>el.open),false);
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
-    assert.deepEqual(errors,[]);
+    assert.equal(await page.locator('[data-ta-chat-input]').inputValue(),'Ещё не отправлено');assert.deepEqual((await state()).draft,before.draft);
+    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);assert.equal(await summary.isVisible(),true);
+    assert.equal(await page.locator('[data-ta-create],[data-ta-card-create]').count(),1);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);assert.deepEqual(errors,[]);
 });
 
 for(const width of [1440,390])test('real Pico offline chat, editor, template, reload and one creation at '+width,async t=>{
@@ -268,30 +263,29 @@ for(const width of [1440,390])test('real Pico offline chat, editor, template, re
     assert.equal((await state()).draft.fields.summary,'Исправить ошибку API при сохранении');
     assert.equal(await page.locator('[data-ta-task-card]').count(),1);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
-    await page.locator('[data-ta-card-details] > summary').click();
     assert.match(await page.locator('[data-ta-card-questions]').innerText(),/среде/);
     assert.equal(await page.locator('[data-ta-chat-log] img').count(),0);
     await send('Тестовая среда, версия 2026.11. Сохранение должно завершиться без ошибки.');
     await send('Выбираю API');
-    assert.equal(await page.locator('[data-ta-card-field="components"] .ta-card-value').innerText(),'API');
+    const components=page.locator('[data-ta-field="components"]');await components.locator('[data-ta-picker]').click();
+    assert.match(await components.locator('[data-ta-chips]').innerText(),/API/);await components.locator('[data-ta-picker]').click();
     assert.equal((await state()).validation.ok,true);
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true);
     await page.locator('[data-ta-chat-input]').fill('Неотправленный текст');
-    await page.locator('[data-ta-card-edit]').click();
-    const panel=page.locator('[data-ta-editor-panel]');assert.equal(await panel.isVisible(),true);
-    assert.equal(await page.locator('[data-ta-editor-close]').evaluate(el=>document.activeElement===el),true);
-    await page.locator('[data-ta-editor-close]').press('Shift+Tab');
-    assert.equal(await panel.evaluate(el=>el.contains(document.activeElement)),true);
-    const summary=page.locator('[data-ta-field="summary"] input');
+    const summary=page.locator('[data-ta-live-editor] [data-ta-field="summary"] input');
+    assert.equal(await summary.isEditable(),true);
+    assert.equal(await page.locator('[data-ta-editor-panel]').isHidden(),true);
+    await summary.focus();await summary.press('Tab');
+    assert.equal(await page.locator('[data-ta-live-editor]').evaluate(el=>el.contains(document.activeElement)),true);
     await summary.fill('Ручная тема API');await summary.press('Tab');
-    assert.equal(await panel.evaluate(el=>el.getBoundingClientRect().top>=0),true);
+    assert.equal(await page.locator('[data-ta-create],[data-ta-card-create]').count(),1);
     await page.screenshot({path:'/tmp/ticket-assistant-chat-'+width+'-editor.png'});
-    await summary.press('Escape');assert.equal(await panel.isHidden(),true);
-    assert.equal(await page.locator('[data-ta-card-edit]').evaluate(el=>document.activeElement===el),true);
+    await summary.press('Escape');
+    assert.equal(await page.locator('[data-ta-editor-panel]').isHidden(),true);
     assert.equal(await page.locator('[data-ta-chat-input]').inputValue(),'Неотправленный текст');
     await send('Предложи другую тему');
     assert.equal((await state()).draft.fields.summary,'Ручная тема API');
-    await page.locator('[data-ta-chat-accept="summary"]').click();
+    await page.locator('[data-ta-accept="summary"]').click();
     assert.equal((await state()).draft.fields.summary,'Проверить обработку ошибок API');
     const description=(await state()).draft.fields.description;
     await send('Добавь критерий: повторное сохранение работает.');
@@ -328,7 +322,7 @@ for(const width of [1440,390])test('real Pico offline chat, editor, template, re
     assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),0,'reload never invokes runtime or replays tools');
     await send('Подтверди готовность задачи.');
     await page.locator('[data-ta-card-create]').click();
-    await page.waitForSelector('[data-ta-chat-issue-link]');
+    await page.waitForSelector('[data-ta-issue-link]');
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),1);
     assert.equal(await page.locator('[data-ta-task-card]').count(),1);
@@ -348,7 +342,7 @@ for(const width of [1440,390])test('real Pico offline chat, editor, template, re
 test('real Pico stop ignores late results; retry preserves text; ambiguous options, rejected template and long text remain usable',async t=>{
     const {page,errors,send,state}=await browserFixture(t,390);
     const accessibility=await page.locator('body').ariaSnapshot();
-    assert.doesNotMatch(accessibility,/Нет открытых вопросов|Исходные данные|Выбрать файлы/,'hidden manual form is absent from the accessibility tree');
+    assert.doesNotMatch(accessibility,/Нет открытых вопросов|Исходные данные/,'legacy source form is absent from the accessibility tree');
     await page.evaluate(()=>{window.taPreview.chatMode='slow';});
     await page.locator('[data-ta-chat-input]').fill('Ошибка при сохранении API');await page.locator('[data-ta-chat-input]').press('Enter');
     await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status==='running');
@@ -372,11 +366,12 @@ test('real Pico stop ignores late results; retry preserves text; ambiguous optio
     await send('Выбираю API');assert.deepEqual((await state()).draft.fields.components,[{id:'31'}]);
     const revision=(await state()).settings.revision;
     await send('Измени шаблон: укажи среду проверки');
-    await page.locator('[data-ta-card-details] > summary').click();
     await page.locator('[data-ta-template-reject]').click();
     assert.equal((await state()).settings.revision,revision);
     assert.equal(await page.locator('[data-ta-template-proposal]').isHidden(),true);
     assert.equal(await page.locator('[data-ta-chat-input]').evaluate(el=>document.activeElement===el),true);
+    // This assertion exercises wrapping, with enough explicit budget for the accumulated multi-turn fixture.
+    await page.evaluate(async()=>{const c=window.taPreview.instance.controller,settings=c.getState().settings;settings.tokenBudget={context:131072,reserve:4096};await c.applySettings(settings);});
     await send('Добавь длинный критерий: '+ 'ПроверкаОченьДлинногоСлова'.repeat(120));
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await page.locator('[data-ta-fullscreen]').click();assert.equal(await page.locator('.ta-fullscreen').count(),1);
@@ -417,8 +412,8 @@ test('old form drafts migrate into the chat card without invoking Pico',async t=
     await page.locator('[data-ta-source]').fill('Сохранённый исходник старой формы');
     await page.locator('[data-ta-field="summary"] input').fill('Ручной старый черновик');
     await page.goto(server.url);await page.waitForSelector('html[data-ta-preview-ready="true"]');
-    await page.locator('[data-ta-card-details] > summary').click();
-    assert.equal(await page.locator('[data-ta-card-field="summary"]').innerText(),'Тема\nРучной старый черновик');
+    assert.equal(await page.locator('[data-ta-field="summary"] input').inputValue(),'Ручной старый черновик');
+    assert.equal(await page.locator('[data-ta-field="summary"] input').isEditable(),true);
     assert.match(await page.locator('.ta-chat-intro').innerText(),/Черновик восстановлен/);
     assert.equal(await page.locator('[data-ta-message]').count(),0);
     assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),0);
@@ -438,7 +433,8 @@ for(const outcome of ['rejected','lostresponse'])test('chat shows '+outcome+' cr
     if(status==='unknown') {
         assert.match(await page.locator('[data-ta-card-reason]').innerText(),/неизвестен/);
         assert.equal(await page.locator('[data-ta-chat-new]').isDisabled(),true);
-        await page.locator('[data-ta-card-edit]').click();assert.equal(await page.locator('[data-ta-reconcile]').isVisible(),true);
+        assert.equal(await page.locator('[data-ta-reconcile]').isVisible(),true);
+        assert.equal(await page.locator('[data-ta-live-editor] [data-ta-found-key]').isVisible(),true);
     } else assert.match(await page.locator('[data-ta-card-creation]').innerText(),/отклон/);
     assert.equal((await state()).draft.creation.status,status);assert.deepEqual(errors,[]);
 });
@@ -508,7 +504,7 @@ test('chat alone populates reporter, description and stated effort in the actual
     assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),calls);
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true);
     await page.locator('[data-ta-card-create]').click();
-    await page.waitForSelector('[data-ta-chat-issue-link]');
+    await page.waitForSelector('[data-ta-issue-link]');
     const fields=await page.evaluate(()=>window.taPreview.createdPayload.fields);
     assert.deepEqual(fields.reporter,{name:'preview'});assert.deepEqual(fields.timetracking,{originalEstimate:'2h'});
     assert.match(fields.description,/Тестовая среда/);assert.match(fields.summary,/ошибк/i);
@@ -570,7 +566,7 @@ test('a gateway outage still allows exactly one explicit issue creation from the
     const create=page.locator('[data-ta-card-create]');
     assert.equal(await create.isEnabled(),true);
     await create.click();
-    await page.waitForSelector('[data-ta-chat-issue-link]');
+    await page.waitForSelector('[data-ta-issue-link]');
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),1);
     assert.equal(await page.evaluate(()=>window.taPreview.createdPayload.fields.description),description);
     assert.equal(await create.isDisabled(),true);
@@ -632,13 +628,13 @@ test('invalid Pico JSON preserves the incident narrative and a required Jira est
     await page.waitForFunction(()=>!!window.taPreview.instance.controller.getState().draft.checked);
     assert.equal(await page.evaluate(()=>window.taPreview.attempts),attempts);
     await page.locator('[data-ta-card-create]').click();
-    await page.waitForSelector('[data-ta-chat-issue-link]');
+    await page.waitForSelector('[data-ta-issue-link]');
     const payload=await page.evaluate(()=>window.taPreview.createdPayload.fields);
     assert.equal(payload.description,narrative);assert.deepEqual(payload.timetracking,{originalEstimate:'10m'});
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(x=>x==='create').length),1);
 });
 
-test('after a malformed tool batch the built widget displays the model-authored Jira fields before creation', async t => {
+test('after a malformed tool batch the source widget displays the model-authored Jira fields before creation', async t => {
     const {page, send, errors} = await browserFixture(t);
     await page.evaluate(async () => {
         const fixture = window.taPreview;
@@ -667,10 +663,10 @@ test('after a malformed tool batch the built widget displays the model-authored 
         await controller.selectTemplate('deployment');
     });
     await send('Для стенда TEST нужна версия 1.0 компонента API, проверим ответ 200 на health.');
-    await page.locator('[data-ta-card-details] > summary').click();
-    assert.match(await page.locator('[data-ta-card-details]').innerText(), /Обновить API в TEST до 1.0/);
-    assert.match(await page.locator('[data-ta-card-field="description"]').innerText(), /Проверка: health возвращает 200/);
-    assert.match(await page.locator('[data-ta-card-field="components"]').innerText(), /API/);
+    assert.match(await page.locator('[data-ta-field="summary"] input').inputValue(), /Обновить API в TEST до 1.0/);
+    assert.match(await page.locator('[data-ta-field="description"] textarea').inputValue(), /Проверка: health возвращает 200/);
+    const components=page.locator('[data-ta-field="components"]');await components.locator('[data-ta-picker]').click();
+    assert.match(await components.locator('[data-ta-chips]').innerText(),/API/);await components.locator('[data-ta-picker]').click();
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(), true);
     assert.deepEqual(await page.evaluate(() => [window.taPreview.requests,
         window.taPreview.calls.filter(op => op === 'create').length]), [2, 0]);

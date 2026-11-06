@@ -47,8 +47,26 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                 searches.delete(aborter); if (signal) signal.removeEventListener('abort', abort);
             });
         }
+        var manualTimer=null,manualRequest=null;
+        function cancelManualCheck() {
+            if(manualTimer!==null)window.clearTimeout(manualTimer);
+            manualTimer=null;
+            if(manualRequest)manualRequest.abort();
+            manualRequest=null;
+        }
+        function scheduleManualCheck(saved) {
+            cancelManualCheck();
+            if(dead || !chat || !saved || !saved.draft || saved.draft.projectKey!=='DEVOPS' || !saved.draft.fields.summary || !saved.draft.fields.description)return;
+            var snapshot=controller.chatSnapshot();
+            manualTimer=window.setTimeout(function() {
+                manualTimer=null;
+                if(dead || chat.getState().status!=='idle' || JSON.stringify(snapshot)!==JSON.stringify(controller.chatSnapshot()))return;
+                var request=new AbortController();manualRequest=request;
+                controller.chatValidate(snapshot,{signal:request.signal}).finally(function(){if(manualRequest===request)manualRequest=null;});
+            },400);
+        }
         ui = uiModule.create({$: $, controller:controller, baseUrl:baseUrl, onSearch:searchUsers, createSettingsView:deps.createSettingsView, panel:!deps.legacyForm,
-            getChatState:function(){return chat && chat.getState();},
+            getChatState:function(){return chat && chat.getState();},onManualField:scheduleManualCheck,
             connection:{shared:shared,storage:storage}});
         ui.mount(root[0]);
         if(!deps.legacyForm) {
@@ -68,7 +86,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                         return response;
                     });
                 });}).catch(function(){throw new Error(httpStatus?'Pico HTTP '+httpStatus:'Pico transport failed');});
-            },onChange:function(){if(!dead && chatUi){chatUi.update(controller.getState());ui.updateChatUsage();scheduleResize();}}});
+            },onChange:function(){if(chat && chat.getState().status==='running')cancelManualCheck();if(!dead && chatUi){chatUi.update(controller.getState());ui.updateChatUsage();scheduleResize();}}});
             chatUi=chatUiModule.create({$: $,controller:controller,chat:chat,editor:ui,baseUrl:baseUrl,
                 onSearch:searchUsers,getCurrentUser:function(options){return api.getCurrentUser(options);},
                 createAssigneePicker:function(options){return fieldUi.create(options);}});
@@ -104,7 +122,7 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
             if (layoutObserver) layoutObserver.disconnect();
             if (mutationObserver) mutationObserver.disconnect();
             if (resizeTimer !== null) {window.clearTimeout(resizeTimer); resizeTimer = null;}
-            if(chatUi)chatUi.destroy();if(chat)chat.destroy();
+            cancelManualCheck();if(chatUi)chatUi.destroy();if(chat)chat.destroy();
             controller.destroy(); searches.forEach(function(aborter) {aborter.abort();}); searches.clear(); ui.destroy();
             if (root.data('ta-instance') === instance) root.removeData('ta-instance');
         };

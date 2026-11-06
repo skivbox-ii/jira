@@ -8,6 +8,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
         var fullscreen = null, tokenOpen = false, activeMenu = null, fieldsQueued = false, pointerHeld = false, pointerTimer = null;
         var workspace, divider, sourceWidth = null, resizeObserver = null, dragPointer = null;
         var editorPanel = null, editorReturn = null, editorScroll = null, typeHome = null;
+        var liveEditorHost = null;
         var stages = {metadata: 'Загрузка полей Jira', routing: 'Выбор шаблона', preparing: 'Подготовка черновика', assisting:'Подготовка предложения', checking: 'Проверка черновика'};
         function button(label, name, selector) {
             return $('<button type="button">').attr(selector || {}).attr({title: label, 'aria-label': label}).append(name ? icon(name) : null, $('<span>').text(label));
@@ -319,6 +320,18 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (options.panel) mountEditorPanel();
             update(c.getState());
         }
+        function mountLiveEditor(target) {
+            if(liveEditorHost)return;
+            liveEditorHost=$(target);
+            var draftArea=root.find('.ta-draft-area'),nativeCreate=root.find('[data-ta-create]').detach(),
+                recovery=root.find('[data-ta-fallback],[data-ta-routes]');
+            liveEditorHost.append(draftArea);
+            draftArea.find('[data-ta-additional]').after(recovery);
+            return function() {
+                workspace.append(draftArea);root.find('.ta-feedback').append(recovery);
+                root.find('.ta-footer').prepend(nativeCreate);liveEditorHost=null;
+            };
+        }
         function mountEditorPanel() {
             var uid='ta-editor-'+(++connectionSequence);
             editorPanel=$('<section class="ta-editor-panel" data-ta-editor-panel role="dialog" aria-modal="true" hidden>').attr('aria-labelledby',uid).appendTo(root);
@@ -342,6 +355,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             });
         }
         function openEditor(invoker) {
+            if(liveEditorHost) {
+                var recovery=liveEditorHost.find('[data-ta-reconcile]:not([hidden]) input').first();
+                if(recovery.length)recovery.trigger('focus');else focusField('summary');
+                return;
+            }
             if(!editorPanel || !editorPanel.prop('hidden'))return;
             editorReturn=invoker || document.activeElement;
             editorScroll={top:root[0].scrollTop,page:(document.scrollingElement || document.documentElement).scrollTop,overflow:document.body.style.overflow};
@@ -364,7 +382,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if(!editorPanel)return;
             var d=state && state.draft,profile=state && state.settings && state.settings.profiles.find(function(p){return p.id===state.settings.activeProfileId;}),
                 selected=profile && d && profile.templates.find(function(t){return t.id===d.templateId;}),unmapped=d && (!selected || !selected.issueTypeId),
-                inPanel=!editorPanel.prop('hidden') || !unmapped;
+                inPanel=!editorPanel.prop('hidden') || !unmapped && !(state.typeTemplateSelection && state.typeTemplateSelection.automatic);
             var host=root.find('[data-ta-type]'),target=inPanel?editorPanel.find('[data-ta-editor-type-slot]'):typeHome;
             if(host.parent()[0]!==target[0])target.append(host);
             typeHome.toggleClass('ta-has-type',!inPanel);
@@ -394,8 +412,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var issue = state.meta && state.meta.issueTypes.find(function(t) {return t.id === d.issueTypeId;});
             var list = issue ? issue.fields.filter(function(f) {return f.id !== 'project' && f.id !== 'issuetype';}) : [];
             // Reorder only this display projection; Meta and its signature remain exact.
-            list = ['summary', 'description', 'environment'].map(function(id) {return list.find(function(f) {return f.id === id;});}).filter(Boolean)
-                .concat(list.filter(function(f) {return ['summary','description','environment'].indexOf(f.id)===-1;}));
+            list = ['summary', 'description', 'environment', 'priority'].map(function(id) {return list.find(function(f) {return f.id === id;});}).filter(Boolean)
+                .concat(list.filter(function(f) {return ['summary','description','environment','priority'].indexOf(f.id)===-1;}));
             Object.keys(d.fields).concat(Object.keys(d.pendingFields)).forEach(function(id) {
                 if (id !== 'project' && id !== 'issuetype' && !list.some(function(f) {return f.id === id;}))
                     list.push({id:id,name:id + ' (нет в текущих metadata)',kind:'unknown',supported:false,writable:false,required:false,allowedValues:[]});
@@ -408,7 +426,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 if (!entry) {
                     var host = $('<div>').attr('data-ta-field', field.id), pending = $('<div class="ta-pending" hidden>');
                     var editor = $('<div>'); host.append(editor, pending); fieldsHost.append(host);
-                    var view = fieldUi.create({$: $, onChange: function(id, value) {if(canEditField(id)) c.updateField(id, value);},
+                    var view = fieldUi.create({$: $, onChange: function(id, value) {
+                        if(!canEditField(id))return;
+                        var saved=c.updateField(id,value);
+                        if(liveEditorHost && options.onManualField)Promise.resolve(saved).then(options.onManualField);
+                    },
                         onSearch:function(query,field,request){
                             if(!canEditField(field.id) || !options.onSearch) return Promise.resolve({values:[]});
                             return Promise.resolve(options.onSearch(query,field,request)).then(function(result){return canEditField(field.id)?result:{values:[]};});
@@ -447,11 +469,18 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     });
                 }
                 var profile = state.settings && state.settings.profiles.find(function(p) {return p.id === state.settings.activeProfileId;});
-                entry.view.update({field:field, value:d.fields[field.id], errors:state.validation && state.validation.fieldErrors[field.id] || [],
+                var displayedValue=d.fields[field.id],priorityDefault=false;
+                if(field.id==='priority' && !Object.prototype.hasOwnProperty.call(d.fields,field.id) && !d.protectedFields[field.id] && field.defaultApplicable===true) {
+                    var inherited=field.defaultValue,byId=inherited && typeof inherited==='object' && !Array.isArray(inherited) && typeof inherited.id==='string';
+                    var defaults=(field.allowedValues || []).filter(function(option){return byId?option.id===inherited.id:field.optionsComplete===true && typeof inherited==='string' && option.label===inherited;});
+                    if(defaults.length===1){displayedValue={id:defaults[0].id};priorityDefault=true;}
+                }
+                entry.view.update({field:field, value:displayedValue, errors:state.validation && state.validation.fieldErrors[field.id] || [],
                     scopeKey:JSON.stringify([d.projectKey,d.issueTypeId,state.meta && state.meta.signature]),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
                     'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':
+                    priorityDefault?'По умолчанию Jira; ручной выбор заменит это значение.':
                     field.kind==='number' && field.supported && field.writable?'Числовое значение задаётся вручную; AI его не рассчитывает.':
                     field.kind==='timetracking' && field.supported && field.writable?'Указывайте только явно названные трудозатраты, например 2h или 1d 30m. Длительность окна выкладки не является оценкой.':'';
                 entry.help.text(help).prop('hidden',!help);
@@ -504,7 +533,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 entry.pending.find('[data-ta-reject]').prop('disabled',busy || writeLocked() || d.creation.status==='preflight');
                 var value=d.fields[field.id],filled=value!=null && value!=='' && (!Array.isArray(value) || value.length>0);
                 var invalid=state.validation && (state.validation.fieldErrors[field.id] || []).length;
-                var prominent=['summary','description','environment'].indexOf(field.id)!==-1 || field.required || filled || invalid || hasPending || !field.supported;
+                var prominent=['summary','description','environment','priority'].indexOf(field.id)!==-1 || field.required || filled || invalid || hasPending || !field.supported;
                 // A local echo must never move the active editor or its caret.
                 var active=entry.host[0].contains(document.activeElement);
                 var destination=active?entry.host.parent():prominent?fieldsHost:optionalHost;
@@ -631,6 +660,12 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             root.find('[data-ta-open-connection]').prop('disabled',connectionLocked() || !options.connection);
             if (connectionHost) connectionHost.find('input,[data-ta-connection-save]').prop('disabled',connectionLocked());
             updateSelection(project, (state.projects || []).map(function(p) {return {id:p.key,label:p.name + ' · ' + p.key};}), d && d.projectKey, false);
+            var automatic=state.typeTemplateSelection && state.typeTemplateSelection.automatic;
+            root.find('[data-ta-template]').prop('hidden',!!automatic);
+            var typeNote=root.find('[data-ta-type-template-note]');
+            if(!typeNote.length)typeNote=$('<p data-ta-type-template-note class="ta-muted" role="status">').appendTo(root.find('[data-ta-type]'));
+            var currentTemplate=profile && d && profile.templates.find(function(t){return t.id===d.templateId;});
+            typeNote.prop('hidden',!automatic).text(automatic ? state.typeTemplateSelection.reason || (currentTemplate ? 'Правила: '+currentTemplate.name : '') : '');
             updateSelection(template, (profile && profile.templates || []).map(function(t) {return {id:t.id,label:t.name};}), d && d.templateId, !d || writeLocked());
             updateSelection(type, (state.meta && state.meta.issueTypes || []).filter(function(t) {return !t.subtask;}).map(function(t) {return {id:t.id,label:t.name,iconUrl:t.iconUrl};}), d && d.issueTypeId, !d || writeLocked());
             positionType();
@@ -724,7 +759,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if (settingsView) settingsView.destroy(); if (root) {root[0].removeEventListener('keydown',escapeOverlay,true);root.off('.taGuided').empty();}
         }
         function refreshColumns() {resizeColumns();}
-        return {mount:mount, update:update, updateChatUsage:renderTokens, openSettings:openSettings, openConnection:openConnection, openEditor:openEditor, closeEditor:closeEditor, destroy:destroy};
+        return {mount:mount, update:update, updateChatUsage:renderTokens, openSettings:openSettings, openConnection:openConnection, openEditor:openEditor, closeEditor:closeEditor, mountLiveEditor:mountLiveEditor, destroy:destroy};
     }
     return {create:create};
 });

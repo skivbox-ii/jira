@@ -234,15 +234,23 @@ define('_ujgTA_ai', ['_ujgShared_llmClient', '_ujgTA_validation'], function(shar
             values = Object.assign(values, result.fields);
         }
         var local = validation.validateFields(ctx.meta, type.id, values, {relations:input.relationConfirmations,
-            allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields});
+            allowAssignee: ctx.profile.allowAssignee === true, explicitUserFields: input.explicitUserFields, attachments:input.attachments});
+        var substantiveQuestions=local.questions || [],substantiveMessages=substantiveQuestions.map(function(q) {return q.text;});
         Object.keys(local.fieldErrors).forEach(function(fieldId) {
             if (kind === 'assist' && fieldId !== input.targetFieldId) return;
+            if(local.fieldErrors[fieldId].every(function(message) {return substantiveMessages.indexOf(message)!==-1;}))return;
             var questionId = 'required:' + fieldId;
             // Reserved IDs cannot be used by the model to suppress a local blocker.
             result.questions = result.questions.filter(function(q) { return q.id !== questionId; });
             var spec = type.fields.find(function(field) {return field.id === fieldId;});
             result.questions.push({id: questionId, text: 'Проверьте поле «' + (spec ? spec.name : fieldId) + '»', reason: 'Локальная проверка metadata требует явного значения или выбора.', required: true});
         });
+        if(Array.isArray(local.questions)) {
+            result.questions=result.questions.filter(function(q) {return q.id.indexOf('devops:')!==0;}).concat(substantiveQuestions.filter(function(q) {
+                var fieldId=q.id==='devops:summary'?'summary':['devops:priority','devops:impact'].indexOf(q.id)!==-1?'priority':q.id==='devops:type'?'issuetype':'description';
+                return kind!=='assist' || input.targetFieldId===fieldId;
+            }));
+        }
         return result;
     }
     function abort(signal) {

@@ -18,6 +18,32 @@ define('_ujgTA_profiles', [], function() {
         };
     }
 
+    function normalizedName(value) {return String(value || '').trim().toLocaleLowerCase('ru').replace(/ё/g,'е').replace(/\s+/g,' ');}
+    function isDevopsProject(project) {
+        return !!project && project.key==='DEVOPS';
+    }
+    function forProject(settings, project) {
+        if (!isDevopsProject(project) || settings.activeProfileId==='devops' || !settings.profiles.some(function(p){return p.id==='devops';}))return settings;
+        return Object.assign({},settings,{activeProfileId:'devops'});
+    }
+    function typeTemplateSelection(settings, project, meta, typeId) {
+        if (!isDevopsProject(project))return {automatic:false};
+        var profile=settings.profiles.find(function(p){return p.id==='devops';});
+        var result={automatic:true,supported:false,templateId:null,reason:''};
+        if(!profile){result.reason='Добавьте профиль DEVOPS в личных настройках.';return result;}
+        var type=meta && meta.issueTypes.find(function(t){return t.id===typeId && !t.subtask;});
+        if(!type){result.reason='Выберите доступный тип задачи Jira.';return result;}
+        var candidates=profile.templates.filter(function(t){return t.issueTypeId===type.id;});
+        if(!candidates.length) {
+            var names={task:['задача','task'],bug:['ошибка','bug'],deployment:['задача развертывания','развертывание','deployment']};
+            candidates=profile.templates.filter(function(t){return t.issueTypeId===null && Object.prototype.hasOwnProperty.call(names,t.id) && names[t.id].indexOf(normalizedName(type.name))!==-1;});
+        }
+        if(candidates.length===1){result.supported=true;result.templateId=candidates[0].id;}
+        else result.reason=candidates.length ? 'К этому типу Jira привязано несколько шаблонов. Оставьте одну привязку в личных настройках.' :
+            'Для этого типа Jira нет шаблона. Настройте привязку типа в личных настройках.';
+        return result;
+    }
+
     function validateSettings(input) {
         var errors = [], seen = [];
         function scan(value) {
@@ -93,5 +119,5 @@ define('_ujgTA_profiles', [], function() {
         } : null };
     }
 
-    return { createDefaults: createDefaults, validateSettings: validateSettings, exportSettings: exportSettings, parseSettingsImport: parseSettingsImport };
+    return { isDevopsProject:isDevopsProject,forProject:forProject,typeTemplateSelection:typeTemplateSelection,createDefaults: createDefaults, validateSettings: validateSettings, exportSettings: exportSettings, parseSettingsImport: parseSettingsImport };
 });

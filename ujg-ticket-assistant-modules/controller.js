@@ -155,6 +155,22 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function profile() {
             return state.settings && state.settings.profiles.find(function(p) { return p.id === state.settings.activeProfileId; });
         }
+        function selectedProject() {
+            return state.draft && state.projects.find(function(p){return p.key===state.draft.projectKey;});
+        }
+        function projectSelection(settings, typeId) {
+            return profiles.typeTemplateSelection(settings || state.settings,selectedProject(),state.meta,typeId===undefined ? state.draft && state.draft.issueTypeId : typeId);
+        }
+        function syncProjectSelection() {
+            if(!state.draft || !state.settings)return;
+            var selected=projectSelection();
+            if(!selected.automatic)return;
+            state.settings=profiles.forProject(state.settings,selectedProject());
+            if(!state.meta)return;
+            var typeId=state.meta && state.meta.issueTypes.some(function(t){return t.id===state.draft.issueTypeId && !t.subtask;}) ? state.draft.issueTypeId : null;
+            selected=projectSelection(state.settings,typeId);
+            state.draft=drafts.setSelection(state.draft,{issueTypeId:typeId,templateId:selected.templateId,settingsRevision:state.settings.revision});
+        }
         function eligible() {
             var ids = [];
             if (state.meta) state.meta.issueTypes.forEach(function(type) {
@@ -170,6 +186,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return ids;
         }
         function updateScope() {
+            state.typeTemplateSelection=state.settings ? projectSelection() : {automatic:false};
             var available = eligible();
             state.generationFieldIds = explicitGeneration === null ? available : explicitGeneration.slice();
             state.contextScope = {
@@ -225,7 +242,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function edited(next) {
             if (locked() || durableGuard()) return emit();
             if (next.creation.status === 'preflight') next = Object.assign({},next,{creation:{status:'idle',attemptId:null,issueKey:null,error:null}});
-            stop(); state.draft = fillMissingReporter(drafts.invalidateAssistance(next)); state.validation = null; state.routeCandidates = [];
+            stop(); state.draft = drafts.invalidateAssistance(next);syncProjectSelection();state.draft=fillMissingReporter(state.draft); state.validation = null; state.routeCandidates = [];
             providerUsage=null;
             state.stage = 'idle'; state.error = identityWarning;
             updateScope(); save(); return emit();
@@ -237,12 +254,17 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 return state.draft.protectedFields[id] === true && field && field.kind === 'user';
             });
             if (isAutomaticReporter(state.draft))explicit.push('reporter');
-            return {relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit};
+            return {relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit,
+                attachments:state.draft.attachments.filter(function(a) {return a.status==='uploaded' || runtimeFiles.has(a.id);})};
+        }
+        function currentQuestions(questions,result) {
+            if(!Array.isArray(result.questions))return questions;
+            return (questions || []).filter(function(q) {return q.id.indexOf('devops:')!==0;}).concat(result.questions);
         }
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
                 templateId: state.draft.templateId, allowFieldIds: state.generationFieldIds, tokenBudget:state.settings.tokenBudget,
-                draft: { fields: state.draft.fields }, relationConfirmations:relationConfirmations, explicitUserFields: policy().explicitUserFields });
+                draft: { fields: state.draft.fields }, attachments:policy().attachments, relationConfirmations:relationConfirmations, explicitUserFields: policy().explicitUserFields });
         }
         function compatible(typeId, templateId) {
             var type = state.meta && state.meta.issueTypes.find(function(t) { return t.id === typeId && !t.subtask; });
@@ -286,6 +308,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!current(run, snapshot)) return false;
             state.meta = fields.normalizeMeta(raw, key, { components: components, versions: versions });
             if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
+            if(!readOnly)syncProjectSelection();
             metadataReady = true;
             if (!readOnly) state.draft = fillMissingReporter(state.draft);
             if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
@@ -293,7 +316,17 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 if (!current(run)) return false;
                 relationConfirmations = confirmed;
             }
-            state.validation = null; updateScope();
+            state.validation = null;
+            if(!readOnly && key==='DEVOPS' && state.draft.issueTypeId) {
+                var restoredValidation=validation.validateFields(state.meta,state.draft.issueTypeId,state.draft.fields,policy());
+                restoredValidation.warnings=warningUnion(restoredValidation.warnings,state.draft.warnings);
+                state.validation=restoredValidation;
+                state.draft=Object.assign({},state.draft,{questions:currentQuestions(state.draft.questions,restoredValidation)});
+                if(!restoredValidation.ok)state.draft=Object.assign({},state.draft,{checked:null});
+                else if(run.restoredCheck && drafts.isCurrent(state.draft,run.restoredCheck) && !state.draft.questions.some(function(q) {return q.required;}))
+                    state.draft=drafts.markChecked(state.draft,restoredValidation,state.draft.questions,drafts.snapshot(state.draft));
+            }
+            updateScope();
             if (readOnly) remember(); else save();
             return true;
         }
@@ -341,7 +374,10 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     if (entry.draft.projectKey !== key) entry.draft = drafts.createDraft({ projectKey: key });
                 }
                 state.draft = drafts.setSelection(entry.draft, { settingsRevision: entry.settings.revision });
-                state.settings = entry.settings; state.meta = entry.meta; explicitGeneration = entry.generation;
+                if(key==='DEVOPS' && state.draft.checked && !locked()) {
+                    run.restoredCheck=copy(state.draft.checked);state.draft=Object.assign({},state.draft,{checked:null});
+                }
+                state.settings = profiles.forProject(entry.settings,state.projects.find(function(p){return p.key===key;})); state.meta = entry.meta; explicitGeneration = entry.generation;
                 providerUsage=null;
                 state.validation = null; state.routeCandidates = []; state.error = entry.error || identityWarning;
                 updateScope();
@@ -399,6 +435,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         async function selectTemplate(id) {
             if (destroyed || !state.draft) return getState();
+            var automatic=projectSelection();
+            if(automatic.automatic) {
+                if(id!==automatic.templateId){state.error=errorState(null,'input');return emit();}
+                return getState();
+            }
             if (id !== null && !profile().templates.some(function(t) { return t.id === id; })) {
                 state.error = errorState(null, 'input'); return emit();
             }
@@ -420,6 +461,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return installSettings(checked.value);
         }
         function settingsSelection(settings) {
+            var automatic=projectSelection(settings);
+            if(automatic.automatic)return {settingsRevision:settings.revision,templateId:automatic.templateId};
             var changedProfile = state.settings.activeProfileId !== settings.activeProfileId;
             var p = settings.profiles.find(function(p) {return p.id === settings.activeProfileId;});
             var selected = p.templates.find(function(t) {return t.id === state.draft.templateId;});
@@ -430,6 +473,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return selection;
         }
         function installSettings(settings) {
+            settings=profiles.forProject(settings,selectedProject());
             var selection=settingsSelection(settings), previous=state.settings.tokenBudget;
             if (previous.context!==settings.tokenBudget.context || previous.reserve!==settings.tokenBudget.reserve) invalidateCachedChecks();
             state.settings=settings;
@@ -441,6 +485,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             try {
                 var saved = store.load(state.draft.projectKey);
                 // Loading rules never replaces or persists this tab's draft, nor acknowledges the CAS conflict.
+                saved.settings=profiles.forProject(saved.settings,selectedProject());
                 stop();var selection=settingsSelection(saved.settings), previous=state.settings.tokenBudget;
                 if (previous.context!==saved.settings.tokenBudget.context || previous.reserve!==saved.settings.tokenBudget.reserve) invalidateCachedChecks();
                 state.settings = saved.settings;providerUsage=null;
@@ -540,6 +585,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 try {
                     if (!state.draft.source.trim() || !profile()) throw { code: 'input' };
                     if (!state.meta && !await metadata(run)) return;
+                    if(kind==='prepare' && projectSelection().automatic && (!state.draft.issueTypeId || !state.draft.templateId))throw {code:'input'};
                     if (kind === 'prepare' && (!state.draft.issueTypeId || !state.draft.templateId)) {
                         var routeSnapshot = drafts.snapshot(state.draft), routeInput = input();
                         stage(run, 'routing');
@@ -590,8 +636,8 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     if (kind === 'check') {
                         // This explicit AI check used the current selected rules and passed the snapshot guard.
                         if(Array.isArray(result.questions)) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
-                        state.validation.warnings = warningUnion((result.warnings || []).filter(function(w) { return typeof w === 'string'; }),retainedReviewWarnings(state.draft.warnings));
-                        state.draft = drafts.markChecked(state.draft, state.validation, result.questions, snapshot);
+                        state.validation.warnings = warningUnion(state.validation.warnings,warningUnion((result.warnings || []).filter(function(w) { return typeof w === 'string'; }),retainedReviewWarnings(state.draft.warnings)));
+                        state.draft = drafts.markChecked(state.draft, state.validation, currentQuestions(result.questions,state.validation), snapshot);
                         // Reuse the nested whitelist without advancing the checked content revision.
                         state.draft = JSON.parse(drafts.serialize(Object.assign({}, state.draft, { evidence: result.evidence })));
                     }
@@ -824,12 +870,20 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     (result.fieldErrors[id] || (result.fieldErrors[id]=[])).push('Подтвердите или отклоните предложение для поля «'+(spec ? spec.name : id)+'» в карточке или редакторе.');
                 });
                 if (!compatible(state.draft.issueTypeId,state.draft.templateId)) {result.ok=false;result.fieldErrors.template=['Select a compatible template'];}
+                state.draft=Object.assign({},state.draft,{questions:currentQuestions(state.draft.questions,result)});
                 if (state.draft.questions.some(function(q) {return q.required;})) result.ok=false;
                 var reviewed=state.draft.templateReviewPending && reviewedTemplateRevision===state.draft.settingsRevision;
                 if(state.draft.templateReviewPending && !reviewed) {
                     result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены.'];
                 }
                 if(reviewed) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
+                if(result.ok && state.draft.projectKey==='DEVOPS') {
+                    var external=await api.checkDevopsIssue(state.draft,meta,{signal:signal});
+                    if(signal && signal.aborted || !chatFresh(snapshot) || state.meta!==meta)return chatFailure();
+                    Object.assign(result.fieldErrors,external.fieldErrors);
+                    if(Object.keys(external.fieldErrors).length)result.ok=false;
+                    result.warnings=warningUnion(result.warnings,external.warnings);
+                }
                 result.warnings=warningUnion(result.warnings,retainedReviewWarnings(state.draft.warnings));
                 state.validation=result;
                 state.draft=drafts.markChecked(state.draft,result,state.draft.questions,snapshot);
@@ -860,6 +914,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
             getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatFilterReviewFields:chatFilterReviewFields,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
+            chatDevopsRequirements:function() {return validation.devopsRequirements(state.meta,state.draft && state.draft.issueTypeId);},
             chatValidate:chatValidate,chatCompleteTemplateReview:function(snapshot,templateRevision,request) {
                 if(!state.draft || !state.draft.templateReviewPending || templateRevision!==state.draft.settingsRevision) return Promise.resolve(chatFailure());
                 return chatValidate(snapshot,request,templateRevision);

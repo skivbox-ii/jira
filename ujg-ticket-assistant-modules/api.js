@@ -190,7 +190,81 @@ define('_ujgTA_api', [], function() {
             }
             return {values:values,complete:false,projectKey:String(project)};
         }
+        // Only an explicitly designated parent is eligible for a real Jira link.
+        // Other keys in descriptions often refer to incidents or related requests.
+        async function checkDevopsIssue(draft, meta, options) {
+            var result={warnings:[],fieldErrors:{},link:null};
+            function normalized(text) {return String(text || '').trim().replace(/\s+/g,' ').toLowerCase();}
+            var summary=normalized(draft.fields.summary), description=draft.fields.description || '';
+            var tokens=summary.match(/[\p{L}\p{N}]+/gu) || [];
+            if (tokens.length) {
+                // Only alphanumeric words enter JQL. Compare the complete strings locally.
+                var phrase=tokens.slice(0,10).join(' ');
+                try {
+                    var similar=await catalog('/search',{jql:'project = DEVOPS AND summary ~ "\\"'+phrase+'\\"" ORDER BY key',fields:'summary,description'},options,false,'issues');
+                    var matching=similar.values.filter(function(issue) {
+                        return issueKey(issue.key) && issue.key.startsWith('DEVOPS-') && issue.fields && normalized(issue.fields.summary)===summary;
+                    });
+                    var same=matching.find(function(issue) {
+                        return issue.fields.summary===draft.fields.summary && issue.fields.description===description;
+                    });
+                    if(same) result.fieldErrors.summary=['В DEVOPS уже есть '+same.key+' с той же темой и описанием. Сверьте существующую задачу.'];
+                    else if(matching.length)result.warnings.push('Такая тема уже есть у '+matching.map(function(issue){return issue.key;}).slice(0,3).join(', ')+'. Сверьте содержание перед созданием.');
+                } catch(error) {
+                    if(error && error.kind==='abort')throw error;
+                    result.warnings.push('Jira не дала проверить похожие задачи. Проверьте дубликат в проекте DEVOPS.');
+                }
+            }
+            var parents=description.split(/\r?\n/).map(function(line) {
+                return /^\s*(?:\*{1,2})?Родительская история(?:\*{1,2})?\s*:\s*(?:\*{1,2})?\s*(.*?)\s*$/i.exec(line);
+            }).filter(Boolean);
+            if(!parents.length)return result;
+            var key=parents[0][1].toUpperCase();
+            if(parents.length===1 && /^(нет|без истории|разовая задача|не применимо|не указана)[.!]?$/i.test(key))return result;
+            if(parents.length!==1 || !issueKey(key)) {
+                result.fieldErrors.description=['Укажите один ключ в строке «Родительская история: ПРОЕКТ-123» или уберите эту строку для разовой задачи.'];
+                return result;
+            }
+            var parentStatements=String(draft.source || '').split(/[\r\n.!?;]+/).map(function(line){return line.trim();})
+                .filter(function(line){return /родител|в рамках истори|без истори|отвяж|отвяз|связыва|(?:отмен|удал|убер|сним)\S*\s+(?:эту?\s+)?связ/i.test(line);});
+            var lastStatement=parentStatements[parentStatements.length-1] || '';
+            var authorized=/^(?:родительская история|(?:работа |задача )?в рамках истории)\s*(?:[:—–-]\s*)?([A-Z][A-Z0-9_]*-\d+)$/i.exec(lastStatement);
+            if(!(draft.protectedFields && draft.protectedFields.description) && !(authorized && authorized[1].toUpperCase()===key)) {
+                result.fieldErrors.description=['Для связи напишите в чат «Родительская история: '+key+'» или укажите её вручную в описании.'];
+                return result;
+            }
+            var type=meta.issueTypes.find(function(t){return t.id===draft.issueTypeId;});
+            if(!type || !type.fields.some(function(f){return f.id==='issuelinks';})) {
+                result.fieldErrors.description=['На экране создания Jira недоступно поле связей. Откройте форму Jira, чтобы связать задачу с '+key+'.'];
+                return result;
+            }
+            try {
+                var story=await request('/issue/'+encodeURIComponent(key),{fields:'issuetype'},options);
+                if(!story || story.key!==key || !/^(Story|История)$/i.test(story.fields && story.fields.issuetype && story.fields.issuetype.name)) {
+                    result.fieldErrors.description=['Проверьте родительскую историю '+key+' и её тип в Jira.'];
+                    return result;
+                }
+                var catalogResult=await request('/issueLinkType',{},options);
+                var directions=[];
+                (catalogResult.issueLinkTypes || []).forEach(function(link) {
+                    ['inward','outward'].forEach(function(side) {
+                        if(link.name && normalized(link[side])==='is child of') {
+                            var addition={type:{name:link.name}};
+                            addition[side+'Issue']={key:key};
+                            directions.push(addition);
+                        }
+                    });
+                });
+                if(directions.length===1)result.link=directions[0];
+                else result.fieldErrors.description=['В Jira не удалось однозначно выбрать связь «is child of» для '+key+'. Проверьте связь в форме Jira.'];
+            } catch(error) {
+                if(error && error.kind==='abort')throw error;
+                result.fieldErrors.description=['Не удалось проверить родительскую историю '+key+' и тип связи в Jira. Проверьте ключ и доступ.'];
+            }
+            return result;
+        }
         return {
+            checkDevopsIssue:checkDevopsIssue,
             getBoards:getBoards, getSprints:getSprints, getEpic:getEpic, getSprint:getSprint, searchEpics:searchEpics,
             getProjects: function(options) { return catalog('/project', {}, options); },
             getCurrentUser: function(options) { return request('/myself', {}, options); },

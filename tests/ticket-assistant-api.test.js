@@ -158,3 +158,47 @@ test('create metadata preserves legacy project wrappers and collects explicit pa
     assert.equal(calls[1].data.startAt, 1);
     assert.equal(calls[1].data.projectKeys, 'DO');
 });
+
+test('DEVOPS duplicate check distinguishes same title from identical content',async()=>{
+    const draft={fields:{summary:'Перенос API в TEST',description:'Обновить версию на TEST'}};
+    function apiWith(content) {
+        return adapter(o=>{
+            assert.equal(o.type,'GET');
+            assert.match(o.data.jql,/^project = DEVOPS AND summary ~/);
+            return Promise.resolve({total:1,issues:[{key:'DEVOPS-21',fields:{summary:draft.fields.summary,description:content}}]});
+        });
+    }
+    const possible=await apiWith('Другая версия').checkDevopsIssue(draft,{});
+    assert.match(possible.warnings[0],/DEVOPS-21/);
+    assert.deepEqual(Object.keys(possible.fieldErrors),[]);
+    const differentCase=await apiWith(draft.fields.description.toLowerCase()).checkDevopsIssue(draft,{});
+    assert.deepEqual(Object.keys(differentCase.fieldErrors),[]);
+    const duplicate=await apiWith(draft.fields.description).checkDevopsIssue(draft,{});
+    assert.match(duplicate.fieldErrors.summary[0],/DEVOPS-21/);
+});
+
+test('DEVOPS attaches only an explicitly supplied parent using the live child relation direction',async()=>{
+    for(const direction of ['inward','outward']) {
+        const type={name:'Hierarchy',inward:'is parent of',outward:'is parent of'};
+        type[direction]='is child of';
+        const paths=[],api=adapter(o=>{
+            paths.push(o.url);
+            if(o.url.endsWith('/search'))return Promise.resolve({total:0,issues:[]});
+            if(o.url.endsWith('/issueLinkType'))return Promise.resolve({issueLinkTypes:[type]});
+            assert.match(o.url,/\/issue\/APP-123$/);
+            return Promise.resolve({key:'APP-123',fields:{issuetype:{name:'История'}}});
+        });
+        const draft={issueTypeId:'5',source:'Работа в рамках истории APP-123',fields:{summary:'Обновить API',description:'Родительская история: APP-123'}};
+        const meta={issueTypes:[{id:'5',fields:[{id:'issuelinks'}]}]};
+        assert.deepEqual(JSON.parse(JSON.stringify((await api.checkDevopsIssue(draft,meta)).link)),{type:{name:'Hierarchy'},[direction+'Issue']:{key:'APP-123'}});
+        for (const source of ['Связанный инцидент APP-123. Родительской истории нет.', 'Родительская история: APP-123. Без истории.', 'Родительская история: APP-123. Не связывай с APP-123.', 'Родительская история: APP-123. Убери родителя.', 'Родительская история: APP-123. Родительская история: APP-124.']) {
+            draft.source=source;
+            assert.match((await api.checkDevopsIssue(draft,meta)).fieldErrors.description[0],/Для связи/);
+        }
+        paths.length=0;draft.fields.description='Связанные заявки: APP-123';
+        assert.equal((await api.checkDevopsIssue(draft,meta)).link,null);
+        assert.equal(paths.length,1);
+        draft.source='Связанная задача APP-124';draft.fields.description='Родительская история: APP-124';
+        assert.match((await api.checkDevopsIssue(draft,meta)).fieldErrors.description[0],/Для связи/);
+    }
+});

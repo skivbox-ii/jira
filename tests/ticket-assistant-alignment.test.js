@@ -162,3 +162,14 @@ test('chat token popover explains estimates without exposing the internal agent 
     for(const node of [summary,usage,h.root.querySelector('[data-ta-token-preflight]'),h.root.querySelector('[data-ta-tokens]')])
         assert.doesNotMatch(node.textContent+' '+node.getAttribute('title')+' '+node.getAttribute('aria-label'),/Pico/i);
 });
+
+test('DEVOPS renders the actual Jira type as the sole selection and explains its derived template',t=>{
+    const h=setup(t,null,{panel:true});
+    h.state.typeTemplateSelection={automatic:true,supported:true,templateId:'t',reason:''};h.ui.update(h.state);
+    const template=h.root.querySelector('[data-ta-template]'),type=h.root.querySelector('[data-ta-type]');
+    assert.equal(template.hidden,true);assert.equal(type.closest('[data-ta-editor-panel]'),null);
+    const hint=h.root.querySelector('[data-ta-type-template-note]');assert.ok(hint);assert.match(hint.textContent,/Task/);
+    h.state.typeTemplateSelection={automatic:true,supported:false,templateId:null,reason:'Настройте привязку типа в личных настройках.'};
+    h.state.draft.templateId=null;h.ui.update(h.state);assert.match(hint.textContent,/Настройте привязку/);assert.equal(template.hidden,true);
+    h.state.typeTemplateSelection={automatic:false};h.ui.update(h.state);assert.equal(template.hidden,false);assert.equal(hint.hidden,true);
+});
