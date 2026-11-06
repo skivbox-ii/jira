@@ -2,14 +2,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {chromium} = require('playwright');
 const {startPreview} = require('./ticket-assistant-preview-server.cjs');
+const {sourcePreviewResponse} = require('../helpers/ticket-assistant-source-preview.cjs');
 
 test('one conversation edits multiple Jira fields and only asks for the remaining DEVOPS requirement', async t => {
-    const server = await startPreview({port: 0});
+    const server = await startPreview({port: 0, sourceAssets: false});
     t.after(() => server.close());
     const browser = await chromium.launch({channel: 'chrome'});
     t.after(() => browser.close());
     const page = await browser.newPage({viewport: {width: 1440, height: 900}});
-    await page.route('**/*', route => route.request().url().startsWith(server.url) ? route.continue() : route.abort());
+    await page.route('**/*', route => {
+        const request = route.request();
+        if (!request.url().startsWith(server.url) || request.method() !== 'GET') return route.abort();
+        const source = sourcePreviewResponse(new URL(request.url()).pathname);
+        return source ? route.fulfill(source) : route.continue();
+    });
     await page.goto(server.url);
     await page.waitForSelector('html[data-ta-preview-ready=true]');
     await page.evaluate(async () => {
@@ -36,7 +42,9 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
                 return {text: JSON.stringify({
                     fields: {priority: {id: '3'}, duedate: '2026-11-20'},
                     descriptionSections: {location: 'DEV, demo-api', release: 'demo-api v1.0', order: 'Перезапустить сервис',
-                        window: 'После 18:00', verification: 'Дежурный проверит HTTP 200 на /health'}
+                        window: 'После 18:00', verification: 'Дежурный проверит HTTP 200 на /health',
+                        // Keep the selected template structurally complete while the actual link is still missing.
+                        links: ''}
                 })};
             }
         });
@@ -53,6 +61,11 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     const send = async text => {await input.fill(text); await input.press('Enter');};
     await send('Развернуть demo-api v1.0 в DEV, после 18:00 перезапустить сервис. Дежурный проверит HTTP 200 на /health. Приоритет обычный. Срок 20.11.2026.');
     await page.locator('[data-ta-chat-log] [data-role=assistant]').first().waitFor();
+    const descriptionPreview = editor.locator('[data-ta-description-preview]');
+    assert.equal(await descriptionPreview.isVisible(), true);
+    assert.match(await descriptionPreview.innerText(), /Окно: После 18:00/);
+    assert.match(await descriptionPreview.innerText(), /Проверка: Дежурный проверит/);
+    await editor.getByRole('button', {name: 'Редактировать описание', exact: true}).click();
     const description = editor.locator('[data-ta-field=description] textarea:visible');
     assert.match(await description.inputValue(), /Окно: После 18:00/);
     assert.match(await description.inputValue(), /Проверка: Дежурный проверит/);
@@ -83,7 +96,7 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     const sent = await page.evaluate(() => ({fields: window.taPreview.createdPayload.fields, calls: window.taPreview.patchRequests}));
     assert.equal(sent.calls, 3);
     assert.equal(sent.fields.summary, 'Обновить demo-api на DEV');
-    assert.match(sent.fields.description, /Ссылки: https:\/\/git.example\/devops\/demo-api/);
+    assert.match(sent.fields.description, /\*Ссылки:\* https:\/\/git.example\/devops\/demo-api/);
     assert.equal(sent.fields.priority.id, '2');
     assert.equal(sent.fields.duedate, '2026-11-20');
 });

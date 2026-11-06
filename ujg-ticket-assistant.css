@@ -210,3 +210,10 @@
     .ujg-ticket-assistant .ta-draft-area { border-left: 0; border-top: 1px solid #dce1e5; padding-left: 0; padding-top: 18px; }
     .ujg-ticket-assistant .ta-header { flex-wrap: wrap; gap: 4px 12px; }
 }
+
+.ujg-ticket-assistant .ta-description-toggle { min-height: 28px; padding: 3px 8px; margin-bottom: 6px; font-size: 12px; }
+.ujg-ticket-assistant .ta-description-preview { padding: 8px 10px; border: 1px solid var(--ta-border, #dfe1e6); border-radius: 4px; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; }
+.ujg-ticket-assistant .ta-description-preview p { margin: 0 0 6px; white-space: pre-wrap; }
+.ujg-ticket-assistant .ta-description-preview > :last-child { margin-bottom: 0; }
+.ujg-ticket-assistant .ta-description-preview ul, .ujg-ticket-assistant .ta-description-preview ol { margin: 4px 0 8px; padding-left: 22px; }
+.ujg-ticket-assistant .ta-description-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }

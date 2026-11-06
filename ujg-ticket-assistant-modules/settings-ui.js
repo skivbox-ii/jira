@@ -3,7 +3,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
     var sequence = 0;
     function copy(value) {return JSON.parse(JSON.stringify(value));}
     function create(options) {
-        var $ = options.$, host, root, local, baseline, meta, templateId, mapping, returnFocus, dead = false, busy = false;
+        var $ = options.$, host, root, local, baseline, meta, templateId, mapping, descriptionFormat, returnFocus, dead = false, busy = false;
         var preview = null, conflict = false, applyAfterLoad = false, confirmation = null;
         var uid = 'ta-settings-' + (++sequence);
         function profile() {return local.profiles.find(function(p) {return p.id === local.activeProfileId;});}
@@ -62,12 +62,17 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             mapping.update({field:{id:'mapping',name:'Тип Jira',kind:'option',supported:true,writable:true,
                 allowedValues:types.map(function(type) {return {id:type.id,label:type.name};})},value:t.issueTypeId===null?null:{id:t.issueTypeId},errors:missing?['Нет привязки к доступному типу.']:[]});
         }
+        function renderDescriptionFormat() {
+            descriptionFormat.update({field:{id:'descriptionFormat',name:'Формат описания',kind:'option',supported:true,writable:true,required:true,optionsComplete:true,
+                allowedValues:[{id:'markdown',label:'Markdown'},{id:'plain',label:'Обычный текст'}]},
+                value:{id:local.descriptionFormat || 'markdown'},removable:false,errors:[]});
+        }
         function render() {
             var p=profile();if(!p)return;
             if(!template()) templateId=p.templates[0] && p.templates[0].id;
             root.find('[data-ta-profile-name]').val(p.name);root.find('[data-ta-profile-instructions]').val(p.instructions);
             root.find('[data-ta-context-budget]').val(local.tokenBudget.context);root.find('[data-ta-response-reserve]').val(local.tokenBudget.reserve);
-            root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);refreshLists();renderTemplate();
+            root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);renderDescriptionFormat();refreshLists();renderTemplate();
         }
         async function apply(resolve) {
             if(busy)return;
@@ -104,6 +109,11 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
                 budgets.append($('<label>').append($('<span>').text(spec[0]),control));
             });
             body.append(budgets,$('<p class="ta-muted">').attr('title','Консервативная эвристика: ASCII / 3, остальные кодовые точки / 1; учитываются весь JSON и 32 условных токена на framing. Токенизатор модели неизвестен; оценка может отличаться от фактического расхода.').text('Оценка токенов приблизительная. Бюджет задаётся локально, а не определяется по модели. Резерв уменьшает доступный вход и не передаётся провайдеру.'));
+            var formatHost=$('<div data-ta-description-format>');body.append(formatHost,$('<p class="ta-muted">').text('Для стандартных типов DEVOPS.'));
+            descriptionFormat=fieldUi.create({$: $,onChange:function(unused,value) {
+                if(value && ['markdown','plain'].indexOf(value.id)!==-1)local.descriptionFormat=value.id;
+                renderDescriptionFormat();
+            }});descriptionFormat.mount(formatHost);
             body.append('<div data-ta-settings-error class="ta-errors" role="alert"></div><div data-ta-settings-conflict class="ta-warning" role="alert" hidden><p>В другой вкладке сохранены изменения. Локальная копия и черновик сохранены здесь.</p><p>Загрузить сохранённые правила заменит только правила в этом окне. Черновик останется локальным. Применить запишет выбранные правила и текущий локальный черновик этого проекта вместо сохранённого черновика.</p></div>');
             body.find('[data-ta-settings-conflict]').append(button('Загрузить сохранённые правила','RefreshCw',{'data-ta-conflict-load':''},async function() {
                 if(busy || !options.onLoadSaved)return;
@@ -127,7 +137,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             var transfer=body.find('.ta-settings-transfer');
             transfer.append(label('JSON настроек',{'data-ta-import-json':''},true,function(){preview=null;root.find('[data-ta-import-use]').prop('disabled',true);root.find('[data-ta-import-result]').empty();}),button('Предпросмотр импорта','Upload',{'data-ta-import-preview':''},function(){
                 var parsed=profiles.parseSettingsImport(root.find('[data-ta-import-json]').val());preview=parsed.ok?parsed.value:null;
-                root.find('[data-ta-import-result]').text(parsed.ok?parsed.preview.profiles.map(function(p){return p.name+': '+p.templates.map(function(t){return t.name+' → '+(t.issueTypeId===null?'без привязки':t.issueTypeId);}).join(', ');}).join('\n'):parsed.errors.join('\n'));
+                root.find('[data-ta-import-result]').text(parsed.ok?'Формат описания — '+(parsed.preview.descriptionFormat==='plain'?'Обычный текст':'Markdown')+'\n'+parsed.preview.profiles.map(function(p){return p.name+': '+p.templates.map(function(t){return t.name+' → '+(t.issueTypeId===null?'без привязки':t.issueTypeId);}).join(', ');}).join('\n'):parsed.errors.join('\n'));
                 root.find('[data-ta-import-use]').prop('disabled',!parsed.ok);
             }),'<p data-ta-import-result role="status"></p>',button('Использовать импорт в копии','Check',{'data-ta-import-use':'',disabled:true},function(){if(preview){local=copy(preview);templateId=null;render();}}),button('Экспорт JSON','Download',{'data-ta-export':''},function(){try{root.find('[data-ta-export-json]').val(profiles.exportSettings(local)).prop('hidden',false);}catch(ignored){root.find('[data-ta-settings-error]').text('Проверьте названия профилей и шаблонов.');}}),'<textarea rows="6" data-ta-export-json aria-label="Экспорт JSON" readonly hidden></textarea>');
             body.append(button('Сбросить правила','RefreshCw',{'data-ta-reset':''},function(){root.find('[data-ta-reset-prompt]').prop('hidden',false);root.find('[data-ta-reset-confirm]').trigger('focus');}),'<div data-ta-reset-prompt class="ta-warning" hidden><p>Сбросить все профили и шаблоны в локальной копии? Исходные данные и поля останутся.</p></div>');
@@ -154,7 +164,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             root.find('.ta-settings-transfer').prop('open',false);root.find('.ta-settings-body').scrollTop(0);
             root.find('[data-ta-settings-conflict]').prop('hidden',!conflict);render();root.find('[data-ta-profile-name]').trigger('focus');
         }
-        function destroy(){dead=true;if(mapping)mapping.destroy();if(root)root.remove();}
+        function destroy(){dead=true;if(mapping)mapping.destroy();if(descriptionFormat)descriptionFormat.destroy();if(root)root.remove();}
         return {open:open,close:close,destroy:destroy};
     }
     return {create:create};

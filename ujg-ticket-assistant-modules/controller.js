@@ -87,6 +87,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function getState() {
             var result = Object.assign({}, state);
             result.destroyed = destroyed;
+            result.standardDescriptionTemplate = usesStandardDescription(state.draft);
             result.tokenPreflight = null;
             if (state.draft && state.meta && state.settings && typeof ai.preflight === 'function') {
                 if (!budgetCache || budgetCache.draft!==state.draft || budgetCache.meta!==state.meta ||
@@ -175,17 +176,18 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if(!d || d.projectKey!=='DEVOPS' || !d.issueTypeId || !d.templateId || typeof validation.formatDevopsDescription!=='function' ||
                 d.protectedFields.description || Object.prototype.hasOwnProperty.call(d.pendingFields,'description') ||
                 d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1)return false;
-            var p=profile(),template=p && p.templates.find(function(t){return t.id===d.templateId;}),
-                standard=profiles.createDefaults().profiles.find(function(p){return p.id==='devops';}).templates.find(function(t){return t.id===d.templateId;}),
-                requirements=validation.devopsRequirements(state.meta,d.issueTypeId),spec=fields.getField(state.meta,d.issueTypeId,'description');
-            return p && p.id==='devops' && template && standard && requirements && requirements.kind===template.id &&
-                ['name','instructions','whenToUse'].every(function(k){return template[k]===standard[k];}) &&
-                spec && spec.supported && spec.writable && ['string','textarea'].indexOf(spec.kind)!==-1;
+            var spec=fields.getField(state.meta,d.issueTypeId,'description');
+            return usesStandardDescription(d) && spec && spec.supported && spec.writable && ['string','textarea'].indexOf(spec.kind)!==-1;
+        }
+        function usesStandardDescription(d) {
+            if (!d || d.projectKey!=='DEVOPS' || !d.templateId || !state.meta) return false;
+            var requirements=validation.devopsRequirements(state.meta,d.issueTypeId);
+            return !!requirements && profiles.isStandardDevopsTemplate(state.settings,d,requirements.kind);
         }
         function formattedDescription(d,value) {
             if(typeof value!=='string' || !value.trim() || !canFormatDescription(d))return {value:value,automatic:false};
             var spec=fields.getField(state.meta,d.issueTypeId,'description'),formatted;
-            try {formatted=validation.formatDevopsDescription(state.meta,d.issueTypeId,value);} catch(error){return {value:value,automatic:false};}
+            try {formatted=validation.formatDevopsDescription(state.meta,d.issueTypeId,value,true);} catch(error){return {value:value,automatic:false};}
             if(typeof formatted!=='string' || !formatted.trim() || spec.maxLength && formatted.length>spec.maxLength)return {value:value,automatic:false};
             return {value:formatted,automatic:true};
         }
@@ -330,7 +332,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 return state.draft.protectedFields[id] === true && field && field.kind === 'user';
             });
             if (isAutomaticReporter(state.draft))explicit.push('reporter');
-            return {relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit,
+            return {descriptionFormat:state.settings.descriptionFormat || 'markdown',requireStructuredDescription:usesStandardDescription(state.draft),relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit,
                 attachments:state.draft.attachments.filter(function(a) {return a.status==='uploaded' || runtimeFiles.has(a.id);})};
         }
         function currentQuestions(questions,result) {
@@ -659,6 +661,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     var result = await ai.assist(requestInput,{signal:run.abort.signal});
                     if (!current(run,snapshot)) return;
                     if (durableGuard()) throw {code:'conflict'};
+                    if (id==='description' && result.fields && typeof result.fields.description==='string') {
+                        result=Object.assign({},result,{fields:Object.assign({},result.fields,{description:formattedDescription(state.draft,result.fields.description).value})});
+                    }
                     state.draft = drafts.applyFieldProposal(state.draft,id,action,result,snapshot);
                     providerUsage = result.usage || null;
                     state.assistance = {fieldId:id,action:action,status:'ready',error:null,
@@ -723,6 +728,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                         state.generationFieldIds.forEach(function(id) {
                             if (result.fields && Object.prototype.hasOwnProperty.call(result.fields, id)) generated[id] = result.fields[id];
                         });
+                        if (typeof generated.description==='string') generated.description=formattedDescription(state.draft,generated.description).value;
                         state.draft = drafts.applyProposal(state.draft, { fields: generated, questions: result.questions, warnings: result.warnings, evidence: result.evidence }, snapshot);
                     }
                     state.validation = unresolvedFactValidation(validation.validateFields(state.meta, state.draft.issueTypeId, state.draft.fields, policy()));
@@ -1021,7 +1027,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 var merged=validation.mergeDescriptionSections(state.meta,state.draft.issueTypeId,typeof base==='string'?base:'',proposal.descriptionSections,state.draft.templateId);
                 rejected=rejected.concat(merged.rejected);appliedSections=merged.applied;
                 if(appliedSections.length) {
-                    var checkedDescription=validatedChatField('description',merged.description);
+                    var checkedDescription=validatedChatField('description',formattedDescription(state.draft,merged.description).value);
                     if(checkedDescription.ok)patch.description=checkedDescription.value;
                     else {appliedSections.forEach(function(id) {rejected.push({id:id,message:'Описание недоступно для автоматического заполнения или превышен лимит Jira.'});});appliedSections=[];}
                 }

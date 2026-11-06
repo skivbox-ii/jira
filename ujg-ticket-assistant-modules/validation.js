@@ -78,6 +78,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         {id:'verifier',label:'Кто проверяет',aliases:['проверяющий','проверяющая команда','проверку выполнит','проверку проводит','проверку выполняет','verifier'],question:'Кто проверяет результат развёртывания?'},
         {id:'impact',label:'Влияние',aliases:['основание критического приоритета','impact'],question:'Что упало или недоступно и какую разработку, проверку или демонстрацию это остановило? Укажите основание критического приоритета.'},
         {id:'buildLog',label:'Лог сборки',aliases:['логи сборки','build log'],question:'Для ошибки пайплайна добавьте лог сборки и укажите упавший шаг.'},
+        {id:'due',label:'Срок (опционально)',aliases:['срок','due date','deadline'],question:''},
         {id:'extra',label:'Дополнительно',aliases:[],question:''}
     ];
     function sectionKey(text) {
@@ -104,9 +105,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     function descriptionSectionDefinitions(meta,typeId,templateId) {
         var requirements=devopsRequirements(meta,typeId),kind=requirements && requirements.kind;
         if(!kind && ['task','bug','deployment'].indexOf(templateId)!==-1)kind=templateId;
-        var ids={task:['goal','work','location','acceptance','links','impact','extra'],
-            bug:['actual','expected','steps','location','evidence','configuration','version','conditions','acceptance','links','buildLog','impact','extra'],
-            deployment:['location','release','order','window','verification','verifier','links','impact','extra']}[kind];
+        var ids={task:['goal','work','location','acceptance','links','impact','due','extra'],
+            bug:['actual','expected','steps','location','evidence','configuration','version','conditions','acceptance','links','buildLog','impact','due','extra'],
+            deployment:['location','release','order','window','verification','verifier','links','impact','due','extra']}[kind];
         if(!ids)return [];
         var required={task:['goal','work','location','acceptance'],bug:['actual','expected','steps','location','evidence','acceptance'],
             deployment:['location','release','order','window','verification']}[kind];
@@ -175,15 +176,89 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return /^\s*(?:(?:нужно|необходимо|требуется|прошу)\s+)?(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|deploy|upgrade|rollout)\s/i.test(prefix) &&
             !/(?:^|[\s,:])(?:текущ\p{L}*|исходн\p{L}*|предыдущ\p{L}*|стар\p{L}*|уже|раньше)(?=$|[\s,:])/iu.test(prefix);
     }
-    function normalizedDescriptionText(description) {
-        return String(description || '').replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70}):\2/g,'$1\n$3:')
-            .replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70})\2\s*:/g,'$1\n$3:');
+    function codeRanges(text) {
+        var ranges=[],open=null,offset=0;
+        text.split('\n').forEach(function(line) {
+            var fence=/^[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line);
+            if(fence) {
+                if(!open)open={start:offset,mark:fence[1][0],length:fence[1].length};
+                else if(fence[1][0]===open.mark && fence[1].length>=open.length && !fence[2].trim()) {ranges.push({start:open.start,end:offset+line.length});open=null;}
+            }
+            offset+=line.length+1;
+        });
+        if(open)ranges.push({start:open.start,end:text.length});
+        function covered(index) {return ranges.some(function(range){return index>=range.start && index<range.end;});}
+        var pattern=/\{(code|noformat)(?::[^}\n]*)?\}/gi,match;
+        open=null;
+        while((match=pattern.exec(text))) {
+            if(covered(match.index))continue;
+            if(!open)open={start:match.index,kind:match[1].toLowerCase()};
+            else if(match[1].toLowerCase()===open.kind) {ranges.push({start:open.start,end:pattern.lastIndex});open=null;}
+        }
+        if(open)ranges.push({start:open.start,end:text.length});
+        pattern=/`+/g;open=null;
+        while((match=pattern.exec(text))) {
+            if(covered(match.index))continue;
+            if(!open)open={start:match.index,length:match[0].length};
+            else if(match[0].length===open.length) {ranges.push({start:open.start,end:pattern.lastIndex});open=null;}
+        }
+        if(open) {var end=text.indexOf('\n',open.start);ranges.push({start:open.start,end:end<0?text.length:end});}
+        return ranges.sort(function(a,b){return a.start-b.start;});
     }
-    function readSections(description) {
+    function codeAt(ranges,index) {return ranges.some(function(range){return index>=range.start && index<range.end;});}
+    function maskCode(text) {
+        var cursor=0,result='';codeRanges(text).forEach(function(range){result+=text.slice(cursor,range.start)+text.slice(range.start,range.end).replace(/[^\r\n]/g,' ');cursor=range.end;});
+        return result+text.slice(cursor);
+    }
+    function descriptionParts(text) {
+        var parts=[],cursor=0;
+        function prose(value) {(value.match(/[\s\S]+?(?:[.!?](?=\s|$)|\n|$)/g) || []).forEach(function(part){parts.push({text:part,code:false});});}
+        codeRanges(text).forEach(function(range){prose(text.slice(cursor,range.start));parts.push({text:text.slice(range.start,range.end),code:true});cursor=range.end;});
+        prose(text.slice(cursor));return parts;
+    }
+    function sectionMarkers(text,definitions) {
+        var sections=definitions || devopsSections,labels=[];
+        sections.forEach(function(section) {
+            var original=devopsSections.find(function(item){return item.id===section.id;});
+            [section.label].concat(original && original.aliases || []).forEach(function(label){if(!labels.includes(label))labels.push(label);});
+        });
+        var names=labels.sort(function(a,b){return b.length-a.length;}).map(function(label){return label.split('').map(function(character){return '.*+?^${}()|[]'.includes(character) || character.charCodeAt(0)===92?String.fromCharCode(92)+character:character;}).join('').replace(/ /g,'[ \\t]+');}).join('|');
+        var pattern=new RegExp('(^|\\s)(?:#{1,6}[ \\t]+|h[1-6]\\.[ \\t]+|[-•][ \\t]+)?(?:\\*{1,2}|__)?('+names+')(?:[ \\t]*:(?:\\*{1,2}|__)?|(?:\\*{1,2}|__)[ \\t]*:|(?:\\*{1,2}|__)?(?=[ \\t]*(?:\\r?\\n|$)))','gim');
+        var markers=[],match,ranges=codeRanges(text);
+        while((match=pattern.exec(text))) {
+            var start=match.index+match[1].length,end=match.index+match[0].length,label=match[2],key=sectionKey(label);
+            if(codeAt(ranges,start))continue;
+            var lineStart=text.lastIndexOf('\n',start-1)+1,linePrefix=text.slice(lineStart,start);
+            var labeledLine=markers.some(function(marker){return marker.start>=lineStart && !marker.inline;});
+            if(linePrefix.trim() && !/[.!?;]$/.test(linePrefix.trimEnd()) && !labeledLine)continue;
+            if(!text.slice(start,end).includes(':') && linePrefix.trim())continue;
+            var definition=sections.find(function(section){var original=devopsSections.find(function(item){return item.id===section.id;});return [section.label].concat(original && original.aliases || []).some(function(alias){return sectionKey(alias)===key;});});
+            markers.push({start:start,end:end,key:key,label:label,id:definition.id,canonical:definition.label,inline:!!linePrefix.trim()});
+        }
+        return markers;
+    }
+    function renderSectionMarkers(text,markers,wiki,canonical) {
+        var cursor=0,result='',newline=text.includes('\r\n')?'\r\n':'\n';
+        markers.forEach(function(marker) {
+            result+=text.slice(cursor,marker.start);
+            if(marker.inline)result+=newline;
+            result+=wiki?'*'+marker.canonical+':*':(canonical?marker.canonical:marker.label)+':';cursor=marker.end;
+        });
+        return result+text.slice(cursor);
+    }
+    function normalizedDescriptionText(description) {
+        var text=String(description || '');return renderSectionMarkers(text,sectionMarkers(text),false);
+    }
+    function jiraTemplateDescription(meta,typeId,text) {
+        var requirements=devopsRequirements(meta,typeId);
+        if(typeof text!=='string' || !requirements || requirements.kind==='unsupported')return text;
+        return renderSectionMarkers(text,sectionMarkers(text,descriptionSectionDefinitions(meta,typeId)),true);
+    }
+    function readSections(description,infer) {
         var result=Object.create(null),current=[],intro=[],headed=false;
         // Models use both **Label:** and **Label**:, including several headings
         // on one line. Strip heading formatting before assigning the actual text.
-        var text=normalizedDescriptionText(description);
+        var text=normalizedDescriptionText(maskCode(String(description || '')));
         text.split(/\r?\n/).forEach(function(line) {
             var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
             var colon=clean.indexOf(':'),label=colon===-1 ? clean : clean.slice(0,colon);
@@ -203,9 +278,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 current.forEach(function(id) {result[id]+='\n'+line;});
             }
         });
+        if(infer===false)return result;
         // Credit literal facts in task prose without rewriting the description or
         // inventing missing data. Links/tags/examples alone cannot name a target.
-        var facts=[intro.join('\n'),result.work || '',result.actual || '',result.steps || ''].join('\n');
+        var facts=[intro.join('\n'),result.work || '',result.actual || '',result.steps || '',result.location || '',result.extra || ''].join('\n');
         if(!meaningful(result.location)) {
             var location=/(?:в|на)\s+(?:(?:сред[еу]|стенд[еу]|окружени[еи]|контур[еу])\s+)?(?:[«"'`])?(DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)(?=$|[^a-z0-9_-])/ig;
             var match,locations=[];
@@ -242,7 +318,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         }
         // A provider fallback may preserve the user's original paragraph. Credit
         // explicit operational steps and an attributed observable check verbatim.
-        var paragraph=intro.join('\n');
+        var paragraph=facts;
         if(!meaningful(result.order)) {
             var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*|скрипт\S*|файл\S*|пакет\S*|бандл\S*)[^.!?\n]*|(?:перезапустить|перезагрузить)\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
             var unresolvedOrder=/(?:порядок(?:\s+действий)?)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н)|неизвест)/i.test(paragraph);
@@ -259,42 +335,47 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
     }
-    function formatDevopsDescription(meta,typeId,description) {
+    function formatDevopsDescription(meta,typeId,description,strict) {
         var requirements=devopsRequirements(meta,typeId);
         if(typeof description!=='string' || !description.trim() || !requirements || requirements.kind==='unsupported')return description;
-        var structured=normalizedDescriptionText(description).split(/\r?\n/).some(function(line) {
-            var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
-            var key=sectionKey(clean.split(':')[0]);
-            return devopsSections.some(function(section) {
-                return [section.label].concat(section.aliases).some(function(label) {return sectionKey(label)===key;});
-            });
-        });
-        if(structured)return description;
+        var definitions=descriptionSectionDefinitions(meta,typeId),markers=sectionMarkers(description,definitions),normalized=normalizedDescriptionText(description);
+        var complete=requirements.sections.every(function(section){return markers.some(function(marker){return marker.id===section.id;});});
+        var links=readSections(description,false).links || '';
+        if(complete && dedupeReferences(links)===links)return markers.some(function(marker){return marker.inline;})?renderSectionMarkers(description,markers,false,true):description;
         var parsed=readSections(description),groups=Object.create(null),extra=[];
-        var order={task:['goal','work','location','acceptance','links'],
-            bug:['actual','expected','steps','location','evidence','acceptance','links'],
-            deployment:['location','release','order','window','verification','links']}[requirements.kind];
+        var order=definitions.filter(function(section){return section.id!=='extra';}).map(function(section){return section.id;});
         var known=order.filter(function(id) {
-            return meaningful(parsed[id]) && description.indexOf(parsed[id].trim())!==-1;
+            return meaningful(parsed[id]) && normalized.indexOf(parsed[id].trim())!==-1;
         });
-        if(!known.length)return description;
+        function editableSkeleton() {
+            var newline=description.includes('\r\n')?'\r\n':'\n';
+            return definitions.filter(function(section){return section.required;}).map(function(section){return section.label+': ';}).join(newline+newline)+newline+newline+'Дополнительно:'+newline+description;
+        }
+        if(!known.length && !markers.length)return strict===true?editableSkeleton():description;
         function append(id,value) {
             if(!groups[id])groups[id]=[];
             groups[id].push(value);
         }
         // A decimal or version dot is not a sentence boundary. Keep each source
         // sentence exactly once, moving only literal facts into template groups.
-        var sentences=description.match(/[\s\S]+?(?:[.!?](?=\s|$)|\n|$)/g) || [description];
-        sentences.forEach(function(part) {
-            var sentence=part.trim();
+        var active=null;
+        descriptionParts(normalized).forEach(function(part) {
+            if(part.code) {if(active && active!=='extra' && active!=='custom')append(active,part.text);else extra.push(part.text);return;}
+            var sentence=part.text.trim();
             if(!sentence)return;
             if(/ссылк|репозитори|документаци|баз[а-яё]* знаний/i.test(sentence) &&
                 /нет(?:$|[.\s])|неизвест|отсутств|не (?:указан|предоставлен)|требуется для создания/i.test(sentence)) {
                 append('links',sentence);return;
             }
-            if(/^[^:\n]{1,80}:\s/.test(sentence)) {extra.push(sentence);return;}
+            var heading=/^([^:\n]{1,80}):[ \t]*([\s\S]*)$/.exec(sentence);
+            if(heading && !/^https?$/i.test(heading[1]) && /^[a-zа-яё][^:\n]{0,79}$/i.test(heading[1])) {
+                var definition=definitions.find(function(section){var original=devopsSections.find(function(item){return item.id===section.id;});return [section.label].concat(original.aliases).some(function(label){return sectionKey(label)===sectionKey(heading[1]);});});
+                if(definition) {active=definition.id;if(active==='extra')extra.push(heading[2]);else append(active,heading[2]);return;}
+                active='custom';extra.push(sentence);return;
+            }
+            if(active==='custom') {extra.push(sentence);return;}
             var matches=known.filter(function(id) {return sentence.indexOf(parsed[id].trim())!==-1;});
-            if(!matches.length) {extra.push(sentence);return;}
+            if(!matches.length) {if(active && active!=='extra')append(active,sentence);else extra.push(sentence);return;}
             var id=matches.indexOf('release')!==-1 ? 'release' : matches[0];
             if(id==='release') ['location','window'].forEach(function(other) {
                 if(matches.indexOf(other)===-1)return;
@@ -305,10 +386,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         });
         var blocks=[];
         order.forEach(function(id) {
-            if(!groups[id])return;
+            if(!groups[id] && !requirements.sections.some(function(section){return section.id===id;}))return;
             var section=devopsSections.find(function(section) {return section.id===id;});
             var label=id==='location' && requirements.kind==='deployment' ? 'Среда' : section.label;
-            blocks.push(label+': '+groups[id].join('\n'));
+            blocks.push(label+': '+(id==='links'?dedupeReferences((groups[id] || []).join('\n')):(groups[id] || []).join('\n')));
         });
         if(extra.length)blocks.push('Дополнительно:\n'+extra.join('\n'));
         var formatted=blocks.join('\n\n');
@@ -321,7 +402,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return result.questions.map(function(q) {return q.id;}).sort().join('|');
         }
         // Formatting grants no new authority and may not hide a known blocker.
-        return missing(formatted)===missing(description) ? formatted : description;
+        return missing(formatted)===missing(description) ? formatted : strict===true?editableSkeleton():description;
     }
     function meaningful(value) {
         var text=String(value || '').replace(/[*_`#{}<>\[\]]/g,'').replace(/\s+/g,' ').trim();
@@ -361,6 +442,17 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return referenceUrl(candidate.replace(/[.,;]+$/,''));
         });
     }
+    function dedupeReferences(text) {
+        var seen=new Set(),ranges=codeRanges(text),offset=0,newline=text.includes('\r\n')?'\r\n':'\n';
+        return text.split(/\r?\n/).filter(function(line) {
+            var inCode=codeAt(ranges,offset);offset+=line.length+newline.length;
+            if(inCode)return true;
+            var literal=line.trim(),references=referenceCandidates(literal),reference=references.length===1?references[0]:null;
+            if(!reference || !reference.ok || !(literal===reference.url || literal.startsWith(reference.url) && /^[.,;]$/.test(literal.slice(reference.url.length))))return true;
+            if(seen.has(reference.url))return false;
+            seen.add(reference.url);return true;
+        }).join(newline);
+    }
     function simpleMissingReference(value) {
         var text=String(value).trim().replace(/^[-•]\s*/,'').replace(/[*_`]/g,'');
         return /^(?:нет|неизвестно|не указана|не предоставлена|отсутствует)\.?$/i.test(text) ||
@@ -368,8 +460,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             /^неизвестно:\s*ссылка на (?:репозиторий|документацию|базу знаний)(?:,\s*(?:репозиторий|документацию|базу знаний))*(?:\s+или\s+(?:репозиторий|документацию|базу знаний))?(?:\s*\(требуется для создания\))?\.?$/i.test(text);
     }
     function descriptionHeaders(description) {
-        var headers=[],offset=0,lines=description.split('\n');
+        var headers=[],offset=0,lines=description.split('\n'),ranges=codeRanges(description);
         lines.forEach(function(line,index) {
+            if(codeAt(ranges,offset)) {offset+=line.length+1;return;}
             var raw=line.replace(/\r$/,''),colon=raw.indexOf(':'),marked=/^\s*(?:#{1,6}\s|h[1-6]\.\s|\*{1,2}|__)/.test(raw);
             var label=(colon===-1?raw:raw.slice(0,colon)).replace(/^\s*(?:#{1,6}\s*|h[1-6]\.\s*)/,'');
             var key=sectionKey(label);
@@ -424,7 +517,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             result.questions.push({id:(meta.projectKey==='DEVOPS'?'devops:':'template:')+id,text:text,required:true});
         }
         if(requirements.kind==='unsupported')missing('type','Для DEVOPS выберите тип «Задача», «Ошибка» или «Задача развёртывания».','issuetype');
-        var sections=readSections(values.description),summary=typeof values.summary==='string'?values.summary.trim():'';
+        var structured=meta.projectKey==='DEVOPS' && policy.requireStructuredDescription===true && (!policy.templateId || policy.templateId===requirements.kind);
+        var inlineStructure=structured && sectionMarkers(String(values.description || ''),descriptionSectionDefinitions(meta,typeId)).some(function(marker){return marker.inline;});
+        var sections=readSections(values.description,!structured),summary=typeof values.summary==='string'?values.summary.trim():'';
         if(!meaningful(summary) || /^(?:сделать обновление|задача|ошибка|тест|test|обновить|развернуть)[.!?\s]*$/i.test(summary))
             missing('summary','Укажите содержательную тему с действием или сбоем, сервисом и местом.','summary');
         requirements.sections.forEach(function(s) {
@@ -458,6 +553,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 !(meaningful(sections.buildLog) && (url(sections.buildLog) || attached || /фрагмент|error|failed/i.test(sections.buildLog)) && /шаг|stage|step|job/i.test(sections.buildLog)))
                 missing('buildLog',devopsSections.find(function(s) {return s.id==='buildLog';}).question);
         }
+        if(inlineStructure && !result.questions.length)missing('structure','Начните каждый раздел выбранного шаблона с новой строки.');
         if(meta.projectKey!=='DEVOPS')return;
         var priority=fields.getField(meta,typeId,'priority');
         var value=Object.prototype.hasOwnProperty.call(values,'priority') ? values.priority : priority && priority.defaultApplicable && priority.defaultValue;
@@ -493,7 +589,11 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         Object.keys(values).forEach(function(id) {
             var field = fields.getField(meta, typeId, id);
             if (id === 'project' || id === 'issuetype' || !field || !field.supported || !field.writable) { error(id, 'Field is unknown, unsupported or not writable: ' + id); return; }
-            var encoded = encode(field, values[id], policy);
+            var value=values[id],requirements=devopsRequirements(meta,typeId);
+            var wiki=id==='description' && policy.requireStructuredDescription===true && policy.descriptionFormat==='markdown' && requirements && requirements.kind!=='unsupported' && (!policy.templateId || policy.templateId===requirements.kind);
+            if(wiki && typeof value==='string')value=jiraTemplateDescription(meta,typeId,value);
+            var encoded = encode(field, value, policy);
+            if(wiki && typeof value==='string' && field.maxLength && value.length>field.maxLength)encoded.error='Описание в формате Jira превышает лимит '+field.maxLength+' символов (получилось '+value.length+'). Сократите текст перед созданием.';
             if (!encoded.ok) error(id, encoded.error || 'Invalid value for ' + field.name + ' (' + id + ')');
             else output[id] = encoded.value;
         });
@@ -530,5 +630,5 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, jiraTemplateDescription:jiraTemplateDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
 });

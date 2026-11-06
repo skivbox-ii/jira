@@ -1,10 +1,44 @@
 define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, fields) {
     'use strict';
     var nextId = 0;
+    // Render a small Markdown subset with DOM text nodes only. Never accept HTML.
+    function markdown($, host, text) {
+        function inline(parent, value) {
+            var pattern = /(!?\[[^\]\n]+\]\([^\s]+\)|\*\*[^*\n]+\*\*|`[^`\n]+`)/g, match, offset = 0;
+            while ((match = pattern.exec(value))) {
+                parent.append(document.createTextNode(value.slice(offset, match.index)));
+                var token = match[0], link = /^\[([^\]]+)\]\(([^\s]+)\)$/.exec(token), node = null;
+                if (link && /^https?:\/\//i.test(link[2])) {
+                    try {
+                        var url = new URL(link[2]);
+                        if (!url.username && !url.password && /^https?:$/.test(url.protocol)) node = $('<a>').attr({href:url.href,target:'_blank',rel:'noopener noreferrer'}).text(link[1]);
+                    } catch (ignored) { /* Invalid links remain literal text. */ }
+                } else if (token.slice(0,2) === '**') node = $('<strong>').text(token.slice(2,-2));
+                else if (token[0] === '`') node = $('<code>').text(token.slice(1,-1));
+                parent.append(node || document.createTextNode(token));offset = pattern.lastIndex;
+            }
+            parent.append(document.createTextNode(value.slice(offset)));
+        }
+        var list = null, code = null;
+        text.replace(/\r\n?/g,'\n').split('\n').forEach(function(line) {
+            if (/^\s*```/.test(line)) {if(code)code=null;else {code=$('<code>');host.append($('<pre>').append(code));}list=null;return;}
+            if (code) {code.append(document.createTextNode(line+'\n'));return;}
+            if (!line.trim()) {list=null;return;}
+            var heading = /^\s{0,3}#{1,6}\s+(.+?)(?:\s+#+)?$/.exec(line), item = /^\s*(?:([-+*])|\d+[.)])\s+(.+)$/.exec(line);
+            if (item) {var tag=item[1]?'ul':'ol';if(!list || list[0].tagName.toLowerCase()!==tag){list=$('<'+tag+'>');host.append(list);}inline($('<li>').appendTo(list),item[2]);return;}
+            list=null;
+            var row=$('<p>').appendTo(host), label=/^\s*(?:\*\*)?([^:*\n]{1,65})(?:\*\*)?\s*:(?:\*\*)?\s*(.*)$/.exec(line);
+            if (heading) inline($('<strong>').appendTo(row),heading[1]);
+            else if(label && !/[\[\]()<>]/.test(label[1])) {row.append($('<strong>').text(label[1]+': '));inline(row,label[2]);}
+            else if (/^(Цель|Что сделать|Где|Среда|Критерии при[её]мки|Ссылки|Что происходит|Что ожидалось|Шаги воспроизведения|Логи ?\/ ?скриншоты|Конфигурация|Версия|Условия возникновения|Версия и состав|Версия\/артефакт и состав|Порядок|Порядок действий|Окно|Проверка|Кто проверяет|Влияние|Лог сборки|Дополнительно)\s*$/i.test(line.trim())) row.append($('<strong>').text(line.trim()));
+            else inline(row,line);
+        });
+    }
     function create(options) {
         var $ = options.$, host, label, body, errors, control, panel, chips, candidates, search, toggle, boards;
         var current = {}, mode, dead = false, sequence = 0, request = null, userOptions = [], query = '', outside, escape;
         var uid = 'ta-field-' + (++nextId), cache = Object.create(null), localEdit = null;
+        var preview = null, previewToggle = null, previewEditing = false;
         var boardId = null, boardChoices = [], needsBoard = false, partial = false;
         var searchTimer = null;
         var relationSearchPending = false, relationSearchError = null;
@@ -119,8 +153,17 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     .on('click',function() {boardId=null;userOptions=[];runSearch();}));
             }
         }
+        function showDescription() {
+            if (!preview) return;
+            var available = current.descriptionPreview === true && !!String(current.value || '').trim();
+            previewToggle.prop('hidden', !available).attr({'aria-expanded':String(available && previewEditing),'aria-label':previewEditing?'Показать описание':'Редактировать описание'})
+                .text(previewEditing ? 'Показать описание' : 'Редактировать');
+            preview.prop('hidden', !available || previewEditing);
+            control.prop('hidden', available && !previewEditing);
+            preview.empty();if(available)markdown($,preview,String(current.value));
+        }
         function build(kind) {
-            cancelSearch(); body.empty(); control = null; panel = null; query = ''; userOptions = []; localEdit = null;
+            cancelSearch(); body.empty(); preview=null;previewToggle=null;previewEditing=false; control = null; panel = null; query = ''; userOptions = []; localEdit = null;
             relationSearchPending=false;relationSearchError=null;
             if (kind === 'picker') {
                 toggle = $('<button type="button" class="ta-picker" data-ta-picker aria-haspopup="listbox" aria-expanded="false">').attr('id', uid).append($('<span>'), icon('ChevronDown'));
@@ -164,19 +207,28 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 if (kind === 'number') control.attr('step', 'any');
                 if (kind === 'datetime') control.attr('placeholder', 'YYYY-MM-DDTHH:mm:ss+HH:mm');
                 control.on('input', function() {
+                    if (preview) previewEditing=true;
                     var value = control.val();
                     if (kind === 'number') value = value === '' ? null : Number(value);
                     if (kind === 'labels') value = value.split(',').map(function(v) {return v.trim();}).filter(Boolean);
                     if (kind === 'number' || kind === 'labels') localEdit = JSON.stringify(value);
                     options.onChange(current.field.id, value);
                 }); body.append(control);
+                if (kind === 'textarea' && current.field.id === 'description') {
+                    previewToggle=$('<button type="button" class="ta-description-toggle" data-ta-description-edit>').attr({'aria-controls':uid+'-preview '+uid});
+                    preview=$('<div class="ta-description-preview" data-ta-description-preview role="region" aria-label="Просмотр описания">').attr('id',uid+'-preview');
+                    body.prepend(previewToggle,preview);
+                    previewToggle.on('click',function(){previewEditing=!previewEditing;showDescription();if(previewEditing)control.trigger('focus');});
+                    control.on('taEditDescription',function(){previewEditing=true;showDescription();});
+                    control.on('input.taPreview',function(){current.value=control.val();if(preview) {preview.empty();markdown($,preview,String(current.value));}});
+                }
             }
             label.attr('for', uid);
         }
         function update(value) {
             if (dead) return; var oldId = current.field && current.field.id, oldScope=current.scopeKey, oldKind=current.field && current.field.kind; current = value;
             if (oldId !== current.field.id || oldScope !== current.scopeKey || oldKind !== current.field.kind) {
-                cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();boardId=null;boardChoices=[];needsBoard=false;partial=false;
+                previewEditing=false;cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();boardId=null;boardChoices=[];needsBoard=false;partial=false;
                 relationSearchPending=false;relationSearchError=null;
                 query='';if(search) search.val('');
                 if(panel) {close();boards.empty();}
@@ -211,6 +263,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     if (control.val() !== text) control.val(text);
                 }
             }
+            showDescription();
         }
         function mount(el) {
             host = $(el).addClass('ta-field'); label = $('<label>'); body = $('<div class="ta-field-body">');

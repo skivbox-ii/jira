@@ -10,7 +10,7 @@ define('_ujgTA_profiles', [], function() {
             ];
         }
         return {
-            schemaVersion: 1, revision: 0, activeProfileId: 'universal', tokenBudget: {context:32768,reserve:4096},
+            schemaVersion: 1, revision: 0, activeProfileId: 'universal', descriptionFormat:'markdown', tokenBudget: {context:32768,reserve:4096},
             profiles: [
                 { id: 'universal', name: 'Универсальный', allowAssignee: false, instructions: 'Пиши по-русски. Сформулируй содержательную тему с действием или сбоем и местом. Описывай только известные факты, цель и критерии приёмки. Сохрани предоставленные ссылки. Уточняй недостающие сведения. Не назначай исполнителя самостоятельно.', templates: templates() },
                 { id: 'devops', name: 'DEVOPS', allowAssignee: false, instructions: 'Пиши по-русски. Тема должна быть содержательной: действие или сбой и место. Обязательны критерии приёмки и ссылки; запроси их, если они отсутствуют. Не назначай инженера вручную. Связь с историей желательна, но её отсутствие не блокирует разовую задачу. Для ошибки «с поля» без доступных логов запроси конфигурацию, версию, условия и явную причину отсутствия логов. Для развёртывания укажи среду DEV/TEST/PREPROD, версию/артефакт, состав, порядок действий, окно, проверку результата и кто проверяет. Не выдумывай недостающие сведения.', templates: templates() }
@@ -21,6 +21,14 @@ define('_ujgTA_profiles', [], function() {
     function normalizedName(value) {return String(value || '').trim().toLocaleLowerCase('ru').replace(/ё/g,'е').replace(/\s+/g,' ');}
     function isDevopsProject(project) {
         return !!project && project.key==='DEVOPS';
+    }
+    function isStandardDevopsTemplate(settings,draft,kind) {
+        if(!settings || !draft || draft.projectKey!=='DEVOPS' || settings.activeProfileId!=='devops' ||
+            draft.templateId!==kind || !Array.isArray(settings.profiles))return false;
+        var profile=settings.profiles.find(function(p){return p.id==='devops';}),
+            template=profile && Array.isArray(profile.templates) && profile.templates.find(function(t){return t.id===draft.templateId;}),
+            standard=createDefaults().profiles.find(function(p){return p.id==='devops';}).templates.find(function(t){return t.id===kind;});
+        return !!template && !!standard && ['name','whenToUse','instructions'].every(function(key){return template[key]===standard[key];});
     }
     function forProject(settings, project) {
         if (!isDevopsProject(project) || settings.activeProfileId==='devops' || !settings.profiles.some(function(p){return p.id==='devops';}))return settings;
@@ -84,7 +92,9 @@ define('_ujgTA_profiles', [], function() {
             if (!budget || !Number.isSafeInteger(budget.context) || !Number.isSafeInteger(budget.reserve) ||
                 budget.context <= 0 || budget.reserve <= 0 || budget.reserve >= budget.context)
                 throw new Error('Бюджет и резерв должны быть положительными целыми числами; резерв меньше бюджета.');
-            value = { schemaVersion: 1, revision: input.revision, activeProfileId: string(input.activeProfileId, true), profiles: unique(input.profiles, function(profile) {
+            var descriptionFormat=input.descriptionFormat===undefined?'markdown':input.descriptionFormat;
+            if(['markdown','plain'].indexOf(descriptionFormat)===-1)throw new Error('Выберите формат описания Markdown или обычный текст.');
+            value = { descriptionFormat:descriptionFormat, schemaVersion: 1, revision: input.revision, activeProfileId: string(input.activeProfileId, true), profiles: unique(input.profiles, function(profile) {
                 if (typeof profile.allowAssignee !== 'boolean') throw new Error('Invalid allowAssignee');
                 return { id: string(profile.id, true), name: string(profile.name, true), instructions: string(profile.instructions), allowAssignee: profile.allowAssignee, templates: unique(profile.templates, function(template) {
                     if (template.issueTypeId !== null) string(template.issueTypeId, true);
@@ -111,6 +121,7 @@ define('_ujgTA_profiles', [], function() {
         try { result = validateSettings(JSON.parse(text)); }
         catch (error) { result = { ok: false, errors: [error.message], value: null }; }
         return { ok: result.ok, errors: result.errors, value: result.value, preview: result.ok ? {
+            descriptionFormat:result.value.descriptionFormat,
             profiles: result.value.profiles.map(function(profile) {
                 return { id: profile.id, name: profile.name, templates: profile.templates.map(function(template) {
                     return { id: template.id, name: template.name, issueTypeId: template.issueTypeId };
@@ -119,5 +130,5 @@ define('_ujgTA_profiles', [], function() {
         } : null };
     }
 
-    return { isDevopsProject:isDevopsProject,forProject:forProject,typeTemplateSelection:typeTemplateSelection,createDefaults: createDefaults, validateSettings: validateSettings, exportSettings: exportSettings, parseSettingsImport: parseSettingsImport };
+    return { isDevopsProject:isDevopsProject,isStandardDevopsTemplate:isStandardDevopsTemplate,forProject:forProject,typeTemplateSelection:typeTemplateSelection,createDefaults: createDefaults, validateSettings: validateSettings, exportSettings: exportSettings, parseSettingsImport: parseSettingsImport };
 });

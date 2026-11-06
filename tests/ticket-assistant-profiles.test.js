@@ -82,3 +82,43 @@ test('export uses an allowlist at every level and import previews without applyi
     result.value.profiles[0].name = 'Изменено';
     assert.notEqual(settings.profiles[0].name, 'Изменено');
 });
+
+test('description format defaults and legacy settings migrate to markdown without changing templates',()=>{
+    const p=loadUnit('profiles'),settings=p.createDefaults();assert.equal(settings.descriptionFormat,'markdown');
+    const legacy=JSON.parse(JSON.stringify(settings));delete legacy.descriptionFormat;
+    const migrated=p.validateSettings(legacy);assert.equal(migrated.ok,true);assert.equal(migrated.value.descriptionFormat,'markdown');
+    assert.deepEqual(JSON.parse(JSON.stringify(migrated.value.profiles)),legacy.profiles);assert.equal(migrated.value.revision,legacy.revision);
+});
+
+test('description format survives import export preview and rejects malformed explicit values',()=>{
+    const p=loadUnit('profiles');
+    for(const format of ['markdown','plain']) {
+        const settings=p.createDefaults();settings.descriptionFormat=format;
+        const imported=p.parseSettingsImport(p.exportSettings(settings));assert.equal(imported.ok,true);assert.equal(imported.value.descriptionFormat,format);assert.equal(imported.preview.descriptionFormat,format);
+        assert.equal(JSON.parse(p.exportSettings(imported.value)).descriptionFormat,format);
+    }
+    for(const format of [null,'','html','MARKDOWN',false,1,[],{}]) {
+        const settings=p.createDefaults();settings.descriptionFormat=format;const checked=p.validateSettings(settings);
+        assert.equal(checked.ok,false,JSON.stringify(format));assert.match(checked.errors.join(' '),/формат описания/i);
+    }
+});
+
+test('standard DEVOPS template predicate matches selected scope and unchanged default template text',()=>{
+    const p=loadUnit('profiles'),settings=p.createDefaults();settings.activeProfileId='devops';
+    for(const kind of ['task','bug','deployment']) {
+        const draft={projectKey:'DEVOPS',templateId:kind};
+        assert.equal(p.isStandardDevopsTemplate(settings,draft,kind),true);
+        settings.profiles[1].templates.find(t=>t.id===kind).issueTypeId='10001';
+        assert.equal(p.isStandardDevopsTemplate(settings,draft,kind),true,'Jira mapping does not change template text');
+        for(const key of ['name','instructions','whenToUse']) {
+            const changed=JSON.parse(JSON.stringify(settings));changed.profiles[1].templates.find(t=>t.id===kind)[key]+=' custom';
+            assert.equal(p.isStandardDevopsTemplate(changed,draft,kind),false,key);
+        }
+        assert.equal(p.isStandardDevopsTemplate(settings,{...draft,projectKey:'APP'},kind),false);
+        assert.equal(p.isStandardDevopsTemplate(settings,draft,kind==='task'?'bug':'task'),false);
+    }
+    assert.equal(p.isStandardDevopsTemplate({...settings,activeProfileId:'universal'},{projectKey:'DEVOPS',templateId:'task'},'task'),false);
+    for(const [s,d,k] of [[null,null,null],[settings,null,'task'],[settings,{projectKey:'DEVOPS',templateId:'custom'},'custom'],[{activeProfileId:'devops',profiles:[]},{projectKey:'DEVOPS',templateId:'task'},'task']]) {
+        assert.equal(p.isStandardDevopsTemplate(s,d,k),false);
+    }
+});

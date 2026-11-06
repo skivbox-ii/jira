@@ -1,4 +1,4 @@
-define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'], function(drafts, fields, validation) {
+define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation', '_ujgTA_profiles'], function(drafts, fields, validation, profiles) {
     'use strict';
     var locks = new Map(), sequence = 0;
     function canonical(value) {
@@ -56,7 +56,9 @@ define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'],
             var reporter=d.fields.reporter;
             if (options.currentReporterName && d.protectedFields.reporter !== true && reporter && typeof reporter === 'object' &&
                 !Array.isArray(reporter) && Object.keys(reporter).length===1 && reporter.name===options.currentReporterName)explicit.push('reporter');
-            return {allowAssignee:profile.allowAssignee === true,explicitUserFields:explicit};
+            var requirements=validation.devopsRequirements(meta,d.issueTypeId);
+            return {descriptionFormat:settings.descriptionFormat || 'markdown',requireStructuredDescription:!!requirements && profiles.isStandardDevopsTemplate(settings,d,requirements.kind),
+                allowAssignee:profile.allowAssignee === true,explicitUserFields:explicit};
         }
         async function attachmentLimits(d, files) {
             var meta = await api.getAttachmentMeta();

@@ -64,7 +64,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var entry=fields.get(id);if (!entry) return;
             entry.host.parents('details').prop('open',true);
             var input=entry.host.find('input,textarea,[data-ta-picker]').first()[0];
-            if (input) {input.focus();if (input.scrollIntoView) input.scrollIntoView({block:'nearest'});}
+            if (input) {$(input).trigger('taEditDescription');input.focus();if (input.scrollIntoView) input.scrollIntoView({block:'nearest'});}
         }
         function scheduleFields() {
             if(fieldsQueued) return;fieldsQueued=true;
@@ -480,7 +480,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     return q.id==='devops:links' && errors.includes(q.text);
                 });
                 entry.view.update({field:field, value:displayedValue, errors:linkQuestion?errors.filter(function(message){return message!==linkQuestion.text;}):errors,
-                    scopeKey:JSON.stringify([d.projectKey,d.issueTypeId,state.meta && state.meta.signature]),
+                    scopeKey:JSON.stringify([d.projectKey,d.id,d.issueTypeId,d.templateId,state.meta && state.meta.signature]),
+                    descriptionPreview:field.id==='description' && state.standardDescriptionTemplate===true && (!state.settings || state.settings.descriptionFormat===undefined || state.settings.descriptionFormat==='markdown'),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
                     'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':

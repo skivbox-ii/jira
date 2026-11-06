@@ -99,7 +99,7 @@ define('_ujgTA_profiles', [], function() {
             ];
         }
         return {
-            schemaVersion: 1, revision: 0, activeProfileId: 'universal', tokenBudget: {context:32768,reserve:4096},
+            schemaVersion: 1, revision: 0, activeProfileId: 'universal', descriptionFormat:'markdown', tokenBudget: {context:32768,reserve:4096},
             profiles: [
                 { id: 'universal', name: 'Универсальный', allowAssignee: false, instructions: 'Пиши по-русски. Сформулируй содержательную тему с действием или сбоем и местом. Описывай только известные факты, цель и критерии приёмки. Сохрани предоставленные ссылки. Уточняй недостающие сведения. Не назначай исполнителя самостоятельно.', templates: templates() },
                 { id: 'devops', name: 'DEVOPS', allowAssignee: false, instructions: 'Пиши по-русски. Тема должна быть содержательной: действие или сбой и место. Обязательны критерии приёмки и ссылки; запроси их, если они отсутствуют. Не назначай инженера вручную. Связь с историей желательна, но её отсутствие не блокирует разовую задачу. Для ошибки «с поля» без доступных логов запроси конфигурацию, версию, условия и явную причину отсутствия логов. Для развёртывания укажи среду DEV/TEST/PREPROD, версию/артефакт, состав, порядок действий, окно, проверку результата и кто проверяет. Не выдумывай недостающие сведения.', templates: templates() }
@@ -110,6 +110,14 @@ define('_ujgTA_profiles', [], function() {
     function normalizedName(value) {return String(value || '').trim().toLocaleLowerCase('ru').replace(/ё/g,'е').replace(/\s+/g,' ');}
     function isDevopsProject(project) {
         return !!project && project.key==='DEVOPS';
+    }
+    function isStandardDevopsTemplate(settings,draft,kind) {
+        if(!settings || !draft || draft.projectKey!=='DEVOPS' || settings.activeProfileId!=='devops' ||
+            draft.templateId!==kind || !Array.isArray(settings.profiles))return false;
+        var profile=settings.profiles.find(function(p){return p.id==='devops';}),
+            template=profile && Array.isArray(profile.templates) && profile.templates.find(function(t){return t.id===draft.templateId;}),
+            standard=createDefaults().profiles.find(function(p){return p.id==='devops';}).templates.find(function(t){return t.id===kind;});
+        return !!template && !!standard && ['name','whenToUse','instructions'].every(function(key){return template[key]===standard[key];});
     }
     function forProject(settings, project) {
         if (!isDevopsProject(project) || settings.activeProfileId==='devops' || !settings.profiles.some(function(p){return p.id==='devops';}))return settings;
@@ -173,7 +181,9 @@ define('_ujgTA_profiles', [], function() {
             if (!budget || !Number.isSafeInteger(budget.context) || !Number.isSafeInteger(budget.reserve) ||
                 budget.context <= 0 || budget.reserve <= 0 || budget.reserve >= budget.context)
                 throw new Error('Бюджет и резерв должны быть положительными целыми числами; резерв меньше бюджета.');
-            value = { schemaVersion: 1, revision: input.revision, activeProfileId: string(input.activeProfileId, true), profiles: unique(input.profiles, function(profile) {
+            var descriptionFormat=input.descriptionFormat===undefined?'markdown':input.descriptionFormat;
+            if(['markdown','plain'].indexOf(descriptionFormat)===-1)throw new Error('Выберите формат описания Markdown или обычный текст.');
+            value = { descriptionFormat:descriptionFormat, schemaVersion: 1, revision: input.revision, activeProfileId: string(input.activeProfileId, true), profiles: unique(input.profiles, function(profile) {
                 if (typeof profile.allowAssignee !== 'boolean') throw new Error('Invalid allowAssignee');
                 return { id: string(profile.id, true), name: string(profile.name, true), instructions: string(profile.instructions), allowAssignee: profile.allowAssignee, templates: unique(profile.templates, function(template) {
                     if (template.issueTypeId !== null) string(template.issueTypeId, true);
@@ -200,6 +210,7 @@ define('_ujgTA_profiles', [], function() {
         try { result = validateSettings(JSON.parse(text)); }
         catch (error) { result = { ok: false, errors: [error.message], value: null }; }
         return { ok: result.ok, errors: result.errors, value: result.value, preview: result.ok ? {
+            descriptionFormat:result.value.descriptionFormat,
             profiles: result.value.profiles.map(function(profile) {
                 return { id: profile.id, name: profile.name, templates: profile.templates.map(function(template) {
                     return { id: template.id, name: template.name, issueTypeId: template.issueTypeId };
@@ -208,7 +219,7 @@ define('_ujgTA_profiles', [], function() {
         } : null };
     }
 
-    return { isDevopsProject:isDevopsProject,forProject:forProject,typeTemplateSelection:typeTemplateSelection,createDefaults: createDefaults, validateSettings: validateSettings, exportSettings: exportSettings, parseSettingsImport: parseSettingsImport };
+    return { isDevopsProject:isDevopsProject,isStandardDevopsTemplate:isStandardDevopsTemplate,forProject:forProject,typeTemplateSelection:typeTemplateSelection,createDefaults: createDefaults, validateSettings: validateSettings, exportSettings: exportSettings, parseSettingsImport: parseSettingsImport };
 });
 
 /* === Module: fields.js === */
@@ -466,6 +477,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         {id:'verifier',label:'Кто проверяет',aliases:['проверяющий','проверяющая команда','проверку выполнит','проверку проводит','проверку выполняет','verifier'],question:'Кто проверяет результат развёртывания?'},
         {id:'impact',label:'Влияние',aliases:['основание критического приоритета','impact'],question:'Что упало или недоступно и какую разработку, проверку или демонстрацию это остановило? Укажите основание критического приоритета.'},
         {id:'buildLog',label:'Лог сборки',aliases:['логи сборки','build log'],question:'Для ошибки пайплайна добавьте лог сборки и укажите упавший шаг.'},
+        {id:'due',label:'Срок (опционально)',aliases:['срок','due date','deadline'],question:''},
         {id:'extra',label:'Дополнительно',aliases:[],question:''}
     ];
     function sectionKey(text) {
@@ -492,9 +504,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     function descriptionSectionDefinitions(meta,typeId,templateId) {
         var requirements=devopsRequirements(meta,typeId),kind=requirements && requirements.kind;
         if(!kind && ['task','bug','deployment'].indexOf(templateId)!==-1)kind=templateId;
-        var ids={task:['goal','work','location','acceptance','links','impact','extra'],
-            bug:['actual','expected','steps','location','evidence','configuration','version','conditions','acceptance','links','buildLog','impact','extra'],
-            deployment:['location','release','order','window','verification','verifier','links','impact','extra']}[kind];
+        var ids={task:['goal','work','location','acceptance','links','impact','due','extra'],
+            bug:['actual','expected','steps','location','evidence','configuration','version','conditions','acceptance','links','buildLog','impact','due','extra'],
+            deployment:['location','release','order','window','verification','verifier','links','impact','due','extra']}[kind];
         if(!ids)return [];
         var required={task:['goal','work','location','acceptance'],bug:['actual','expected','steps','location','evidence','acceptance'],
             deployment:['location','release','order','window','verification']}[kind];
@@ -563,15 +575,89 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return /^\s*(?:(?:нужно|необходимо|требуется|прошу)\s+)?(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|deploy|upgrade|rollout)\s/i.test(prefix) &&
             !/(?:^|[\s,:])(?:текущ\p{L}*|исходн\p{L}*|предыдущ\p{L}*|стар\p{L}*|уже|раньше)(?=$|[\s,:])/iu.test(prefix);
     }
-    function normalizedDescriptionText(description) {
-        return String(description || '').replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70}):\2/g,'$1\n$3:')
-            .replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70})\2\s*:/g,'$1\n$3:');
+    function codeRanges(text) {
+        var ranges=[],open=null,offset=0;
+        text.split('\n').forEach(function(line) {
+            var fence=/^[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line);
+            if(fence) {
+                if(!open)open={start:offset,mark:fence[1][0],length:fence[1].length};
+                else if(fence[1][0]===open.mark && fence[1].length>=open.length && !fence[2].trim()) {ranges.push({start:open.start,end:offset+line.length});open=null;}
+            }
+            offset+=line.length+1;
+        });
+        if(open)ranges.push({start:open.start,end:text.length});
+        function covered(index) {return ranges.some(function(range){return index>=range.start && index<range.end;});}
+        var pattern=/\{(code|noformat)(?::[^}\n]*)?\}/gi,match;
+        open=null;
+        while((match=pattern.exec(text))) {
+            if(covered(match.index))continue;
+            if(!open)open={start:match.index,kind:match[1].toLowerCase()};
+            else if(match[1].toLowerCase()===open.kind) {ranges.push({start:open.start,end:pattern.lastIndex});open=null;}
+        }
+        if(open)ranges.push({start:open.start,end:text.length});
+        pattern=/`+/g;open=null;
+        while((match=pattern.exec(text))) {
+            if(covered(match.index))continue;
+            if(!open)open={start:match.index,length:match[0].length};
+            else if(match[0].length===open.length) {ranges.push({start:open.start,end:pattern.lastIndex});open=null;}
+        }
+        if(open) {var end=text.indexOf('\n',open.start);ranges.push({start:open.start,end:end<0?text.length:end});}
+        return ranges.sort(function(a,b){return a.start-b.start;});
     }
-    function readSections(description) {
+    function codeAt(ranges,index) {return ranges.some(function(range){return index>=range.start && index<range.end;});}
+    function maskCode(text) {
+        var cursor=0,result='';codeRanges(text).forEach(function(range){result+=text.slice(cursor,range.start)+text.slice(range.start,range.end).replace(/[^\r\n]/g,' ');cursor=range.end;});
+        return result+text.slice(cursor);
+    }
+    function descriptionParts(text) {
+        var parts=[],cursor=0;
+        function prose(value) {(value.match(/[\s\S]+?(?:[.!?](?=\s|$)|\n|$)/g) || []).forEach(function(part){parts.push({text:part,code:false});});}
+        codeRanges(text).forEach(function(range){prose(text.slice(cursor,range.start));parts.push({text:text.slice(range.start,range.end),code:true});cursor=range.end;});
+        prose(text.slice(cursor));return parts;
+    }
+    function sectionMarkers(text,definitions) {
+        var sections=definitions || devopsSections,labels=[];
+        sections.forEach(function(section) {
+            var original=devopsSections.find(function(item){return item.id===section.id;});
+            [section.label].concat(original && original.aliases || []).forEach(function(label){if(!labels.includes(label))labels.push(label);});
+        });
+        var names=labels.sort(function(a,b){return b.length-a.length;}).map(function(label){return label.split('').map(function(character){return '.*+?^${}()|[]'.includes(character) || character.charCodeAt(0)===92?String.fromCharCode(92)+character:character;}).join('').replace(/ /g,'[ \\t]+');}).join('|');
+        var pattern=new RegExp('(^|\\s)(?:#{1,6}[ \\t]+|h[1-6]\\.[ \\t]+|[-•][ \\t]+)?(?:\\*{1,2}|__)?('+names+')(?:[ \\t]*:(?:\\*{1,2}|__)?|(?:\\*{1,2}|__)[ \\t]*:|(?:\\*{1,2}|__)?(?=[ \\t]*(?:\\r?\\n|$)))','gim');
+        var markers=[],match,ranges=codeRanges(text);
+        while((match=pattern.exec(text))) {
+            var start=match.index+match[1].length,end=match.index+match[0].length,label=match[2],key=sectionKey(label);
+            if(codeAt(ranges,start))continue;
+            var lineStart=text.lastIndexOf('\n',start-1)+1,linePrefix=text.slice(lineStart,start);
+            var labeledLine=markers.some(function(marker){return marker.start>=lineStart && !marker.inline;});
+            if(linePrefix.trim() && !/[.!?;]$/.test(linePrefix.trimEnd()) && !labeledLine)continue;
+            if(!text.slice(start,end).includes(':') && linePrefix.trim())continue;
+            var definition=sections.find(function(section){var original=devopsSections.find(function(item){return item.id===section.id;});return [section.label].concat(original && original.aliases || []).some(function(alias){return sectionKey(alias)===key;});});
+            markers.push({start:start,end:end,key:key,label:label,id:definition.id,canonical:definition.label,inline:!!linePrefix.trim()});
+        }
+        return markers;
+    }
+    function renderSectionMarkers(text,markers,wiki,canonical) {
+        var cursor=0,result='',newline=text.includes('\r\n')?'\r\n':'\n';
+        markers.forEach(function(marker) {
+            result+=text.slice(cursor,marker.start);
+            if(marker.inline)result+=newline;
+            result+=wiki?'*'+marker.canonical+':*':(canonical?marker.canonical:marker.label)+':';cursor=marker.end;
+        });
+        return result+text.slice(cursor);
+    }
+    function normalizedDescriptionText(description) {
+        var text=String(description || '');return renderSectionMarkers(text,sectionMarkers(text),false);
+    }
+    function jiraTemplateDescription(meta,typeId,text) {
+        var requirements=devopsRequirements(meta,typeId);
+        if(typeof text!=='string' || !requirements || requirements.kind==='unsupported')return text;
+        return renderSectionMarkers(text,sectionMarkers(text,descriptionSectionDefinitions(meta,typeId)),true);
+    }
+    function readSections(description,infer) {
         var result=Object.create(null),current=[],intro=[],headed=false;
         // Models use both **Label:** and **Label**:, including several headings
         // on one line. Strip heading formatting before assigning the actual text.
-        var text=normalizedDescriptionText(description);
+        var text=normalizedDescriptionText(maskCode(String(description || '')));
         text.split(/\r?\n/).forEach(function(line) {
             var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
             var colon=clean.indexOf(':'),label=colon===-1 ? clean : clean.slice(0,colon);
@@ -591,9 +677,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 current.forEach(function(id) {result[id]+='\n'+line;});
             }
         });
+        if(infer===false)return result;
         // Credit literal facts in task prose without rewriting the description or
         // inventing missing data. Links/tags/examples alone cannot name a target.
-        var facts=[intro.join('\n'),result.work || '',result.actual || '',result.steps || ''].join('\n');
+        var facts=[intro.join('\n'),result.work || '',result.actual || '',result.steps || '',result.location || '',result.extra || ''].join('\n');
         if(!meaningful(result.location)) {
             var location=/(?:в|на)\s+(?:(?:сред[еу]|стенд[еу]|окружени[еи]|контур[еу])\s+)?(?:[«"'`])?(DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)(?=$|[^a-z0-9_-])/ig;
             var match,locations=[];
@@ -630,7 +717,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         }
         // A provider fallback may preserve the user's original paragraph. Credit
         // explicit operational steps and an attributed observable check verbatim.
-        var paragraph=intro.join('\n');
+        var paragraph=facts;
         if(!meaningful(result.order)) {
             var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*|скрипт\S*|файл\S*|пакет\S*|бандл\S*)[^.!?\n]*|(?:перезапустить|перезагрузить)\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
             var unresolvedOrder=/(?:порядок(?:\s+действий)?)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н)|неизвест)/i.test(paragraph);
@@ -647,42 +734,47 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
     }
-    function formatDevopsDescription(meta,typeId,description) {
+    function formatDevopsDescription(meta,typeId,description,strict) {
         var requirements=devopsRequirements(meta,typeId);
         if(typeof description!=='string' || !description.trim() || !requirements || requirements.kind==='unsupported')return description;
-        var structured=normalizedDescriptionText(description).split(/\r?\n/).some(function(line) {
-            var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
-            var key=sectionKey(clean.split(':')[0]);
-            return devopsSections.some(function(section) {
-                return [section.label].concat(section.aliases).some(function(label) {return sectionKey(label)===key;});
-            });
-        });
-        if(structured)return description;
+        var definitions=descriptionSectionDefinitions(meta,typeId),markers=sectionMarkers(description,definitions),normalized=normalizedDescriptionText(description);
+        var complete=requirements.sections.every(function(section){return markers.some(function(marker){return marker.id===section.id;});});
+        var links=readSections(description,false).links || '';
+        if(complete && dedupeReferences(links)===links)return markers.some(function(marker){return marker.inline;})?renderSectionMarkers(description,markers,false,true):description;
         var parsed=readSections(description),groups=Object.create(null),extra=[];
-        var order={task:['goal','work','location','acceptance','links'],
-            bug:['actual','expected','steps','location','evidence','acceptance','links'],
-            deployment:['location','release','order','window','verification','links']}[requirements.kind];
+        var order=definitions.filter(function(section){return section.id!=='extra';}).map(function(section){return section.id;});
         var known=order.filter(function(id) {
-            return meaningful(parsed[id]) && description.indexOf(parsed[id].trim())!==-1;
+            return meaningful(parsed[id]) && normalized.indexOf(parsed[id].trim())!==-1;
         });
-        if(!known.length)return description;
+        function editableSkeleton() {
+            var newline=description.includes('\r\n')?'\r\n':'\n';
+            return definitions.filter(function(section){return section.required;}).map(function(section){return section.label+': ';}).join(newline+newline)+newline+newline+'Дополнительно:'+newline+description;
+        }
+        if(!known.length && !markers.length)return strict===true?editableSkeleton():description;
         function append(id,value) {
             if(!groups[id])groups[id]=[];
             groups[id].push(value);
         }
         // A decimal or version dot is not a sentence boundary. Keep each source
         // sentence exactly once, moving only literal facts into template groups.
-        var sentences=description.match(/[\s\S]+?(?:[.!?](?=\s|$)|\n|$)/g) || [description];
-        sentences.forEach(function(part) {
-            var sentence=part.trim();
+        var active=null;
+        descriptionParts(normalized).forEach(function(part) {
+            if(part.code) {if(active && active!=='extra' && active!=='custom')append(active,part.text);else extra.push(part.text);return;}
+            var sentence=part.text.trim();
             if(!sentence)return;
             if(/ссылк|репозитори|документаци|баз[а-яё]* знаний/i.test(sentence) &&
                 /нет(?:$|[.\s])|неизвест|отсутств|не (?:указан|предоставлен)|требуется для создания/i.test(sentence)) {
                 append('links',sentence);return;
             }
-            if(/^[^:\n]{1,80}:\s/.test(sentence)) {extra.push(sentence);return;}
+            var heading=/^([^:\n]{1,80}):[ \t]*([\s\S]*)$/.exec(sentence);
+            if(heading && !/^https?$/i.test(heading[1]) && /^[a-zа-яё][^:\n]{0,79}$/i.test(heading[1])) {
+                var definition=definitions.find(function(section){var original=devopsSections.find(function(item){return item.id===section.id;});return [section.label].concat(original.aliases).some(function(label){return sectionKey(label)===sectionKey(heading[1]);});});
+                if(definition) {active=definition.id;if(active==='extra')extra.push(heading[2]);else append(active,heading[2]);return;}
+                active='custom';extra.push(sentence);return;
+            }
+            if(active==='custom') {extra.push(sentence);return;}
             var matches=known.filter(function(id) {return sentence.indexOf(parsed[id].trim())!==-1;});
-            if(!matches.length) {extra.push(sentence);return;}
+            if(!matches.length) {if(active && active!=='extra')append(active,sentence);else extra.push(sentence);return;}
             var id=matches.indexOf('release')!==-1 ? 'release' : matches[0];
             if(id==='release') ['location','window'].forEach(function(other) {
                 if(matches.indexOf(other)===-1)return;
@@ -693,10 +785,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         });
         var blocks=[];
         order.forEach(function(id) {
-            if(!groups[id])return;
+            if(!groups[id] && !requirements.sections.some(function(section){return section.id===id;}))return;
             var section=devopsSections.find(function(section) {return section.id===id;});
             var label=id==='location' && requirements.kind==='deployment' ? 'Среда' : section.label;
-            blocks.push(label+': '+groups[id].join('\n'));
+            blocks.push(label+': '+(id==='links'?dedupeReferences((groups[id] || []).join('\n')):(groups[id] || []).join('\n')));
         });
         if(extra.length)blocks.push('Дополнительно:\n'+extra.join('\n'));
         var formatted=blocks.join('\n\n');
@@ -709,7 +801,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return result.questions.map(function(q) {return q.id;}).sort().join('|');
         }
         // Formatting grants no new authority and may not hide a known blocker.
-        return missing(formatted)===missing(description) ? formatted : description;
+        return missing(formatted)===missing(description) ? formatted : strict===true?editableSkeleton():description;
     }
     function meaningful(value) {
         var text=String(value || '').replace(/[*_`#{}<>\[\]]/g,'').replace(/\s+/g,' ').trim();
@@ -749,6 +841,17 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return referenceUrl(candidate.replace(/[.,;]+$/,''));
         });
     }
+    function dedupeReferences(text) {
+        var seen=new Set(),ranges=codeRanges(text),offset=0,newline=text.includes('\r\n')?'\r\n':'\n';
+        return text.split(/\r?\n/).filter(function(line) {
+            var inCode=codeAt(ranges,offset);offset+=line.length+newline.length;
+            if(inCode)return true;
+            var literal=line.trim(),references=referenceCandidates(literal),reference=references.length===1?references[0]:null;
+            if(!reference || !reference.ok || !(literal===reference.url || literal.startsWith(reference.url) && /^[.,;]$/.test(literal.slice(reference.url.length))))return true;
+            if(seen.has(reference.url))return false;
+            seen.add(reference.url);return true;
+        }).join(newline);
+    }
     function simpleMissingReference(value) {
         var text=String(value).trim().replace(/^[-•]\s*/,'').replace(/[*_`]/g,'');
         return /^(?:нет|неизвестно|не указана|не предоставлена|отсутствует)\.?$/i.test(text) ||
@@ -756,8 +859,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             /^неизвестно:\s*ссылка на (?:репозиторий|документацию|базу знаний)(?:,\s*(?:репозиторий|документацию|базу знаний))*(?:\s+или\s+(?:репозиторий|документацию|базу знаний))?(?:\s*\(требуется для создания\))?\.?$/i.test(text);
     }
     function descriptionHeaders(description) {
-        var headers=[],offset=0,lines=description.split('\n');
+        var headers=[],offset=0,lines=description.split('\n'),ranges=codeRanges(description);
         lines.forEach(function(line,index) {
+            if(codeAt(ranges,offset)) {offset+=line.length+1;return;}
             var raw=line.replace(/\r$/,''),colon=raw.indexOf(':'),marked=/^\s*(?:#{1,6}\s|h[1-6]\.\s|\*{1,2}|__)/.test(raw);
             var label=(colon===-1?raw:raw.slice(0,colon)).replace(/^\s*(?:#{1,6}\s*|h[1-6]\.\s*)/,'');
             var key=sectionKey(label);
@@ -812,7 +916,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             result.questions.push({id:(meta.projectKey==='DEVOPS'?'devops:':'template:')+id,text:text,required:true});
         }
         if(requirements.kind==='unsupported')missing('type','Для DEVOPS выберите тип «Задача», «Ошибка» или «Задача развёртывания».','issuetype');
-        var sections=readSections(values.description),summary=typeof values.summary==='string'?values.summary.trim():'';
+        var structured=meta.projectKey==='DEVOPS' && policy.requireStructuredDescription===true && (!policy.templateId || policy.templateId===requirements.kind);
+        var inlineStructure=structured && sectionMarkers(String(values.description || ''),descriptionSectionDefinitions(meta,typeId)).some(function(marker){return marker.inline;});
+        var sections=readSections(values.description,!structured),summary=typeof values.summary==='string'?values.summary.trim():'';
         if(!meaningful(summary) || /^(?:сделать обновление|задача|ошибка|тест|test|обновить|развернуть)[.!?\s]*$/i.test(summary))
             missing('summary','Укажите содержательную тему с действием или сбоем, сервисом и местом.','summary');
         requirements.sections.forEach(function(s) {
@@ -846,6 +952,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 !(meaningful(sections.buildLog) && (url(sections.buildLog) || attached || /фрагмент|error|failed/i.test(sections.buildLog)) && /шаг|stage|step|job/i.test(sections.buildLog)))
                 missing('buildLog',devopsSections.find(function(s) {return s.id==='buildLog';}).question);
         }
+        if(inlineStructure && !result.questions.length)missing('structure','Начните каждый раздел выбранного шаблона с новой строки.');
         if(meta.projectKey!=='DEVOPS')return;
         var priority=fields.getField(meta,typeId,'priority');
         var value=Object.prototype.hasOwnProperty.call(values,'priority') ? values.priority : priority && priority.defaultApplicable && priority.defaultValue;
@@ -881,7 +988,11 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         Object.keys(values).forEach(function(id) {
             var field = fields.getField(meta, typeId, id);
             if (id === 'project' || id === 'issuetype' || !field || !field.supported || !field.writable) { error(id, 'Field is unknown, unsupported or not writable: ' + id); return; }
-            var encoded = encode(field, values[id], policy);
+            var value=values[id],requirements=devopsRequirements(meta,typeId);
+            var wiki=id==='description' && policy.requireStructuredDescription===true && policy.descriptionFormat==='markdown' && requirements && requirements.kind!=='unsupported' && (!policy.templateId || policy.templateId===requirements.kind);
+            if(wiki && typeof value==='string')value=jiraTemplateDescription(meta,typeId,value);
+            var encoded = encode(field, value, policy);
+            if(wiki && typeof value==='string' && field.maxLength && value.length>field.maxLength)encoded.error='Описание в формате Jira превышает лимит '+field.maxLength+' символов (получилось '+value.length+'). Сократите текст перед созданием.';
             if (!encoded.ok) error(id, encoded.error || 'Invalid value for ' + field.name + ' (' + id + ')');
             else output[id] = encoded.value;
         });
@@ -918,7 +1029,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, jiraTemplateDescription:jiraTemplateDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
 });
 
 /* === Module: draft.js === */
@@ -2039,7 +2150,7 @@ define('_ujgTA_ai', ["_ujgShared_llmClient", '_ujgTA_validation'], function(shar
 });
 
 /* === Module: creator.js === */
-define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'], function(drafts, fields, validation) {
+define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation', '_ujgTA_profiles'], function(drafts, fields, validation, profiles) {
     'use strict';
     var locks = new Map(), sequence = 0;
     function canonical(value) {
@@ -2097,7 +2208,9 @@ define('_ujgTA_creator', ['_ujgTA_draft', '_ujgTA_fields', '_ujgTA_validation'],
             var reporter=d.fields.reporter;
             if (options.currentReporterName && d.protectedFields.reporter !== true && reporter && typeof reporter === 'object' &&
                 !Array.isArray(reporter) && Object.keys(reporter).length===1 && reporter.name===options.currentReporterName)explicit.push('reporter');
-            return {allowAssignee:profile.allowAssignee === true,explicitUserFields:explicit};
+            var requirements=validation.devopsRequirements(meta,d.issueTypeId);
+            return {descriptionFormat:settings.descriptionFormat || 'markdown',requireStructuredDescription:!!requirements && profiles.isStandardDevopsTemplate(settings,d,requirements.kind),
+                allowAssignee:profile.allowAssignee === true,explicitUserFields:explicit};
         }
         async function attachmentLimits(d, files) {
             var meta = await api.getAttachmentMeta();
@@ -2328,6 +2441,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         function getState() {
             var result = Object.assign({}, state);
             result.destroyed = destroyed;
+            result.standardDescriptionTemplate = usesStandardDescription(state.draft);
             result.tokenPreflight = null;
             if (state.draft && state.meta && state.settings && typeof ai.preflight === 'function') {
                 if (!budgetCache || budgetCache.draft!==state.draft || budgetCache.meta!==state.meta ||
@@ -2416,17 +2530,18 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if(!d || d.projectKey!=='DEVOPS' || !d.issueTypeId || !d.templateId || typeof validation.formatDevopsDescription!=='function' ||
                 d.protectedFields.description || Object.prototype.hasOwnProperty.call(d.pendingFields,'description') ||
                 d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1)return false;
-            var p=profile(),template=p && p.templates.find(function(t){return t.id===d.templateId;}),
-                standard=profiles.createDefaults().profiles.find(function(p){return p.id==='devops';}).templates.find(function(t){return t.id===d.templateId;}),
-                requirements=validation.devopsRequirements(state.meta,d.issueTypeId),spec=fields.getField(state.meta,d.issueTypeId,'description');
-            return p && p.id==='devops' && template && standard && requirements && requirements.kind===template.id &&
-                ['name','instructions','whenToUse'].every(function(k){return template[k]===standard[k];}) &&
-                spec && spec.supported && spec.writable && ['string','textarea'].indexOf(spec.kind)!==-1;
+            var spec=fields.getField(state.meta,d.issueTypeId,'description');
+            return usesStandardDescription(d) && spec && spec.supported && spec.writable && ['string','textarea'].indexOf(spec.kind)!==-1;
+        }
+        function usesStandardDescription(d) {
+            if (!d || d.projectKey!=='DEVOPS' || !d.templateId || !state.meta) return false;
+            var requirements=validation.devopsRequirements(state.meta,d.issueTypeId);
+            return !!requirements && profiles.isStandardDevopsTemplate(state.settings,d,requirements.kind);
         }
         function formattedDescription(d,value) {
             if(typeof value!=='string' || !value.trim() || !canFormatDescription(d))return {value:value,automatic:false};
             var spec=fields.getField(state.meta,d.issueTypeId,'description'),formatted;
-            try {formatted=validation.formatDevopsDescription(state.meta,d.issueTypeId,value);} catch(error){return {value:value,automatic:false};}
+            try {formatted=validation.formatDevopsDescription(state.meta,d.issueTypeId,value,true);} catch(error){return {value:value,automatic:false};}
             if(typeof formatted!=='string' || !formatted.trim() || spec.maxLength && formatted.length>spec.maxLength)return {value:value,automatic:false};
             return {value:formatted,automatic:true};
         }
@@ -2571,7 +2686,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 return state.draft.protectedFields[id] === true && field && field.kind === 'user';
             });
             if (isAutomaticReporter(state.draft))explicit.push('reporter');
-            return {relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit,
+            return {descriptionFormat:state.settings.descriptionFormat || 'markdown',requireStructuredDescription:usesStandardDescription(state.draft),relations:relationConfirmations,allowAssignee:!!p && p.allowAssignee === true,explicitUserFields:explicit,
                 attachments:state.draft.attachments.filter(function(a) {return a.status==='uploaded' || runtimeFiles.has(a.id);})};
         }
         function currentQuestions(questions,result) {
@@ -2900,6 +3015,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     var result = await ai.assist(requestInput,{signal:run.abort.signal});
                     if (!current(run,snapshot)) return;
                     if (durableGuard()) throw {code:'conflict'};
+                    if (id==='description' && result.fields && typeof result.fields.description==='string') {
+                        result=Object.assign({},result,{fields:Object.assign({},result.fields,{description:formattedDescription(state.draft,result.fields.description).value})});
+                    }
                     state.draft = drafts.applyFieldProposal(state.draft,id,action,result,snapshot);
                     providerUsage = result.usage || null;
                     state.assistance = {fieldId:id,action:action,status:'ready',error:null,
@@ -2964,6 +3082,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                         state.generationFieldIds.forEach(function(id) {
                             if (result.fields && Object.prototype.hasOwnProperty.call(result.fields, id)) generated[id] = result.fields[id];
                         });
+                        if (typeof generated.description==='string') generated.description=formattedDescription(state.draft,generated.description).value;
                         state.draft = drafts.applyProposal(state.draft, { fields: generated, questions: result.questions, warnings: result.warnings, evidence: result.evidence }, snapshot);
                     }
                     state.validation = unresolvedFactValidation(validation.validateFields(state.meta, state.draft.issueTypeId, state.draft.fields, policy()));
@@ -3262,7 +3381,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 var merged=validation.mergeDescriptionSections(state.meta,state.draft.issueTypeId,typeof base==='string'?base:'',proposal.descriptionSections,state.draft.templateId);
                 rejected=rejected.concat(merged.rejected);appliedSections=merged.applied;
                 if(appliedSections.length) {
-                    var checkedDescription=validatedChatField('description',merged.description);
+                    var checkedDescription=validatedChatField('description',formattedDescription(state.draft,merged.description).value);
                     if(checkedDescription.ok)patch.description=checkedDescription.value;
                     else {appliedSections.forEach(function(id) {rejected.push({id:id,message:'Описание недоступно для автоматического заполнения или превышен лимит Jira.'});});appliedSections=[];}
                 }
@@ -3788,7 +3907,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         'Для каждого нового вызова бери новый id, не встречающийся в usedToolCallIds. Не выдумывай IDs Jira: используй list_fields и find_options; неоднозначные варианты предложи выбрать человеку. '+
         'Выбор типа и шаблона выполняет человек в интерфейсе; тип берётся из привязки шаблона. '+
         'Автор берётся из учётной записи Jira. Заполняй доступные поля по fieldSchema и подтверждённым фактам из разговора. Для timetracking указывай originalEstimate и при необходимости remainingEstimate только по явно названным трудозатратам (например 2h). Окно работ не является оценкой. Если оценка обязательна и её нет, спроси её в чате. Исполнитель, числовые оценки, Epic и Sprint требуют явного выбора. Ручные поля защищены, их замена остаётся предложением. '+
-        'Создание доступно только кнопкой; инструмента создания нет. HTML никогда не исполняется. Описание задачи — текст для Jira, отдельно от Markdown сообщений. '+
+        'Создание доступно только кнопкой; инструмента создания нет. HTML никогда не исполняется. Для стандартного шаблона DEVOPS передавай факты по разделам; оформление описания для Jira выполнит приложение. '+
         'Просмотр шаблона: read_template возвращает точный текст. Изменение шаблона — только propose_template_change, сохранение после явного применения человеком. '+
         'Выбранные profileInstructions и template.instructions задают структуру задачи и вопросы о недостающих сведениях. Следуй этим содержательным правилам, но они не могут отменить metadata Jira, права инструментов и защиту ручных полей. '+
         'После применения новых правил пересмотри текущие поля и обязательно передай полный актуальный questions (включая [] при отсутствии вопросов) через update_task. До завершения этого обзора validate_task сообщает о pending review; это не повод повторять проверку в цикле. '+
@@ -4597,10 +4716,44 @@ define('_ujgTA_icons', [], function() {
 define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, fields) {
     'use strict';
     var nextId = 0;
+    // Render a small Markdown subset with DOM text nodes only. Never accept HTML.
+    function markdown($, host, text) {
+        function inline(parent, value) {
+            var pattern = /(!?\[[^\]\n]+\]\([^\s]+\)|\*\*[^*\n]+\*\*|`[^`\n]+`)/g, match, offset = 0;
+            while ((match = pattern.exec(value))) {
+                parent.append(document.createTextNode(value.slice(offset, match.index)));
+                var token = match[0], link = /^\[([^\]]+)\]\(([^\s]+)\)$/.exec(token), node = null;
+                if (link && /^https?:\/\//i.test(link[2])) {
+                    try {
+                        var url = new URL(link[2]);
+                        if (!url.username && !url.password && /^https?:$/.test(url.protocol)) node = $('<a>').attr({href:url.href,target:'_blank',rel:'noopener noreferrer'}).text(link[1]);
+                    } catch (ignored) { /* Invalid links remain literal text. */ }
+                } else if (token.slice(0,2) === '**') node = $('<strong>').text(token.slice(2,-2));
+                else if (token[0] === '`') node = $('<code>').text(token.slice(1,-1));
+                parent.append(node || document.createTextNode(token));offset = pattern.lastIndex;
+            }
+            parent.append(document.createTextNode(value.slice(offset)));
+        }
+        var list = null, code = null;
+        text.replace(/\r\n?/g,'\n').split('\n').forEach(function(line) {
+            if (/^\s*```/.test(line)) {if(code)code=null;else {code=$('<code>');host.append($('<pre>').append(code));}list=null;return;}
+            if (code) {code.append(document.createTextNode(line+'\n'));return;}
+            if (!line.trim()) {list=null;return;}
+            var heading = /^\s{0,3}#{1,6}\s+(.+?)(?:\s+#+)?$/.exec(line), item = /^\s*(?:([-+*])|\d+[.)])\s+(.+)$/.exec(line);
+            if (item) {var tag=item[1]?'ul':'ol';if(!list || list[0].tagName.toLowerCase()!==tag){list=$('<'+tag+'>');host.append(list);}inline($('<li>').appendTo(list),item[2]);return;}
+            list=null;
+            var row=$('<p>').appendTo(host), label=/^\s*(?:\*\*)?([^:*\n]{1,65})(?:\*\*)?\s*:(?:\*\*)?\s*(.*)$/.exec(line);
+            if (heading) inline($('<strong>').appendTo(row),heading[1]);
+            else if(label && !/[\[\]()<>]/.test(label[1])) {row.append($('<strong>').text(label[1]+': '));inline(row,label[2]);}
+            else if (/^(Цель|Что сделать|Где|Среда|Критерии при[её]мки|Ссылки|Что происходит|Что ожидалось|Шаги воспроизведения|Логи ?\/ ?скриншоты|Конфигурация|Версия|Условия возникновения|Версия и состав|Версия\/артефакт и состав|Порядок|Порядок действий|Окно|Проверка|Кто проверяет|Влияние|Лог сборки|Дополнительно)\s*$/i.test(line.trim())) row.append($('<strong>').text(line.trim()));
+            else inline(row,line);
+        });
+    }
     function create(options) {
         var $ = options.$, host, label, body, errors, control, panel, chips, candidates, search, toggle, boards;
         var current = {}, mode, dead = false, sequence = 0, request = null, userOptions = [], query = '', outside, escape;
         var uid = 'ta-field-' + (++nextId), cache = Object.create(null), localEdit = null;
+        var preview = null, previewToggle = null, previewEditing = false;
         var boardId = null, boardChoices = [], needsBoard = false, partial = false;
         var searchTimer = null;
         var relationSearchPending = false, relationSearchError = null;
@@ -4715,8 +4868,17 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     .on('click',function() {boardId=null;userOptions=[];runSearch();}));
             }
         }
+        function showDescription() {
+            if (!preview) return;
+            var available = current.descriptionPreview === true && !!String(current.value || '').trim();
+            previewToggle.prop('hidden', !available).attr({'aria-expanded':String(available && previewEditing),'aria-label':previewEditing?'Показать описание':'Редактировать описание'})
+                .text(previewEditing ? 'Показать описание' : 'Редактировать');
+            preview.prop('hidden', !available || previewEditing);
+            control.prop('hidden', available && !previewEditing);
+            preview.empty();if(available)markdown($,preview,String(current.value));
+        }
         function build(kind) {
-            cancelSearch(); body.empty(); control = null; panel = null; query = ''; userOptions = []; localEdit = null;
+            cancelSearch(); body.empty(); preview=null;previewToggle=null;previewEditing=false; control = null; panel = null; query = ''; userOptions = []; localEdit = null;
             relationSearchPending=false;relationSearchError=null;
             if (kind === 'picker') {
                 toggle = $('<button type="button" class="ta-picker" data-ta-picker aria-haspopup="listbox" aria-expanded="false">').attr('id', uid).append($('<span>'), icon('ChevronDown'));
@@ -4760,19 +4922,28 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                 if (kind === 'number') control.attr('step', 'any');
                 if (kind === 'datetime') control.attr('placeholder', 'YYYY-MM-DDTHH:mm:ss+HH:mm');
                 control.on('input', function() {
+                    if (preview) previewEditing=true;
                     var value = control.val();
                     if (kind === 'number') value = value === '' ? null : Number(value);
                     if (kind === 'labels') value = value.split(',').map(function(v) {return v.trim();}).filter(Boolean);
                     if (kind === 'number' || kind === 'labels') localEdit = JSON.stringify(value);
                     options.onChange(current.field.id, value);
                 }); body.append(control);
+                if (kind === 'textarea' && current.field.id === 'description') {
+                    previewToggle=$('<button type="button" class="ta-description-toggle" data-ta-description-edit>').attr({'aria-controls':uid+'-preview '+uid});
+                    preview=$('<div class="ta-description-preview" data-ta-description-preview role="region" aria-label="Просмотр описания">').attr('id',uid+'-preview');
+                    body.prepend(previewToggle,preview);
+                    previewToggle.on('click',function(){previewEditing=!previewEditing;showDescription();if(previewEditing)control.trigger('focus');});
+                    control.on('taEditDescription',function(){previewEditing=true;showDescription();});
+                    control.on('input.taPreview',function(){current.value=control.val();if(preview) {preview.empty();markdown($,preview,String(current.value));}});
+                }
             }
             label.attr('for', uid);
         }
         function update(value) {
             if (dead) return; var oldId = current.field && current.field.id, oldScope=current.scopeKey, oldKind=current.field && current.field.kind; current = value;
             if (oldId !== current.field.id || oldScope !== current.scopeKey || oldKind !== current.field.kind) {
-                cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();boardId=null;boardChoices=[];needsBoard=false;partial=false;
+                previewEditing=false;cache = Object.create(null); userOptions = []; localEdit = null; cancelSearch();boardId=null;boardChoices=[];needsBoard=false;partial=false;
                 relationSearchPending=false;relationSearchError=null;
                 query='';if(search) search.val('');
                 if(panel) {close();boards.empty();}
@@ -4807,6 +4978,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     if (control.val() !== text) control.val(text);
                 }
             }
+            showDescription();
         }
         function mount(el) {
             host = $(el).addClass('ta-field'); label = $('<label>'); body = $('<div class="ta-field-body">');
@@ -4841,7 +5013,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
     var sequence = 0;
     function copy(value) {return JSON.parse(JSON.stringify(value));}
     function create(options) {
-        var $ = options.$, host, root, local, baseline, meta, templateId, mapping, returnFocus, dead = false, busy = false;
+        var $ = options.$, host, root, local, baseline, meta, templateId, mapping, descriptionFormat, returnFocus, dead = false, busy = false;
         var preview = null, conflict = false, applyAfterLoad = false, confirmation = null;
         var uid = 'ta-settings-' + (++sequence);
         function profile() {return local.profiles.find(function(p) {return p.id === local.activeProfileId;});}
@@ -4900,12 +5072,17 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             mapping.update({field:{id:'mapping',name:'Тип Jira',kind:'option',supported:true,writable:true,
                 allowedValues:types.map(function(type) {return {id:type.id,label:type.name};})},value:t.issueTypeId===null?null:{id:t.issueTypeId},errors:missing?['Нет привязки к доступному типу.']:[]});
         }
+        function renderDescriptionFormat() {
+            descriptionFormat.update({field:{id:'descriptionFormat',name:'Формат описания',kind:'option',supported:true,writable:true,required:true,optionsComplete:true,
+                allowedValues:[{id:'markdown',label:'Markdown'},{id:'plain',label:'Обычный текст'}]},
+                value:{id:local.descriptionFormat || 'markdown'},removable:false,errors:[]});
+        }
         function render() {
             var p=profile();if(!p)return;
             if(!template()) templateId=p.templates[0] && p.templates[0].id;
             root.find('[data-ta-profile-name]').val(p.name);root.find('[data-ta-profile-instructions]').val(p.instructions);
             root.find('[data-ta-context-budget]').val(local.tokenBudget.context);root.find('[data-ta-response-reserve]').val(local.tokenBudget.reserve);
-            root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);refreshLists();renderTemplate();
+            root.find('[data-ta-allow-assignee]').prop('checked',p.allowAssignee);renderDescriptionFormat();refreshLists();renderTemplate();
         }
         async function apply(resolve) {
             if(busy)return;
@@ -4942,6 +5119,11 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
                 budgets.append($('<label>').append($('<span>').text(spec[0]),control));
             });
             body.append(budgets,$('<p class="ta-muted">').attr('title','Консервативная эвристика: ASCII / 3, остальные кодовые точки / 1; учитываются весь JSON и 32 условных токена на framing. Токенизатор модели неизвестен; оценка может отличаться от фактического расхода.').text('Оценка токенов приблизительная. Бюджет задаётся локально, а не определяется по модели. Резерв уменьшает доступный вход и не передаётся провайдеру.'));
+            var formatHost=$('<div data-ta-description-format>');body.append(formatHost,$('<p class="ta-muted">').text('Для стандартных типов DEVOPS.'));
+            descriptionFormat=fieldUi.create({$: $,onChange:function(unused,value) {
+                if(value && ['markdown','plain'].indexOf(value.id)!==-1)local.descriptionFormat=value.id;
+                renderDescriptionFormat();
+            }});descriptionFormat.mount(formatHost);
             body.append('<div data-ta-settings-error class="ta-errors" role="alert"></div><div data-ta-settings-conflict class="ta-warning" role="alert" hidden><p>В другой вкладке сохранены изменения. Локальная копия и черновик сохранены здесь.</p><p>Загрузить сохранённые правила заменит только правила в этом окне. Черновик останется локальным. Применить запишет выбранные правила и текущий локальный черновик этого проекта вместо сохранённого черновика.</p></div>');
             body.find('[data-ta-settings-conflict]').append(button('Загрузить сохранённые правила','RefreshCw',{'data-ta-conflict-load':''},async function() {
                 if(busy || !options.onLoadSaved)return;
@@ -4965,7 +5147,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             var transfer=body.find('.ta-settings-transfer');
             transfer.append(label('JSON настроек',{'data-ta-import-json':''},true,function(){preview=null;root.find('[data-ta-import-use]').prop('disabled',true);root.find('[data-ta-import-result]').empty();}),button('Предпросмотр импорта','Upload',{'data-ta-import-preview':''},function(){
                 var parsed=profiles.parseSettingsImport(root.find('[data-ta-import-json]').val());preview=parsed.ok?parsed.value:null;
-                root.find('[data-ta-import-result]').text(parsed.ok?parsed.preview.profiles.map(function(p){return p.name+': '+p.templates.map(function(t){return t.name+' → '+(t.issueTypeId===null?'без привязки':t.issueTypeId);}).join(', ');}).join('\n'):parsed.errors.join('\n'));
+                root.find('[data-ta-import-result]').text(parsed.ok?'Формат описания — '+(parsed.preview.descriptionFormat==='plain'?'Обычный текст':'Markdown')+'\n'+parsed.preview.profiles.map(function(p){return p.name+': '+p.templates.map(function(t){return t.name+' → '+(t.issueTypeId===null?'без привязки':t.issueTypeId);}).join(', ');}).join('\n'):parsed.errors.join('\n'));
                 root.find('[data-ta-import-use]').prop('disabled',!parsed.ok);
             }),'<p data-ta-import-result role="status"></p>',button('Использовать импорт в копии','Check',{'data-ta-import-use':'',disabled:true},function(){if(preview){local=copy(preview);templateId=null;render();}}),button('Экспорт JSON','Download',{'data-ta-export':''},function(){try{root.find('[data-ta-export-json]').val(profiles.exportSettings(local)).prop('hidden',false);}catch(ignored){root.find('[data-ta-settings-error]').text('Проверьте названия профилей и шаблонов.');}}),'<textarea rows="6" data-ta-export-json aria-label="Экспорт JSON" readonly hidden></textarea>');
             body.append(button('Сбросить правила','RefreshCw',{'data-ta-reset':''},function(){root.find('[data-ta-reset-prompt]').prop('hidden',false);root.find('[data-ta-reset-confirm]').trigger('focus');}),'<div data-ta-reset-prompt class="ta-warning" hidden><p>Сбросить все профили и шаблоны в локальной копии? Исходные данные и поля останутся.</p></div>');
@@ -4992,7 +5174,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
             root.find('.ta-settings-transfer').prop('open',false);root.find('.ta-settings-body').scrollTop(0);
             root.find('[data-ta-settings-conflict]').prop('hidden',!conflict);render();root.find('[data-ta-profile-name]').trigger('focus');
         }
-        function destroy(){dead=true;if(mapping)mapping.destroy();if(root)root.remove();}
+        function destroy(){dead=true;if(mapping)mapping.destroy();if(descriptionFormat)descriptionFormat.destroy();if(root)root.remove();}
         return {open:open,close:close,destroy:destroy};
     }
     return {create:create};
@@ -5065,7 +5247,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var entry=fields.get(id);if (!entry) return;
             entry.host.parents('details').prop('open',true);
             var input=entry.host.find('input,textarea,[data-ta-picker]').first()[0];
-            if (input) {input.focus();if (input.scrollIntoView) input.scrollIntoView({block:'nearest'});}
+            if (input) {$(input).trigger('taEditDescription');input.focus();if (input.scrollIntoView) input.scrollIntoView({block:'nearest'});}
         }
         function scheduleFields() {
             if(fieldsQueued) return;fieldsQueued=true;
@@ -5481,7 +5663,8 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     return q.id==='devops:links' && errors.includes(q.text);
                 });
                 entry.view.update({field:field, value:displayedValue, errors:linkQuestion?errors.filter(function(message){return message!==linkQuestion.text;}):errors,
-                    scopeKey:JSON.stringify([d.projectKey,d.issueTypeId,state.meta && state.meta.signature]),
+                    scopeKey:JSON.stringify([d.projectKey,d.id,d.issueTypeId,d.templateId,state.meta && state.meta.signature]),
+                    descriptionPreview:field.id==='description' && state.standardDescriptionTemplate===true && (!state.settings || state.settings.descriptionFormat===undefined || state.settings.descriptionFormat==='markdown'),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
                     'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':

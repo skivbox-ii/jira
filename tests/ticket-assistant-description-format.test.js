@@ -22,11 +22,18 @@ async function setup(t,actual=false) {
     t.after(()=>h.controller.destroy());return h;
 }
 test('normal automatic model update formats the actual Jira field and keeps applied-model provenance',async t=>{
-    const h=await setup(t),c=h.controller,chat=h.makeChat(async config=>{
+    const h=await setup(t,true),c=h.controller,format=h.validation.formatDevopsDescription;
+    const expected=format(c.getState().meta,'12',raw);
+    assert.match(expected,/^Среда:/);
+    h.validation.formatDevopsDescription=(meta,typeId,value)=>{
+        h.calls.push({typeId,description:value});
+        return format(meta,typeId,value);
+    };
+    const chat=h.makeChat(async config=>{
         await config.tools.find(x=>x.name==='update_task').execute({fields:{summary:'Обновить demo-api в DEV',description:raw},questions:[]},{});
         config.afterStep({hasTools:true,failedTool:false,draftExtracted:true});
     });t.after(()=>chat.destroy());await chat.send(raw);
-    assert.equal(c.getState().draft.fields.description,'Отформатировано: '+raw);assert.equal(c.getState().draft.source,raw);
+    assert.equal(c.getState().draft.fields.description,expected);assert.equal(c.getState().draft.source,raw);
     assert.equal(chat.getState().error,null);assertMissingLink(h,chat);
     assert.ok(h.calls.some(x=>x.typeId==='12' && x.description===raw));
 });
