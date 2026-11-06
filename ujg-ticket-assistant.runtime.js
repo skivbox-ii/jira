@@ -3505,18 +3505,57 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             return s.generationFieldIds.includes(id) && !d.protectedFields[id] &&
                 !Object.prototype.hasOwnProperty.call(d.pendingFields,id) && !String(d.fields[id] || '').trim();
         }
+        function narrativeSummary(description) {
+            var text=description.trim().replace(/^(?:(?:добрый (?:день|вечер)|доброе утро|здравствуйте|привет)(?=$|[!.,\s])[!.,\s]*)+/i,'').trim();
+            var first=text.split(/\r?\n/).find(function(line){return line.trim();});
+            return first ? (first.trim().match(/^.*?[.!?](?=\s|$)/) || [first.trim()])[0].slice(0,255) : '';
+        }
+        function savedNarrative() {
+            var users=state.transcript.filter(function(m){return m.role==='user';});
+            if(!users.length)return null;
+            var text=users[0].text;
+            return users.every(function(m){return m.text===text;}) && !inquiry(text) && !connectionCommand(text) &&
+                !text.trim().endsWith('?') && narrativeSummary(text) ? text : null;
+        }
+        function collapseExactRetry(text) {
+            // Only uninterrupted identical user entries are retries. An assistant
+            // question may need the same answer as its preceding question.
+            var matches=[];
+            for(var i=state.transcript.length-1;i>=0;i--) {
+                var entry=state.transcript[i];
+                if(entry.role!=='user' || entry.text!==text)break;
+                matches.push(entry);
+            }
+            if(!matches.length)return false;
+            var keep=matches.pop();
+            state.transcript=state.transcript.filter(function(m){return m===keep || !matches.includes(m);});
+            return true;
+        }
         async function deriveSummary(run) {
             if(!current(run))return;
             var s=controller.getState(), description=s.draft.fields.description;
             if(!emptyChatField(s,'summary') || typeof description!=='string' || !description.trim())return;
-            var first=description.trim().split(/\r?\n/).find(function(line){return line.trim();}).trim();
-            var summary=(first.match(/^.*?[.!?](?=\s|$)/) || [first])[0].slice(0,255);
+            var summary=narrativeSummary(description);
+            if(!summary)return;
             await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot);});
         }
         async function recoverUnavailable(run,text,reassessment,reconcile) {
-            if(!current(run) || reassessment || reconcile || run.templateAction ||
-                !state.error || !['transport','runtime'].includes(state.error.code) || inquiry(text) || connectionCommand(text))return;
+            if(!current(run) || reassessment && !reconcile || run.templateAction ||
+                !state.error || !(['transport','runtime','response','response-repair'].includes(state.error.code) ||
+                    reconcile && state.error.code==='draft-update'))return;
             var s=controller.getState(), d=s.draft, patch={};
+            var malformed=['response','response-repair','draft-update'].includes(state.error.code);
+            if(reconcile) {
+                text=savedNarrative();
+                if(!text || d.source || !emptyChatField(s,'description'))return;
+                collapseExactRetry(text);
+            }
+            if(inquiry(text) || connectionCommand(text) || !narrativeSummary(text))return;
+            // A protocol failure grants no authority to use model fields or to
+            // resolve semantic questions, overrides, or a pending rules review.
+            if((malformed || reconcile) && (run.reviewPending || d.taskExceptions.length || run.priorQuestions.length ||
+                run.sourceAppended && !run.verbatimDescription ||
+                run.initialDescription && run.initialDescription!==text && !run.verbatimDescription))return;
             if(run.sourceAppended && (!run.descriptionReviewed ||
                 run.initialDescription && d.fields.description===run.initialDescription && !run.verbatimDescription)) {
                 // Appending the correction to source, or echoing the old description,
@@ -3528,9 +3567,14 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // Later answers must not authorize creation while their facts are missing.
             var description=d.fields.description;
             if(!run.sourceAppended) {
-                if(d.source || run.priorQuestions.length || !emptyChatField(s,'description') || text.trim().endsWith('?') ||
-                    state.transcript.filter(function(m){return m.role==='user' && !inquiry(m.text);}).length!==1)return;
-                description=text;patch.description=description;
+                if(savedNarrative()!==text || run.priorQuestions.length || text.trim().endsWith('?'))return;
+                if(d.source===text && description===text) {
+                    // An exact retry of an already recovered narrative adds no source.
+                } else {
+                    if(d.source || !emptyChatField(s,'description'))return;
+                    description=text;patch.description=description;
+                    if(emptyChatField(s,'summary'))patch.summary=narrativeSummary(description);
+                }
             }
             if(typeof description!=='string' || !description.trim())return;
             if(Object.keys(patch).length) {
@@ -3541,17 +3585,30 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             await deriveSummary(run);
             if(!current(run))return;
             var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-            if(!current(run) || !checked.validation)return;
+            if(!current(run))return;
+            if(!checked.validation) {
+                add('assistant','Описание сохранено. Не удалось проверить поля Jira. Откройте редактор и повторите проверку.');
+                return;
+            }
             var verified=controller.getState();
+            var providerNote=malformed?'Pico вернул ответ неверного формата.':'Pico недоступен.';
             if(checked.ok && verified.draft.checked && !verified.error) {
                 // Keep the safe provider diagnostic as a notice. It is no longer
                 // a blocking error once this exact card passed the local check.
                 var http=/\bHTTP ([45]\d{2})\b/.exec(state.error.message);
-                var diagnostic=(http?'Сервис модели вернул HTTP '+http[1]+'.':
+                var diagnostic=(malformed?providerNote:http?'Сервис модели вернул HTTP '+http[1]+'.':
                     state.error.code==='runtime'?'Pico недоступен.':'Не удалось получить ответ Pico.')+' Карточка прошла локальную проверку Jira.';
                 if(!state.notices.includes(diagnostic))state.notices.push(diagnostic);
                 state.error=null;state.status='idle';
-                add('assistant','Pico недоступен. Проверка пройдена. Сверьте карточку и нажмите «Создать», когда будете готовы.');
+                add('assistant',providerNote+' Проверка пройдена. Сверьте карточку и нажмите «Создать», когда будете готовы.');
+            } else {
+                var why=Object.values(checked.validation.fieldErrors || {}).flat().concat(d.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
+                if(checked.validation.fieldErrors.timetracking)why.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
+                var notice=providerNote+' Сведения сохранены из текста пользователя; готовность проверена локально.';
+                if(!state.notices.includes(notice))state.notices.push(notice);
+                state.error=null;state.status='idle';
+                add('assistant','Создание пока недоступно. '+(why.join(' ') || 'Откройте редактор и проверьте карточку.')+
+                    ((checked.validation.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira».':''));
             }
         }
         async function runTurn(text,reassessment,reconcile) {
@@ -3576,7 +3633,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var priorEntry=state.transcript[state.transcript.length-1];
             if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
                 priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
-            if(!reassessment) add('user',text);state.error=null;state.status='running';
+            if(!reassessment && !collapseExactRetry(text)) add('user',text);state.error=null;state.status='running';
             var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || ''};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},

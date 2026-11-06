@@ -35,7 +35,7 @@ test('actual Pico failures reach chat and UI as safe actionable categories, incl
         let invoked;const editor={openEditor(){invoked='editor';},openConnection(){invoked='connection';},openSettings(){invoked='budget';}};
         ui=loadUnit('chat-ui',{'_ujgTA_icons':loadUnit('icons',{},globals)},globals).create({$,controller:h.controller,chat,editor});ui.mount(window.document.querySelector('#root'));
         try {
-            const userText=scenario.name==='transport'?'Покажи доступные поля':'Текст запроса должен сохраниться';
+            const userText=['transport','response'].includes(scenario.name)?'Покажи доступные поля':'Текст запроса должен сохраниться';
             window.document.querySelector('[data-ta-chat-input]').value=userText;
             $('[data-ta-chat-input]').trigger('input');
             window.document.querySelector('[data-ta-chat-send]').click();
@@ -602,4 +602,38 @@ test('after a transport failure a user can validate the current edited card with
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true);
     assert.equal(await page.evaluate(()=>window.taPreview.gatewayCalls),1);
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),0);
+});
+
+test('invalid Pico JSON preserves the incident narrative and a required Jira estimate can be answered in chat',async t=>{
+    const {page,state}=await browserFixture(t,1440,'?effort=required');
+    await page.evaluate(async()=>{
+        const fixture=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');
+        fixture.instance.destroy();
+        fixture.attempts=0;
+        fixture.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{
+            api:fixture.api,storage:null,requestText:async()=>{fixture.attempts++;return {text:'{"toolCalls":[{"name":"update_task","arguments":{"fields":{"summary":"UNTRUSTED"}}}'};}
+        });
+        await fixture.instance.ready;
+        const c=fixture.instance.controller;
+        await c.selectProject('DEMO');await c.selectIssueType('10');await c.selectTemplate('task');
+    });
+    const narrative='Добрый день!\nС утра отсутствует доступ к тестовому серверу.\nПо проблеме зарегистрированы заявки SD0001 и SD0002.\nПрошу восстановить доступ.';
+    const composer=page.locator('[data-ta-chat-input]');
+    await composer.fill(narrative);await composer.press('Enter');
+    await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
+    const before=(await state()).draft;
+    assert.equal(before.fields.description,narrative);
+    assert.match(before.fields.summary,/доступ/);
+    assert.doesNotMatch(before.fields.summary,/UNTRUSTED|Добрый день/);
+    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
+    assert.match(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),/оценк/i);
+    const attempts=await page.evaluate(()=>window.taPreview.attempts);
+    await composer.fill('10 минут');await composer.press('Enter');
+    await page.waitForFunction(()=>!!window.taPreview.instance.controller.getState().draft.checked);
+    assert.equal(await page.evaluate(()=>window.taPreview.attempts),attempts);
+    await page.locator('[data-ta-card-create]').click();
+    await page.waitForSelector('[data-ta-chat-issue-link]');
+    const payload=await page.evaluate(()=>window.taPreview.createdPayload.fields);
+    assert.equal(payload.description,narrative);assert.deepEqual(payload.timetracking,{originalEstimate:'10m'});
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(x=>x==='create').length),1);
 });

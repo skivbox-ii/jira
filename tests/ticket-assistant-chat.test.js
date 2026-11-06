@@ -81,20 +81,23 @@ for(const correction of ['valid','malformed','changed','prose']) test('primary c
         const d=h.controller.getState().draft;assert.equal(d.fields.summary,'Ошибка запуска');assert.equal(d.fields.description,'Приложение не запускается');
         assert.equal(d.questions[0].text,'Когда появилась ошибка?');assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
     } else {
-        assert.equal(chat.getState().error.code,'response-repair');assert.equal(chat.getState().error.action,'retry');
-        assert.match(chat.getState().error.message,/Повторить/);assert.equal(n,2);
-        assert.equal(chat.getState().transcript.length,1);assert.equal(JSON.stringify(h.controller.getState().draft),before);
+        assert.equal(chat.getState().error,null);assert.equal(n,2);
+        const d=h.controller.getState().draft;
+        assert.equal(d.fields.summary,'Приложение не запускается');assert.equal(d.fields.description,'Приложение не запускается');
+        assert.equal(d.source,'Приложение не запускается');assert.equal(d.questions.length,0);assert.ok(d.checked);
+        assert.equal(chat.getState().lastTurnUsage.toolCalls,0);
+        assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
     }
     chat.destroy();
 });
 
 for(const bad of ['Ответ\n{"toolCalls":', 'update_task(summary="Changed")',
     JSON.stringify({text:'Нельзя показывать частичный ответ',toolCalls:[{id:'good',name:'update_task',arguments:{fields:{summary:'Changed'}}},{id:'bad',name:'unknown',arguments:{}}]})]) {
-    test('primary task chat rejects malformed output without transcript or task partial effects: '+bad.slice(0,35),async()=>{
+    test('primary inquiry rejects malformed output without transcript or task partial effects: '+bad.slice(0,35),async()=>{
         const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
         const h=await setup();h.chat.destroy();let n=0;const before=JSON.stringify(h.controller.getState().draft);
         const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{n++;return {text:bad};}});
-        await chat.send('Проверка');assert.equal(chat.getState().status,'error');assert.equal(chat.getState().error.code,'response');
+        await chat.send('Покажи поля');assert.equal(chat.getState().status,'error');assert.equal(chat.getState().error.code,'response');
         assert.equal(chat.getState().transcript.length,1);assert.equal(n,1);
         assert.equal(JSON.stringify(h.controller.getState().draft),before);chat.destroy();
     });

@@ -66,11 +66,107 @@ test('later narrative cannot silently replace a user description or check missed
     await h.chat.send(narrative);
     assert.equal(h.controller.getState().draft.fields.description,'Моё описание');assert.equal(h.controller.getState().draft.checked,null);
 });
-test('fallback is not used for malformed model output or reconciliation',async t=>{
+test('malformed initial response recovers user facts; reconciliation without evidence stays blocked',async t=>{
     const h=await setup(t,async config=>{config.onEvent({type:'error',code:'response'});return {status:'error'};});
-    const before=JSON.stringify(h.controller.getState().draft);await h.chat.send(narrative);
-    assert.equal(JSON.stringify(h.controller.getState().draft),before);
+    await h.chat.send(narrative);
+    assert.equal(h.controller.getState().draft.fields.description,narrative);
+    assert.ok(h.controller.getState().draft.checked);
     const h2=await setup(t);await h2.chat.reconcile();assert.equal(h2.controller.getState().draft.checked,null);
+});
+
+const greeted='Добрый день!\nНа стендах DEV, TEST и PREPROD приложение не запускается. Нужно восстановить запуск. Проверка: успешный вход.';
+async function requireEstimate(h) {
+    const read=h.api.getCreateMeta;
+    h.api.getCreateMeta=async(...args)=>{const raw=await read(...args);for(const type of raw.projects[0].issuetypes)
+        type.fields.timetracking={name:'Оценка трудозатрат',required:true,schema:{type:'timetracking',system:'timetracking'}};
+        return raw;};
+    await h.controller.selectProject('DO');
+}
+async function restoreMalformed(t,h,texts) {
+    h.chat.destroy();const id=h.controller.getState().draft.id;
+    const previous=h.store.loadConversation('DO',id);
+    h.store.saveConversation('DO',id,{transcript:texts.map((text,i)=>({id:'legacy-'+i,role:'user',text})),messages:[],pendingTemplateProposal:null,notices:[]},previous?.revision || 0);
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
+    const Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields});
+    const Chat=loadUnit('chat',{_ujgTA_chatTools:Tools,_ujgTA_draft:h.drafts},{AbortController});
+    let calls=0;
+    const chat=Chat.create({controller:h.controller,store:h.store,runtime,requestText:async()=>{calls++;return {text:JSON.stringify({text:'EVIL',toolCalls:[
+        {id:'write',name:'update_task',arguments:{fields:{summary:'EVIL',description:'EVIL',timetracking:{originalEstimate:'1h'}},questions:[]}},
+        {id:'create',name:'create_issue',arguments:{}}]})};}});
+    t.after(()=>chat.destroy());return {chat,calls:()=>calls};
+}
+for(const restored of [false,true])test('greeted narrative recovers from user text with a real estimate blocker; restored duplicates='+restored,async t=>{
+    const h=await setup(t);await requireEstimate(h);
+    const r=await restoreMalformed(t,h,restored?[greeted,greeted,greeted]:[]);
+    if(restored)await r.chat.reconcile();else await r.chat.send(greeted);
+    const d=h.controller.getState().draft,s=r.chat.getState();
+    assert.equal(d.fields.description,greeted);assert.equal(d.source,greeted);
+    assert.equal(d.fields.summary,'На стендах DEV, TEST и PREPROD приложение не запускается.');
+    assert.equal(d.fields.timetracking,undefined);assert.equal(d.checked,null);
+    assert.ok(h.controller.getState().validation.fieldErrors.timetracking);
+    assert.equal(s.error,null);assert.equal(s.status,'idle');
+    assert.match(s.transcript.at(-1).text,/исходную оценку трудозатрат/);
+    assert.doesNotMatch(s.transcript.at(-1).text,/Проверка пройдена|EVIL/);
+    assert.match(s.notices.join(' '),/неверного формата/);assert.doesNotMatch(s.notices.join(' '),/Pico недоступен/);
+    assert.equal(s.transcript.filter(m=>m.role==='user').length,1);
+    assert.equal(r.calls(),restored?2:1);
+    assert.equal(h.store.loadConversation('DO',d.id).value.transcript.filter(m=>m.role==='user').length,1);
+});
+test('exact retries collapse uninterrupted legacy user entries and preserve a later identical answer',async t=>{
+    const h=await setup(t),r=await restoreMalformed(t,h,[greeted,greeted,greeted]);
+    await r.chat.send(greeted);
+    assert.equal(r.chat.getState().transcript.filter(m=>m.role==='user').length,1);
+    assert.equal(h.controller.getState().draft.source,greeted);
+    await r.chat.send(greeted);
+    assert.equal(r.chat.getState().transcript.filter(m=>m.role==='user').length,2);
+    assert.equal(h.controller.getState().draft.source,greeted);
+});
+test('the same short answer to successive assistant questions stays visible',async t=>{
+    let turn=0;
+    const h=await setup(t,async config=>{config.onEvent({type:'assistant',text:++turn===1?'Проверить TEST?':'Проверить DEV?'});});
+    await h.chat.send('Да');await h.chat.send('Да');
+    assert.deepEqual(h.chat.getState().transcript.filter(m=>m.role==='user').map(m=>m.text),['Да','Да']);
+});
+test('summary greeting removal respects Russian word boundaries',async t=>{
+    const h=await setup(t);await h.chat.send('Приветствие не отображается на странице входа. Исправить текст.');
+    assert.equal(h.controller.getState().draft.fields.summary,'Приветствие не отображается на странице входа.');
+});
+test('missing estimate after malformed recovery can be answered locally without another model request',async t=>{
+    const h=await setup(t);await requireEstimate(h);const r=await restoreMalformed(t,h,[greeted,greeted,greeted]);
+    await r.chat.reconcile();assert.equal(h.controller.getState().draft.checked,null);
+    const calls=r.calls();await r.chat.send('Оценка: 2 часа');
+    assert.equal(r.calls(),calls);assert.equal(h.controller.getState().draft.fields.timetracking.originalEstimate,'2h');
+    assert.ok(h.controller.getState().draft.checked);assert.match(r.chat.getState().transcript.at(-1).text,/Проверка пройдена/);
+});
+test('malformed recovery preserves protected summary and pending replacement',async t=>{
+    const h=await setup(t),c=h.controller;
+    await c.updateField('summary','Ручная тема');await c.chatUpdate({fields:{summary:'Предложенная тема'}},c.chatSnapshot());
+    const r=await restoreMalformed(t,h,[greeted,greeted,greeted]);await r.chat.reconcile();
+    const d=c.getState().draft;assert.equal(d.fields.summary,'Ручная тема');assert.equal(d.pendingFields.summary,'Предложенная тема');
+    assert.equal(d.protectedFields.summary,true);assert.equal(d.checked,null);assert.equal(d.fields.description,greeted);
+    assert.match(r.chat.getState().transcript.at(-1).text,/Подтвердите или отклоните/);
+});
+test('one undo removes only automatically recovered fields and leaves the original narrative',async t=>{
+    const h=await setup(t),r=await restoreMalformed(t,h,[greeted,greeted,greeted]);await r.chat.reconcile();
+    assert.equal(r.chat.getState().canUndo,true);await r.chat.undo();
+    const d=h.controller.getState().draft;assert.equal(d.fields.summary,undefined);assert.equal(d.fields.description,undefined);
+    assert.equal(d.source,greeted);assert.equal(d.checked,null);
+    assert.equal(r.chat.getState().transcript.filter(m=>m.role==='user').length,1);
+});
+for(const texts of [[greeted,'Не трогайте DEV, работать только на TEST'],['Покажи шаблон'],['Добрый день!']])
+test('restored reconciliation cannot seed from ambiguous, command or greeting evidence: '+texts.join(' / '),async t=>{
+    const h=await setup(t),r=await restoreMalformed(t,h,texts),before=JSON.stringify(h.controller.getState().draft.fields);
+    await r.chat.reconcile();assert.equal(JSON.stringify(h.controller.getState().draft.fields),before);
+    assert.equal(h.controller.getState().draft.checked,null);assert.ok(r.chat.getState().error);
+});
+for(const guard of ['description','question','review','exception'])test('restored malformed recovery preserves semantic guard '+guard,async t=>{
+    const h=await setup(t),c=h.controller;
+    if(guard==='description')await c.updateField('description','Ручное описание');
+    if(guard==='question')await c.chatUpdate({fields:{},questions:[{id:'q',text:'Какие стенды?',required:true}]},c.chatSnapshot());
+    if(guard==='review')await c.chatApplyTemplate({instructions:'Новые правила'},c.chatSnapshot());
+    if(guard==='exception')await c.chatUpdate({fields:{},taskException:'Не проверять доступ'},c.chatSnapshot());
+    const r=await restoreMalformed(t,h,[greeted,greeted,greeted]),before=JSON.stringify(c.getState().draft.fields);
+    await r.chat.reconcile();assert.equal(JSON.stringify(c.getState().draft.fields),before);assert.equal(c.getState().draft.checked,null);
 });
 test('late failed provider cannot change a newer manual edit',async t=>{
     const gate=deferred();const h=await setup(t,async()=>{await gate.promise;throw Error('transport');});
@@ -92,8 +188,8 @@ test('plain API incident narrative is task data, not a connection command',async
     assert.equal(h.controller.getState().draft.fields.description,'Исправить API на DEV. Проверка: ответ 200.');
     assert.ok(h.controller.getState().draft.checked);
 });
-for(const cancel of ['stop','edit','switch','destroy'])test('late Jira relation check cannot check a '+cancel+' turn',async t=>{
-    const h=await setup(t),c=h.controller,read=h.api.getCreateMeta,gate=deferred();let started=false,signal;
+for(const failure of ['transport','response'])for(const cancel of ['stop','edit','switch','destroy'])test('late Jira relation check cannot check a '+cancel+' turn after '+failure,async t=>{
+    const h=await setup(t,async()=>{throw Error(failure==='response'?'Invalid Pico text envelope':'provider unavailable');}),c=h.controller,read=h.api.getCreateMeta,gate=deferred();let started=false,signal;
     h.api.getCreateMeta=async(...args)=>{const raw=await read(...args);raw.projects[0].issuetypes.forEach(x=>x.fields.customfield_923={name:'Epic',schema:{type:'any',custom:'com.pyxis.greenhopper.jira:gh-epic-link'}});return raw;};
     await c.selectProject('DO');await c.updateField('customfield_923','DO-42');
     h.api.getEpic=(project,key,request)=>{started=true;signal=request.signal;return gate.promise;};
