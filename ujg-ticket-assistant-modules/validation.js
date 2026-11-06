@@ -60,9 +60,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
 
     var devopsSections = [
         {id:'goal',label:'Цель',aliases:['goal'],question:'Зачем нужна эта работа и какой результат она должна дать?'},
-        {id:'work',label:'Что сделать',aliases:['объём работ','объем работ','работы','what to do'],question:'Что именно должен сделать DevOps? Укажите конкретные действия и объём работ.'},
+        {id:'work',label:'Что сделать',aliases:['объём работ','объем работ','работы','задача','действия','what to do'],question:'Что именно должен сделать DevOps? Укажите конкретные действия и объём работ.'},
         {id:'location',label:'Где',aliases:['окружение','среда','environment','where'],question:'Где выполнить работу или воспроизвести сбой? Укажите среду, сервис и стенд.'},
-        {id:'acceptance',label:'Критерии приёмки',aliases:['критерии приемки','критерии проверки исправления','acceptance criteria'],question:'По каким наблюдаемым результатам вы примете выполненную работу?'},
+        {id:'acceptance',label:'Критерии приёмки',aliases:['критерии приемки','критерии проверки исправления','критерии готовности','критерии успешности','acceptance criteria'],question:'По каким наблюдаемым результатам вы примете выполненную работу?'},
         {id:'links',label:'Ссылки',aliases:['links'],question:'Добавьте ссылку на репозиторий, документацию или базу знаний. Правило DEVOPS требует ссылку перед созданием; причина её отсутствия сохраняется в описании.'},
         {id:'actual',label:'Что происходит',aliases:['фактическое поведение','actual behavior'],question:'Что именно сломалось? Опишите фактическое поведение.'},
         {id:'expected',label:'Что ожидалось',aliases:['ожидаемое поведение','expected behavior'],question:'Какое поведение ожидалось при тех же действиях?'},
@@ -72,10 +72,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         {id:'version',label:'Версия',aliases:['version'],question:'На какой версии возникла ошибка с поля без доступных логов?'},
         {id:'conditions',label:'Условия возникновения',aliases:['conditions'],question:'При каких условиях наблюдалась ошибка с поля без доступных логов?'},
         {id:'release',label:'Версия и состав',aliases:['версия/артефакт и состав','release and scope'],question:'Какую версию или артефакт разворачиваем и что входит в релиз? Можно указать ссылку на релиз, тег или ветку.'},
-        {id:'order',label:'Порядок',aliases:['порядок действий','порядок развёртывания','порядок развертывания','deployment steps'],question:'В каком порядке выполнять развёртывание? Укажите шаги, миграции или скрипты.'},
-        {id:'window',label:'Окно',aliases:['окно работ','окно развёртывания','окно развертывания','deployment window'],question:'Какое окно развёртывания согласовано? Укажите время или явно рабочие часы.'},
+        {id:'order',label:'Порядок',aliases:['порядок действий','порядок развёртывания','порядок развертывания','действия','deployment steps'],question:'В каком порядке выполнять развёртывание? Укажите шаги, миграции или скрипты.'},
+        {id:'window',label:'Окно',aliases:['окно работ','окно выполнения','время выполнения','окно развёртывания','окно развертывания','deployment window'],question:'Какое окно развёртывания согласовано? Укажите время или явно рабочие часы.'},
         {id:'verification',label:'Проверка',aliases:['проверка результата','verification'],question:'Что проверяем после развёртывания и кто проверяет результат?'},
-        {id:'verifier',label:'Кто проверяет',aliases:['проверяющий','проверяющая команда','verifier'],question:'Кто проверяет результат развёртывания?'},
+        {id:'verifier',label:'Кто проверяет',aliases:['проверяющий','проверяющая команда','проверку выполнит','проверку проводит','проверку выполняет','verifier'],question:'Кто проверяет результат развёртывания?'},
         {id:'impact',label:'Влияние',aliases:['основание критического приоритета','impact'],question:'Что упало или недоступно и какую разработку, проверку или демонстрацию это остановило? Укажите основание критического приоритета.'},
         {id:'buildLog',label:'Лог сборки',aliases:['логи сборки','build log'],question:'Для ошибки пайплайна добавьте лог сборки и укажите упавший шаг.'}
     ];
@@ -101,20 +101,62 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         })};
     }
     function readSections(description) {
-        var result=Object.create(null),current=null;
-        String(description || '').split(/\r?\n/).forEach(function(line) {
-            var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*)/,'').trim();
+        var result=Object.create(null),current=[],intro=[],headed=false;
+        // Models use both **Label:** and **Label**:, including several headings
+        // on one line. Strip heading formatting before assigning the actual text.
+        var text=String(description || '').replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70}):\2/g,'$1\n$3:')
+            .replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70})\2\s*:/g,'$1\n$3:');
+        text.split(/\r?\n/).forEach(function(line) {
+            var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
             var colon=clean.indexOf(':'),label=colon===-1 ? clean : clean.slice(0,colon);
-            var key=sectionKey(label),section=devopsSections.find(function(s) {
+            var key=sectionKey(label),sections=devopsSections.filter(function(s) {
                 return [s.label].concat(s.aliases).some(function(alias) {return sectionKey(alias)===key;});
             });
-            if(section) {
-                current=section.id;
-                if(!result[current])result[current]='';
-                result[current]+='\n'+(colon===-1?'':clean.slice(colon+1).replace(/^\s*\*{1,2}\s*/,''));
-            } else if (/^(?:срок(?: \(опционально\))?|родительская история|влияние \(опционально\)|история|приоритет|исполнитель)\s*:/i.test(clean)) current=null;
-            else if (current) result[current]+='\n'+line;
+            if(sections.length) {
+                headed=true;
+                current=sections.map(function(s) {return s.id;});
+                current.forEach(function(id) {
+                    if(!result[id])result[id]='';
+                    result[id]+='\n'+(colon===-1?'':clean.slice(colon+1).replace(/^\s*\*{1,2}\s*/,''));
+                });
+            } else if (/^(?:срок(?: \(опционально\))?|родительская история|влияние \(опционально\)|история|приоритет|исполнитель)\s*:/i.test(clean)) current=[];
+            else {
+                if(!headed)intro.push(line);
+                current.forEach(function(id) {result[id]+='\n'+line;});
+            }
         });
+        // Credit literal facts in task prose without rewriting the description or
+        // inventing missing data. Links/tags/examples alone cannot name a target.
+        var facts=[intro.join('\n'),result.work || '',result.actual || '',result.steps || ''].join('\n');
+        if(!meaningful(result.location)) {
+            var location=/(?:в|на)\s+(?:(?:сред[еу]|стенд[еу]|окружени[еи]|контур[еу])\s+)?(?:[«"'`])?(DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)(?=$|[^a-z0-9_-])/ig;
+            var match,locations=[];
+            var alternativeLocation=/(?:DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)\s*(?:или|либо|\/)\s*(?:(?:в|на)\s+)?(?:(?:сред[еу]|стенд[еу]|окружени[еи]|контур[еу])\s+)?(?:DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)(?=$|[^a-z0-9_-])/i.test(facts);
+            while((match=location.exec(facts))) {
+                var before=facts.slice(Math.max(0,match.index-15),match.index);
+                if(/(?:не|например)\s*$/i.test(before))continue;
+                locations.push(match);
+            }
+            var targets=Array.from(new Set(locations.map(function(item) {return item[1].toUpperCase();})));
+            if(!alternativeLocation && targets.length===1)result.location=locations[0][0];
+        }
+        if(!meaningful(result.release) && /обнов|разверн|разв[её]рт|выкат|установ|deploy|upgrade|rollout/i.test(facts)) {
+            // Only an explicitly stated target version or tag identifies a release.
+            // A current/source version is useful context, never the target by itself.
+            var release=/(?:до\s+версии|на\s+версию)\s+([vV]?\d[\w.-]*)|(?:из\s+)?тег[а]?\s+[`"']?([\w][\w./-]*)/i.exec(facts);
+            var unknownTarget=/(?:целевая|новая|нужная)\s+версия\s+(?:пока\s+)?(?:неизвестна|не определена|не указана)/i.test(facts);
+            if(release) {
+                var beforeRelease=facts.slice(0,release.index),afterRelease=facts.slice(release.index+release[0].length);
+                var alternativeRelease=/^\s*(?:или|либо|\/)\s*(?:(?:до|на|из)\s+)?(?:(?:версии|версию|тега)\s+)?[\w\d]/i.test(afterRelease);
+                var placeholderTag=release[2] && /^(?:tbd|todo|unknown|none|n\/a)[.!?]*$/i.test(release[2]);
+                if(!unknownTarget && !alternativeRelease && !placeholderTag && !/(?:не|нет|уточнить)\s*$/i.test(beforeRelease))result.release=release[0];
+            }
+        }
+        if(!meaningful(result.window)) {
+            var workingHours=/(?:в\s+)?рабоч(?:ие|их|ее|ем)\s+(?:часы|часов|время|времени)/i.exec(facts);
+            if(workingHours && !/(?:не|вне)\s*$/i.test(facts.slice(Math.max(0,workingHours.index-5),workingHours.index)))result.window=workingHours[0];
+        }
+        if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
     }
     function meaningful(value) {
@@ -148,10 +190,10 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(meaningful(sections.links) && !url(sections.links))
             missing('links',devopsSections.find(function(s) {return s.id==='links';}).question);
         if(requirements.kind==='deployment' && meaningful(sections.verification) && !meaningful(sections.verifier) &&
-            !/(?:проверя(?:ет|ют|ющий)|проверит|проверять будет|кто\s*[:—-]|ответственн|инженер|разработчик|тестировщик|команда|заказчик|(?:QA|DevOps)\s)/i.test(sections.verification))
+            !/(?:проверя(?:ет|ют|ющий)|проверит|проверять будет|проверку (?:выполнит|выполняет|проводит)|кто\s*[:—-]|ответственный\s*[:—-])/i.test(sections.verification))
             missing('verifier','Кто проверяет результат развёртывания? Укажите человека или команду в разделе «Проверка».');
         if(requirements.kind==='deployment' && meaningful(sections.window) &&
-            !/(?:\d{1,2}[:.]\d{2}|рабочи[ех] (?:час|врем)|ноч(?:ь|ью)|утр|вечер|с\s*\d{1,2}\s*(?:до|[-–—])\s*\d{1,2})/i.test(sections.window))
+            !/(?:\d{1,2}[:.]\d{2}|рабоч(?:ие|их|ее|ем) (?:час|врем)|ноч(?:ь|ью)|утр|вечер|с\s*\d{1,2}\s*(?:до|[-–—])\s*\d{1,2})/i.test(sections.window))
             missing('window',devopsSections.find(function(s) {return s.id==='window';}).question);
         if(requirements.kind==='bug') {
             var evidence=sections.evidence || '';

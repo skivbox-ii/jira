@@ -227,3 +227,68 @@ test('compact typed facts and a dedicated QA verifier are accepted without repea
     const fieldBug=descriptions['11'].replace('https://logs.example/incidents/123','Логи недоступны: ошибка с поля, установщик не имеет доступа к окружению.\nКонфигурация: x86\nВерсия: 2.3\nУсловия возникновения: Импорт файла после обновления.');
     assert.equal(check('11',fieldBug).ok,true);
 });
+
+test('live formatted deployment prose credits explicit environment release actions working hours and named verifier',()=>{
+    const description='**Задача:** Обновить сервис demo-api в среде DEV до версии 1.0 из тега v1.0.\n'+
+        '**Действия:**\n1. Заменить образ сервиса.\n2. Перезапустить сервис.\n'+
+        '**Окно:** В рабочее время.\n'+
+        '**Проверка:** Проверку проводит Иванов Иван.\n'+
+        '**Критерии приемки:** Сервис запускается без ошибок, GET /health возвращает HTTP 200.\n'+
+        '**Ссылки:** https://git.example/services/demo-api/releases/v1.0';
+    const result=validation.validateFields(meta(),'12',{summary:'Обновление сервиса demo-api в DEV до версии 1.0',description});
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.questions.length,0);
+    const withoutWindow=description.replace('**Окно:** В рабочее время.\n','');
+    assert.deepEqual(Array.from(check('12',withoutWindow).questions,q=>q.id),['devops:window']);
+});
+
+test('inline formatted headings and alternate real service values satisfy the same deployment rules',()=>{
+    const description='**Задача:** Развернуть reporting-worker в окружении PREPROD до версии 2026.11.6 из тега release-2026.11.6. '+
+        '**Действия:** Обновить образ, затем перезапустить worker. '+
+        '**Время выполнения:** В рабочие часы. '+
+        '**Проверяющий:** QA '+
+        '**Критерии готовности:** Очередь обрабатывается, ошибок в логах нет. '+
+        '**Ссылки:** https://code.example/reporting/releases/2026.11.6';
+    const result=check('12',description);
+    assert.equal(result.ok,true,JSON.stringify(result));
+});
+
+test('environment and release examples negations and unresolved alternatives do not become task facts',()=>{
+    for(const sentence of ['Среда пока неизвестна, например DEV.', 'Обновить сервис не в среде DEV, окружение пока не выбрано.', 'Обновить сервис в DEV или TEST, выбор ещё не сделан.']) {
+        const description='**Задача:** '+sentence+'\n**Действия:** Заменить образ API и перезапустить сервис.\nОкно: В рабочее время.\nПроверка: Команда QA проверяет HTTP 200.\nСсылки: https://git.example/api';
+        const result=check('12',description);
+        assert.ok(result.questions.some(q=>q.id==='devops:location'),sentence);
+        assert.ok(result.questions.some(q=>q.id==='devops:release'),sentence);
+    }
+});
+
+test('complete production prose with working-time window health criterion and named requester leaves only link missing',()=>{
+    const description='**Задача:** Обновить сервис demo-api в среде DEV до версии 1.0 из тега v1.0.\n'+
+        '**Действия:**\n1. Заменить образ сервиса.\n2. Перезапустить сервис.\n'+
+        '**Окно выполнения:** Рабочее время.\n'+
+        '**Критерии приёмки:**\n- Проверка HTTP 200 на эндпоинте /health\n- Проверку выполнит: Постановщик.';
+    const result=validation.validateFields(meta(),'12',{summary:'Обновление сервиса demo-api в DEV до версии 1.0',description});
+    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:links']);
+    assert.equal(check('12',description+'\nСсылки: https://git.example/api/releases/v1.0').ok,true);
+});
+
+test('an observable outcome without a person does not invent a named verifier',()=>{
+    const description=descriptions['12'].replace('Инженер команды разработки проверяет HTTP 200 на /health.','Сервис запускается без ошибок.');
+    assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),['devops:verifier']);
+});
+
+test('deployment references do not invent environment and an unspecified tag does not invent a release',()=>{
+    const description='Задача: Обновить сервис API из тега неизвестно.\nДействия: Перезапустить сервис.\nОкно выполнения: В рабочее время.\nКритерии приёмки: HTTP 200 на /health.\nКто проверяет: QA\nСсылки: Инструкция по обновлению API в DEV https://git.example/api';
+    assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),['devops:location','devops:release']);
+});
+
+test('reviewer ambiguous targets source versions and placeholder tags stay incomplete',()=>{
+    for(const [sentence,missing] of [
+        ['Обновить API в DEV или на TEST до версии 1.0','devops:location'],
+        ['Обновить API в DEV с версии 1.0; целевая версия пока неизвестна','devops:release'],
+        ['Обновить API в DEV из тега TBD','devops:release'],
+        ['Обновить API в DEV до версии 1.0 или 2.0','devops:release']
+    ]) {
+        const description='Задача: '+sentence+'\nДействия: Заменить образ и перезапустить API.\nОкно: Рабочее время.\nПроверка: HTTP 200 на /health.\nКто проверяет: QA\nСсылки: https://git.example/api';
+        assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),[missing],sentence);
+    }
+});

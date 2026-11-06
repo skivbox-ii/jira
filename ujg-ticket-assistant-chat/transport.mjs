@@ -170,8 +170,18 @@ export function makeDraftRequest(system, state, evidence, {messages = [], includ
             priorQuestion = '';
         }
     }
+    // Requirements are supplied by the selected Jira type's validator. Carry the
+    // descriptor through both review and recovery; never hard-code a type's labels.
+    const devopsRequirements = state.draft.projectKey==='DEVOPS' ? state.devopsRequirements : null;
+    const devopsContext = devopsRequirements ? {devopsRequirements,
+        requiredDescriptionLabels:devopsRequirements.sections.map(section=>section.label)} : {};
+    if (devopsContext.requiredDescriptionLabels?.length) {
+        devopsContext.descriptionFormatInstruction = 'Для DEVOPS заполни description по requiredDescriptionLabels: используй точное название каждого раздела и двоеточие, затем запиши содержательные факты естественным русским языком. '+
+            'Каждый раздел начинай с новой строки. Сохрани подтверждённые сведения из current и userAnswers. Не выдумывай факты и не подставляй заглушки вместо неизвестных значений; сохрани соответствующие вопросы в missing.';
+        system += '\n\n'+devopsContext.descriptionFormatInstruction+'\nОбязательные названия разделов description для выбранного типа Jira (данные): '+JSON.stringify(devopsContext.requiredDescriptionLabels)+'.';
+    }
     return {system, user:JSON.stringify({
-        template:state.template, fields:state.fieldSchema, current:state.draft.fields,
+        template:state.template, fields:state.fieldSchema, current:state.draft.fields, ...devopsContext,
         scope:{project:state.draft.projectKey,type:state.draft.issueTypeId,typeName:state.issueType?.name},
         protected:state.draft.protectedFields, proposals:state.draft.pendingFields, usersPresent:state.draft.userFieldsPresent,
         openQuestions:state.draft.questions, exceptions:state.draft.taskExceptions, ...(includeSource ? {source:state.draft.source} : {}),

@@ -361,3 +361,53 @@ test('nested missing normalization refuses metadata fields, conflicting envelope
         assert.deepEqual(parseDraftData(JSON.stringify(value),schema),value);
     }
 });
+
+for(const [typeId,kind] of [['10','task'],['11','bug'],['12','deployment']])
+test('compact DEVOPS '+kind+' request preserves dynamic requirements and exact description formatting in both contexts',async()=>{
+    const {makeDraftRequest}=await import('../ujg-ticket-assistant-chat/transport.mjs');
+    const {loadUnit,metadataFixture}=require('./helpers/ticket-assistant-fixture');
+    const validation=loadUnit('validation',{_ujgTA_fields:loadUnit('fields')});
+    const requirements=JSON.parse(JSON.stringify(validation.devopsRequirements(metadataFixture('DEVOPS'),typeId)));
+    const state=extractionContext();state.draft.projectKey='DEVOPS';state.draft.issueTypeId=typeId;state.draft.source='Подтверждённые факты';state.devopsRequirements=requirements;
+    for(const includeSource of [true,false]) {
+        const request=makeDraftRequest('Existing compact instructions.',state,state.conversationForExtraction,{includeSource}),data=JSON.parse(request.user);
+        assert.deepEqual(data.devopsRequirements,requirements);
+        assert.deepEqual(data.requiredDescriptionLabels,requirements.sections.map(s=>s.label));
+        assert.match(data.descriptionFormatInstruction,/точное название.*двоеточие/);
+        assert.match(data.descriptionFormatInstruction,/естественным русским языком/);
+        assert.match(data.descriptionFormatInstruction,/Каждый раздел начинай с новой строки/);
+        assert.ok(request.system.startsWith('Existing compact instructions.'));
+        assert.ok(request.system.includes(data.descriptionFormatInstruction));
+        for(const label of data.requiredDescriptionLabels)assert.ok(request.system.includes(JSON.stringify(label)));
+        assert.equal(Object.hasOwn(data,'source'),includeSource);
+    }
+});
+for(const project of ['DO','APP','devops'])test('compact generic '+project+' prompt remains unchanged even if DEVOPS requirements are present',async()=>{
+    const {makeDraftRequest}=await import('../ujg-ticket-assistant-chat/transport.mjs');const state=extractionContext();
+    state.draft.projectKey=project;state.devopsRequirements={kind:'deployment',sections:[{id:'window',label:'Окно'}]};
+    const request=makeDraftRequest('Generic compact instructions unchanged.',state,state.conversationForExtraction),data=JSON.parse(request.user);
+    assert.equal(request.system,'Generic compact instructions unchanged.');
+    for(const key of ['devopsRequirements','requiredDescriptionLabels','descriptionFormatInstruction'])assert.equal(Object.hasOwn(data,key),false);
+});
+test('compact DEVOPS requirements are sourced from the current descriptor, never a fixed three-type label list',async()=>{
+    const {makeDraftRequest}=await import('../ujg-ticket-assistant-chat/transport.mjs');const state=extractionContext();state.draft.projectKey='DEVOPS';
+    state.devopsRequirements={kind:'deployment',sections:[{id:'custom',label:'Пользовательский раздел',question:'Что требуется?'}]};
+    const request=makeDraftRequest('Compact.',state,[]),data=JSON.parse(request.user);
+    assert.deepEqual(data.requiredDescriptionLabels,['Пользовательский раздел']);assert.match(request.system,/Пользовательский раздел/);
+    assert.doesNotMatch(request.system,/Окно|Шаги воспроизведения/);
+});
+
+
+for(const recovery of [false,true])test('configured model receives DEVOPS compact requirements during '+(recovery?'envelope recovery':'reconciliation'),async()=>{
+    const {createSession}=await runtime(),requests=[];let executed=0;
+    const state=extractionContext();state.draft.projectKey='DEVOPS';state.conversationForReview=state.conversationForExtraction;
+    state.devopsRequirements={kind:'deployment',sections:[{id:'window',label:'Окно',question:'Когда развёртывать?'}]};
+    const session=createSession({draftReviewPrompt:recovery?undefined:'Compact review.',draftExtractionPrompt:'Compact recovery.',
+        getContext:()=>state,afterStep:()=>({action:'end'}),tools:[extractionTool(()=>{executed++;return {ok:true};})],
+        requestText:async request=>{requests.push(request);return {text:recovery && requests.length===1?'{}':JSON.stringify({fields:{description:'Окно: в рабочие часы.'},missing:[]})};}});
+    const result=await session.prompt('Развёртывание в рабочие часы.');
+    assert.equal(result.status,'complete');assert.equal(executed,1);assert.equal(requests.length,recovery?2:1);
+    const request=requests.at(-1),data=JSON.parse(request.user);
+    assert.deepEqual(data.devopsRequirements,state.devopsRequirements);assert.deepEqual(data.requiredDescriptionLabels,['Окно']);
+    assert.ok(request.system.includes(data.descriptionFormatInstruction));assert.match(request.system,/"Окно"/);session.dispose();
+});
