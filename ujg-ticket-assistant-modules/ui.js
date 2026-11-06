@@ -642,15 +642,15 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var counter=root.find('[data-ta-token-preflight]');
             if(options.panel) {
                 var budget=state.settings && state.settings.tokenBudget,s=options.getChatState && options.getChatState(),usage=s && s.lastTurnUsage;
-                counter.prop('hidden',!budget || !tokenOpen).removeClass('ta-budget-over').attr('aria-label','Бюджет Pico');
-                root.find('[data-ta-tokens]').prop('disabled',!budget).attr({'aria-label':'Токены Pico',title:'Токены Pico'});
+                counter.prop('hidden',!budget || !tokenOpen).removeClass('ta-budget-over').attr('aria-label','Бюджет запросов');
+                root.find('[data-ta-tokens]').prop('disabled',!budget).attr({'aria-label':'Расход токенов',title:'Расход токенов'});
                 root.find('[data-ta-budget-warning]').prop('hidden',true);
-                root.find('[data-ta-token-summary]').text(budget?'Pico · Контекст '+budget.context+' токенов; на вход каждого запроса до '+(budget.context-budget.reserve)+'.':'Выберите проект для настройки бюджета Pico.');
+                root.find('[data-ta-token-summary]').text(budget?'Контекст: '+budget.context+' токенов; на вход каждого запроса до '+(budget.context-budget.reserve)+'.':'Выберите проект для настройки бюджета запросов.');
                 root.find('[data-ta-token-breakdown]').text(budget?'Резерв ответа каждого запроса '+budget.reserve+'. В запрос входят инструкции, схемы инструментов, текущая карточка и история.':'');
                 var outcomes={complete:'завершён',completed:'завершён',aborted:'остановлен',error:'ошибка',limit:'остановлен ограничением'};
                 root.find('[data-ta-token-usage]').prop('hidden',false).text(usage?
-                    'Последний ход Pico · эвристическая оценка, сумма по '+usage.modelCalls+' попыткам запроса: вход '+usage.inputTokens+', ответ '+usage.outputTokens+'. Вызовов инструментов '+usage.toolCalls+'. Ход: '+(outcomes[usage.status] || 'завершён')+'.':
-                    'Оценка последнего хода Pico появится после ответа. Данные usage провайдера здесь не показаны.');
+                    'Последний ответ · приблизительная оценка по всем запросам ('+usage.modelCalls+'): вход '+usage.inputTokens+', ответ '+usage.outputTokens+'. Вызовов инструментов '+usage.toolCalls+'. Статус: '+(outcomes[usage.status] || 'завершён')+'.':
+                    'Оценка расхода появится после ответа. Это приблизительный расчёт по тексту.');
                 return;
             }
             var estimate=state.tokenPreflight;

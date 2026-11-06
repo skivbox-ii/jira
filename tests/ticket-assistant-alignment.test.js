@@ -6,7 +6,7 @@ const {JSDOM}=require('jsdom');
 const jquery=require('jquery');
 const {loadUnit,metadataFixture}=require('./helpers/ticket-assistant-fixture');
 
-function setup(t,resizeObserver) {
+function setup(t,resizeObserver,options={}) {
     const dom=new JSDOM('<div id="root"></div>',{url:'https://jira.test/'}),window=dom.window,$=jquery(window);
     if(resizeObserver)window.ResizeObserver=resizeObserver;
     const globals={window,document:window.document,AbortController,URL};
@@ -17,7 +17,7 @@ function setup(t,resizeObserver) {
     const state={draft,meta:metadataFixture(),settings:{activeProfileId:'p',profiles:[{id:'p',templates:[{id:'t',name:'Task',issueTypeId:'10'}]}]},
         projects:[{key:'DO',name:'Delivery'}],stage:'idle',generationFieldIds:['summary','description']};
     const calls=[],controller={getState:()=>state,assistField:(...args)=>calls.push(args)};
-    const ui=loadUnit('ui',{_ujgTA_fieldUi:fieldUi,_ujgTA_icons:icons,_ujgTA_settingsUi:{}},globals).create({$,controller});
+    const ui=loadUnit('ui',{_ujgTA_fieldUi:fieldUi,_ujgTA_icons:icons,_ujgTA_settingsUi:{}},globals).create({$,controller,...options});
     const root=window.document.querySelector('#root');ui.mount(root);
     t.after(()=>{ui.destroy();window.close();});
     return {root,ui,state,calls,window,$};
@@ -147,4 +147,18 @@ test('page panes and footer use normal flow; only comparison values and fullscre
     assert.doesNotMatch(css,/\.ta-primary-actions\s*\{[^}]*position:\s*(sticky|fixed)/);
     assert.doesNotMatch(css,/\.ta-source-area[^}]*overflow-y:\s*auto/);
     assert.match(css,/\.ta-comparison-value\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/);
+});
+
+
+test('chat token popover explains estimates without exposing the internal agent name',t=>{
+    let chatState={lastTurnUsage:null};const h=setup(t,null,{panel:true,getChatState:()=>chatState});
+    h.state.settings.tokenBudget={context:32768,reserve:4096};h.ui.update(h.state);
+    const summary=h.root.querySelector('[data-ta-token-summary]'),usage=h.root.querySelector('[data-ta-token-usage]');
+    assert.match(summary.textContent,/Контекст: 32768/);assert.match(usage.textContent,/приблизительный расчёт/);
+    assert.equal(h.root.querySelector('[data-ta-tokens]').getAttribute('aria-label'),'Расход токенов');
+    assert.equal(h.root.querySelector('[data-ta-token-preflight]').getAttribute('aria-label'),'Бюджет запросов');
+    chatState={lastTurnUsage:{modelCalls:2,inputTokens:4500,outputTokens:700,toolCalls:1,status:'complete'}};h.ui.update(h.state);
+    assert.match(usage.textContent,/приблизительная оценка по всем запросам \(2\)/);assert.match(usage.textContent,/вход 4500, ответ 700/);
+    for(const node of [summary,usage,h.root.querySelector('[data-ta-token-preflight]'),h.root.querySelector('[data-ta-tokens]')])
+        assert.doesNotMatch(node.textContent+' '+node.getAttribute('title')+' '+node.getAttribute('aria-label'),/Pico/i);
 });

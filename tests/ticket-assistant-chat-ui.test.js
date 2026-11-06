@@ -5,7 +5,7 @@ const jquery=require('jquery');
 const {loadUnit,metadataFixture}=require('./helpers/ticket-assistant-fixture');
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 function setup(t) {
-    const dom=new JSDOM('<div id="root"><div class="ta-layout"><header class="ta-header"><div class="ta-header-tools"></div></header></div></div>',{url:'https://jira.test/'});
+    const dom=new JSDOM('<div id="root"><div class="ta-layout"><header class="ta-header"><h2>Задача</h2><div class="ta-header-tools"></div></header></div></div>',{url:'https://jira.test/'});
     const window=dom.window,$=jquery(window),globals={window,document:window.document};
     const draft=loadUnit('draft').createDraft({projectKey:'DO'});draft.issueTypeId='10';draft.templateId='task';
     draft.fields={summary:'Проверить API <img src=x>',description:'Подробное описание'};
@@ -134,4 +134,26 @@ test('quoted, fenced, embedded and template facts headings remain unsplit with a
     assert.equal(h.doc.querySelectorAll('[data-ta-message-facts]').length,0);
     for(let i=0;i<values.length;i++)assert.match(h.doc.querySelector('[data-ta-message="quoted'+i+'"] .ta-message-text').textContent,/Полный текст/);
     assert.equal(h.doc.querySelector('[data-ta-template-read]').textContent,text);
+});
+
+test('product chrome uses natural Russian copy while saved conversation and legacy notices remain intact',t=>{
+    const h=setup(t);
+    h.chatState.notices=['Pico недоступен. Карточка прошла локальную проверку Jira.','Ответ Pico отклонён: повторный идентификатор вызова.','Другое уведомление.'];
+    h.chatState.transcript=[{id:'user-copy',role:'user',text:'Проверить Pico на DEV.'},{id:'saved-answer',role:'assistant',text:'Pico недоступен. Описание сохранено.'}];
+    const before=JSON.stringify(h.chatState);h.ui.update(h.state);
+    assert.equal(h.doc.querySelector('.ta-header h2').textContent,'Помощник по задачам');
+    assert.equal(h.doc.querySelector('.ta-chat').getAttribute('aria-label'),'Подготовка задачи');
+    assert.equal(h.doc.querySelector('[data-ta-chat-input]').getAttribute('aria-label'),'Сообщение');
+    assert.equal(h.doc.querySelector('[data-ta-card-local-check]').textContent.trim(),'Проверить поля Jira');
+    assert.equal(h.doc.querySelector('[data-ta-chat-rate-retry]').textContent.trim(),'Повторить запрос');
+    assert.equal(h.doc.querySelector('[data-role="assistant"] .ta-message-author').textContent,'Помощник');
+    assert.equal(h.doc.querySelector('[data-role="user"] .ta-message-text').textContent,'Проверить Pico на DEV.');
+    assert.equal(h.doc.querySelector('[data-role="assistant"] .ta-message-text').textContent,'Pico недоступен. Описание сохранено.');
+    assert.doesNotMatch(h.doc.querySelector('[data-ta-chat-status]').textContent,/Pico/i);
+    assert.match(h.doc.querySelector('[data-ta-chat-status]').textContent,/Другое уведомление/);
+    assert.equal(JSON.stringify(h.chatState),before);
+    h.chatState.status='running';h.ui.update(h.state);
+    assert.equal(h.doc.querySelector('[data-ta-chat-status]').textContent,'Готовлю ответ…');
+    assert.doesNotMatch(h.doc.querySelector('[data-ta-card-create]').getAttribute('title') || '',/Pico/);
+    for(const el of h.doc.querySelectorAll('[aria-label],[title]'))assert.doesNotMatch((el.getAttribute('aria-label') || '')+' '+(el.getAttribute('title') || ''),/Pico/i);
 });

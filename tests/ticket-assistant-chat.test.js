@@ -350,7 +350,7 @@ test('reconcile cannot make a prose-only claim ready by validating before it rev
     await h.controller.updateField('summary','Заполненная тема');
     await h.chat.reconcile();
     assert.equal(validations,1);assert.equal(h.controller.getState().draft.checked,null);
-    assert.match(h.chat.getState().transcript.at(-1).text,/не сверил/);h.chat.destroy();
+    assert.match(h.chat.getState().transcript.at(-1).text,/Открытые вопросы ещё не сверены/);h.chat.destroy();
 });
 
 for(const fail of [false,true]) test('reconciliation invalidates a previously checked draft even without an update, transport failure='+fail,async()=>{
@@ -522,7 +522,7 @@ test('invalid ordinary envelope triggers fresh model draft extraction and a chec
     const draft=h.controller.getState().draft;
     assert.equal(draft.fields.description,formatted);assert.equal(draft.fields.summary,'Восстановить RDP на DEV');
     assert.ok(draft.checked);assert.equal(draft.questions.length,0);
-    assert.match(chat.getState().transcript.at(-1).text,/Pico заполнил карточку по вашему сообщению/);
+    assert.match(chat.getState().transcript.at(-1).text,/Карточка заполнена по вашему сообщению/);
     assert.doesNotMatch(chat.getState().notices.join(' '),/Ответ Pico отклонён/);
     assert.equal(chat.getState().lastTurnUsage.modelCalls,2);assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
     chat.destroy();
@@ -655,7 +655,7 @@ for(const mode of ['recovered','blocked','ordinary','invalid'])test('verified AI
     else {
         assert.equal(state.error,null);for(const notice of obsolete)assert.equal(state.notices.includes(notice),false);
         const reply=state.transcript.at(-1).text;
-        if(mode!=='ordinary')assert.match(reply,/Pico заполнил карточку по вашему сообщению/);
+        if(mode!=='ordinary')assert.match(reply,/Карточка заполнена по вашему сообщению/);
         if(mode==='blocked'){assert.match(reply,/исходную оценку трудозатрат/);assert.match(reply,/Когда проверить доступ/);assert.equal(h.controller.getState().draft.checked,null);}
         else assert.ok(h.controller.getState().draft.checked);
     }
@@ -664,4 +664,17 @@ for(const mode of ['recovered','blocked','ordinary','invalid'])test('verified AI
     chat.destroy();
     const restored=h.Chat.create({controller:h.controller,runtime,store:h.store});
     assert.deepEqual(restored.getState().notices,state.notices);assert.deepEqual(restored.getState().transcript,state.transcript);restored.destroy();
+});
+
+for(const [reason,code] of [
+    ['Pico draft update missing','draft-update'],['Pico connection configuration invalid','config'],
+    ['Invalid Pico text envelope','response'],['Pico response correction failed','response-repair'],
+    ['Pico model call limit reached (maximum 8 per turn).','model-calls'],['Pico tool call limit reached (maximum 12 per turn).','tool-calls'],
+    ['Pico wall time limit reached (maximum 180000 ms per turn).','elapsed'],['Pico context limit reached: test','context'],
+    ['Pico response reserve exceeded.','reserve'],['Runtime unavailable','runtime'],['Pico HTTP 429','transport']
+])test('internal diagnostic keeps classification and uses unbranded product copy: '+code,async()=>{
+    const h=await setup(async()=>{throw Error(reason);});await h.chat.send('Поясни поля');
+    assert.equal(h.chat.getState().error.code,code);assert.doesNotMatch(h.chat.getState().error.message,/Pico/i);
+    if(reason.endsWith('429'))assert.match(h.chat.getState().error.message,/HTTP 429/);
+    h.chat.destroy();
 });

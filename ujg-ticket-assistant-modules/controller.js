@@ -827,7 +827,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 if (state.draft.questions.some(function(q) {return q.required;})) result.ok=false;
                 var reviewed=state.draft.templateReviewPending && reviewedTemplateRevision===state.draft.settingsRevision;
                 if(state.draft.templateReviewPending && !reviewed) {
-                    result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены Pico.'];
+                    result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены.'];
                 }
                 if(reviewed) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
                 result.warnings=warningUnion(result.warnings,retainedReviewWarnings(state.draft.warnings));

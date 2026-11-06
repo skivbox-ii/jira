@@ -2427,7 +2427,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 if (state.draft.questions.some(function(q) {return q.required;})) result.ok=false;
                 var reviewed=state.draft.templateReviewPending && reviewedTemplateRevision===state.draft.settingsRevision;
                 if(state.draft.templateReviewPending && !reviewed) {
-                    result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены Pico.'];
+                    result.ok=false;result.fieldErrors._templateReview=['Новые правила шаблона ещё не проверены.'];
                 }
                 if(reviewed) state.draft=Object.assign({},state.draft,{templateReviewPending:false});
                 result.warnings=warningUnion(result.warnings,retainedReviewWarnings(state.draft.warnings));
@@ -2690,18 +2690,18 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
     'use strict';
     function copy(value) {return JSON.parse(JSON.stringify(value));}
     var failures={
-        'draft-update':{action:'retry',message:'Pico получил сообщение, но не записал сведения в карточку. Ваш ответ сохранён в чате. Нажмите «Повторить», чтобы заполнить поля.'},
+        'draft-update':{action:'retry',message:'Не удалось перенести сведения из сообщения в карточку. Ваш ответ сохранён в чате. Нажмите «Повторить», чтобы заполнить поля.'},
         config:{action:'connection',message:'Подключение AI не настроено или некорректно. Откройте «Подключение AI» и проверьте URL, модель и ключ. Текст сохранён.'},
-        response:{action:'retry',message:'Pico вернул ответ неверного формата. Действия из этого ответа не применены. Нажмите «Повторить». Текст сохранён.'},
-        'response-repair':{action:'retry',message:'Pico не смог исправить формат ответа за одну попытку. Действия из этого ответа не применены. Нажмите «Повторить» или продолжите заполнение в редакторе. Текст сохранён.'},
+        response:{action:'retry',message:'Получен ответ неверного формата. Действия из этого ответа не применены. Нажмите «Повторить». Текст сохранён.'},
+        'response-repair':{action:'retry',message:'Не удалось исправить формат ответа. Действия из этого ответа не применены. Нажмите «Повторить» или продолжите заполнение в редакторе. Текст сохранён.'},
         'model-calls':{action:'editor',message:'Достигнут предел запросов к модели за один ход (не более 8). Уточните задачу в следующем сообщении или продолжите в редакторе. Текст сохранён.'},
         'tool-calls':{action:'editor',message:'Достигнут предел вызовов инструментов за один ход (не более 12). Уточните следующий шаг или продолжите в редакторе. Текст сохранён.'},
-        elapsed:{action:'editor',message:'Истекло время работы Pico за один ход. Отправьте более конкретный запрос или продолжите в редакторе. Текст сохранён.'},
-        context:{action:'budget',message:'Контекст Pico не помещается в доступный размер запроса с резервом ответа. Сократите текущий запрос, начните новый разговор или проверьте бюджет контекста. История сохранена.'},
-        reserve:{action:'budget',message:'Ответ Pico превысил настроенный резерв ответа и не был применён. Запросите более короткий ответ или увеличьте резерв в бюджете контекста. Текст сохранён.'},
-        transport:{action:'retry',message:'Не удалось получить ответ Pico. Проверьте доступность подключения и повторите запрос. Текст сохранён.'},
-        limit:{action:'editor',message:'Pico остановлен ограничением работы. Уточните следующий шаг в новом сообщении или продолжите в редакторе. Текст сохранён.'},
-        runtime:{action:'editor',message:'Pico недоступен. Обновите виджет или продолжите подготовку задачи в редакторе. Текст сохранён.'}
+        elapsed:{action:'editor',message:'Истекло время ожидания ответа. Отправьте более конкретный запрос или продолжите в редакторе. Текст сохранён.'},
+        context:{action:'budget',message:'Запрос не помещается в доступный контекст с учётом резерва ответа. Сократите текущий запрос, начните новый разговор или проверьте бюджет контекста. История сохранена.'},
+        reserve:{action:'budget',message:'Ответ превысил заданный размер и не был применён. Запросите более короткий ответ или увеличьте резерв в бюджете контекста. Текст сохранён.'},
+        transport:{action:'retry',message:'Не удалось получить ответ. Проверьте доступность подключения и повторите запрос. Текст сохранён.'},
+        limit:{action:'editor',message:'Достигнуто ограничение обработки запроса. Уточните следующий шаг в новом сообщении или продолжите в редакторе. Текст сохранён.'},
+        runtime:{action:'editor',message:'Помощник недоступен. Обновите виджет или продолжите подготовку задачи в редакторе. Текст сохранён.'}
     };
     function safeFailure(value,isLimit) {
         // Only application-owned categories escape this boundary. Never expose the
@@ -2724,7 +2724,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         }
         var http=code==='transport' && typeof reason==='string' && /^Pico HTTP ([45]\d{2})$/.exec(reason);
         return {code:code,action:failures[code].action,message:http?
-            'Сервис модели вернул HTTP '+http[1]+'. Сообщение сохранено.':failures[code].message};
+            'Сервис модели вернул HTTP '+http[1]+'. '+(http[1]==='429'?'Сервис ограничил запросы. Повторите вручную позже; точное время ожидания неизвестно. ':'')+'Сообщение сохранено.':failures[code].message};
     }
     function safeUsage(value,status) {
         var keys=['modelCalls','toolCalls','inputTokens','outputTokens','compactions','elapsedMs'];
@@ -2734,7 +2734,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         return usage;
     }
     var sequence=0;
-    var instructions='Ты Pico, помощник подготовки одной задачи Jira. Пиши по-русски. '+
+    var instructions='Ты помогаешь подготовить одну задачу Jira. Пиши по-русски. '+
         'summary — короткое название действия, подробности — в description; пользователю показывай только следующий вопрос или результат, без списков «Инструменты: [...]». '+
         'Если пользователь передаёт сведения для задачи, сначала примени уже известные summary и description через update_task, дождись результата и только затем задай один следующий содержательный вопрос о недостающих сведениях. Не откладывай заполнение известных полей до ответа на уточнение. '+
         'Используй только известные факты; не выдумывай содержание полей. Чистый запрос просмотра полей, чтения или изменения шаблона не является сведениями для задачи: выполняй только запрошенный просмотр или предложение шаблона, не меняя задачу и её источник. '+
@@ -2876,7 +2876,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         }
         function obsoleteRecoveryNotice(notice) {
             if(notice.startsWith('Ответ Pico отклонён:'))return true;
-            return /^(?:Pico недоступен\.|Pico вернул ответ неверного формата\.|Не удалось получить ответ Pico\.|Сервис модели вернул HTTP [45]\d{2}\.) /.test(notice) &&
+            return /^(?:Pico недоступен\.|Pico вернул ответ неверного формата\.|Не удалось получить ответ Pico\.|Сервис недоступен\.|Получен ответ неверного формата\.|Не удалось получить ответ\.|Сервис модели вернул HTTP [45]\d{2}\.) /.test(notice) &&
                 /(?:Карточка прошла локальную проверку Jira\.|готовность проверена локально\.|Готовность проверена локально\.|Поля Jira проверены локально\.)$/.test(notice);
         }
         function groundedReply(text) {
@@ -2979,6 +2979,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         }
         function setFailure(error,isLimit,run) {
             state.status='error';state.error=safeFailure(error,isLimit);
+            if(/\bHTTP 429\b/.test(state.error.message)) {
+                if(run.informational)state.error.retryTarget='turn';
+            } else state.notices=state.notices.filter(function(notice){return !/\bHTTP 429\b/.test(notice);});
             if(run.verbatimDescription) {
                 var d=controller.getState().draft;
                 if(d.fields.description===run.verbatimDescription || d.pendingFields.description===run.verbatimDescription) {
@@ -3055,6 +3058,17 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 !state.error || !(['transport','runtime','response','response-repair'].includes(state.error.code) ||
                     reconcile && state.error.code==='draft-update'))return;
             var s=controller.getState(), d=s.draft, patch={},copiedDescription=false,copiedSummary=false;
+            // A rejected provider request cannot invalidate an unchanged card that
+            // already passed Jira checks. Recheck it locally; never infer readiness
+            // after model mutations or a stale controller snapshot.
+            if(reconcile && run.verifiedCard && /\bHTTP 429\b/.test(state.error.message) && run.verifiedCard===cardContent(d)) {
+                var rechecked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
+                if(!current(run))return;
+                if(rechecked.ok && controller.getState().draft.checked) {
+                    if(!state.notices.some(function(n){return /\bHTTP 429\b/.test(n);}))state.notices.push('Сервис модели вернул HTTP 429. Карточка прошла локальную проверку Jira.');
+                    state.error=null;state.status='idle';return;
+                }
+            }
             var malformed=['response','response-repair','draft-update'].includes(state.error.code);
             if(reconcile) {
                 text=savedNarrative();
@@ -3103,14 +3117,14 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 return;
             }
             var verified=controller.getState();
-            var providerNote=malformed?'Pico вернул ответ неверного формата.':'Pico недоступен.';
+            var providerNote=malformed?'Получен ответ неверного формата.':'Сервис недоступен.';
             var provenance=copiedDescription ? (copiedSummary?'Тема и описание взяты из вашего текста. ':'Описание взято из вашего текста. ') : '';
             if(checked.ok && verified.draft.checked && !verified.error) {
                 // Keep the safe provider diagnostic as a notice. It is no longer
                 // a blocking error once this exact card passed the local check.
                 var http=/\bHTTP ([45]\d{2})\b/.exec(state.error.message);
                 var diagnostic=(malformed?providerNote:http?'Сервис модели вернул HTTP '+http[1]+'.':
-                    state.error.code==='runtime'?'Pico недоступен.':'Не удалось получить ответ Pico.')+' Карточка прошла локальную проверку Jira.';
+                    state.error.code==='runtime'?'Сервис недоступен.':'Не удалось получить ответ.')+' Карточка прошла локальную проверку Jira.';
                 if(!state.notices.includes(diagnostic))state.notices.push(diagnostic);
                 state.error=null;state.status='idle';
                 add('assistant',providerNote+' '+provenance+'Поля Jira проверены локально. Проверка пройдена. Откройте карточку, чтобы сверить её перед созданием.');
@@ -3118,13 +3132,15 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 var why=Object.values(checked.validation.fieldErrors || {}).flat().concat(d.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
                 if(checked.validation.fieldErrors.timetracking)why.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
                 var notice=providerNote+' '+provenance+'Поля Jira проверены локально.';
+                if(/\bHTTP 429\b/.test(state.error.message))notice='HTTP 429. '+notice;
                 if(!state.notices.includes(notice))state.notices.push(notice);
                 state.error=null;state.status='idle';
                 add('assistant','Создание пока недоступно. '+(why.join(' ') || 'Откройте редактор и проверьте карточку.')+
                     ((checked.validation.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira».':''));
             }
         }
-        async function runTurn(text,reassessment,reconcile) {
+        function cardContent(d) {var card=Object.assign({},d);delete card.checked;delete card.draftRevision;return JSON.stringify(card);}
+        async function runTurn(text,reassessment,reconcile,retryRateLimit) {
             if(dead || active || applying || controller.getState().destroyed) return getState();
             controllerChanged();selectScope();
             if(typeof text!=='string' || !text.trim() || !scope) return getState();
@@ -3146,9 +3162,10 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var priorEntry=state.transcript[state.transcript.length-1];
             if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
                 priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
-            if(!reassessment && !collapseExactRetry(text)) add('user',text);state.error=null;state.status='running';
+            if(!reassessment && !retryRateLimit && !collapseExactRetry(text)) add('user',text);state.error=null;state.status='running';
             var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,
-                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || ''};active=run;
+                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',
+                verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
                 getVerbatimDescription:function(){return run.verbatimDescription;},
@@ -3210,12 +3227,12 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                         var review=await controller.chatCompleteTemplateReview(run.snapshot,run.templateRevision,{signal:run.aborter.signal});
                         if(!current(run)) return getState();
                         if(!review.validation) {state.status='error';state.error={code:review.code || 'review',message:'Правила сохранены, но повторная проверка прервана. Продолжите разговор или запустите «Проверить» в редакторе.'};}
-                    } else {state.status='error';state.error={code:'review',message:'Правила сохранены. Pico ещё не оценил недостающие сведения. Продолжите разговор или запустите «Проверить» в редакторе.'};}
+                    } else {state.status='error';state.error={code:'review',message:'Правила сохранены. Недостающие сведения ещё не проверены. Продолжите разговор или запустите «Проверить» в редакторе.'};}
                 }
                 var wantsReady=run.questionsEvaluated && !(controller.getState().draft.questions || []).some(function(q){return q.required;}) && (createClaim.test(run.lastReply || '') || run.descriptionReviewed);
                 if(complete && state.status==='running' && (reconcile || wantsReady || run.recoveredDraft) && !run.reviewPending) {
                     var currentState=controller.getState();
-                    if(!run.questionsEvaluated)run.lastReply='Pico не сверил открытые вопросы с карточкой. Сверьте описание в редакторе; готовность не подтверждена.';
+                    if(!run.questionsEvaluated)run.lastReply='Открытые вопросы ещё не сверены с карточкой. Сверьте описание в редакторе; готовность не подтверждена.';
                     else if(!currentState.validation) {
                         var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
                         if(!current(run))return getState();
@@ -3236,8 +3253,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(complete && state.status==='running' && run.modelFieldsUpdated && !run.templateAction) {
                     state.notices=state.notices.filter(function(notice){return !obsoleteRecoveryNotice(notice);});
                     if(run.recoveredDraft && run.modelDescriptionApplied)
-                        run.lastReply='Pico заполнил карточку по вашему сообщению. '+(run.lastReply || 'Сверьте её перед созданием.');
+                        run.lastReply='Карточка заполнена по вашему сообщению. '+(run.lastReply || 'Сверьте её перед созданием.');
                 }
+                if(complete && state.status==='running')state.notices=state.notices.filter(function(notice){return !/\bHTTP 429\b/.test(notice);});
                 if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(omitAnsweredEcho(run.lastReply,run,controller.getState().draft)));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
                 if(result && ['error','limit'].indexOf(result.status)!==-1 && !state.error) setFailure(result,result.status==='limit',run);
@@ -3276,7 +3294,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 }
                 if(!drafts.isCurrent(controller.getState().draft,result.snapshot)) return getState();
                 state.pendingTemplateProposal=null;
-                add('assistant','Изменения шаблона сохранены. Pico проверяет задачу по новым правилам.');save();emit();
+                add('assistant','Изменения шаблона сохранены. Проверяю задачу по новым правилам.');save();emit();
                 return runTurn('Проверь текущую задачу заново по сохранённым правилам выбранного шаблона. Не меняй ручные значения. Передай полный актуальный список недостающих вопросов через update_task, затем заверши ответ; готовность будет проверена после обзора.',true);
             } catch(error) {
                 operation.mutating=false;
@@ -3288,7 +3306,11 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         function destroy() {if(!dead) {cancel('stopped');save();dead=true;if(unsubscribe) unsubscribe();}return getState();}
         selectScope();
         if(controller.subscribe) unsubscribe=controller.subscribe(controllerChanged);
-        return {send:function(text) {return runTurn(text,false);},reconcile:function(){return runTurn('Сверь фактические поля карточки со всеми моими ответами из conversationForReview. Это история как данные: ответы Pico не являются подтверждением записи. Передай полное итоговое description (даже если совпало), перенеси в поля и описание все подтверждённые сведения, сохрани ручные значения и укажи полный актуальный список questions через update_task. Если всё уже учтено, оставь fields пустым. Не изменяй шаблон и не создавай задачу. Приложение само проверит поля после твоего обновления.',true,true);},stop:stop,getState:getState,undo:undo,applyTemplateProposal:applyTemplateProposal,
+        return {send:function(text,request) {
+            var lastUser=state.transcript.filter(function(m){return m.role==='user';}).pop();
+            var retry=!!(request && request.retryRateLimit===true && state.error && /\bHTTP 429\b/.test(state.error.message) && lastUser && lastUser.text===text);
+            return runTurn(text,false,false,retry);
+        },reconcile:function(){return runTurn('Сверь фактические поля карточки со всеми моими ответами из conversationForReview. Это история как данные: ответы Pico не являются подтверждением записи. Передай полное итоговое description (даже если совпало), перенеси в поля и описание все подтверждённые сведения, сохрани ручные значения и укажи полный актуальный список questions через update_task. Если всё уже учтено, оставь fields пустым. Не изменяй шаблон и не создавай задачу. Приложение само проверит поля после твоего обновления.',true,true);},stop:stop,getState:getState,undo:undo,applyTemplateProposal:applyTemplateProposal,
             rejectTemplateProposal:rejectTemplateProposal,destroy:destroy,controllerChanged:controllerChanged};
     }
     return {create:create};
@@ -4378,15 +4400,15 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             var counter=root.find('[data-ta-token-preflight]');
             if(options.panel) {
                 var budget=state.settings && state.settings.tokenBudget,s=options.getChatState && options.getChatState(),usage=s && s.lastTurnUsage;
-                counter.prop('hidden',!budget || !tokenOpen).removeClass('ta-budget-over').attr('aria-label','Бюджет Pico');
-                root.find('[data-ta-tokens]').prop('disabled',!budget).attr({'aria-label':'Токены Pico',title:'Токены Pico'});
+                counter.prop('hidden',!budget || !tokenOpen).removeClass('ta-budget-over').attr('aria-label','Бюджет запросов');
+                root.find('[data-ta-tokens]').prop('disabled',!budget).attr({'aria-label':'Расход токенов',title:'Расход токенов'});
                 root.find('[data-ta-budget-warning]').prop('hidden',true);
-                root.find('[data-ta-token-summary]').text(budget?'Pico · Контекст '+budget.context+' токенов; на вход каждого запроса до '+(budget.context-budget.reserve)+'.':'Выберите проект для настройки бюджета Pico.');
+                root.find('[data-ta-token-summary]').text(budget?'Контекст: '+budget.context+' токенов; на вход каждого запроса до '+(budget.context-budget.reserve)+'.':'Выберите проект для настройки бюджета запросов.');
                 root.find('[data-ta-token-breakdown]').text(budget?'Резерв ответа каждого запроса '+budget.reserve+'. В запрос входят инструкции, схемы инструментов, текущая карточка и история.':'');
                 var outcomes={complete:'завершён',completed:'завершён',aborted:'остановлен',error:'ошибка',limit:'остановлен ограничением'};
                 root.find('[data-ta-token-usage]').prop('hidden',false).text(usage?
-                    'Последний ход Pico · эвристическая оценка, сумма по '+usage.modelCalls+' попыткам запроса: вход '+usage.inputTokens+', ответ '+usage.outputTokens+'. Вызовов инструментов '+usage.toolCalls+'. Ход: '+(outcomes[usage.status] || 'завершён')+'.':
-                    'Оценка последнего хода Pico появится после ответа. Данные usage провайдера здесь не показаны.');
+                    'Последний ответ · приблизительная оценка по всем запросам ('+usage.modelCalls+'): вход '+usage.inputTokens+', ответ '+usage.outputTokens+'. Вызовов инструментов '+usage.toolCalls+'. Статус: '+(outcomes[usage.status] || 'завершён')+'.':
+                    'Оценка расхода появится после ответа. Это приблизительный расчёт по тексту.');
                 return;
             }
             var estimate=state.tokenPreflight;
@@ -4589,10 +4611,19 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             markdown($('<div data-ta-message-facts-text>').appendTo(facts),parts[1]);
             markdown($('<div data-ta-message-question>').appendTo(target),parts[2]);
         }
+        // Translate only known application notices for display. Keep persisted
+        // legacy values and every conversation message verbatim.
+        function noticeText(notice) {
+            var text=String((typeof notice==='string'?notice:notice && notice.message) || '');
+            return text.replace(/^Pico недоступен\./,'Сервис недоступен.')
+                .replace(/^Pico вернул ответ неверного формата\./,'Получен ответ неверного формата.')
+                .replace(/^Не удалось получить ответ Pico\./,'Не удалось получить ответ.')
+                .replace(/^Ответ Pico отклонён:/,'Ответ не принят:');
+        }
         function mount(el) {
             root=$(el).addClass('ta-chat-mode');
-            host=$('<section class="ta-chat" aria-label="Разговор с Pico">').appendTo(root.children('.ta-layout'));
-            root.find('.ta-header h2').text('Pico');
+            host=$('<section class="ta-chat" aria-label="Подготовка задачи">').appendTo(root.children('.ta-layout'));
+            root.find('.ta-header h2').text('Помощник по задачам');
             var newButton=button('Новый разговор','Plus',{'data-ta-chat-new':'','aria-label':'Новый разговор',title:'Новый разговор'},function() {
                 cancelAssignee();run(function(){chat.stop();return c.newDraft();});
             }).addClass('ta-icon-button');
@@ -4604,7 +4635,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             card.find('[data-ta-card-details]').on('toggle',function(){if(scope)expandedDrafts.set(scope,this.open);});
             var actions=$('<div class="ta-actions">').appendTo(card);
             actions.append(button('Сверить с чатом','Check',{'data-ta-card-check':'',title:'Сверить поля с сохранённым разговором и проверить недостающие сведения'},reconcile),
-                button('Проверить поля без Pico','Check',{'data-ta-card-local-check':'',hidden:true,title:'Проверить текущие значения карточки по правилам Jira. Сообщения чата заново не обрабатываются.'},checkCurrentFields),
+                button('Проверить поля Jira','Check',{'data-ta-card-local-check':'',hidden:true,title:'Проверить текущие значения карточки по правилам Jira. Сообщения чата заново не обрабатываются.'},checkCurrentFields),
                 button('Редактировать','Settings',{'data-ta-card-edit':''},function(){openEditor(this);}),
                 button('Создать','Check',{'data-ta-card-create':''},function(){run(function(){return c.submit();});}).addClass('ta-primary'),
                 button('Отменить изменение','RefreshCw',{'data-ta-card-undo':''},function(){run(function(){return chat.undo();});}));
@@ -4613,6 +4644,9 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             proposal.append(button('Применить к шаблону','Check',{'data-ta-template-apply':''},function(){run(function(){return chat.applyTemplateProposal();});}),
                 button('Отклонить','X',{'data-ta-template-reject':''},function(){run(function(){return chat.rejectTemplateProposal();});}));
             host.append('<p data-ta-chat-status role="status" class="ta-muted"></p><p data-ta-chat-warning class="ta-warning" hidden></p><div data-ta-chat-error class="ta-error" role="alert" hidden></div>');
+            host.append($('<div data-ta-chat-rate-limit class="ta-warning" hidden>').append(
+                $('<p role="status">').text('Сервис модели ограничил запросы (HTTP 429). Повторите запрос вручную позже. Точное время ожидания неизвестно.'),
+                button('Повторить запрос','RefreshCw',{'data-ta-chat-rate-retry':''},retryRateLimit)));
             host.append($('<div class="ta-actions" data-ta-chat-error-actions>').append(
                 button('Проверить подключение AI','Settings',{'data-ta-chat-configure':'',hidden:true},function(){resetReconcileRetry();options.editor.openConnection();}),
                 button('Бюджет контекста','Settings',{'data-ta-chat-error-budget':'',hidden:true},function(){resetReconcileRetry();options.editor.openSettings();}),
@@ -4625,7 +4659,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 });
             }));
             var form=$('<form class="ta-chat-composer" data-ta-chat-composer>').appendTo(host);
-            input=$('<textarea rows="3" data-ta-chat-input aria-label="Сообщение Pico" placeholder="Опишите задачу или ответьте на вопрос…">').appendTo(form);
+            input=$('<textarea rows="3" data-ta-chat-input aria-label="Сообщение" placeholder="Опишите задачу или ответьте на вопрос…">').appendTo(form);
             var composerActions=$('<div class="ta-composer-actions">').appendTo(form);
             composerActions.append($('<span class="ta-muted">').text('Enter — отправить · Shift+Enter — новая строка'),
                 button('Повторить','RefreshCw',{'data-ta-chat-retry':'',hidden:true},function(){
@@ -4684,6 +4718,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(!dead)update(c.getState());
             });
         }
+        function hasRateLimit(s) {
+            if(s.error)return /\bHTTP 429\b/.test(s.error.message || '');
+            return (s.notices || []).some(function(n){return /\bHTTP 429\b/.test(typeof n==='string'?n:n.message || '');});
+        }
+        function retryRateLimit() {
+            var next=c.getState(),d=next.draft,s=chat.getState();
+            if(dead || localCheck || sending || reconciling || s.status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope || !hasRateLimit(s))return;
+            if(!(s.error && s.error.retryTarget==='turn') && (s.status==='idle' || retryReconcileScope===scope || d.fields.summary || d.fields.description || d.source)) {reconcile();return;}
+            var original=(s.transcript || []).filter(function(m){return m.role==='user';}).pop();
+            if(original) {cancelAssignee();sendText(original.text,true);}
+        }
         function updateSend() {
             var busy=chat.getState().status==='running' || sending || reconciling || !!localCheck;
             host.find('[data-ta-chat-send]').prop('disabled',busy || !state || !state.draft || locked(state.draft) || !input.val().trim());
@@ -4701,17 +4746,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             }
             sendText(text);
         }
-        function sendText(text) {
+        function sendText(text,preserveComposer) {
             var requestedScope=scope;
             lastSent=text;sending=true;updateSend();
             run(function(){
                 var d=c.getState().draft;
                 if(dead || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==requestedScope)return;
-                return chat.send(text);
+                return chat.send(text,preserveComposer?{retryRateLimit:true}:undefined);
             }).then(function(){
                 if(dead)return;sending=false;
                 var current=chat.getState();
-                if(scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
+                if(!preserveComposer && scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
                 update(c.getState());
             });
         }
@@ -4758,7 +4803,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 entries.forEach(function(entry){
                     if(messageRows.has(entry.id))return;
                     var row=$('<article class="ta-message">').attr({'data-ta-message':entry.id,'data-role':entry.role});
-                    row.append($('<span class="ta-message-author">').text(entry.role==='user'?'Вы':'Pico'));
+                    row.append($('<span class="ta-message-author">').text(entry.role==='user'?'Вы':'Помощник'));
                     var text=$('<div class="ta-message-text">').appendTo(row);
                     if(entry.kind==='template')text.attr('data-ta-template-read','').text(String(entry.text || ''));
                     else if(entry.role==='assistant')assistantText(text,String(entry.text || ''));
@@ -4775,12 +4820,15 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             if(!p && proposalHadFocus)input[0].focus({preventScroll:true});
             if(p && pkey!==proposalKey){proposal.find('[data-ta-template-before]').text(templateText(p.before));proposal.find('[data-ta-template-after]').text(templateText(p.after));}
             proposalKey=pkey;
-            var busy=s.status==='running' || reconciling,error=s.error || state.error;
-            host.find('[data-ta-chat-status]').text(busy?'Pico готовит ответ…':s.status==='stopped'?'Остановлено. Изменения сохранены.':(s.notices || []).map(function(n){return typeof n==='string'?n:n.message;}).join('\n'));
+            var busy=s.status==='running' || reconciling,error=s.error || state.error,rateLimited=hasRateLimit(s);
+            host.find('[data-ta-chat-rate-limit]').prop('hidden',!rateLimited);
+            host.find('[data-ta-chat-rate-retry]').prop('hidden',!rateLimited).prop('disabled',!!localCheck || sending || busy || !d || locked(d));
+            var visibleNotices=(s.notices || []).filter(function(n){return !s.error || rateLimited || !/\bHTTP 429\b/.test(typeof n==='string'?n:n.message || '');});
+            host.find('[data-ta-chat-status]').text(busy?'Готовлю ответ…':s.status==='stopped'?'Остановлено. Изменения сохранены.':visibleNotices.map(noticeText).join('\n'));
             host.find('[data-ta-chat-error]').prop('hidden',!error).text(error ? error.message || String(error) : '');
             host.find('[data-ta-chat-warning]').prop('hidden',!s.storageWarning).text(s.storageWarning || '');
             host.find('[data-ta-chat-stop]').prop('hidden',!busy);
-            host.find('[data-ta-chat-retry]').prop('hidden',busy || !(lastSent || retryReconcileScope===scope && scope!==null) || !(s.status==='stopped' || s.status==='error' && (!s.error || !s.error.action || s.error.action==='retry')));
+            host.find('[data-ta-chat-retry]').prop('hidden',rateLimited || busy || !(lastSent || retryReconcileScope===scope && scope!==null) || !(s.status==='stopped' || s.status==='error' && (!s.error || !s.error.action || s.error.action==='retry')));
             host.find('[data-ta-chat-configure]').prop('hidden',busy || !s.error || s.error.action!=='connection');
             host.find('[data-ta-chat-error-budget]').prop('hidden',busy || !s.error || s.error.action!=='budget').prop('disabled',!state.settings);
             host.find('[data-ta-chat-error-edit]').prop('hidden',busy || !d || !s.error || ['editor','connection'].indexOf(s.error.action)===-1);
@@ -4794,9 +4842,9 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         function renderCard(d,s) {
             card.attr('data-ta-task-card-id',d.id);
             var issue=state.meta && state.meta.issueTypes.find(function(t){return t.id===d.issueTypeId;}),validation=state.validation;
-            var reason=!d.issueTypeId?'Выберите тип Jira в редакторе.':!d.templateId?'Выберите шаблон.':!validation?'Pico ещё не проверил текущие поля.':!validation.ok?Object.keys(validation.fieldErrors || {}).map(function(id){return (validation.fieldErrors[id] || []).join(' ');}).join(' ') || 'Ответьте на обязательные вопросы.':!d.checked?'Текущие изменения требуют проверки.':'';
+            var reason=!d.issueTypeId?'Выберите тип Jira в редакторе.':!d.templateId?'Выберите шаблон.':!validation?'Текущие поля ещё не проверены.':!validation.ok?Object.keys(validation.fieldErrors || {}).map(function(id){return (validation.fieldErrors[id] || []).join(' ');}).join(' ') || 'Ответьте на обязательные вопросы.':!d.checked?'Текущие изменения требуют проверки.':'';
             if(validation && validation.unsupportedRequired && validation.unsupportedRequired.length)reason+=' Откройте «Редактировать», затем «Открыть форму Jira» для обязательных полей.';
-            if(s.status==='running' || reconciling)reason='Дождитесь ответа Pico или остановите запрос.';
+            if(s.status==='running' || reconciling)reason='Дождитесь ответа или остановите запрос.';
             var creation=d.creation,labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Ожидаем результат создания…',created:'Задача создана.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.',rejected:'Создание отклонено.'};
             if(locked(d))reason=labels[creation.status] || 'Создание заблокировано.';
             card.find('[data-ta-card-summary]').text(d.fields.summary || 'Тема пока не заполнена');

@@ -121,10 +121,19 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             markdown($('<div data-ta-message-facts-text>').appendTo(facts),parts[1]);
             markdown($('<div data-ta-message-question>').appendTo(target),parts[2]);
         }
+        // Translate only known application notices for display. Keep persisted
+        // legacy values and every conversation message verbatim.
+        function noticeText(notice) {
+            var text=String((typeof notice==='string'?notice:notice && notice.message) || '');
+            return text.replace(/^Pico недоступен\./,'Сервис недоступен.')
+                .replace(/^Pico вернул ответ неверного формата\./,'Получен ответ неверного формата.')
+                .replace(/^Не удалось получить ответ Pico\./,'Не удалось получить ответ.')
+                .replace(/^Ответ Pico отклонён:/,'Ответ не принят:');
+        }
         function mount(el) {
             root=$(el).addClass('ta-chat-mode');
-            host=$('<section class="ta-chat" aria-label="Разговор с Pico">').appendTo(root.children('.ta-layout'));
-            root.find('.ta-header h2').text('Pico');
+            host=$('<section class="ta-chat" aria-label="Подготовка задачи">').appendTo(root.children('.ta-layout'));
+            root.find('.ta-header h2').text('Помощник по задачам');
             var newButton=button('Новый разговор','Plus',{'data-ta-chat-new':'','aria-label':'Новый разговор',title:'Новый разговор'},function() {
                 cancelAssignee();run(function(){chat.stop();return c.newDraft();});
             }).addClass('ta-icon-button');
@@ -136,7 +145,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             card.find('[data-ta-card-details]').on('toggle',function(){if(scope)expandedDrafts.set(scope,this.open);});
             var actions=$('<div class="ta-actions">').appendTo(card);
             actions.append(button('Сверить с чатом','Check',{'data-ta-card-check':'',title:'Сверить поля с сохранённым разговором и проверить недостающие сведения'},reconcile),
-                button('Проверить поля без Pico','Check',{'data-ta-card-local-check':'',hidden:true,title:'Проверить текущие значения карточки по правилам Jira. Сообщения чата заново не обрабатываются.'},checkCurrentFields),
+                button('Проверить поля Jira','Check',{'data-ta-card-local-check':'',hidden:true,title:'Проверить текущие значения карточки по правилам Jira. Сообщения чата заново не обрабатываются.'},checkCurrentFields),
                 button('Редактировать','Settings',{'data-ta-card-edit':''},function(){openEditor(this);}),
                 button('Создать','Check',{'data-ta-card-create':''},function(){run(function(){return c.submit();});}).addClass('ta-primary'),
                 button('Отменить изменение','RefreshCw',{'data-ta-card-undo':''},function(){run(function(){return chat.undo();});}));
@@ -145,6 +154,9 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             proposal.append(button('Применить к шаблону','Check',{'data-ta-template-apply':''},function(){run(function(){return chat.applyTemplateProposal();});}),
                 button('Отклонить','X',{'data-ta-template-reject':''},function(){run(function(){return chat.rejectTemplateProposal();});}));
             host.append('<p data-ta-chat-status role="status" class="ta-muted"></p><p data-ta-chat-warning class="ta-warning" hidden></p><div data-ta-chat-error class="ta-error" role="alert" hidden></div>');
+            host.append($('<div data-ta-chat-rate-limit class="ta-warning" hidden>').append(
+                $('<p role="status">').text('Сервис модели ограничил запросы (HTTP 429). Повторите запрос вручную позже. Точное время ожидания неизвестно.'),
+                button('Повторить запрос','RefreshCw',{'data-ta-chat-rate-retry':''},retryRateLimit)));
             host.append($('<div class="ta-actions" data-ta-chat-error-actions>').append(
                 button('Проверить подключение AI','Settings',{'data-ta-chat-configure':'',hidden:true},function(){resetReconcileRetry();options.editor.openConnection();}),
                 button('Бюджет контекста','Settings',{'data-ta-chat-error-budget':'',hidden:true},function(){resetReconcileRetry();options.editor.openSettings();}),
@@ -157,7 +169,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 });
             }));
             var form=$('<form class="ta-chat-composer" data-ta-chat-composer>').appendTo(host);
-            input=$('<textarea rows="3" data-ta-chat-input aria-label="Сообщение Pico" placeholder="Опишите задачу или ответьте на вопрос…">').appendTo(form);
+            input=$('<textarea rows="3" data-ta-chat-input aria-label="Сообщение" placeholder="Опишите задачу или ответьте на вопрос…">').appendTo(form);
             var composerActions=$('<div class="ta-composer-actions">').appendTo(form);
             composerActions.append($('<span class="ta-muted">').text('Enter — отправить · Shift+Enter — новая строка'),
                 button('Повторить','RefreshCw',{'data-ta-chat-retry':'',hidden:true},function(){
@@ -216,6 +228,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(!dead)update(c.getState());
             });
         }
+        function hasRateLimit(s) {
+            if(s.error)return /\bHTTP 429\b/.test(s.error.message || '');
+            return (s.notices || []).some(function(n){return /\bHTTP 429\b/.test(typeof n==='string'?n:n.message || '');});
+        }
+        function retryRateLimit() {
+            var next=c.getState(),d=next.draft,s=chat.getState();
+            if(dead || localCheck || sending || reconciling || s.status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope || !hasRateLimit(s))return;
+            if(!(s.error && s.error.retryTarget==='turn') && (s.status==='idle' || retryReconcileScope===scope || d.fields.summary || d.fields.description || d.source)) {reconcile();return;}
+            var original=(s.transcript || []).filter(function(m){return m.role==='user';}).pop();
+            if(original) {cancelAssignee();sendText(original.text,true);}
+        }
         function updateSend() {
             var busy=chat.getState().status==='running' || sending || reconciling || !!localCheck;
             host.find('[data-ta-chat-send]').prop('disabled',busy || !state || !state.draft || locked(state.draft) || !input.val().trim());
@@ -233,17 +256,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             }
             sendText(text);
         }
-        function sendText(text) {
+        function sendText(text,preserveComposer) {
             var requestedScope=scope;
             lastSent=text;sending=true;updateSend();
             run(function(){
                 var d=c.getState().draft;
                 if(dead || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==requestedScope)return;
-                return chat.send(text);
+                return chat.send(text,preserveComposer?{retryRateLimit:true}:undefined);
             }).then(function(){
                 if(dead)return;sending=false;
                 var current=chat.getState();
-                if(scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
+                if(!preserveComposer && scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
                 update(c.getState());
             });
         }
@@ -290,7 +313,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 entries.forEach(function(entry){
                     if(messageRows.has(entry.id))return;
                     var row=$('<article class="ta-message">').attr({'data-ta-message':entry.id,'data-role':entry.role});
-                    row.append($('<span class="ta-message-author">').text(entry.role==='user'?'Вы':'Pico'));
+                    row.append($('<span class="ta-message-author">').text(entry.role==='user'?'Вы':'Помощник'));
                     var text=$('<div class="ta-message-text">').appendTo(row);
                     if(entry.kind==='template')text.attr('data-ta-template-read','').text(String(entry.text || ''));
                     else if(entry.role==='assistant')assistantText(text,String(entry.text || ''));
@@ -307,12 +330,15 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             if(!p && proposalHadFocus)input[0].focus({preventScroll:true});
             if(p && pkey!==proposalKey){proposal.find('[data-ta-template-before]').text(templateText(p.before));proposal.find('[data-ta-template-after]').text(templateText(p.after));}
             proposalKey=pkey;
-            var busy=s.status==='running' || reconciling,error=s.error || state.error;
-            host.find('[data-ta-chat-status]').text(busy?'Pico готовит ответ…':s.status==='stopped'?'Остановлено. Изменения сохранены.':(s.notices || []).map(function(n){return typeof n==='string'?n:n.message;}).join('\n'));
+            var busy=s.status==='running' || reconciling,error=s.error || state.error,rateLimited=hasRateLimit(s);
+            host.find('[data-ta-chat-rate-limit]').prop('hidden',!rateLimited);
+            host.find('[data-ta-chat-rate-retry]').prop('hidden',!rateLimited).prop('disabled',!!localCheck || sending || busy || !d || locked(d));
+            var visibleNotices=(s.notices || []).filter(function(n){return !s.error || rateLimited || !/\bHTTP 429\b/.test(typeof n==='string'?n:n.message || '');});
+            host.find('[data-ta-chat-status]').text(busy?'Готовлю ответ…':s.status==='stopped'?'Остановлено. Изменения сохранены.':visibleNotices.map(noticeText).join('\n'));
             host.find('[data-ta-chat-error]').prop('hidden',!error).text(error ? error.message || String(error) : '');
             host.find('[data-ta-chat-warning]').prop('hidden',!s.storageWarning).text(s.storageWarning || '');
             host.find('[data-ta-chat-stop]').prop('hidden',!busy);
-            host.find('[data-ta-chat-retry]').prop('hidden',busy || !(lastSent || retryReconcileScope===scope && scope!==null) || !(s.status==='stopped' || s.status==='error' && (!s.error || !s.error.action || s.error.action==='retry')));
+            host.find('[data-ta-chat-retry]').prop('hidden',rateLimited || busy || !(lastSent || retryReconcileScope===scope && scope!==null) || !(s.status==='stopped' || s.status==='error' && (!s.error || !s.error.action || s.error.action==='retry')));
             host.find('[data-ta-chat-configure]').prop('hidden',busy || !s.error || s.error.action!=='connection');
             host.find('[data-ta-chat-error-budget]').prop('hidden',busy || !s.error || s.error.action!=='budget').prop('disabled',!state.settings);
             host.find('[data-ta-chat-error-edit]').prop('hidden',busy || !d || !s.error || ['editor','connection'].indexOf(s.error.action)===-1);
@@ -326,9 +352,9 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         function renderCard(d,s) {
             card.attr('data-ta-task-card-id',d.id);
             var issue=state.meta && state.meta.issueTypes.find(function(t){return t.id===d.issueTypeId;}),validation=state.validation;
-            var reason=!d.issueTypeId?'Выберите тип Jira в редакторе.':!d.templateId?'Выберите шаблон.':!validation?'Pico ещё не проверил текущие поля.':!validation.ok?Object.keys(validation.fieldErrors || {}).map(function(id){return (validation.fieldErrors[id] || []).join(' ');}).join(' ') || 'Ответьте на обязательные вопросы.':!d.checked?'Текущие изменения требуют проверки.':'';
+            var reason=!d.issueTypeId?'Выберите тип Jira в редакторе.':!d.templateId?'Выберите шаблон.':!validation?'Текущие поля ещё не проверены.':!validation.ok?Object.keys(validation.fieldErrors || {}).map(function(id){return (validation.fieldErrors[id] || []).join(' ');}).join(' ') || 'Ответьте на обязательные вопросы.':!d.checked?'Текущие изменения требуют проверки.':'';
             if(validation && validation.unsupportedRequired && validation.unsupportedRequired.length)reason+=' Откройте «Редактировать», затем «Открыть форму Jira» для обязательных полей.';
-            if(s.status==='running' || reconciling)reason='Дождитесь ответа Pico или остановите запрос.';
+            if(s.status==='running' || reconciling)reason='Дождитесь ответа или остановите запрос.';
             var creation=d.creation,labels={preflight:'Предварительная проверка Jira и файлов…',submitting:'Ожидаем результат создания…',created:'Задача создана.',unknown:'Результат неизвестен. Повторное создание заблокировано до сверки с Jira.',rejected:'Создание отклонено.'};
             if(locked(d))reason=labels[creation.status] || 'Создание заблокировано.';
             card.find('[data-ta-card-summary]').text(d.fields.summary || 'Тема пока не заполнена');

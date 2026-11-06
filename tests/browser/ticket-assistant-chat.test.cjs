@@ -151,7 +151,7 @@ test('default chat token popover reflects growing actual Pico turns instead of u
         records.manualEstimate=records.instance.controller.getState().tokenPreflight.input;
     });
     await page.locator('[data-ta-tokens]').click();
-    assert.match(await page.locator('[data-ta-token-summary]').innerText(),/Pico.*32768/);
+    assert.match(await page.locator('[data-ta-token-summary]').innerText(),/Контекст: 32768/);
     assert.match(await page.locator('[data-ta-token-breakdown]').innerText(),/4096/);
     await send('Поясни первый вопрос');const first=await page.locator('[data-ta-token-usage]').innerText();
     await send('Поясни второй вопрос с предыдущим ответом');
@@ -160,7 +160,7 @@ test('default chat token popover reflects growing actual Pico turns instead of u
     assert.equal(estimates.length,2);assert.ok(estimates[1]>estimates[0]);assert.equal(currentManual,manualEstimate);
     assert.equal(usage.inputTokens,estimates[1]);assert.equal(usage.modelCalls,1);
     const second=await page.locator('[data-ta-token-usage]').innerText();assert.notEqual(second,first);
-    assert.match(second,new RegExp('вход '+estimates[1]));assert.match(second,/сумма|Сумма/);assert.match(second,/оценка/);
+    assert.match(second,new RegExp('вход '+estimates[1]));assert.match(second,/по всем запросам/);assert.match(second,/оценка/);
     assert.doesNotMatch(second,/Точно по usage|Текст 0/);assert.deepEqual(errors,[]);
 });
 
@@ -674,5 +674,50 @@ test('after a malformed tool batch the built widget displays the model-authored 
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(), true);
     assert.deepEqual(await page.evaluate(() => [window.taPreview.requests,
         window.taPreview.calls.filter(op => op === 'create').length]), [2, 0]);
+    assert.deepEqual(errors, []);
+});
+
+test('visible HTTP 429 retry uses the saved chat and preserves unsent text across another 429', async t => {
+    const {page, state, errors} = await browserFixture(t);
+    await page.evaluate(async () => {
+        const f = window.taPreview, Gadget = window.taRequire('_ujgTicketAssistantRuntime');
+        f.instance.destroy();
+        f.attempts = 0;
+        f.instance = new Gadget({getGadgetContentEl: () => window.jQuery('#ticket-assistant')}, {
+            api:f.api, storage:null,
+            readConfig:() => ({apiBase:'https://example.test', model:'offline', apiKey:'fixture-key'}),
+            fetchImpl:async () => {
+                f.attempts++;
+                if (f.attempts < 3) return new Response('private-quota-details', {status:429});
+                const card = {fields:{summary:'Обновить demo-api в DEV', description:'Обновить demo-api до 1.0 в DEV. Проверить /health.'}, missing:[]};
+                return Response.json({choices:[{message:{content:JSON.stringify(card)}}]});
+            }
+        });
+        await f.instance.ready;
+        const controller = f.instance.controller;
+        await controller.selectProject('DEMO');
+        await controller.selectIssueType('10');
+        await controller.selectTemplate('task');
+    });
+    const composer = page.locator('[data-ta-chat-input]');
+    const source = 'На DEV нужен demo-api версии 1.0, после обновления проверить /health.';
+    await composer.fill(source);
+    await composer.press('Enter');
+    await page.waitForFunction(() => !!window.taPreview.instance.controller.getState().draft.checked);
+    const retry = page.getByRole('button', {name:/повторить/i});
+    await retry.waitFor({state:'visible', timeout:2000});
+    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(), true);
+    const unsent = 'Уточнение, которое я ещё не отправил';
+    await composer.fill(unsent);
+    for (const expected of [2, 3]) {
+        await retry.click();
+        await page.waitForFunction(n => window.taPreview.attempts === n && window.taPreview.instance.chat.getState().status !== 'running', expected);
+        assert.equal(await composer.inputValue(), unsent);
+        assert.equal(await page.locator('[data-ta-chat-log] [data-role="user"]').count(), 1);
+    }
+    assert.equal(await retry.isVisible(), false);
+    assert.doesNotMatch(await page.locator('[data-ta-chat-status]').innerText(), /429|private-quota-details/);
+    assert.equal((await state()).draft.fields.summary, 'Обновить demo-api в DEV');
+    assert.equal(await page.evaluate(() => window.taPreview.calls.filter(x => x === 'create').length), 0);
     assert.deepEqual(errors, []);
 });
