@@ -637,3 +637,42 @@ test('invalid Pico JSON preserves the incident narrative and a required Jira est
     assert.equal(payload.description,narrative);assert.deepEqual(payload.timetracking,{originalEstimate:'10m'});
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(x=>x==='create').length),1);
 });
+
+test('after a malformed tool batch the built widget displays the model-authored Jira fields before creation', async t => {
+    const {page, send, errors} = await browserFixture(t);
+    await page.evaluate(async () => {
+        const fixture = window.taPreview;
+        const Gadget = window.taRequire('_ujgTicketAssistantRuntime');
+        fixture.instance.destroy();
+        fixture.requests = 0;
+        fixture.instance = new Gadget({getGadgetContentEl: () => window.jQuery('#ticket-assistant')}, {
+            api: fixture.api, storage: null, requestText: async () => {
+                fixture.requests++;
+                if (fixture.requests === 1) return {text: JSON.stringify({text:'', toolCalls:[
+                    {id:'update_001', name:'update_task', arguments:{fields:{summary:'Содержимое отклонённого пакета'}}},
+                    {id:'update_001', name:'get_task', arguments:{}}
+                ]})};
+                return {text: JSON.stringify({fields:{
+                    summary:'Обновить API в TEST до 1.0',
+                    description:'Цель: обновить компонент API в TEST до 1.0. Проверка: health возвращает 200.',
+                    components:[{id:'31'}],
+                    missing:[]
+                }})};
+            }
+        });
+        await fixture.instance.ready;
+        const controller = fixture.instance.controller;
+        await controller.selectProject('DEMO');
+        await controller.selectIssueType('10');
+        await controller.selectTemplate('deployment');
+    });
+    await send('Для стенда TEST нужна версия 1.0 компонента API, проверим ответ 200 на health.');
+    await page.locator('[data-ta-card-details] > summary').click();
+    assert.match(await page.locator('[data-ta-card-details]').innerText(), /Обновить API в TEST до 1.0/);
+    assert.match(await page.locator('[data-ta-card-field="description"]').innerText(), /Проверка: health возвращает 200/);
+    assert.match(await page.locator('[data-ta-card-field="components"]').innerText(), /API/);
+    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(), true);
+    assert.deepEqual(await page.evaluate(() => [window.taPreview.requests,
+        window.taPreview.calls.filter(op => op === 'create').length]), [2, 0]);
+    assert.deepEqual(errors, []);
+});

@@ -1,6 +1,6 @@
 import { Agent } from '@earendil-works/pi-agent-core';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
-import { abortable, checkTree, copy, emptyUsage, estimateTokens, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseEnvelope, requestSize, sameJson, validateBudget } from './transport.mjs';
+import { abortable, copy, emptyUsage, estimateTokens, makeDraftRequest, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseDraftData, parseEnvelope, requestSize, sameJson, validateBudget, validateDraftFields } from './transport.mjs';
 
 export const VERSION = '1.4.0';
 export const LIMITS = Object.freeze({modelCalls: 8, toolCalls: 12, wallMs: 180000});
@@ -88,7 +88,7 @@ function reviewQuestions(missing, state, proposed) {
     return questions;
 }
 
-export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep, draftReviewPrompt} = {}) {
+export function createSession({system = '', messages = [], tools = [], requestText, tokenBudget, onEvent = () => {}, getContext, limits = {}, allowPlainTextFinal = false, repairMisplacedQuestions = false, currentTurnWithEvidence = false, afterStep, draftReviewPrompt, draftExtractionPrompt} = {}) {
     if (typeof requestText !== 'function') throw Error('Pico requires the configured shared requestText callback');
     if (typeof system !== 'string' || typeof onEvent !== 'function' || (getContext !== undefined && typeof getContext !== 'function')) throw Error('Invalid Pico session options');
     const budget = validateBudget(tokenBudget), bounds = {};
@@ -165,25 +165,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                     // Reconciliation is a single, scoped local field update. The
                     // model supplies field data; the application owns call IDs and
                     // runs the same schema, scope and concurrency checks as chat.
-                    let priorQuestion='';
-                    const userAnswers=[];
-                    for (const entry of state.conversationForReview) {
-                        if(entry.role==='assistant') {
-                            priorQuestion=entry.text.split('\n').filter(line=>line.includes('?')).pop() || '';
-                        } else if(entry.role==='user') {
-                            userAnswers.push({text:entry.text, ...(priorQuestion?{inReplyTo:priorQuestion}:{})});
-                            priorQuestion='';
-                        }
-                    }
-                    return {system:draftReviewPrompt, user:JSON.stringify({
-                        template:state.template, fields:state.fieldSchema, current:state.draft.fields,
-                        scope:{project:state.draft.projectKey,type:state.draft.issueTypeId},
-                        protected:state.draft.protectedFields, proposals:state.draft.pendingFields, usersPresent:state.draft.userFieldsPresent,
-                        openQuestions:state.draft.questions,
-                        exceptions:state.draft.taskExceptions, source:state.draft.source,
-                        userAnswers, problems:state.validation,
-                        previousToolResults:projected.filter(m=>m.role==='toolResult').map(m=>m.content)
-                    })};
+                    return makeDraftRequest(draftReviewPrompt, state, state.conversationForReview, {messages:projected});
                 }
                 let request = buildRequest(), size = requestSize(request);
                 const fits = () => size.tokens <= budget.context - budget.reserve && size.bytes <= MAX_PROMPT_BYTES;
@@ -217,17 +199,18 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                     return {response, tokens};
                 }
                 let {response, tokens} = await ask(), envelope;
+                const readDraft = (raw, strict = false) => {
+                    const value = parseDraftData(raw, state.fieldSchema);
+                    if (!value || Object.keys(value).sort().join(',') !== 'fields,missing' ||
+                        !Array.isArray(value.missing)) throw Error('Invalid draft');
+                    if (state.generationFieldIds.includes('description') && (typeof value.fields?.description!=='string' || !value.fields.description.trim())) throw Error('Missing description');
+                    let seq=seenIds.size+1;
+                    while(seenIds.has('draft_'+seq))seq++;
+                    const args={fields:value.fields,questions:reviewQuestions(value.missing,state,value.fields)};
+                    if (strict) validateDraftFields(args.fields, state);
+                    return parseEnvelope(JSON.stringify({text:'',toolCalls:[{id:'draft_'+seq,name:'update_task',arguments:args}]}),tools,seenIds);
+                };
                 if (draftReviewPrompt) {
-                    const readDraft = raw => {
-                        const value = JSON.parse(raw);checkTree(value);
-                        if (!value || Object.keys(value).sort().join(',') !== 'fields,missing' ||
-                            !Array.isArray(value.missing)) throw Error('Invalid draft');
-                        if (state.generationFieldIds.includes('description') && (typeof value.fields?.description!=='string' || !value.fields.description.trim())) throw Error('Missing description');
-                        let seq=seenIds.size+1;
-                        while(seenIds.has('draft_'+seq))seq++;
-                        const args={fields:value.fields,questions:reviewQuestions(value.missing,state,value.fields)};
-                        return parseEnvelope(JSON.stringify({text:'',toolCalls:[{id:'draft_'+seq,name:'update_task',arguments:args}]}),tools,seenIds);
-                    };
                     try {envelope=readDraft(response.text);}
                     catch {
                         if(run.reformatted)throw Error('Pico draft update missing');
@@ -238,19 +221,38 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                         try {envelope=readDraft(response.text);} catch {throw Error('Pico draft update missing');}
                     }
                 } else try {envelope = parseEnvelope(response.text, tools, seenIds, allowPlainTextFinal);} catch (error) {
+                    const code = error.message==='Duplicate Pico tool call id' ? 'duplicate-call-id' :
+                        error.message.startsWith('Invalid arguments for Pico tool:') ? 'tool-schema' : 'envelope';
+                    emit({type:'response-rejected', code});
                     const candidate = repairMisplacedQuestions === true && !run.reformatted ? misplacedQuestionsCandidate(response.text, tools, seenIds) : null;
-                    if (!candidate) throw error;
-                    run.reformatted = true;
-                    state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
-                    live(run, signal);
-                    request = makeRequest(system + '\nReformat the previous invalid response exactly once. No tools from it were executed. Move update_task questions inside arguments; preserve all text, IDs, names and argument values. Return the complete original batch in a strict JSON envelope, with no extra members or prose.',
-                        tools, [...projected, {role:'assistant', content:[{type:'text', text:response.text}]}], state, compaction);
-                    size = requestSize(request);
-                    try {
-                        ({response, tokens} = await ask());
-                        envelope = parseEnvelope(response.text, tools, seenIds);
-                        if (!sameJson(envelope, candidate)) throw Error('Changed correction');
-                    } catch {throw Error('Pico response correction failed');}
+                    if (!candidate) {
+                        if (!draftExtractionPrompt || run.reformatted || !getContext) throw error;
+                        run.reformatted = true;
+                        // Re-read authoritative state; never use the invalid response as
+                        // factual evidence or salvage any of its requested commands.
+                        state = copy(await abortable(Promise.resolve().then(() => getContext({purpose:'draft-extraction'})), signal));
+                        live(run, signal);
+                        const evidence = state.conversationForExtraction;
+                        if (!Array.isArray(evidence) || !evidence.some(m=>m.role==='user' && m.text.trim())) throw error;
+                        state.conversationForReview = evidence;
+                        request = makeDraftRequest(draftExtractionPrompt, state, evidence, {includeSource:false});
+                        size = requestSize(request);
+                        ({response,tokens} = await ask());
+                        try {envelope = readDraft(response.text, true);} catch {throw Error('Pico response correction failed');}
+                        run.extracted = true;
+                    } else {
+                        run.reformatted = true;
+                        state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
+                        live(run, signal);
+                        request = makeRequest(system + '\nReformat the previous invalid response exactly once. No tools from it were executed. Move update_task questions inside arguments; preserve all text, IDs, names and argument values. Return the complete original batch in a strict JSON envelope, with no extra members or prose.',
+                            tools, [...projected, {role:'assistant', content:[{type:'text', text:response.text}]}], state, compaction);
+                        size = requestSize(request);
+                        try {
+                            ({response, tokens} = await ask());
+                            envelope = parseEnvelope(response.text, tools, seenIds);
+                            if (!sameJson(envelope, candidate)) throw Error('Changed correction');
+                        } catch {throw Error('Pico response correction failed');}
+                    }
                 }
                 if (envelope.toolCalls.length > bounds.toolCalls - run.usage.toolCalls) limit('Pico tool call limit reached (maximum ' + bounds.toolCalls + ' per turn).');
                 for (const c of envelope.toolCalls) seenIds.add(c.id);
@@ -277,7 +279,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
         finishTurn: ({message, toolResults}) => {
             if (active?.status) return {action:'end'};
             if (afterStep && !['error','aborted'].includes(message.stopReason)) {
-                return afterStep({hasTools:toolResults.length > 0, failedTool:toolResults.some(r=>r.isError),
+                return afterStep({draftExtracted:active.extracted === true, hasTools:toolResults.length > 0, failedTool:toolResults.some(r=>r.isError),
                     text:message.content.filter(c=>c.type==='text').map(c=>c.text).join('\n')});
             }
         }});

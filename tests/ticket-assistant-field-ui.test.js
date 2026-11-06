@@ -54,7 +54,7 @@ test('manual numeric control emits numbers including zero and decimals',t=>{
 test('main routes relation search options to controller and keeps user lookup on the Jira adapter',async t=>{
     const dom=new JSDOM('<div id="root"></div>',{url:'https://jira.test/'}),window=dom.window,$=jquery(window);
     let uiOptions;const calls=[];
-    const main=loadUnit('main',{jquery:$,_ujgTA_chat:{},_ujgTA_chatUi:{},_ujgTA_picoRuntime:{},_ujgShared_llmClient:{},_ujgTA_api:{createApi:()=>({})},_ujgTA_ai:{},_ujgTA_storage:{},
+    const main=loadUnit('main',{jquery:$,_ujgTA_fieldUi:{},_ujgTA_chat:{},_ujgTA_chatUi:{},_ujgTA_picoRuntime:{},_ujgShared_llmClient:{},_ujgTA_api:{createApi:()=>({})},_ujgTA_ai:{},_ujgTA_storage:{},
         _ujgTA_controller:{create:()=>({init:async()=>({}),destroy(){},searchRelation:async(...args)=>{calls.push(['relation',...args]);return {values:[]};}})},
         _ujgTA_ui:{create:opts=>{uiOptions=opts;return {mount(){},destroy(){}};}}},{window,document:window.document,AbortController});
     const gadget=new main({getGadgetContentEl:()=>window.document.querySelector('#root')},{ai:{},legacyForm:true,api:{searchUsers:async q=>{calls.push(['user',q]);return {values:[]};}},storage:null});

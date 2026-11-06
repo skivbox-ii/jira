@@ -1,5 +1,5 @@
-define('_ujgTA_main', ['jquery', '_ujgShared_llmClient', '_ujgTA_api', '_ujgTA_ai', '_ujgTA_storage', '_ujgTA_controller', '_ujgTA_ui', '_ujgTA_chat', '_ujgTA_chatUi', '_ujgTA_picoRuntime'],
-function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModule, chatModule, chatUiModule, picoRuntime) {
+define('_ujgTA_main', ['jquery', '_ujgShared_llmClient', '_ujgTA_api', '_ujgTA_ai', '_ujgTA_storage', '_ujgTA_controller', '_ujgTA_ui', '_ujgTA_chat', '_ujgTA_chatUi', '_ujgTA_picoRuntime', '_ujgTA_fieldUi'],
+function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModule, chatModule, chatUiModule, picoRuntime, fieldUi) {
     'use strict';
     // Optional dependencies provide offline transport without changing product URL behavior.
     function TicketAssistantGadget(API, dependencies) {
@@ -69,7 +69,9 @@ function($, shared, apiModule, aiModule, storageModule, controllerModule, uiModu
                     });
                 });}).catch(function(){throw new Error(httpStatus?'Pico HTTP '+httpStatus:'Pico transport failed');});
             },onChange:function(){if(!dead && chatUi){chatUi.update(controller.getState());ui.updateChatUsage();scheduleResize();}}});
-            chatUi=chatUiModule.create({$: $,controller:controller,chat:chat,editor:ui,baseUrl:baseUrl});
+            chatUi=chatUiModule.create({$: $,controller:controller,chat:chat,editor:ui,baseUrl:baseUrl,
+                onSearch:searchUsers,getCurrentUser:function(options){return api.getCurrentUser(options);},
+                createAssigneePicker:function(options){return fieldUi.create(options);}});
             chatUi.mount(root[0]);
         }
         var warningHost = $('<p class="ta-warning" data-ta-storage-warning hidden>');

@@ -75,6 +75,50 @@ export function parseEnvelope(raw, tools, seenIds, allowPlainTextFinal = false) 
     }
     return value;
 }
+// Observed compact data-only variant: the model put missing inside fields.
+// Never relocate a real metadata field, resolve conflicting keys, or salvage commands.
+export function parseDraftData(raw, fieldSchema) {
+    const value = JSON.parse(raw); checkTree(value);
+    if (exact(value, ['fields']) && record(value.fields) && Array.isArray(value.fields.missing) &&
+        !fieldSchema.some(f=>f.id==='missing')) {
+        const {missing, ...fields} = value.fields;
+        return {fields, missing};
+    }
+    return value;
+}
+function containsToken(text, token) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(^|[^\\p{L}\\p{N}_-])'+escaped+'($|[^\\p{L}\\p{N}_-])', 'u').test(text);
+}
+// Compact recovery proposals are data, validated atomically before publishing a
+// synthetic update_task. Tool validation remains the final concurrency/manual guard.
+export function validateDraftFields(fields, state) {
+    if (!record(fields) || !Object.keys(fields).length) throw Error('Invalid draft fields');
+    const evidence = state.conversationForReview.filter(m=>m.role==='user').map(m=>m.text).join('\n');
+    for (const [id, value] of Object.entries(fields)) {
+        const spec = state.fieldSchema.find(f=>f.id===id);
+        if (!spec || !spec.fillable || spec.writable!==true || !state.generationFieldIds.includes(id)) throw Error('Unscoped draft field');
+        const choice = v => {
+            const choices = spec.choices || [];
+            if (exact(v, ['id']) && typeof v.id==='string') return choices.some(c=>c.id===v.id);
+            return typeof v==='string' && spec.choicesComplete===true && choices.filter(c=>c.label===v).length===1;
+        };
+        let valid = false;
+        if (['string','textarea','date','datetime'].includes(spec.kind)) {
+            valid = typeof value==='string' && !!value.trim() && (!spec.maxLength || value.length<=spec.maxLength);
+            if (valid && spec.kind==='date') valid = /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10)===value;
+            if (valid && spec.kind==='datetime') valid = /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value));
+        } else if (spec.kind==='option') valid = choice(value);
+        else if (['multioption','components','versions'].includes(spec.kind)) valid = Array.isArray(value) && value.length>0 && value.every(choice);
+        else if (spec.kind==='labels') valid = Array.isArray(value) && value.length>0 && value.every(v=>typeof v==='string' && !!v.trim() && !/\s/.test(v) &&
+            (containsToken(evidence, v) || state.draft.fields[id]?.includes(v)));
+        else if (spec.kind==='timetracking') valid = record(value) && Object.keys(value).length>0 && Object.entries(value).every(([k,v])=>
+            ['originalEstimate','remainingEstimate'].includes(k) && typeof v==='string' && /^(?:\d+[wdhm]\s*)+$/.test(v) &&
+            (state.draft.fields.timetracking?.[k]===v || state.extractionEstimates?.[k]===v));
+        // Users, numeric estimates, relations and unknown kinds stay human-only.
+        if (!valid) throw Error('Invalid draft field value');
+    }
+}
 // Recognize exactly the observed misplaced member. This candidate is validation
 // evidence for a reformat request only; it is never published or executed.
 export function misplacedQuestionsCandidate(raw, tools, seenIds) {
@@ -112,6 +156,28 @@ export function makeRequest(system, tools, messages, authoritativeContext, compa
             if (m.role === 'toolResult') return {role: 'toolResult', toolCallId: m.toolCallId, toolName: m.toolName, content: m.content, isError: !!m.isError};
             return {role: 'assistant', content: m.content, ...(m.errorMessage ? {errorMessage: m.errorMessage} : {})};
         })})};
+}
+// Both explicit review and invalid-envelope extraction use the same compact
+// data protocol. Only the host selects which factual turns are fresh enough.
+export function makeDraftRequest(system, state, evidence, {messages = [], includeSource = true} = {}) {
+    let priorQuestion = '';
+    const userAnswers = [];
+    for (const entry of evidence) {
+        if (entry.role==='assistant') priorQuestion = entry.text.split('\n').filter(line=>line.includes('?')).pop() || '';
+        else if (entry.role==='user') {
+            const inReplyTo = entry.inReplyTo || priorQuestion;
+            userAnswers.push({text:entry.text, ...(inReplyTo ? {inReplyTo} : {})});
+            priorQuestion = '';
+        }
+    }
+    return {system, user:JSON.stringify({
+        template:state.template, fields:state.fieldSchema, current:state.draft.fields,
+        scope:{project:state.draft.projectKey,type:state.draft.issueTypeId,typeName:state.issueType?.name},
+        protected:state.draft.protectedFields, proposals:state.draft.pendingFields, usersPresent:state.draft.userFieldsPresent,
+        openQuestions:state.draft.questions, exceptions:state.draft.taskExceptions, ...(includeSource ? {source:state.draft.source} : {}),
+        userAnswers, problems:state.validation, userStatedEstimates:state.extractionEstimates,
+        previousToolResults:messages.filter(m=>m.role==='toolResult').map(m=>m.content)
+    })};
 }
 export function requestSize(request) {
     // Match the shared client preflight, including the envelope/tool schema instructions.

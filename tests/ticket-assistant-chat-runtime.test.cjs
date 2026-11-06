@@ -271,3 +271,93 @@ test('AMD bundle runs real Pi with standard browser globals and creates no outsi
     const s=api.createSession({requestText:async()=>envelope('Browser done')});assert.equal((await s.prompt('Browser turn')).status,'complete');s.dispose();
     assert.deepEqual(Object.keys(sandbox),keys);
 });
+
+test('Citrix HTTP 200 update_001 shape is accepted; only reuse or malformed fields reject it',async()=>{
+    const {parseEnvelope}=await import('../ujg-ticket-assistant-chat/transport.mjs');
+    const parameters={type:'object',properties:{fields:{type:'object',additionalProperties:true}},required:['fields'],additionalProperties:false};
+    const tools=[{name:'update_task',parameters}],args={fields:{summary:'Восстановить RDP',description:'Среда DEV. Проверить вход.'}};
+    const raw=JSON.stringify({text:'',toolCalls:[call('update_001','update_task',args)]});
+    assert.deepEqual(parseEnvelope(raw,tools,new Set()).toolCalls[0].arguments,args);
+    assert.throws(()=>parseEnvelope(raw,tools,new Set(['update_001'])),/Duplicate Pico tool call id/);
+    assert.throws(()=>parseEnvelope(JSON.stringify({text:'',toolCalls:[call('update_001','update_task',{fields:[]})]}),tools,new Set()),/Invalid arguments/);
+    assert.throws(()=>parseEnvelope(raw.slice(0,-1),tools,new Set()),/must be a JSON/);
+});
+
+function extractionContext() {
+    return {draft:{projectKey:'DO',issueTypeId:'10',fields:{description:'Среда DEV'},questions:[]},
+        fieldSchema:[{id:'description',kind:'textarea',fillable:true,writable:true},{id:'summary',kind:'string',fillable:true,writable:true,maxLength:255},
+            {id:'components',kind:'components',fillable:true,writable:true,choices:[{id:'DO-9',label:'Backend'}]},
+            {id:'assignee',kind:'user',fillable:false,writable:true}],generationFieldIds:['description','summary','components'],
+        conversationForExtraction:[{role:'user',text:'Проверка: вход по RDP.'}]};
+}
+function extractionTool(execute) {
+    return {name:'update_task',parameters:{type:'object',properties:{fields:{type:'object'},questions:{type:'array'}},required:['fields','questions'],additionalProperties:false},execute};
+}
+for(const bad of [
+    {fields:{description:'Итог',foreign:'x'},missing:[]},
+    {fields:{description:'Итог',components:[{id:'OTHER-9'}]},missing:[]},
+    {fields:{description:'Итог',assignee:{id:'alice'}},missing:[]},
+    {fields:{description:'Итог',summary:42},missing:[]},
+    {fields:{description:'Итог'},missing:[{text:'Вопрос?',required:'false'}]},
+    {fields:{description:'Итог'},missing:[],toolCalls:[]},
+    {fields:[],missing:[]},
+    {fields:{description:''},missing:[]}
+])test('compact extraction rejects the entire invalid proposal before tool execution: '+JSON.stringify(bad),async()=>{
+    const {createSession}=await runtime();let calls=0,executed=0;
+    const s=createSession({draftExtractionPrompt:'Review draft',getContext:extractionContext,
+        tools:[extractionTool(()=>{executed++;return {ok:true};})],requestText:async()=>({text:++calls===1?'```json\n{}\n```':JSON.stringify(bad)})});
+    const result=await s.prompt('Проверка: вход по RDP.');
+    assert.equal(result.status,'error');assert.equal(result.reason,'Pico response correction failed');
+    assert.equal(calls,2);assert.equal(executed,0);assert.equal(result.usage.toolCalls,0);s.dispose();
+});
+for(const bounds of [{modelCalls:1},{toolCalls:1}])test('compact extraction obeys existing turn limits '+JSON.stringify(bounds),async()=>{
+    const {createSession}=await runtime();let calls=0,executed=0;
+    const s=createSession({draftExtractionPrompt:'Review draft',getContext:extractionContext,limits:bounds,
+        afterStep:()=>({action:'end'}),tools:[extractionTool(()=>{executed++;return {ok:true};})],
+        requestText:async()=>({text:++calls===1?'{}':JSON.stringify({fields:{description:'Проверка: вход по RDP.'},missing:[]})})});
+    const result=await s.prompt('Проверка: вход по RDP.');assert.equal(result.status,bounds.modelCalls?'limit':'complete');
+    assert.equal(calls,bounds.modelCalls?1:2);assert.equal(executed,bounds.modelCalls?0:1);s.dispose();
+});
+
+for(const mode of ['reserve','context','abort','stale'])test('compact extraction stops safely on '+mode,async()=>{
+    const {createSession}=await runtime();let calls=0,executed=0;const gate=deferred(),reached=deferred();
+    const s=createSession({draftExtractionPrompt:'Review draft',tokenBudget:{context:6000,reserve:600},
+        getContext:()=>{if(mode==='stale' && calls===1)throw Error('stale');const state=extractionContext();if(mode==='context' && calls===1)state.template='x'.repeat(20000);return state;},
+        tools:[extractionTool(()=>{executed++;return {ok:true};})],requestText:async()=>{
+            if(++calls===1)return {text:'{}'};
+            reached.resolve();if(mode==='abort')await gate.promise;
+            return {text:mode==='reserve'?'я'.repeat(650):JSON.stringify({fields:{description:'Вход по RDP.'},missing:[]})};
+        }});
+    const pending=s.prompt('Вход по RDP.');
+    if(mode==='abort'){await reached.promise;s.abort();gate.resolve();}
+    const result=await pending;
+    assert.equal(result.status,mode==='abort'?'aborted':mode==='stale'?'error':'limit');
+    assert.equal(executed,0);assert.equal(result.usage.toolCalls,0);assert.equal(calls,['stale','context'].includes(mode)?1:2);s.dispose();
+});
+
+test('compact extraction cannot revive an old effort estimate as a new factual answer',async()=>{
+    const {validateDraftFields}=await import('../ujg-ticket-assistant-chat/transport.mjs');
+    const state=extractionContext();state.conversationForReview=state.conversationForExtraction;
+    state.fieldSchema.push({id:'timetracking',kind:'timetracking',fillable:true,writable:true});state.generationFieldIds.push('timetracking');
+    assert.throws(()=>validateDraftFields({description:'Вход по RDP.',timetracking:{originalEstimate:'2h'}},state),/Invalid draft field/);
+    state.extractionEstimates={originalEstimate:'2h'};
+    assert.doesNotThrow(()=>validateDraftFields({description:'Вход по RDP.',timetracking:{originalEstimate:'2h'}},state));
+});
+
+test('recovery labels use token boundaries rather than substrings',async()=>{
+    const {validateDraftFields}=await import('../ujg-ticket-assistant-chat/transport.mjs'),state=extractionContext();
+    state.conversationForReview=[{role:'user',text:'Use latest release, label test-run.'}];
+    state.fieldSchema.push({id:'labels',kind:'labels',fillable:true,writable:true});state.generationFieldIds.push('labels');
+    assert.throws(()=>validateDraftFields({description:'Release',labels:['test']},state),/Invalid draft field/);
+    assert.doesNotThrow(()=>validateDraftFields({description:'Release',labels:['test-run']},state));
+});
+
+test('nested missing normalization refuses metadata fields, conflicting envelopes and command siblings',async()=>{
+    const {parseDraftData}=await import('../ujg-ticket-assistant-chat/transport.mjs');
+    const nested={fields:{description:'Итог',missing:[]}};
+    assert.deepEqual(parseDraftData(JSON.stringify(nested),[]),{fields:{description:'Итог'},missing:[]});
+    for(const value of [nested,{...nested,missing:[]},{...nested,toolCalls:[]},{fields:{description:'Итог',missing:'bad'}}]) {
+        const schema=value===nested?[{id:'missing'}]:[];
+        assert.deepEqual(parseDraftData(JSON.stringify(value),schema),value);
+    }
+});

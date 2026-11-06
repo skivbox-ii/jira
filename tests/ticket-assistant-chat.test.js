@@ -503,3 +503,165 @@ test('live-style review saves verified description despite invalid optional fiel
     assert.equal(saved.fields.timetracking,undefined);assert.equal(saved.fields.priority,undefined);assert.equal(saved.questions.length,0);
     assert.ok(saved.warnings.length>0);chat.destroy();
 });
+
+for(const malformed of ['```json\n{"fields":{"description":"UNTRUSTED"},"missing":[]}\n```','{"answer":"UNTRUSTED","actions":[]}'])
+test('invalid ordinary envelope triggers fresh model draft extraction and a checked formatted task: '+malformed.slice(0,12),async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
+    const formatted='Проблема: на DEV отсутствует RDP.\n\nПроверка: вход по RDP восстановлен.';
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        if(++calls===1)return {text:malformed};
+        assert.equal(h.controller.getState().draft.fields.description,undefined);
+        const data=JSON.parse(r.user);
+        assert.deepEqual(data.userAnswers.map(m=>m.text),['На DEV нет RDP; проверить восстановлением входа.']);
+        assert.ok(data.fields.find(f=>f.id==='components').choices.some(v=>v.id==='DO-9'));
+        assert.doesNotMatch(r.user,/UNTRUSTED/);
+        return {text:JSON.stringify({fields:{summary:'Восстановить RDP на DEV',description:formatted,components:[{id:'DO-9'}]},missing:[]})};
+    }});
+    await chat.send('На DEV нет RDP; проверить восстановлением входа.');
+    assert.equal(calls,2);assert.equal(chat.getState().error,null);
+    const draft=h.controller.getState().draft;
+    assert.equal(draft.fields.description,formatted);assert.equal(draft.fields.summary,'Восстановить RDP на DEV');
+    assert.ok(draft.checked);assert.equal(draft.questions.length,0);
+    assert.match(chat.getState().transcript.at(-1).text,/Pico заполнил карточку по вашему сообщению/);
+    assert.doesNotMatch(chat.getState().notices.join(' '),/Ответ Pico отклонён/);
+    assert.equal(chat.getState().lastTurnUsage.modelCalls,2);assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
+    chat.destroy();
+});
+
+test('reused update_001 is never replayed; compact recovery applies fresh Pico values and preserves a manual summary',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        calls++;
+        if(calls===1)return {text:JSON.stringify({text:'',toolCalls:[{id:'update_001',name:'update_task',arguments:{fields:{summary:'Первая тема',description:'Старый стенд TEST'},questions:[]}}]})};
+        if(calls===2)return {text:'Проверка пройдена.'};
+        if(calls===3)return {text:JSON.stringify({text:'',toolCalls:[{id:'update_001',name:'update_task',arguments:{fields:{summary:'REPLAY',description:'REPLAY'},questions:[]}}]})};
+        const data=JSON.parse(r.user);
+        assert.deepEqual(data.userAnswers.map(m=>m.text),['Теперь стенд DEV, проверка — вход по RDP.']);
+        assert.equal(data.current.description,'Текущая ручная версия: DEV');
+        assert.doesNotMatch(r.user,/Старый стенд TEST|REPLAY/);
+        return {text:JSON.stringify({fields:{summary:'Тема от Pico',description:'Среда: DEV.\n\nПроверка: вход по RDP.'},missing:[]})};
+    }});
+    await chat.send('Старый стенд TEST');
+    assert.equal(h.controller.getState().draft.fields.summary,'Первая тема');
+    await h.controller.updateField('summary','Ручная тема');
+    await h.controller.updateField('description','Текущая ручная версия: DEV');
+    await chat.send('Теперь стенд DEV, проверка — вход по RDP.');
+    const d=h.controller.getState().draft;
+    assert.equal(calls,4);assert.equal(d.fields.summary,'Ручная тема');assert.equal(d.pendingFields.summary,'Тема от Pico');
+    assert.equal(d.fields.description,'Текущая ручная версия: DEV');
+    assert.equal(d.pendingFields.description,'Среда: DEV.\n\nПроверка: вход по RDP.');
+    assert.equal(d.checked,null);assert.doesNotMatch(chat.getState().notices.join(' '),/повторный идентификатор/);
+    assert.equal(chat.getState().lastTurnUsage.toolCalls,1);chat.destroy();
+});
+
+for(const text of ['Покажи шаблон','Поясни поля','Как выбрать тип?','Модель: test'])
+test('invalid informational or configuration turn cannot authorize draft extraction: '+text,async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
+    const before=JSON.stringify(h.controller.getState().draft);
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{calls++;return {text:'{}'};}});
+    await chat.send(text);assert.ok(calls<=1);assert.equal(JSON.stringify(h.controller.getState().draft),before);chat.destroy();
+});
+
+for(const reconcile of [true,false])test('live nested fields.missing is normalized atomically for '+(reconcile?'reconcile':'recovery'),async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
+    const formatted='Среда: DEV.\n\nПроверка: вход по RDP.';
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{
+        calls++;
+        if(!reconcile && calls===1)return {text:'{}'};
+        return {text:JSON.stringify({fields:{summary:'Восстановить доступ',description:formatted,missing:[]}})};
+    }});
+    if(reconcile)await chat.reconcile();else await chat.send('На DEV нет доступа; проверить входом по RDP.');
+    assert.equal(calls,reconcile?1:2);assert.equal(chat.getState().error,null);
+    assert.equal(h.controller.getState().draft.fields.description,formatted);assert.ok(h.controller.getState().draft.checked);
+    chat.destroy();
+});
+
+test('recovery preserves unsaved earlier facts and reply-to across reload; ordinary request carries no extraction evidence',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup(async c=>{c.onEvent({type:'assistant',text:'Какой компонент?'});});
+    h.api.getComponents=async key=>({projectKey:key,values:Array.from({length:25},(_,i)=>({id:key+'-'+i,name:i===9?'Backend':'Other'+i})),complete:true});
+    await h.controller.selectProject('APP');await h.controller.selectProject('DO');await h.controller.selectIssueType('10');await h.controller.selectTemplate('task');
+    await h.chat.send('Требуется исправить конфигурацию.');h.chat.destroy();
+    let calls=0;
+    const first=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{throw Error('AI connection failed');}});
+    await first.send('Backend. Стенд DEV.');first.destroy();
+    calls=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        const data=JSON.parse(r.user);
+        if(++calls===1){assert.equal(data.authoritativeContext.conversationForExtraction,undefined);assert.equal(data.authoritativeContext.extractionEstimates,undefined);return {text:'{}'};}
+        assert.ok(data.userAnswers.some(m=>m.text==='Требуется исправить конфигурацию.'));
+        assert.ok(data.userAnswers.some(m=>m.text==='Backend. Стенд DEV.' && m.inReplyTo==='Какой компонент?'));
+        assert.deepEqual(data.fields.find(f=>f.id==='components').choices,[{id:'DO-9',label:'Backend'}]);
+        return {text:JSON.stringify({fields:{summary:'Исправить Backend',description:'Конфигурация Backend. Среда DEV. Проверка: вход по RDP.',components:[{id:'DO-9'}]},missing:[]})};
+    }});
+    await chat.send('Критерий: вход по RDP.');assert.equal(calls,2);assert.equal(chat.getState().error,null);
+    assert.match(h.controller.getState().draft.fields.description,/Backend/);assert.ok(h.controller.getState().draft.checked);chat.destroy();
+});
+
+for(const reconcile of [false,true])test('actual Jira type name and selected template survive '+(reconcile?'compact review':'ordinary and recovery contexts'),async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();const requests=[];
+    const createMeta=h.api.getCreateMeta;h.api.getCreateMeta=async key=>{const raw=await createMeta(key);raw.projects.forEach(p=>p.issuetypes.forEach(t=>{if(t.id==='10')t.name='Задача развертывания';}));return raw;};
+    await h.controller.selectProject('APP');await h.controller.selectProject('DO');await h.controller.selectIssueType('10');await h.controller.selectTemplate('task');
+    const template=h.controller.chatReadTemplate();
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
+        requests.push(JSON.parse(r.user));
+        if(!reconcile && requests.length===1)return {text:'{}'};
+        return {text:JSON.stringify({fields:{summary:'Развернуть сервис',description:'Среда DEV. Проверка: вход.'},missing:[]})};
+    }});
+    if(reconcile)await chat.reconcile();else await chat.send('Развернуть сервис на DEV. Проверка: вход.');
+    if(!reconcile)assert.equal(requests[0].authoritativeContext.issueType.name,'Задача развертывания');
+    const data=requests.at(-1);assert.equal(data.scope.type,'10');assert.equal(data.scope.typeName,'Задача развертывания');
+    assert.deepEqual(data.template.template,template.template);
+    assert.equal(chat.getState().error,null);assert.ok(h.controller.getState().draft.checked);chat.destroy();
+});
+
+test('later transport failure preserves successful model provenance',async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async()=>{
+        if(++calls===1)return {text:JSON.stringify({text:'',toolCalls:[{id:'model_write',name:'update_task',arguments:{fields:{summary:'Сводка модели',description:'Форматированное описание модели: DEV, RDP.'},questions:[]}}]})};
+        throw Error('provider unavailable');
+    }});
+    await chat.send('Восстановить доступ DEV по RDP.');
+    assert.equal(h.controller.getState().draft.fields.summary,'Сводка модели');
+    assert.equal(h.controller.getState().draft.fields.description,'Форматированное описание модели: DEV, RDP.');
+    assert.doesNotMatch(chat.getState().transcript.map(m=>m.text).join(' '),/модель не заполняла|Тема и описание взяты из вашего текста|Резервное копирование/);
+    chat.destroy();
+});
+
+for(const mode of ['recovered','blocked','ordinary','invalid'])test('verified AI update retires obsolete recovery notices and keeps transcript/unrelated notices: '+mode,async()=>{
+    const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();h.chat.destroy();let calls=0;
+    if(mode==='blocked') {
+        const read=h.api.getCreateMeta;h.api.getCreateMeta=async key=>{const raw=await read(key);raw.projects[0].issuetypes.forEach(type=>{type.fields.timetracking={name:'Оценка трудозатрат',required:true,schema:{type:'timetracking',system:'timetracking'}};});return raw;};
+        await h.controller.selectProject('DO');
+    }
+    const id=h.controller.getState().draft.id,prior=h.store.loadConversation('DO',id);
+    const obsolete=['Ответ Pico отклонён: повторный идентификатор вызова.',
+        'Pico недоступен. Карточка прошла локальную проверку Jira.',
+        'Pico вернул ответ неверного формата. Сведения сохранены из текста пользователя; готовность проверена локально.',
+        'Pico недоступен. Резервное копирование текста пользователя; модель не заполняла карточку. Готовность проверена локально.'];
+    const unrelated='Не удалось сохранить историю. Проверьте хранилище.';
+    const oldTranscript=[{id:'old-assistant',role:'assistant',text:'Pico недоступен. Описание сохранено.'}];
+    assert.equal(h.store.saveConversation('DO',id,{transcript:oldTranscript,messages:[],pendingTemplateProposal:null,notices:obsolete.concat(unrelated)},prior?.revision || 0).ok,true);
+    const snapshots=[];
+    const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,onChange:s=>snapshots.push(s),requestText:async()=>{
+        calls++;
+        if(mode==='invalid' || mode!=='ordinary' && calls===1)return {text:'{}'};
+        const fields={summary:'Восстановить RDP',description:'Среда DEV. Проверка: вход по RDP.'};
+        const missing=mode==='blocked'?[{text:'Когда проверить доступ?',required:true}]:[];
+        return {text:mode==='ordinary'?JSON.stringify(calls===1?{text:'',toolCalls:[{id:'fresh_ai',name:'update_task',arguments:{fields,questions:[]}}]}:{text:'Проверка пройдена.',toolCalls:[]}):JSON.stringify({fields:{...fields,missing}})};
+    }});
+    await chat.send('На DEV нет доступа. Проверить вход по RDP.');
+    const state=chat.getState();assert.deepEqual(state.transcript[0],oldTranscript[0]);assert.ok(state.notices.includes(unrelated));
+    if(mode==='invalid') {for(const notice of obsolete)assert.ok(state.notices.includes(notice));}
+    else {
+        assert.equal(state.error,null);for(const notice of obsolete)assert.equal(state.notices.includes(notice),false);
+        const reply=state.transcript.at(-1).text;
+        if(mode!=='ordinary')assert.match(reply,/Pico заполнил карточку по вашему сообщению/);
+        if(mode==='blocked'){assert.match(reply,/исходную оценку трудозатрат/);assert.match(reply,/Когда проверить доступ/);assert.equal(h.controller.getState().draft.checked,null);}
+        else assert.ok(h.controller.getState().draft.checked);
+    }
+    // A fresh rejection creates no new persistent notice at any point.
+    assert.ok(snapshots.every(s=>s.notices.filter(n=>n.startsWith('Ответ Pico отклонён:')).length<=1));
+    chat.destroy();
+    const restored=h.Chat.create({controller:h.controller,runtime,store:h.store});
+    assert.deepEqual(restored.getState().notices,state.notices);assert.deepEqual(restored.getState().transcript,state.transcript);restored.destroy();
+});

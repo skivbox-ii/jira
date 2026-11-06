@@ -30,6 +30,8 @@ test('unavailable '+mode+' checks a real description and derives an empty summar
     assert.equal(s.validation.ok,true);assert.ok(s.draft.checked);
     assert.equal(h.store.load('DO').draft.checked.draftRevision,s.draft.draftRevision);
     assert.equal(creates,0);assert.match(h.chat.getState().transcript.at(-1).text,/Проверка пройдена/);
+    if(!prefix)assert.match(h.chat.getState().transcript.at(-1).text,/Тема и описание взяты из вашего текста/);
+    assert.doesNotMatch(h.chat.getState().transcript.at(-1).text,/Резервное копирование|модель не заполняла/);
     await h.controller.submit();assert.equal(creates,1);assert.equal(h.controller.getState().draft.creation.issueKey,'DO-123');
 });
 test('fallback preserves a manually entered summary',async t=>{
@@ -109,7 +111,7 @@ for(const restored of [false,true])test('greeted narrative recovers from user te
     assert.doesNotMatch(s.transcript.at(-1).text,/Проверка пройдена|EVIL/);
     assert.match(s.notices.join(' '),/неверного формата/);assert.doesNotMatch(s.notices.join(' '),/Pico недоступен/);
     assert.equal(s.transcript.filter(m=>m.role==='user').length,1);
-    assert.equal(r.calls(),restored?2:1);
+    assert.equal(r.calls(),2);
     assert.equal(h.store.loadConversation('DO',d.id).value.transcript.filter(m=>m.role==='user').length,1);
 });
 test('exact retries collapse uninterrupted legacy user entries and preserve a later identical answer',async t=>{

@@ -5,11 +5,99 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false,retryReconcileScope=null;
         var messageRows=new Map(),expandedDrafts=new Map(),lastFields=null,changedFields=[],jiraRetrying=false,reconciling=false;
         var localCheck=null;
+        var assigneeHost,assigneeRequest=null,assigneePicker=null;
+        function cancelAssignee() {
+            if(assigneeRequest)assigneeRequest.abort.abort();assigneeRequest=null;
+            if(assigneePicker)assigneePicker.destroy();assigneePicker=null;
+            if(assigneeHost)assigneeHost.empty().prop('hidden',true);
+        }
+        function assigneeContext() {
+            var next=c.getState(),d=next.draft;
+            return d && JSON.stringify([d.projectKey,d.id,d.issueTypeId,d.templateId,next.meta,d.fields,d.protectedFields,next.settings,next.stage,next.error,d.creation]);
+        }
+        function assigneeField() {
+            var next=c.getState(),d=next.draft,p=next.settings && next.settings.profiles.find(function(p){return p.id===next.settings.activeProfileId;}),
+                type=d && next.meta && next.meta.projectKey===d.projectKey && next.meta.issueTypes.find(function(t){return t.id===d.issueTypeId;}),
+                field=type && type.fields.find(function(f){return f.id==='assignee';});
+            return p && p.allowAssignee===true && d && !locked(d) && !next.error && next.stage!=='metadata' && field && field.kind==='user' && field.supported && field.writable ? field : null;
+        }
+        function assigneeIntent(text) {
+            // Only explicit commands/clauses are interpreted locally; mentions in prose are not authority.
+            var rest=[],intent=null;
+            String(text).trim().split(/\s*[;\n]\s*/).forEach(function(clause){
+                if(/^(?:без исполнителя|сними исполнителя|убери исполнителя|unassign(?:ed)?)\s*[.!]?$/i.test(clause)){intent={clear:true};return;}
+                var match=/^(?:назначь(?:те)?(?:\s+(?:задачу|исполнителя))?\s+на\s+|исполнитель\s*:\s*|assignee\s*:\s*|assign\s+(?:to\s+)?)(.+?)\s*[.!]?$/i.exec(clause);
+                if(!match && /^(?:на меня|на себя)\s*[.!]?$/i.test(clause))match=[clause,'меня'];
+                if(!match){rest.push(clause);return;}
+                var query=match[1].trim().replace(/^[«"']|[»"']$/g,'');
+                intent={query:query,self:/^(?:меня|себя|me|myself)$/i.test(query),clear:/^(?:никого|без исполнителя|unassigned|none)$/i.test(query)};
+            });
+            if(intent)intent.rest=rest.join('\n');return intent;
+        }
+        function assigneeNotice(text) {assigneeHost.empty().prop('hidden',false).append($('<p role="status">').text(text));}
+        function verifiedUsers(result) {
+            var seen=new Set();
+            return (Array.isArray(result)?result:result && result.values || []).filter(function(user){
+                if(!user || user.active===false || typeof user.name!=='string' || !user.name.trim() || user.name.trim()!==user.name || seen.has(user.name))return false;
+                seen.add(user.name);return true;
+            }).map(function(user){return {name:user.name,displayName:typeof user.displayName==='string'?user.displayName:user.name};});
+        }
+        async function fillAssignee(intent) {
+            var next=c.getState(),profile=next.settings && next.settings.profiles.find(function(p){return p.id===next.settings.activeProfileId;});
+            var requestedScope=JSON.stringify([next.draft.projectKey,next.draft.id]);
+            function continueTask() {
+                var d=c.getState().draft;
+                if(!dead && d && JSON.stringify([d.projectKey,d.id])===requestedScope && intent.rest && input.val()===intent.rest && !locked(d) && !sending && chat.getState().status!=='running')sendText(intent.rest);
+            }
+            if(!profile || profile.allowAssignee!==true) {
+                assigneeNotice('Выбор исполнителя отключён активным профилем. Настройки → Профили → активный профиль → «Разрешить ручной выбор исполнителя». Назначение определят правила Jira.');
+                assigneeHost.append(button('Открыть настройки','Settings',{'data-ta-assignee-settings':''},function(){options.editor.openSettings();}));continueTask();return;
+            }
+            var field=assigneeField();
+            if(!field){assigneeNotice('Поле исполнителя недоступно. Проверьте тип задачи и поля в редакторе.');return;}
+            if(intent.clear && field.required){assigneeNotice('Исполнитель обязателен в Jira; оставить задачу без исполнителя нельзя.');return;}
+            var request={abort:new AbortController(),context:assigneeContext()};assigneeRequest=request;
+            function current(){return !dead && assigneeRequest===request && !request.abort.signal.aborted && request.context===assigneeContext() && !!assigneeField();}
+            function apply(value) {
+                if(!current())return;
+                cancelAssignee();c.updateField('assignee',value);
+                var edited=c.getState().draft;
+                if(!edited || JSON.stringify(edited.fields.assignee)!==JSON.stringify(value) || edited.protectedFields.assignee!==true){assigneeNotice('Не удалось сохранить исполнителя. Текст задачи оставлен в поле сообщения.');return;}
+                assigneeNotice(value?'Исполнитель выбран в Jira: '+value.name+'.':'Явно выбрано: без исполнителя. Jira проверит возможность при создании.');
+                continueTask();
+            }
+            if(intent.clear){apply(null);return;}
+            assigneeNotice('Проверяю пользователя в Jira…');
+            assigneeHost.append(button('Отменить поиск','X',{'data-ta-assignee-cancel':''},cancelAssignee));
+            try {
+                var result=intent.self?await options.getCurrentUser({signal:request.abort.signal}):await options.onSearch(intent.query,field,{signal:request.abort.signal});
+                if(!current())return;
+                var users=verifiedUsers(intent.self?[result]:result),exact=users.filter(function(user){return intent.self || user.name.toLowerCase()===intent.query.toLowerCase();});
+                if(!exact.length && result && result.complete===true)exact=users.filter(function(user){return user.displayName.toLowerCase()===intent.query.toLowerCase();});
+                if(exact.length===1){apply({name:exact[0].name});return;}
+                if(!users.length){assigneeNotice('Пользователь не найден в Jira. Уточните имя или логин; исполнитель не изменён.');return;}
+                assigneeNotice('Выберите подтверждённого пользователя Jira. Результаты поиска остаются только в этом интерфейсе.');
+                if(typeof options.createAssigneePicker!=='function'){assigneeHost.append(button('Выбрать в редакторе','Settings',{},function(){openEditor(this);}));return;}
+                var pickerHost=$('<div data-ta-assignee-picker>').appendTo(assigneeHost);
+                assigneePicker=options.createAssigneePicker({$: $,onSearch:async function(query,f,opts){
+                    if(!current())return {values:[]};
+                    var found=query?await options.onSearch(query,f,opts):{values:users};
+                    if(!current())return {values:[]};
+                    users=verifiedUsers(found);return {values:users};
+                },onChange:function(id,value){if(value && users.some(function(user){return user.name===value.name;}))apply(value);}});
+                // Search selections are verified by the same adapter, including refined searches.
+                var picker=assigneePicker;
+                picker.mount(pickerHost[0]);picker.update({field:field,value:null,removable:false,errors:[],scopeKey:request.context});
+                assigneeHost.append(button('Отменить выбор','X',{'data-ta-assignee-cancel':''},cancelAssignee));
+            } catch(error) {
+                if(current())assigneeNotice('Не удалось проверить пользователя в Jira. Повторите запрос или выберите исполнителя в редакторе.');
+            }
+        }
         function button(label,name,attr,action) {
             return $('<button type="button">').attr(attr || {}).append(icon(name),$('<span>').text(label)).on('click',action);
         }
         function resetReconcileRetry() {if(retryReconcileScope!==null){retryReconcileScope=null;if(!dead && host)update(c.getState());}}
-        function openEditor(invoker) {resetReconcileRetry();options.editor.openEditor(invoker);}
+        function openEditor(invoker) {cancelAssignee();resetReconcileRetry();options.editor.openEditor(invoker);}
         function run(action,keepReconcileRetry) {if(!keepReconcileRetry)resetReconcileRetry();return Promise.resolve().then(action).catch(function() {if(!dead)host.find('[data-ta-chat-error]').text('Не удалось выполнить действие. Текст сохранён; повторите действие вручную.').prop('hidden',false);});}
         // Deliberately small Markdown subset. All source text becomes text nodes;
         // Jira description is rendered separately, without Markdown conversion.
@@ -38,10 +126,11 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             host=$('<section class="ta-chat" aria-label="Разговор с Pico">').appendTo(root.children('.ta-layout'));
             root.find('.ta-header h2').text('Pico');
             var newButton=button('Новый разговор','Plus',{'data-ta-chat-new':'','aria-label':'Новый разговор',title:'Новый разговор'},function() {
-                run(function(){chat.stop();return c.newDraft();});
+                cancelAssignee();run(function(){chat.stop();return c.newDraft();});
             }).addClass('ta-icon-button');
             root.find('.ta-header-tools').prepend(newButton);
             log=$('<div class="ta-chat-log" data-ta-chat-log role="log" aria-label="Сообщения" aria-live="polite" aria-relevant="additions text">').appendTo(host);
+            assigneeHost=$('<section data-ta-chat-assignee aria-label="Выбор исполнителя в чате" hidden>').appendTo(host);
             card=$('<article class="ta-task-card" data-ta-task-card aria-label="Текущая задача">').appendTo(host);
             card.append('<details data-ta-card-details><summary class="ta-card-summary"><span class="ta-card-heading"><span class="ta-card-title">Задача: <span data-ta-card-summary></span></span><span data-ta-card-type class="ta-muted"></span></span><span data-ta-card-reason class="ta-muted"></span><span data-ta-card-counts class="ta-muted"></span></summary><div class="ta-card-details-body"><div data-ta-card-values></div><div data-ta-card-questions></div><div data-ta-card-pending></div></div></details><div data-ta-card-warnings class="ta-warning" role="status" hidden></div><div data-ta-card-creation role="status"></div>');
             card.find('[data-ta-card-details]').on('toggle',function(){if(scope)expandedDrafts.set(scope,this.open);});
@@ -77,7 +166,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                     if(retryReconcileScope===scope)reconcile();
                     else if(lastSent){input.val(lastSent);send();}
                 }),
-                button('Остановить','Square',{'data-ta-chat-stop':'',hidden:true},function(){chat.stop();input.trigger('focus');}),
+                button('Остановить','Square',{'data-ta-chat-stop':'',hidden:true},function(){cancelAssignee();chat.stop();input.trigger('focus');}),
                 button('Отправить','WandSparkles',{'data-ta-chat-send':'',type:'submit'},function(){}).addClass('ta-primary'));
             form.on('submit',function(event){event.preventDefault();send();});
             input.on('input',updateSend).on('keydown',function(event){
@@ -94,6 +183,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         async function checkCurrentFields() {
             var s=chat.getState(),d=c.getState().draft;
             if(dead || localCheck || sending || reconciling || s.status==='running' || c.getState().error || !canCheckFields(d))return;
+            cancelAssignee();
             var check=new AbortController();
             var snapshot=c.chatSnapshot();
             localCheck=check;update(c.getState());
@@ -112,6 +202,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         function reconcile() {
             if(dead || localCheck || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
+            cancelAssignee();
             var requestedScope=scope;
             retryReconcileScope=requestedScope;lastSent='';
             reconciling=true;update(c.getState());
@@ -131,11 +222,28 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         function send() {
             var text=input.val();if(localCheck || sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
+            cancelAssignee();
+            var intent=assigneeIntent(text);
+            if(intent) {
+                // Keep the queued task editable and sendable while lookup/selection waits.
+                // A new send cancels the old request; only its surviving selection can resume it.
+                input.val(intent.rest);lastSent='';
+                fillAssignee(intent);
+                updateSend();return;
+            }
+            sendText(text);
+        }
+        function sendText(text) {
+            var requestedScope=scope;
             lastSent=text;sending=true;updateSend();
-            run(function(){return chat.send(text);}).then(function(){
+            run(function(){
+                var d=c.getState().draft;
+                if(dead || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==requestedScope)return;
+                return chat.send(text);
+            }).then(function(){
                 if(dead)return;sending=false;
                 var current=chat.getState();
-                if(current.status!=='error' && input.val()===text)input.val('');
+                if(scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
                 update(c.getState());
             });
         }
@@ -165,8 +273,10 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         function templateText(t) {return 'Название: '+(t.name || '—')+'\nТип Jira: '+(t.issueTypeId || 'не привязан')+'\nКогда использовать: '+(t.whenToUse || '')+'\n\n'+(t.instructions || '');}
         function update(next) {
             if(dead || !host)return;state=next;
+            if(assigneeRequest && assigneeRequest.context!==assigneeContext())cancelAssignee();
             var s=chat.getState(),d=state.draft,newScope=d && JSON.stringify([d.projectKey,d.id]);
             if(scope!==newScope) {
+                cancelAssignee();
                 if(scope!==null) {input.val('');expandedDrafts.set(scope,card.find('[data-ta-card-details]')[0].open);}
                 scope=newScope;lastSent='';retryReconcileScope=null;lastFields=null;changedFields=[];cardKey=null;pendingKey=null;
                 card.find('[data-ta-card-details]').prop('open',expandedDrafts.get(scope)===true);
@@ -270,7 +380,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(creation.issueKey && /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(creation.issueKey))status.append($('<a target="_blank" rel="noopener" data-ta-chat-issue-link>').attr('href',(options.baseUrl || '').replace(/\/+$/,'')+'/browse/'+encodeURIComponent(creation.issueKey)).text(creation.issueKey));
             }
         }
-        function destroy(){dead=true;if(localCheck)localCheck.abort();messageRows.clear();expandedDrafts.clear();if(host)host.remove();if(root){root.removeClass('ta-chat-mode');root.find('[data-ta-chat-new]').remove();}}
+        function destroy(){dead=true;cancelAssignee();if(localCheck)localCheck.abort();messageRows.clear();expandedDrafts.clear();if(host)host.remove();if(root){root.removeClass('ta-chat-mode');root.find('[data-ta-chat-new]').remove();}}
         return {mount:mount,update:update,destroy:destroy};
     }
     return {create:create};
