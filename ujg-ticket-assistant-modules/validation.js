@@ -251,6 +251,78 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return !/^(?:todo|tbd|n\/?a|да|ок|ok|нет|неизвестно|не указано|не заполнено|не нужно(?: заполнять)?|не надо|не применимо|уточним(?: позже)?|позже|цель|что сделать|описание|среда|версия|ссылки|логи|проверка)[.!?\s]*$/i.test(text);
     }
     function url(value) {return /https?:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d+)?(?:[/?#][^\s<>]*)?(?=$|[\s<>])/i.test(value || '');}
+    var referenceMessage='Пришлите одну ссылку http(s) на репозиторий, документацию или базу знаний.';
+    var dashboardMessage='Эта ссылка ведёт на дашборд Jira. Нужна ссылка на репозиторий, документацию или базу знаний для задачи.';
+    function referenceUrl(value) {
+        var match=typeof value==='string' && /^(https?):\/\/([^/?#\s]+)([^?#\s]*)(?:\?[^\s#]*)?(?:#[^\s]*)?$/i.exec(value);
+        if(!match || /[\\\u0000-\u0020<>"`]/.test(value) ||
+            !/^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[a-f0-9:]+\])(?::\d{1,5})?$/i.test(match[2]))
+            return {ok:false,url:null,code:'reference',message:referenceMessage};
+        var path;
+        try {path=decodeURIComponent(match[3] || '/');} catch(ignore) {return {ok:false,url:null,code:'reference',message:referenceMessage};}
+        var segments=[];
+        path.split('/').forEach(function(segment) {if(segment==='..')segments.pop();else if(segment && segment!=='.')segments.push(segment);});
+        if(/(?:^|\/)secure\/Dashboard\.jspa\/?$/i.test(segments.join('/')))
+            return {ok:false,url:null,code:'dashboard',message:dashboardMessage};
+        return {ok:true,url:value,code:null,message:null};
+    }
+    function parseDevopsReferenceAnswer(text) {
+        if(typeof text!=='string')return {ok:false,url:null,code:'reference',message:referenceMessage};
+        var match=/^(?:(?:вот\s+)?(?:ссылка(?:\s+на\s+(?:репу|репозиторий|документацию|базу\s+знаний))?|репозиторий|репа|документация|база\s+знаний)\s*[:—-]?\s*)?(https?:\/\/\S+)$/i.exec(text.trim());
+        return match ? referenceUrl(match[1]) : {ok:false,url:null,code:'reference',message:referenceMessage};
+    }
+    function referenceCandidates(text) {
+        return (String(text || '').match(/https?:\/\/[^\s<>"`]+/gi) || []).map(function(candidate) {
+            // Closing Markdown delimiters are outside the URL. Balanced brackets
+            // within a path/query remain part of the literal supplied address.
+            [['(',')'],['[',']'],['{','}']].forEach(function(pair) {
+                while(candidate.endsWith(pair[1]) && candidate.split(pair[1]).length>candidate.split(pair[0]).length)candidate=candidate.slice(0,-1);
+            });
+            return referenceUrl(candidate.replace(/[.,;]+$/,''));
+        });
+    }
+    function simpleMissingReference(value) {
+        var text=String(value).trim().replace(/^[-•]\s*/,'').replace(/[*_`]/g,'');
+        return /^(?:нет|неизвестно|не указана|не предоставлена|отсутствует)\.?$/i.test(text) ||
+            /^ссылк[аи]\s+на\s+(?:репозиторий|репу|документацию|базу знаний)(?:\s+для примера)?\s+(?:нет|не указана|не предоставлена|отсутствует)\.?$/i.test(text) ||
+            /^неизвестно:\s*ссылка на (?:репозиторий|документацию|базу знаний)(?:,\s*(?:репозиторий|документацию|базу знаний))*(?:\s+или\s+(?:репозиторий|документацию|базу знаний))?(?:\s*\(требуется для создания\))?\.?$/i.test(text);
+    }
+    function mergeDevopsReference(description,value) {
+        var parsed=parseDevopsReferenceAnswer(value);
+        if(!parsed.ok || typeof description!=='string')return {ok:false,description:description,code:parsed.code || 'description',message:parsed.message || 'Описание задачи должно быть текстом.'};
+        var newline=description.indexOf('\r\n')!==-1?'\r\n':'\n',headers=[],offset=0,lines=description.split('\n');
+        lines.forEach(function(line,index) {
+            var raw=line.replace(/\r$/,''),colon=raw.indexOf(':'),marked=/^\s*(?:#{1,6}\s|h[1-6]\.\s|\*{1,2}|__)/.test(raw);
+            var label=(colon===-1?raw:raw.slice(0,colon)).replace(/^\s*(?:#{1,6}\s*|h[1-6]\.\s*)/,'');
+            var key=sectionKey(label);
+            var known=devopsSections.some(function(section) {return [section.label].concat(section.aliases).some(function(alias) {return sectionKey(alias)===key;});});
+            if(key && !/^https?$/i.test(key) && (known || marked || colon!==-1 && /^[a-zа-яё][^:\n]{0,79}$/i.test(key)) && !simpleMissingReference(raw)) {
+                var content=colon===-1 ? offset+line.length+(index<lines.length-1?1:0) : offset+colon+1;
+                if(colon!==-1)content+=(description.slice(content).match(/^(?:\*{1,2}|__)?[ \t]*/) || [''])[0].length;
+                headers.push({key:key,start:offset,content:content,inline:colon!==-1});
+            }
+            offset+=line.length+1;
+        });
+        var index=headers.findIndex(function(header) {return header.key===sectionKey('Ссылки') || header.key==='links';});
+        if(index===-1) {
+            var extra=headers.find(function(header) {return header.key===sectionKey('Дополнительно');});
+            var position=extra?extra.start:description.length,prefix=description.slice(0,position),suffix=description.slice(position);
+            if(prefix && !prefix.endsWith(newline+newline))prefix+=prefix.endsWith(newline)?newline:newline+newline;
+            return {ok:true,description:prefix+'Ссылки: '+parsed.url+(suffix?newline+newline+suffix:''),code:null,message:null};
+        }
+        var header=headers[index],end=index+1<headers.length?headers[index+1].start:description.length;
+        var original=description.slice(header.content,end),pieces=original.split(/\r?\n/),kept=pieces.filter(function(line) {return !simpleMissingReference(line);});
+        var present=(original.match(/https?:\/\/[^\s<>"`]+/gi) || []).some(function(candidate) {
+            return candidate===parsed.url || candidate.indexOf(parsed.url)===0 && /^[)\]}.,;]+$/.test(candidate.slice(parsed.url.length));
+        });
+        if(present && kept.length===pieces.length)return {ok:true,description:description,code:null,message:null};
+        var content=kept.join(newline);
+        if(!present)content=parsed.url+(content?newline+content:'');
+        if(end<description.length && !content.endsWith(newline))content+=newline+newline;
+        var before=description.slice(0,header.content);
+        if(!header.inline && before && !before.endsWith('\n'))before+=newline;
+        return {ok:true,description:before+content+description.slice(end),code:null,message:null};
+    }
     function explanatoryException(value) {
         return /(?:не применим|отсутству|нет (?:репозитория|документации|источник)|не существует|недоступн)/i.test(value || '') &&
             meaningful(value) && String(value).trim().split(/\s+/).length>=7;
@@ -271,8 +343,11 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             if(s.id==='evidence')return;
             if(!meaningful(sections[s.id]))missing(s.id,s.question);
         });
-        if(meaningful(sections.links) && !url(sections.links))
-            missing('links',devopsSections.find(function(s) {return s.id==='links';}).question);
+        if(meaningful(sections.links)) {
+            var references=referenceCandidates(sections.links);
+            if(!references.some(function(reference) {return reference.ok;}))
+                missing('links',references.some(function(reference) {return reference.code==='dashboard';}) ? dashboardMessage : devopsSections.find(function(s) {return s.id==='links';}).question);
+        }
         if(requirements.kind==='deployment' && meaningful(sections.verification) && !meaningful(sections.verifier) &&
             !/(?:проверя(?:ет|ют|ющий)|проверит|проверять будет|проверку (?:выполнит|выполняет|проводит)|кто\s*[:—-]|ответственный\s*[:—-])/i.test(sections.verification))
             missing('verifier','Кто проверяет результат развёртывания? Укажите человека или команду в разделе «Проверка».');
@@ -366,5 +441,5 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference };
 });

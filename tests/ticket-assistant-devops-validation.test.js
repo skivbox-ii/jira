@@ -410,3 +410,53 @@ test('formatted deployment shows required groups first then literal missing-refe
     assert.doesNotThrow(()=>validation.buildCreatePayload(meta(),'12',values('12',withUrl)));
     assert.deepEqual(Array.from(check('12',formatted+'\nДополнительно: Справочный URL https://unrelated.example/notes').questions,q=>q.id),['devops:links']);
 });
+
+test('reference answer accepts only an explicit URL or short reference phrase and preserves internal URL query',()=>{
+    const url='https://git.internal/scm/API/repo.git?at=refs%2Ftags%2Fv1.0&path=README.md#usage';
+    for(const reply of [url,'ссылка на репу '+url,'Вот ссылка на документацию: '+url,'база знаний '+url]) {
+        const parsed=validation.parseDevopsReferenceAnswer(reply);assert.equal(parsed.ok,true,JSON.stringify(parsed));assert.equal(parsed.url,url);
+    }
+    for(const reply of ['git.internal/scm/repo','Создай задачу '+url,'Не добавляй '+url,'ссылка потом','https://',url+' https://docs.internal/a'])assert.equal(validation.parseDevopsReferenceAnswer(reply).ok,false,reply);
+});
+
+test('recognized Jira Dashboard path is rejected both as answer and in normal manual validation',()=>{
+    for(const url of ['https://jira.internal/secure/Dashboard.jspa?selectPageId=13210','https://jira.internal/jira/secure/Dashboard.jspa?x=1#abc']) {
+        const parsed=validation.parseDevopsReferenceAnswer(url);assert.equal(parsed.ok,false);assert.equal(parsed.code,'dashboard');assert.match(parsed.message,/дашборд Jira/);
+        const result=check('12',descriptions['12'].replace('https://git.example/api/releases/2.3',url));
+        assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:links']);assert.match(result.questions[0].text,/дашборд Jira/);
+        assert.throws(()=>validation.buildCreatePayload(meta(),'12',values('12',descriptions['12'].replace('https://git.example/api/releases/2.3',url))),e=>e.kind==='validation');
+    }
+    for(const url of ['http://git/scm/repo?at=v1.0','https://kb.internal/pages/viewpage.action?pageId=123','https://docs.internal/search?q=/secure/Dashboard.jspa']) {
+        assert.equal(validation.parseDevopsReferenceAnswer(url).ok,true,url);
+        assert.equal(check('12',descriptions['12'].replace('https://git.example/api/releases/2.3',url)).ok,true,url);
+    }
+});
+
+test('merge replaces only simple missing-source markers and is idempotent with no fact or Markdown loss',()=>{
+    const url='https://git.internal/scm/API/repo?at=v1.0&x=1';
+    const source=descriptions['12'].replace('Ссылки: https://git.example/api/releases/2.3','**Ссылки:** Ссылки на репозиторий для примера нет.\nНеизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).')+'\n\n**Дополнительно:**\nИсходная оценка: 30 минут.\nМой раздел: **НЕ МЕНЯТЬ** vRC-1.\nРодительская история: APP-123';
+    const merged=validation.mergeDevopsReference(source,url);assert.equal(merged.ok,true);assert.ok(merged.description.includes('**Ссылки:** '+url));
+    assert.ok(!merged.description.includes('Ссылки на репозиторий для примера нет.'));assert.ok(!merged.description.includes('Неизвестно: ссылка'));
+    for(const fact of ['**Дополнительно:**','Исходная оценка: 30 минут.','Мой раздел: **НЕ МЕНЯТЬ** vRC-1.','Родительская история: APP-123'])assert.ok(merged.description.includes(fact),fact);
+    assert.equal(validation.mergeDevopsReference(merged.description,url).description,merged.description);
+    assert.equal(check('12',merged.description).ok,true);
+});
+
+test('merge preserves unrelated missing-source notes and custom sections, and inserts absent section before extras',()=>{
+    const url='https://docs.internal/doc?id=5';
+    const source='## Ссылки\nДокументации нет, но есть отдельный риск миграции — согласовать с DBA.\n\n## Риски\nСохранить эту строку и **Markdown**.';
+    const merged=validation.mergeDevopsReference(source,url);assert.equal(merged.ok,true);assert.ok(merged.description.includes('Документации нет, но есть отдельный риск миграции — согласовать с DBA.'));assert.ok(merged.description.includes('## Риски\nСохранить эту строку и **Markdown**.'));
+    assert.equal(validation.mergeDevopsReference(merged.description,url).description,merged.description);
+    const absent=validation.mergeDevopsReference('Среда: DEV\n\nДополнительно:\nАвторская пометка',url);
+    assert.equal(absent.ok,true);assert.ok(absent.description.indexOf('Ссылки:')<absent.description.indexOf('Дополнительно:'));assert.ok(absent.description.includes('Авторская пометка'));
+    const rejected=validation.mergeDevopsReference(source,'https://jira.internal/secure/Dashboard.jspa');assert.equal(rejected.ok,false);assert.equal(rejected.description,source);
+});
+
+test('merge preserves literal query punctuation and never duplicates it on retry',()=>{
+    for(const url of ['https://git/repo?q=value.','https://git/repo?q=value)','http://kb:8080/article?x=a%2Fb&return=/secure/Dashboard.jspa#Part-1']) {
+        assert.equal(validation.parseDevopsReferenceAnswer(url).url,url);
+        const one=validation.mergeDevopsReference('Ссылки: Нет.\n\nДополнительно:\nСохранить заметку.',url);
+        assert.equal(one.ok,true);assert.ok(one.description.includes(url));
+        assert.equal(validation.mergeDevopsReference(one.description,url).description,one.description,url);
+    }
+});

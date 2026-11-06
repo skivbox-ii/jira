@@ -321,6 +321,36 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(state.notices.indexOf(notice)===-1)state.notices.push(notice);
             }
         }
+        async function fillReferenceAnswer(run,text) {
+            var answer=run.referenceAnswer;
+            if(!answer)return false;
+            // Old provider diagnostics no longer explain a local link answer. Keep
+            // rate-limit/storage notices and every historical message intact.
+            state.notices=state.notices.filter(function(n){return !obsoleteRecoveryNotice(n) || /\bHTTP 429\b/.test(n);});
+            if(answer.kind==='explain') {
+                recoveryReply(run,answer.message);state.status='idle';state.error=null;return true;
+            }
+            var d=controller.getState().draft;
+            if(!answer.unchanged) {
+                var already=('\n\n'+d.source+'\n\n').includes('\n\n'+text+'\n\n');
+                var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:answer.description}},run.snapshot,already?undefined:text,{preservePendingFields:true});});
+                if(!current(run))return true;
+                if(!applied.ok){recoveryReply(run,'Не удалось добавить ссылку в описание. Откройте карточку и проверьте поле.');state.status='idle';return true;}
+            }
+            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
+            if(!current(run))return true;
+            var verified=controller.getState(),v=checked.validation;
+            var pending=Object.prototype.hasOwnProperty.call(verified.draft.pendingFields,'description'),reply;
+            if(pending)reply='Ссылка подготовлена как предложение к ручному описанию. Подтвердите или отклоните его в карточке.';
+            else if(!v)reply='Ссылка сохранена в описании. Не удалось проверить поля Jira. Повторите проверку в карточке.';
+            else if(checked.ok && verified.draft.checked && !verified.error)reply='Ссылка сохранена в описании. Проверка пройдена. Сверьте карточку перед созданием.';
+            else {
+                var blockers=Object.values(v.fieldErrors || {}).flat().concat(verified.draft.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
+                if(v.fieldErrors.timetracking)blockers.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
+                reply='Ссылка сохранена в описании. Создание пока недоступно. '+(blockerText(blockers) || 'Проверьте оставшиеся поля в карточке.');
+            }
+            recoveryReply(run,reply);state.status='idle';state.error=null;return true;
+        }
         async function fillEffortAnswer(run,text,priorEntry) {
             var currentState=controller.getState(),d=currentState.draft,validation=currentState.validation;
             if(!validation || !validation.fieldErrors.timetracking || !currentState.generationFieldIds.includes('timetracking'))return false;
@@ -525,6 +555,8 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 add('assistant','Откройте «Подключение AI», чтобы изменить URL, модель или ключ.');
                 state.error=null;state.status='idle';save();return emit();
             }
+            var lastUser=state.transcript.filter(function(m){return m.role==='user';}).slice(-1)[0],sameUser=!!lastUser && lastUser.text===text;
+            var referenceAnswer=!reassessment && controller.chatDevopsReferenceAnswer ? controller.chatDevopsReferenceAnswer(text,sameUser) : null;
             if((reconcile || !reassessment && d.checked && !inquiry(text) && !connectionCommand(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
                 state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
             }
@@ -532,9 +564,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var priorEntry=state.transcript[state.transcript.length-1];
             if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
                 priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
-            var exactRetry=!reassessment && !retryRateLimit && collapseExactRetry(text);
+            var exactRetry=!reassessment && !retryRateLimit && (referenceAnswer && sameUser || collapseExactRetry(text));
             if(!reassessment && !retryRateLimit && !exactRetry)add('user',text);state.error=null;state.status='running';
-            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
+            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,referenceAnswer:referenceAnswer,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',initialRecoveredNarrative:sameRecoveredNarrative(text),
                 verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
@@ -553,6 +585,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var earlierEvidence=!reassessment && state.transcript.length>8 ? reviewTranscript(state.transcript.slice(0,-1)) : null;
             save();emit();
             try {
+                if(!reassessment && await fillReferenceAnswer(run,text))return getState();
                 if(!reassessment && controller.getState().validation?.fieldErrors?.timetracking && await fillEffortAnswer(run,text,priorEntry))return getState();
                 if(!current(run))return getState();
                 // A user can supply the finished description itself. Save it before

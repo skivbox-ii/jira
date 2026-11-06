@@ -856,6 +856,22 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             state.validation=null;save();emit();
             return state.error && ['storage','conflict'].includes(state.error.code)?chatFailure(state.error.code):{ok:true};
         }
+        function chatDevopsReferenceAnswer(text,allowExisting) {
+            var d=state.draft;
+            if(!d || d.projectKey!=='DEVOPS' || !metadataReady || !state.meta || !compatible(d.issueTypeId,d.templateId) ||
+                d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1 ||
+                typeof validation.parseDevopsReferenceAnswer!=='function' || typeof validation.mergeDevopsReference!=='function')return null;
+            var parsed=validation.parseDevopsReferenceAnswer(text);
+            if(!parsed.ok && parsed.code!=='dashboard')return null; // Mixed replies remain ordinary model turns.
+            var local=validation.validateFields(state.meta,d.issueTypeId,d.fields,policy()),missing=(local.questions || []).some(function(q){return q.id==='devops:links';});
+            var merged=parsed.ok ? validation.mergeDevopsReference(d.fields.description,parsed.url) : null;
+            if(!missing && !(allowExisting && merged && merged.ok && merged.description===d.fields.description))return null;
+            if(!parsed.ok)return {kind:'explain',message:parsed.message};
+            if(Object.prototype.hasOwnProperty.call(d.pendingFields,'description'))return {kind:'explain',message:'В карточке есть предложение к описанию. Подтвердите или отклоните его, затем добавьте ссылку.'};
+            if(state.generationFieldIds.indexOf('description')===-1)return {kind:'explain',message:'Описание исключено из автоматического заполнения. Добавьте ссылку в редакторе или включите это поле в настройках.'};
+            if(!merged.ok)return {kind:'explain',message:merged.message};
+            return {kind:'apply',description:merged.description,unchanged:merged.description===d.fields.description};
+        }
         async function chatUpdate(proposal, snapshot, sourceText, updateOptions) {
             if (!chatFresh(snapshot)) return chatFailure();
             if (!compatible(state.draft.issueTypeId,state.draft.templateId) || !proposal || typeof proposal !== 'object' || Array.isArray(proposal) ||
@@ -879,6 +895,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var before = sourceText===undefined ? state.draft : drafts.setSource(state.draft,state.draft.source+(state.draft.source ? '\n\n' : '')+sourceText);
             var next = drafts.applyProposal(before,{fields:patch,questions:proposal.questions === undefined ? before.questions : proposal.questions,
                 warnings:warningUnion(proposal.warnings === undefined ? before.warnings : proposal.warnings,retainedReviewWarnings(before.warnings)),evidence:before.evidence},drafts.snapshot(before));
+            if(updateOptions && updateOptions.preservePendingFields===true)Object.keys(before.pendingFields).forEach(function(id){
+                if(!Object.prototype.hasOwnProperty.call(patch,id))next.pendingFields[id]=before.pendingFields[id];
+            });
             if(Object.prototype.hasOwnProperty.call(patch,'description')) {
                 if(literal)next.protectedFields.description=true;
             }
@@ -963,6 +982,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return {ok:true,snapshot:chatSnapshot(),reviewRequired:true};
         }
         return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
+            chatDevopsReferenceAnswer:chatDevopsReferenceAnswer,
             chatDescriptionMatchesSource:descriptionMatchesSource,chatDescriptionMatches:descriptionMatches,
             getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatFilterReviewFields:chatFilterReviewFields,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
             chatDevopsRequirements:function() {return validation.devopsRequirements(state.meta,state.draft && state.draft.issueTypeId);},
