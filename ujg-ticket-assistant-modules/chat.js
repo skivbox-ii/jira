@@ -355,9 +355,13 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             return users.every(function(m){return m.text===text;}) && !inquiry(text) && !connectionCommand(text) &&
                 !text.trim().endsWith('?') && narrativeSummary(text) ? text : null;
         }
+        function sameRecoveredNarrative(text) {
+            var d=controller.getState().draft;
+            return controller.chatDescriptionMatchesSource ? controller.chatDescriptionMatchesSource(text) : d.source===text && d.fields.description===text;
+        }
         function collapseExactRetry(text) {
-            var last=state.transcript.findLastIndex(function(m){return m.role==='user';}),d=controller.getState().draft;
-            var recovered=state.notices.some(obsoleteRecoveryNotice) && d.source===text && d.fields.description===text;
+            var last=state.transcript.findLastIndex(function(m){return m.role==='user';});
+            var recovered=state.notices.some(obsoleteRecoveryNotice) && sameRecoveredNarrative(text);
             var failed=state.error && ['response','response-repair','draft-update'].includes(state.error.code);
             if(last>=0 && last<state.transcript.length-1 && state.transcript[last].text===text && (recovered || failed) &&
                 state.transcript.slice(last+1).every(function(m){return m.role==='assistant' && !m.kind &&
@@ -398,7 +402,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var s=controller.getState(), description=s.draft.fields.description;
             var repair=placeholderSummary(s.draft.fields.summary) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary');
             if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
-            var summary=narrativeSummary(description);
+            var sourceMatches=controller.chatDescriptionMatchesSource && controller.chatDescriptionMatchesSource(s.draft.source);
+            var summary=narrativeSummary(sourceMatches ? s.draft.source : description);
+            if(s.draft.projectKey==='DEVOPS' && /^[^:\n]{1,80}:\s/.test(summary))return;
             if(!summary || summary===s.draft.fields.summary)return;
             await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot);});
         }
@@ -444,7 +450,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // resolve semantic questions, overrides, or a pending rules review.
             if((malformed || reconcile) && (run.reviewPending || d.taskExceptions.length || run.recoveryQuestions.length ||
                 run.sourceAppended && !run.verbatimDescription ||
-                run.initialDescription && run.initialDescription!==text && !run.verbatimDescription))return;
+                run.initialDescription && run.initialDescription!==text && !run.initialRecoveredNarrative && !run.verbatimDescription))return;
             if(run.sourceAppended && (!run.descriptionReviewed ||
                 run.initialDescription && d.fields.description===run.initialDescription && !run.verbatimDescription)) {
                 // Appending the correction to source, or echoing the old description,
@@ -457,7 +463,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var description=d.fields.description;
             if(!run.sourceAppended) {
                 if(savedNarrative()!==text || run.recoveryQuestions.length || text.trim().endsWith('?'))return;
-                if(d.source===text && description===text) {
+                if(sameRecoveredNarrative(text)) {
                     // An exact retry of an already recovered narrative adds no source.
                 } else {
                     if(d.source || !emptyChatField(s,'description'))return;
@@ -529,7 +535,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var exactRetry=!reassessment && !retryRateLimit && collapseExactRetry(text);
             if(!reassessment && !retryRateLimit && !exactRetry)add('user',text);state.error=null;state.status='running';
             var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
-                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',
+                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',initialRecoveredNarrative:sameRecoveredNarrative(text),
                 verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
@@ -537,7 +543,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 getTurnText:function(){return reassessment ? '' : text;},
                 getEstimates:function(){return chatTools.statedEstimates(state.transcript);},
                 getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
-                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(args.fields && Object.keys(args.fields).length)run.modelFieldsUpdated=true;if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim()){run.modelDescriptionApplied=!run.verbatimDescription && controller.getState().draft.fields.description===args.fields.description;}if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim())run.descriptionReviewed=true;if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
+                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(args.fields && Object.keys(args.fields).length)run.modelFieldsUpdated=true;if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim()){run.modelDescriptionApplied=!run.verbatimDescription && (controller.chatDescriptionMatches ? controller.chatDescriptionMatches(args.fields.description) : controller.getState().draft.fields.description===args.fields.description);}if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim())run.descriptionReviewed=true;if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
                     if(current(run)) add('assistant',read.template.name+'\nТип Jira: '+(read.template.issueTypeId===null ? 'не привязан' : read.template.issueTypeId)+'\n\n'+read.template.instructions,'template');
                 },onTemplateProposal:function(proposal) {if(current(run)) {state.pendingTemplateProposal=proposal;save();emit();}}});
             if(reconcile)tools=tools.filter(function(t){return !['read_template','propose_template_change'].includes(t.name);});
@@ -556,7 +562,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                     run.verbatimDescription=direct[1];
                     var alreadySaved=d.fields.description===run.verbatimDescription || d.pendingFields.description===run.verbatimDescription;
                     var sourceText=alreadySaved && (d.source===text || d.source.endsWith('\n\n'+text)) ? undefined : text;
-                    var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:run.verbatimDescription}},run.snapshot,sourceText);});
+                    var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:run.verbatimDescription}},run.snapshot,sourceText,{verbatimDescription:true});});
                     if(!current(run))return getState();
                     if(!applied.ok)throw Error('Pico draft update missing');
                     // The literal is a direct user edit, including when it replaces

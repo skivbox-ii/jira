@@ -13,6 +13,6 @@ async function harness(backend = memoryStorage()) {
     const Controller=loadUnit('controller',{_ujgTA_draft:drafts,_ujgTA_profiles:profiles,_ujgTA_fields:fields,_ujgTA_validation:validation,_ujgTA_creator:creator},{AbortController});
     const controller=Controller.create({api,ai:{},createStore:()=>store});
     await controller.init();await controller.selectProject('DO');await controller.selectIssueType('10');await controller.selectTemplate('task');
-    return {controller,store,drafts,fields,api,backend};
+    return {controller,store,drafts,fields,validation,api,backend};
 }
 module.exports={harness,plain};

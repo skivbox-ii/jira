@@ -971,7 +971,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         {id:'verification',label:'Проверка',aliases:['проверка результата','verification'],question:'Что проверяем после развёртывания и кто проверяет результат?'},
         {id:'verifier',label:'Кто проверяет',aliases:['проверяющий','проверяющая команда','проверку выполнит','проверку проводит','проверку выполняет','verifier'],question:'Кто проверяет результат развёртывания?'},
         {id:'impact',label:'Влияние',aliases:['основание критического приоритета','impact'],question:'Что упало или недоступно и какую разработку, проверку или демонстрацию это остановило? Укажите основание критического приоритета.'},
-        {id:'buildLog',label:'Лог сборки',aliases:['логи сборки','build log'],question:'Для ошибки пайплайна добавьте лог сборки и укажите упавший шаг.'}
+        {id:'buildLog',label:'Лог сборки',aliases:['логи сборки','build log'],question:'Для ошибки пайплайна добавьте лог сборки и укажите упавший шаг.'},
+        {id:'extra',label:'Дополнительно',aliases:[],question:''}
     ];
     function sectionKey(text) {
         return String(text).toLocaleLowerCase('ru').replace(/ё/g,'е').replace(/[\s\/*_#`]+/g,' ').trim();
@@ -997,12 +998,15 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     function unresolvedInstruction(value) {
         return /не\s+(?:нужн|надо|требу|согласован|определ[её]н|извест|выполн|провед|провер|ожида|подтвержд|будет|будут)|неизвест|отмен[её]н|уточн(?:им|ить)/i.test(value || '');
     }
+    function normalizedDescriptionText(description) {
+        return String(description || '').replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70}):\2/g,'$1\n$3:')
+            .replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70})\2\s*:/g,'$1\n$3:');
+    }
     function readSections(description) {
         var result=Object.create(null),current=[],intro=[],headed=false;
         // Models use both **Label:** and **Label**:, including several headings
         // on one line. Strip heading formatting before assigning the actual text.
-        var text=String(description || '').replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70}):\2/g,'$1\n$3:')
-            .replace(/(^|\s)(\*{1,2}|__)([^:\n]{2,70})\2\s*:/g,'$1\n$3:');
+        var text=normalizedDescriptionText(description);
         text.split(/\r?\n/).forEach(function(line) {
             var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
             var colon=clean.indexOf(':'),label=colon===-1 ? clean : clean.slice(0,colon);
@@ -1068,6 +1072,70 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         }
         if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
+    }
+    function formatDevopsDescription(meta,typeId,description) {
+        var requirements=devopsRequirements(meta,typeId);
+        if(typeof description!=='string' || !description.trim() || !requirements || requirements.kind==='unsupported')return description;
+        var structured=normalizedDescriptionText(description).split(/\r?\n/).some(function(line) {
+            var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
+            var key=sectionKey(clean.split(':')[0]);
+            return devopsSections.some(function(section) {
+                return [section.label].concat(section.aliases).some(function(label) {return sectionKey(label)===key;});
+            });
+        });
+        if(structured)return description;
+        var parsed=readSections(description),groups=Object.create(null),extra=[];
+        var order={task:['goal','work','location','acceptance','links'],
+            bug:['actual','expected','steps','location','evidence','acceptance','links'],
+            deployment:['location','release','order','window','verification','links']}[requirements.kind];
+        var known=order.filter(function(id) {
+            return meaningful(parsed[id]) && description.indexOf(parsed[id].trim())!==-1;
+        });
+        if(!known.length)return description;
+        function append(id,value) {
+            if(!groups[id])groups[id]=[];
+            groups[id].push(value);
+        }
+        // A decimal or version dot is not a sentence boundary. Keep each source
+        // sentence exactly once, moving only literal facts into template groups.
+        var sentences=description.match(/[\s\S]+?(?:[.!?](?=\s|$)|\n|$)/g) || [description];
+        sentences.forEach(function(part) {
+            var sentence=part.trim();
+            if(!sentence)return;
+            if(/ссылк|репозитори|документаци|баз[а-яё]* знаний/i.test(sentence) &&
+                /нет(?:$|[.\s])|неизвест|отсутств|не (?:указан|предоставлен)|требуется для создания/i.test(sentence)) {
+                append('links',sentence);return;
+            }
+            if(/^[^:\n]{1,80}:\s/.test(sentence)) {extra.push(sentence);return;}
+            var matches=known.filter(function(id) {return sentence.indexOf(parsed[id].trim())!==-1;});
+            if(!matches.length) {extra.push(sentence);return;}
+            var id=matches.indexOf('release')!==-1 ? 'release' : matches[0];
+            if(id==='release') ['location','window'].forEach(function(other) {
+                if(matches.indexOf(other)===-1)return;
+                var value=parsed[other].trim();
+                append(other,value);sentence=sentence.replace(value,'');
+            });
+            append(id,sentence.replace(/[ \t]{2,}/g,' ').replace(/\s+([.!?])/g,'$1').trim());
+        });
+        var blocks=[];
+        order.forEach(function(id) {
+            if(!groups[id])return;
+            var section=devopsSections.find(function(section) {return section.id===id;});
+            var label=id==='location' && requirements.kind==='deployment' ? 'Среда' : section.label;
+            blocks.push(label+': '+groups[id].join('\n'));
+        });
+        if(extra.length)blocks.push('Дополнительно:\n'+extra.join('\n'));
+        var formatted=blocks.join('\n\n');
+        function missing(text) {
+            var result={questions:[],warnings:[],fieldErrors:Object.create(null)};
+            validateDevops(meta,typeId,{summary:'Сверка описания задачи',description:text},{},result,function(id,message) {
+                if(!result.fieldErrors[id])result.fieldErrors[id]=[];
+                result.fieldErrors[id].push(message);
+            });
+            return result.questions.map(function(q) {return q.id;}).sort().join('|');
+        }
+        // Formatting grants no new authority and may not hide a known blocker.
+        return missing(formatted)===missing(description) ? formatted : description;
     }
     function meaningful(value) {
         var text=String(value || '').replace(/[*_`#{}<>\[\]]/g,'').replace(/\s+/g,' ').trim();
@@ -1192,7 +1260,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription };
 });
 
 /* === Module: draft.js === */
@@ -1366,6 +1434,12 @@ define('_ujgTA_draft', [], function() {
         if(!summary || summary!==narrativeSummary(d.source))return d;
         var next=changed(d);next.fields.summary=summary.slice(0,Math.min(maxLength,255));return next;
     }
+    function setAutomaticDescription(d,value) {
+        if(typeof value!=='string' || !value.trim() || d.fields.description===value || d.protectedFields.description ||
+            Object.prototype.hasOwnProperty.call(d.pendingFields,'description') || d.pendingAssistance ||
+            d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1)return d;
+        var next=changed(d);next.fields.description=value;return next;
+    }
     function setSource(d, text) {
         if (typeof text !== 'string') throw new Error('Expected source text');
         if (text === d.source) return d;
@@ -1468,7 +1542,7 @@ define('_ujgTA_draft', [], function() {
         next.checked = valid ? checked(d) : null;
         return next;
     }
-    return {placeholderSummary:placeholderSummary,narrativeSummary:narrativeSummary,repairAutomaticSummary:repairAutomaticSummary,recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
+    return {setAutomaticDescription:setAutomaticDescription,placeholderSummary:placeholderSummary,narrativeSummary:narrativeSummary,repairAutomaticSummary:repairAutomaticSummary,recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
         appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
         invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };
@@ -2624,6 +2698,44 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             selected=projectSelection(state.settings,typeId);
             state.draft=drafts.setSelection(state.draft,{issueTypeId:typeId,templateId:selected.templateId,settingsRevision:state.settings.revision});
         }
+        function canFormatDescription(d) {
+            if(!d || d.projectKey!=='DEVOPS' || !d.issueTypeId || !d.templateId || typeof validation.formatDevopsDescription!=='function' ||
+                d.protectedFields.description || Object.prototype.hasOwnProperty.call(d.pendingFields,'description') ||
+                d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1)return false;
+            var p=profile(),template=p && p.templates.find(function(t){return t.id===d.templateId;}),
+                standard=profiles.createDefaults().profiles.find(function(p){return p.id==='devops';}).templates.find(function(t){return t.id===d.templateId;}),
+                requirements=validation.devopsRequirements(state.meta,d.issueTypeId),spec=fields.getField(state.meta,d.issueTypeId,'description');
+            return p && p.id==='devops' && template && standard && requirements && requirements.kind===template.id &&
+                ['name','instructions','whenToUse'].every(function(k){return template[k]===standard[k];}) &&
+                spec && spec.supported && spec.writable && ['string','textarea'].indexOf(spec.kind)!==-1;
+        }
+        function formattedDescription(d,value) {
+            if(typeof value!=='string' || !value.trim() || !canFormatDescription(d))return {value:value,automatic:false};
+            var spec=fields.getField(state.meta,d.issueTypeId,'description'),formatted;
+            try {formatted=validation.formatDevopsDescription(state.meta,d.issueTypeId,value);} catch(error){return {value:value,automatic:false};}
+            if(typeof formatted!=='string' || !formatted.trim() || spec.maxLength && formatted.length>spec.maxLength)return {value:value,automatic:false};
+            return {value:formatted,automatic:true};
+        }
+        function restoreAutomaticDescription(d) {
+            if(!d || !d.source || d.protectedFields.description || d.pendingAssistance || Object.prototype.hasOwnProperty.call(d.pendingFields,'description') ||
+                d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1 || typeof d.fields.description!=='string')return d;
+            var literal=/^\s*описание(?: задачи)?\s*: ?([\s\S]+)$/i.exec(d.source);
+            if(literal && literal[1]===d.fields.description)return drafts.editField(d,'description',d.fields.description);
+            var proven=d.fields.description===d.source || drafts.narrativeSummary(d.fields.description)===drafts.narrativeSummary(d.source);
+            if(!proven)return d;
+            var formatted=formattedDescription(d,d.fields.description);
+            return formatted.automatic && formatted.value!==d.fields.description ? drafts.setAutomaticDescription(d,formatted.value) : d;
+        }
+        function descriptionMatchesSource(text) {
+            var d=state.draft;
+            if(!d || d.source!==text || d.protectedFields.description || Object.prototype.hasOwnProperty.call(d.pendingFields,'description'))return false;
+            if(d.fields.description===text)return true;
+            var formatted=formattedDescription(d,text);
+            return formatted.automatic && formatted.value===d.fields.description;
+        }
+        function descriptionMatches(value) {
+            return !!state.draft && (state.draft.fields.description===value || formattedDescription(state.draft,value).value===state.draft.fields.description);
+        }
         function eligible() {
             var ids = [];
             if (state.meta) state.meta.issueTypes.forEach(function(type) {
@@ -2768,6 +2880,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 var summaryField=fields.getField(state.meta,state.draft.issueTypeId,'summary');
                 if(summaryField && summaryField.supported && summaryField.writable && summaryField.kind==='string')
                     state.draft=drafts.repairAutomaticSummary(state.draft,summaryField.maxLength || 255);
+                state.draft=restoreAutomaticDescription(state.draft);
             }
             if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
                 var confirmed = await fields.confirmRelations(state.meta,state.draft.issueTypeId,state.draft.fields,api,request);
@@ -3270,7 +3383,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             state.validation=null;save();emit();
             return state.error && ['storage','conflict'].includes(state.error.code)?chatFailure(state.error.code):{ok:true};
         }
-        async function chatUpdate(proposal, snapshot, sourceText) {
+        async function chatUpdate(proposal, snapshot, sourceText, updateOptions) {
             if (!chatFresh(snapshot)) return chatFailure();
             if (!compatible(state.draft.issueTypeId,state.draft.templateId) || !proposal || typeof proposal !== 'object' || Array.isArray(proposal) ||
                 Object.keys(proposal).some(function(k) {return ['fields','questions','warnings','taskException'].indexOf(k) === -1;}) ||
@@ -3281,8 +3394,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (proposal.warnings !== undefined && (!Array.isArray(proposal.warnings) || proposal.warnings.some(function(v) {return typeof v !== 'string';}))) return chatFailure('input');
             if (proposal.taskException !== undefined && typeof proposal.taskException !== 'string') return chatFailure('input');
             var patch = {}, ids = Object.keys(proposal.fields), valid = true;
+            var literal=!!(updateOptions && updateOptions.verbatimDescription===true),description;
+            if(Object.prototype.hasOwnProperty.call(proposal.fields,'description') && !literal)
+                description=formattedDescription(state.draft,proposal.fields.description);
             ids.forEach(function(id) {
-                var checked=validatedChatField(id,proposal.fields[id]);
+                var checked=validatedChatField(id,id==='description' && description ? description.value : proposal.fields[id]);
                 if(checked.ok)patch[id]=checked.value;else valid=false;
             });
             if (!valid) return chatFailure('value');
@@ -3290,6 +3406,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var before = sourceText===undefined ? state.draft : drafts.setSource(state.draft,state.draft.source+(state.draft.source ? '\n\n' : '')+sourceText);
             var next = drafts.applyProposal(before,{fields:patch,questions:proposal.questions === undefined ? before.questions : proposal.questions,
                 warnings:warningUnion(proposal.warnings === undefined ? before.warnings : proposal.warnings,retainedReviewWarnings(before.warnings)),evidence:before.evidence},drafts.snapshot(before));
+            if(Object.prototype.hasOwnProperty.call(patch,'description')) {
+                if(literal)next.protectedFields.description=true;
+            }
             if (proposal.taskException !== undefined) next.taskExceptions = before.taskExceptions.concat([proposal.taskException]);
             // Install before emitting so subscribers can inspect undo during this update.
             next=drafts.recordAutomaticChange(next,before);
@@ -3371,6 +3490,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             return {ok:true,snapshot:chatSnapshot(),reviewRequired:true};
         }
         return { subscribe:function(listener) {listeners.add(listener);return function() {listeners.delete(listener);};},
+            chatDescriptionMatchesSource:descriptionMatchesSource,chatDescriptionMatches:descriptionMatches,
             getStore:function() {return store;}, chatSnapshot:chatSnapshot,chatBeginReview:chatBeginReview,chatFilterReviewFields:chatFilterReviewFields,chatUpdate:chatUpdate,chatUndo:chatUndo,chatCanUndo:chatCanUndo,
             chatDevopsRequirements:function() {return validation.devopsRequirements(state.meta,state.draft && state.draft.issueTypeId);},
             chatValidate:chatValidate,chatCompleteTemplateReview:function(snapshot,templateRevision,request) {
@@ -3957,9 +4077,13 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             return users.every(function(m){return m.text===text;}) && !inquiry(text) && !connectionCommand(text) &&
                 !text.trim().endsWith('?') && narrativeSummary(text) ? text : null;
         }
+        function sameRecoveredNarrative(text) {
+            var d=controller.getState().draft;
+            return controller.chatDescriptionMatchesSource ? controller.chatDescriptionMatchesSource(text) : d.source===text && d.fields.description===text;
+        }
         function collapseExactRetry(text) {
-            var last=state.transcript.findLastIndex(function(m){return m.role==='user';}),d=controller.getState().draft;
-            var recovered=state.notices.some(obsoleteRecoveryNotice) && d.source===text && d.fields.description===text;
+            var last=state.transcript.findLastIndex(function(m){return m.role==='user';});
+            var recovered=state.notices.some(obsoleteRecoveryNotice) && sameRecoveredNarrative(text);
             var failed=state.error && ['response','response-repair','draft-update'].includes(state.error.code);
             if(last>=0 && last<state.transcript.length-1 && state.transcript[last].text===text && (recovered || failed) &&
                 state.transcript.slice(last+1).every(function(m){return m.role==='assistant' && !m.kind &&
@@ -4000,7 +4124,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var s=controller.getState(), description=s.draft.fields.description;
             var repair=placeholderSummary(s.draft.fields.summary) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary');
             if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
-            var summary=narrativeSummary(description);
+            var sourceMatches=controller.chatDescriptionMatchesSource && controller.chatDescriptionMatchesSource(s.draft.source);
+            var summary=narrativeSummary(sourceMatches ? s.draft.source : description);
+            if(s.draft.projectKey==='DEVOPS' && /^[^:\n]{1,80}:\s/.test(summary))return;
             if(!summary || summary===s.draft.fields.summary)return;
             await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot);});
         }
@@ -4046,7 +4172,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // resolve semantic questions, overrides, or a pending rules review.
             if((malformed || reconcile) && (run.reviewPending || d.taskExceptions.length || run.recoveryQuestions.length ||
                 run.sourceAppended && !run.verbatimDescription ||
-                run.initialDescription && run.initialDescription!==text && !run.verbatimDescription))return;
+                run.initialDescription && run.initialDescription!==text && !run.initialRecoveredNarrative && !run.verbatimDescription))return;
             if(run.sourceAppended && (!run.descriptionReviewed ||
                 run.initialDescription && d.fields.description===run.initialDescription && !run.verbatimDescription)) {
                 // Appending the correction to source, or echoing the old description,
@@ -4059,7 +4185,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var description=d.fields.description;
             if(!run.sourceAppended) {
                 if(savedNarrative()!==text || run.recoveryQuestions.length || text.trim().endsWith('?'))return;
-                if(d.source===text && description===text) {
+                if(sameRecoveredNarrative(text)) {
                     // An exact retry of an already recovered narrative adds no source.
                 } else {
                     if(d.source || !emptyChatField(s,'description'))return;
@@ -4131,7 +4257,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var exactRetry=!reassessment && !retryRateLimit && collapseExactRetry(text);
             if(!reassessment && !retryRateLimit && !exactRetry)add('user',text);state.error=null;state.status='running';
             var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
-                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',
+                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',initialRecoveredNarrative:sameRecoveredNarrative(text),
                 verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
@@ -4139,7 +4265,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 getTurnText:function(){return reassessment ? '' : text;},
                 getEstimates:function(){return chatTools.statedEstimates(state.transcript);},
                 getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
-                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(args.fields && Object.keys(args.fields).length)run.modelFieldsUpdated=true;if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim()){run.modelDescriptionApplied=!run.verbatimDescription && controller.getState().draft.fields.description===args.fields.description;}if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim())run.descriptionReviewed=true;if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
+                validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args) {if(args.fields && Object.keys(args.fields).length)run.modelFieldsUpdated=true;if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim()){run.modelDescriptionApplied=!run.verbatimDescription && (controller.chatDescriptionMatches ? controller.chatDescriptionMatches(args.fields.description) : controller.getState().draft.fields.description===args.fields.description);}if(args.fields && typeof args.fields.description==='string' && args.fields.description.trim())run.descriptionReviewed=true;if(Object.prototype.hasOwnProperty.call(args,'questions')) run.questionsEvaluated=true;},onSourceApplied:function() {run.sourceAppended=true;},onTemplateRead:function(read) {
                     if(current(run)) add('assistant',read.template.name+'\nТип Jira: '+(read.template.issueTypeId===null ? 'не привязан' : read.template.issueTypeId)+'\n\n'+read.template.instructions,'template');
                 },onTemplateProposal:function(proposal) {if(current(run)) {state.pendingTemplateProposal=proposal;save();emit();}}});
             if(reconcile)tools=tools.filter(function(t){return !['read_template','propose_template_change'].includes(t.name);});
@@ -4158,7 +4284,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                     run.verbatimDescription=direct[1];
                     var alreadySaved=d.fields.description===run.verbatimDescription || d.pendingFields.description===run.verbatimDescription;
                     var sourceText=alreadySaved && (d.source===text || d.source.endsWith('\n\n'+text)) ? undefined : text;
-                    var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:run.verbatimDescription}},run.snapshot,sourceText);});
+                    var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:run.verbatimDescription}},run.snapshot,sourceText,{verbatimDescription:true});});
                     if(!current(run))return getState();
                     if(!applied.ok)throw Error('Pico draft update missing');
                     // The literal is a direct user edit, including when it replaces

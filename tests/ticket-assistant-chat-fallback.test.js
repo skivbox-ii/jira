@@ -361,11 +361,12 @@ for(const modelQuestion of [false,true])test('restored raw DEVOPS retry revalida
     await c.init();await c.selectProject('DEVOPS');await c.selectIssueType('12');
     const Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields}),Chat=loadUnit('chat',{_ujgTA_chatTools:Tools,_ujgTA_draft:h.drafts},{AbortController});
     const makeChat=()=>Chat.create({controller:c,store:h.store,runtime:{createSession(){return {prompt:async()=>{throw Error('Invalid Pico text envelope');},getMessages:()=>[],abort(){},dispose(){}};}}});
-    let chat=makeChat();await chat.send(liveTraining);assert.equal(chat.getState().error,null);assert.equal(c.getState().draft.fields.description,liveTraining);
+    let chat=makeChat();await chat.send(liveTraining);assert.equal(chat.getState().error,null);assert.equal(c.getState().draft.fields.description,h.validation.formatDevopsDescription(c.getState().meta,'12',liveTraining));
     const draftId=c.getState().draft.id;chat.destroy();
-    // Reproduce the old generated summary alongside local validation.questions.
-    await c.chatUpdate({fields:{summary:'Учебный черновик.'},questions:modelQuestion?[{id:'model:question',text:'Нужно ли затронуть второй сервис?',required:true}]:[]},c.chatSnapshot());
-    await c.chatValidate(c.chatSnapshot());assert.ok(c.getState().validation.questions.some(q=>q.id==='devops:links'));
+    // Seed a genuinely legacy unformatted record; chatUpdate now formats new values.
+    const legacy=h.store.load('DEVOPS');legacy.draft.fields.summary='Учебный черновик.';legacy.draft.fields.description=liveTraining;
+    legacy.draft.questions=modelQuestion?[{id:'model:question',text:'Нужно ли затронуть второй сервис?',required:true}]:[];
+    assert.equal(h.store.save('DEVOPS',{draft:legacy.draft,settings:legacy.settings},legacy.revision).ok,true);
     await c.init();await c.selectProject('DEVOPS');chat=makeChat();t.after(()=>chat.destroy());
     assert.equal(c.getState().draft.id,draftId);
     await chat.send(liveTraining);const state=chat.getState(),d=c.getState().draft;

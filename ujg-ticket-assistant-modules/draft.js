@@ -168,6 +168,12 @@ define('_ujgTA_draft', [], function() {
         if(!summary || summary!==narrativeSummary(d.source))return d;
         var next=changed(d);next.fields.summary=summary.slice(0,Math.min(maxLength,255));return next;
     }
+    function setAutomaticDescription(d,value) {
+        if(typeof value!=='string' || !value.trim() || d.fields.description===value || d.protectedFields.description ||
+            Object.prototype.hasOwnProperty.call(d.pendingFields,'description') || d.pendingAssistance ||
+            d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1)return d;
+        var next=changed(d);next.fields.description=value;return next;
+    }
     function setSource(d, text) {
         if (typeof text !== 'string') throw new Error('Expected source text');
         if (text === d.source) return d;
@@ -270,7 +276,7 @@ define('_ujgTA_draft', [], function() {
         next.checked = valid ? checked(d) : null;
         return next;
     }
-    return {placeholderSummary:placeholderSummary,narrativeSummary:narrativeSummary,repairAutomaticSummary:repairAutomaticSummary,recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
+    return {setAutomaticDescription:setAutomaticDescription,placeholderSummary:placeholderSummary,narrativeSummary:narrativeSummary,repairAutomaticSummary:repairAutomaticSummary,recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
         appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
         invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };

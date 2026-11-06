@@ -333,3 +333,80 @@ test('raw attributed HTTP check does not credit a negated or unspecified check o
         assert.deepEqual(ids,['devops:links','devops:verification'],verification);
     }
 });
+
+const liveRaw='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
+
+test('pure formatter splits the live deployment paragraph into actual headings without duplicating raw text',()=>{
+    const m=meta(),before=JSON.stringify(m),formatted=validation.formatDevopsDescription(m,'12',liveRaw);
+    for(const heading of ['Среда:','Версия и состав:','Порядок:','Окно:','Проверка:'])assert.ok(formatted.includes(heading),formatted);
+    for(const fact of ['Учебный черновик','demo-api','DEV','1.0','v1.0','Поменять образ и перезапустить сервис','Постановщик проверит HTTP 200 на /health','Исходная оценка: 30 минут','Приоритет: Средний','Ссылки на репозиторий для примера нет'])assert.ok(formatted.includes(fact),fact);
+    assert.equal(formatted.split('Обновить сервис demo-api').length-1,1);
+    assert.equal(formatted.split('Постановщик проверит HTTP 200').length-1,1);
+    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:links']);
+    assert.equal(validation.formatDevopsDescription(m,'12',formatted),formatted);
+    assert.equal(JSON.stringify(m),before);
+});
+
+test('formatter preserves structured descriptions exact custom content parent and attachment references',()=>{
+    for(const type of ['10','11','12']) {
+        const description=descriptions[type]+'\nРодительская история: APP-123\nВложение: trace-2026.LOG\nМой раздел: Содержимое НеМенять.';
+        assert.equal(validation.formatDevopsDescription(meta(),type,description),description);
+    }
+    const raw=liveRaw+'\nНеизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).\nРодительская история: APP-123\nВложение: trace-2026.LOG\nМой раздел: Не менять регистр vRC-1.';
+    const formatted=validation.formatDevopsDescription(meta(),'12',raw);
+    for(const fact of ['Неизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).','Родительская история: APP-123','Вложение: trace-2026.LOG','Мой раздел: Не менять регистр vRC-1.'])assert.ok(formatted.includes(fact),fact);
+    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:links']);
+});
+
+test('formatter leaves ambiguity negation and missing evidence unsatisfied and preserves other projects',()=>{
+    for(const sentence of [
+        'Обновить API в DEV или на TEST до версии 1.0.',
+        'Обновить API в DEV с версии 1.0; целевая версия пока неизвестна.',
+        'Обновить API в DEV из тега TBD.',
+        'Обновить API в DEV до версии 1.0 или 2.0.',
+        'Поменять образ не нужно, порядок действий пока не согласован.',
+        'Постановщик проверит HTTP 200 на /health, результат пока неизвестен.'
+    ]) {
+        const formatted=validation.formatDevopsDescription(meta(),'12',sentence);
+        assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),Array.from(check('12',sentence).questions,q=>q.id),sentence);
+        assert.ok(formatted.includes(sentence.trim()),formatted);
+        assert.equal(validation.formatDevopsDescription(meta(),'12',formatted),formatted);
+    }
+    assert.equal(validation.formatDevopsDescription(metadataFixture(),'10',liveRaw),liveRaw);
+    assert.equal(validation.formatDevopsDescription(meta(),'11','Сбой API. Логи недоступны.'),'Сбой API. Логи недоступны.');
+});
+
+test('formatter groups confident task and bug location facts while retaining their unanswered requirements',()=>{
+    for(const type of ['10','11']) {
+        const source='Сервис API на TEST возвращает HTTP 500. Причина пока неизвестна. Требуется расследование.';
+        const formatted=validation.formatDevopsDescription(meta(),type,source);
+        assert.ok(formatted.includes('Где:'),formatted);
+        for(const sentence of source.split('. ').map(s=>s.replace(/\.$/,'')))assert.ok(formatted.includes(sentence),sentence);
+        assert.deepEqual(Array.from(check(type,formatted).questions,q=>q.id),Array.from(check(type,source).questions,q=>q.id));
+        assert.equal(validation.formatDevopsDescription(meta(),type,formatted),formatted);
+    }
+});
+
+test('formatter keeps custom headings in their own lines even when they contain recognized facts',()=>{
+    const description=liveRaw+'\nКонтекст клиента: Обновить API в DEV до версии 1.0.';
+    const formatted=validation.formatDevopsDescription(meta(),'12',description);
+    assert.ok(formatted.split('\n').includes('Контекст клиента: Обновить API в DEV до версии 1.0.'),formatted);
+});
+
+test('formatted deployment shows required groups first then literal missing-reference reasons and additional facts',()=>{
+    const reason='Неизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).';
+    const formatted=validation.formatDevopsDescription(meta(),'12',liveRaw+'\n'+reason);
+    const headings=['Среда:','Версия и состав:','Порядок:','Окно:','Проверка:','Ссылки:','Дополнительно:'];
+    const positions=headings.map(heading=>formatted.indexOf(heading));
+    assert.ok(positions.every((position,index)=>position>=0 && (!index || position>positions[index-1])),formatted);
+    assert.ok(formatted.startsWith('Среда:'),formatted);
+    const links=formatted.slice(positions[5],positions[6]),extra=formatted.slice(positions[6]);
+    assert.ok(links.includes('Ссылки на репозиторий для примера нет.'));assert.ok(links.includes(reason));
+    for(const fact of ['Учебный черновик.','Исходная оценка: 30 минут.','Приоритет: Средний.'])assert.ok(extra.includes(fact),fact);
+    assert.equal(validation.formatDevopsDescription(meta(),'12',formatted),formatted);
+    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:links']);
+    const withUrl=formatted.replace('Ссылки:','Ссылки: https://git.example/api/releases/v1.0\n');
+    assert.equal(check('12',withUrl).ok,true);
+    assert.doesNotThrow(()=>validation.buildCreatePayload(meta(),'12',values('12',withUrl)));
+    assert.deepEqual(Array.from(check('12',formatted+'\nДополнительно: Справочный URL https://unrelated.example/notes').questions,q=>q.id),['devops:links']);
+});
