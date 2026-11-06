@@ -71,6 +71,9 @@ function harness(options = {}) {
         identities.push(key);
         const store = storage.createStore({ userKey: key, origin: 'https://jira.test', storage: localStorage });
         stores.push(store);
+        // This harness explicitly drives project selection, including deferred metadata reads.
+        // Automatic startup navigation is covered with real preferences in navigation.test.js.
+        store.loadLastProject=()=>null;
         return store;
     } });
     async function ready(manual = true) {

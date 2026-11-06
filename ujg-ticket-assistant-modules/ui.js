@@ -475,7 +475,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     var defaults=(field.allowedValues || []).filter(function(option){return byId?option.id===inherited.id:field.optionsComplete===true && typeof inherited==='string' && option.label===inherited;});
                     if(defaults.length===1){displayedValue={id:defaults[0].id};priorityDefault=true;}
                 }
-                entry.view.update({field:field, value:displayedValue, errors:state.validation && state.validation.fieldErrors[field.id] || [],
+                var errors=state.validation && state.validation.fieldErrors[field.id] || [];
+                var linkQuestion=field.id==='description' && (state.validation?.questions || []).find(function(q) {
+                    return q.id==='devops:links' && errors.includes(q.text);
+                });
+                entry.view.update({field:field, value:displayedValue, errors:linkQuestion?errors.filter(function(message){return message!==linkQuestion.text;}):errors,
                     scopeKey:JSON.stringify([d.projectKey,d.issueTypeId,state.meta && state.meta.signature]),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
@@ -483,6 +487,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     priorityDefault?'По умолчанию Jira; ручной выбор заменит это значение.':
                     field.kind==='number' && field.supported && field.writable?'Числовое значение задаётся вручную; AI его не рассчитывает.':
                     field.kind==='timetracking' && field.supported && field.writable?'Указывайте только явно названные трудозатраты, например 2h или 1d 30m. Длительность окна выкладки не является оценкой.':'';
+                if(linkQuestion)help=linkQuestion.text;
                 entry.help.text(help).prop('hidden',!help);
                 if(help) {
                     var control=entry.host.find('.ta-field-body').find('input,textarea,[data-ta-picker]').first(),helpId=control.attr('id')+'-help';

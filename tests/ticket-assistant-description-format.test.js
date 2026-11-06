@@ -4,7 +4,7 @@ const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const raw='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
 const modified=raw.replace('Ссылки на репозиторий для примера нет.','')+'\nНеизвестно: ссылка на репозиторий отсутствует.';
-const linkQuestion='Добавьте ссылку на репозиторий, документацию или базу знаний. Правило DEVOPS требует ссылку перед созданием; причина её отсутствия сохраняется в описании.';
+const linkQuestion='Добавьте ссылку на репозиторий, документацию или базу знаний.';
 function assertMissingLink(h,chat) {
     const s=h.controller.getState();
     assert.equal(s.draft.checked,null);assert.equal(s.validation.ok,false);
@@ -73,7 +73,7 @@ for(const structured of [false,true])for(const placeholder of [false,true])test(
         config.afterStep({hasTools:true,failedTool:false,draftExtracted:true});
     });t.after(()=>chat.destroy());await chat.send(raw);
     assert.equal(c.getState().draft.fields.description,formatted);
-    assert.equal(c.getState().draft.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время.');
+    assert.equal(c.getState().draft.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0.');
     assert.equal(c.getState().draft.source,raw);
     assert.equal(chat.getState().error,null);assertMissingLink(h,chat);
 });

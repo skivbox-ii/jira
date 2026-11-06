@@ -451,7 +451,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         {id:'work',label:'Что сделать',aliases:['объём работ','объем работ','работы','задача','действия','what to do'],question:'Что именно должен сделать DevOps? Укажите конкретные действия и объём работ.'},
         {id:'location',label:'Где',aliases:['окружение','среда','environment','where'],question:'Где выполнить работу или воспроизвести сбой? Укажите среду, сервис и стенд.'},
         {id:'acceptance',label:'Критерии приёмки',aliases:['критерии приемки','критерии проверки исправления','критерии готовности','критерии успешности','acceptance criteria'],question:'По каким наблюдаемым результатам вы примете выполненную работу?'},
-        {id:'links',label:'Ссылки',aliases:['links'],question:'Добавьте ссылку на репозиторий, документацию или базу знаний. Правило DEVOPS требует ссылку перед созданием; причина её отсутствия сохраняется в описании.'},
+        {id:'links',label:'Ссылки',aliases:['links'],question:'Добавьте ссылку на репозиторий, документацию или базу знаний.'},
         {id:'actual',label:'Что происходит',aliases:['фактическое поведение','actual behavior'],question:'Что именно сломалось? Опишите фактическое поведение.'},
         {id:'expected',label:'Что ожидалось',aliases:['ожидаемое поведение','expected behavior'],question:'Какое поведение ожидалось при тех же действиях?'},
         {id:'steps',label:'Шаги воспроизведения',aliases:['steps to reproduce'],question:'Как воспроизвести сбой? Укажите последовательность действий.'},
@@ -1215,7 +1215,9 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         var memory = Object.create(null);
         var observed = Object.create(null), startedAt = eventRevision;
         var persistent = typeof options.userKey === 'string' && !!options.userKey.trim() && typeof options.origin === 'string' && !!options.origin && !!options.storage;
-        var conversationPersistent = persistent;
+        var readable=persistent,overlays=Object.create(null);
+        var conversationPersistent = persistent,conversationReadable=persistent,conversationOverlays=Object.create(null),quotaBlocked=false;
+        function quotaError(error) {return !!error && (error.name==='QuotaExceededError' || error.code===22 || error.code===1014 || /quota/i.test(error.message || ''));}
         function warn(reason) {
             if (typeof options.onWarning === 'function') options.onWarning(reason);
         }
@@ -1225,7 +1227,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         function empty() { return { revision: 0, settings: profiles.createDefaults(), draft: null }; }
         function load(projectKey) {
             var scope = key(projectKey);
-            if (persistent) {
+            if (readable && !overlays[scope]) {
                 var change = changes[scope];
                 var externalRevision = Math.max(
                     change && change.area === options.storage ? change.revision : 0,
@@ -1263,7 +1265,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                         memory[scope] = { revision: parsed.revision, settings: settings.value, draft: draft };
                     }
                 } catch (error) {
-                    persistent = false;
+                    readable=false;persistent = false;
                     warn('Persistent storage unavailable or damaged; using memory.');
                 }
             }
@@ -1286,10 +1288,14 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             var next;
             try { next = { revision: current.revision + 1, settings: settings.value, draft: copyDraft(value.draft) }; }
             catch (error) { return { ok: false, revision: current.revision, reason: 'invalid' }; }
-            memory[key(projectKey)] = next;
+            memory[key(projectKey)] = next;overlays[key(projectKey)]=true;
             if (persistent) {
-                try { options.storage.setItem(key(projectKey), JSON.stringify(next)); }
+                try {
+                    if(quotaBlocked) {persistent=false;warn('Persistent storage unavailable; changes retained in memory.');}
+                    else {options.storage.setItem(key(projectKey), JSON.stringify(next));delete overlays[key(projectKey)];}
+                }
                 catch (error) {
+                    if(quotaError(error))quotaBlocked=true;
                     persistent = false;
                     warn('Persistent storage unavailable; changes retained in memory.');
                 }
@@ -1329,7 +1335,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         }
         function loadConversation(projectKey,draftId) {
             var scope=conversationKey(projectKey,draftId);
-            if(conversationPersistent) try {
+            if(conversationReadable && !conversationOverlays[scope]) try {
                 var raw=options.storage.getItem(scope);
                 if(raw===null) conversations[scope]={revision:0,value:null};
                 else {
@@ -1337,7 +1343,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                     if(!Number.isSafeInteger(parsed.revision) || parsed.revision<0) throw new Error('Invalid conversation revision');
                     conversations[scope]={revision:parsed.revision,value:cleanConversation(parsed.value)};
                 }
-            } catch(error) {conversationPersistent=false;warn('Conversation storage unavailable; using memory.');}
+            } catch(error) {conversationReadable=false;conversationPersistent=false;warn('Conversation storage unavailable; using memory.');}
             return clone(conversations[scope] || {revision:0,value:null});
         }
         function saveConversation(projectKey,draftId,value,expectedRevision) {
@@ -1345,10 +1351,51 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             if(current.revision!==expectedRevision) return {ok:false,reason:'conflict',revision:current.revision};
             if(current.revision===Number.MAX_SAFE_INTEGER) return {ok:false,reason:'invalid',revision:current.revision};
             var next;try {next={revision:current.revision+1,value:cleanConversation(value)};} catch(error) {return {ok:false,reason:'invalid',revision:current.revision};}
-            var scope=conversationKey(projectKey,draftId);conversations[scope]=next;
-            if(conversationPersistent) try {options.storage.setItem(scope,JSON.stringify(next));}
-            catch(error) {conversationPersistent=false;warn('Conversation storage unavailable; changes retained in memory.');}
+            var scope=conversationKey(projectKey,draftId);conversations[scope]=next;conversationOverlays[scope]=true;
+            if(quotaBlocked)conversationPersistent=false;
+            if(conversationPersistent) try {options.storage.setItem(scope,JSON.stringify(next));delete conversationOverlays[scope];}
+            catch(error) {if(quotaError(error))quotaBlocked=true;conversationPersistent=false;warn('Conversation storage unavailable; changes retained in memory.');}
             return {ok:true,revision:next.revision};
+        }
+        // Navigation preferences never participate in the draft/creation CAS.
+        // Per-project keys also keep independent tabs' recent choices separate.
+        var preferenceMemory=Object.create(null),preferencePersistent=persistent,preferenceReadable=readable,preferenceOverlays=Object.create(null);
+        function preferenceString(value) {return typeof value==='string' && value.trim()===value && !!value && value.length<=255 && !/[\u0000-\u0020]/.test(value);}
+        function projectPreference(value) {return preferenceString(value) && /^[a-z][a-z0-9_]*$/i.test(value);}
+        function preference(scope,normalize) {
+            if(preferenceReadable && !preferenceOverlays[scope])try {
+                var raw=options.storage.getItem(scope);
+                preferenceMemory[scope]=raw===null?null:normalize(JSON.parse(raw));
+            } catch(error) {preferenceReadable=false;preferencePersistent=false;warn('Navigation preferences unavailable; using memory.');}
+            return clone(preferenceMemory[scope] || null);
+        }
+        function savePreference(scope,value) {
+            preferenceMemory[scope]=value;preferenceOverlays[scope]=true;
+            if(!persistent || quotaBlocked)preferencePersistent=false;
+            if(preferencePersistent)try {
+                var encoded=JSON.stringify(value);
+                if(options.storage.getItem(scope)!==encoded)options.storage.setItem(scope,encoded);
+                delete preferenceOverlays[scope];
+            } catch(error) {if(quotaError(error))quotaBlocked=true;preferencePersistent=false;warn('Navigation preferences unavailable; changes retained in memory.');}
+            return {ok:true};
+        }
+        function loadLastProject() {
+            return preference(key('$navigation'),function(value) {return projectPreference(value)?value:null;});
+        }
+        function saveLastProject(projectKey) {
+            return projectPreference(projectKey)?savePreference(key('$navigation'),projectKey):{ok:false,reason:'invalid'};
+        }
+        function cleanSelection(value) {
+            if(!value || typeof value!=='object' || Array.isArray(value) ||
+                !preferenceString(value.issueTypeId) || !preferenceString(value.templateId) || !preferenceString(value.profileId))return null;
+            return {issueTypeId:value.issueTypeId,templateId:value.templateId,profileId:value.profileId};
+        }
+        function loadProjectSelection(projectKey) {
+            return projectPreference(projectKey)?preference(key(projectKey)+':selection',cleanSelection):null;
+        }
+        function saveProjectSelection(projectKey,value) {
+            var clean=cleanSelection(value);
+            return projectPreference(projectKey) && clean?savePreference(key(projectKey)+':selection',clean):{ok:false,reason:'invalid'};
         }
         function withCreationLock(projectKey,draftId,action) {
             var locks=options.locks || (typeof navigator!=='undefined' && navigator.locks);
@@ -1357,7 +1404,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                 return lock ? action() : {ok:false,reason:'busy'};
             });
         }
-        return { isConversationPersistent:function() {return conversationPersistent;},withCreationLock:withCreationLock,loadConversation:loadConversation,saveConversation:saveConversation,load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
+        return {loadLastProject:loadLastProject,saveLastProject:saveLastProject,loadProjectSelection:loadProjectSelection,saveProjectSelection:saveProjectSelection, isConversationPersistent:function() {return conversationPersistent;},withCreationLock:withCreationLock,loadConversation:loadConversation,saveConversation:saveConversation,load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
     }
 
     return { createStore: createStore };
@@ -2237,7 +2284,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
         var budgetCache = null, providerUsage = null;
-        var metadataReady = false, currentReporterName = null,templateQuestionCandidate=null;
+        var metadataReady = false, currentReporterName = null,templateQuestionCandidate=null,currentUserKey=null,rememberedSelections=Object.create(null);
         var listeners = new Set();
         var relationConfirmations = Object.create(null), relationSearches = new Map();
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
@@ -2419,8 +2466,37 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     state.error = entry.error;
                     return;
                 }
-                entry.revision = result.revision; entry.error = null;
+                entry.revision = result.revision; entry.error = null;rememberRecentSelection();
             } catch (error) { entry.error = errorState(null, 'storage'); state.error = entry.error; }
+        }
+        function rememberRecentSelection() {
+            if(!currentUserKey || !store || typeof store.saveProjectSelection!=='function' || !metadataReady ||
+                !state.draft || !state.meta || state.meta.projectKey!==state.draft.projectKey || !compatible(state.draft.issueTypeId,state.draft.templateId))return;
+            var selected={issueTypeId:state.draft.issueTypeId,templateId:state.draft.templateId,profileId:profile().id},signature=JSON.stringify(selected);
+            if(rememberedSelections[state.draft.projectKey]===signature)return;
+            try {if(store.saveProjectSelection(state.draft.projectKey,selected).ok)rememberedSelections[state.draft.projectKey]=signature;}
+            catch(ignore) { /* Draft persistence remains authoritative. */ }
+        }
+        function restoreRecentSelection(draft) {
+            if(!state.meta || state.meta.projectKey!==draft.projectKey || !profile())return draft;
+            var type=state.meta.issueTypes.find(function(t) {return t.id===draft.issueTypeId && !t.subtask;}),
+                template=profile().templates.find(function(t) {return t.id===draft.templateId;});
+            var selection={};
+            if(draft.issueTypeId && !type)selection.issueTypeId=null;
+            if(draft.templateId && (!template || template.issueTypeId!==null && (!type || template.issueTypeId!==type.id)))selection.templateId=null;
+            draft=drafts.setSelection(draft,selection);
+            if(draft.issueTypeId || draft.templateId || !currentUserKey || !store || typeof store.loadProjectSelection!=='function')return draft;
+            var recent;
+            try {recent=store.loadProjectSelection(draft.projectKey);} catch(ignore) {return draft;}
+            if(!recent || recent.profileId!==profile().id || !compatible(recent.issueTypeId,recent.templateId))return draft;
+            return drafts.setSelection(draft,{issueTypeId:recent.issueTypeId,templateId:recent.templateId});
+        }
+        function resetSelection(draft,resetOptions) {
+            if(!resetOptions || resetOptions.preserveSelection!==true)return draft;
+            var current=state.draft;
+            if(current && compatible(current.issueTypeId,current.templateId))
+                draft=drafts.setSelection(draft,{issueTypeId:current.issueTypeId,templateId:current.templateId});
+            return fillMissingReporter(restoreRecentSelection(draft));
         }
         function fillMissingReporter(draft) {
             if (!metadataReady || !currentReporterName || !draft || draft.protectedFields.reporter === true ||
@@ -2524,6 +2600,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
             if(!readOnly)syncProjectSelection();
             metadataReady = true;
+            if(!readOnly) {state.draft=restoreRecentSelection(state.draft);syncProjectSelection();}
             if (!readOnly) state.draft = fillMissingReporter(state.draft);
             if(!readOnly) {
                 var summaryField=fields.getField(state.meta,state.draft.issueTypeId,'summary');
@@ -2557,7 +2634,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
-            budgetCache=null;providerUsage=null;metadataReady=false;currentReporterName=null;
+            budgetCache=null;providerUsage=null;metadataReady=false;currentReporterName=null;currentUserKey=null;rememberedSelections=Object.create(null);
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
                 error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
             emit();
@@ -2570,12 +2647,15 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 currentReporterName = user && typeof user.name === 'string' && user.name.trim() && user.name.trim() === user.name ? user.name : null;
                 var key = user && (typeof user.key === 'string' && user.key.trim() ? user.key : typeof user.name === 'string' && user.name.trim() ? user.name : null);
                 if (!key) { key = null; identityWarning = errorState(null, 'identity'); state.error = identityWarning; }
-                store = options.createStore(key);
+                currentUserKey=key;store = options.createStore(key);
                 creator = creators.create({api:api,store:store,now:options.now,currentReporterName:currentReporterName});
                 var projects = await api.getProjects({ signal: run.abort.signal });
                 if (!current(run)) return getState();
                 state.projects = projects.values.map(function(p) { return { id: String(p.id), key: String(p.key), name: String(p.name || p.key) }; });
-                finish(run);
+                var lastProject=null;
+                if(key && typeof store.loadLastProject==='function')try {lastProject=store.loadLastProject();} catch(ignore) {}
+                if(lastProject && state.projects.some(function(p) {return p.key===lastProject;}))await selectProject(lastProject);
+                else finish(run);
             } catch (error) { fail(run, error, 'network'); }
             return getState();
         }
@@ -2585,7 +2665,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!store || !state.projects.some(function(p) { return p.key === key; })) {
                 state.error = errorState(null, 'input'); return emit();
             }
+            var retained=state.draft && state.draft.projectKey===key?state.draft:null;
             var run = begin('project');
+            if(retained)state.draft=retained;
             save();
             try {
                 var entry = scopes[key];
@@ -2603,7 +2685,10 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 providerUsage=null;
                 state.validation = null; state.routeCandidates = []; state.error = entry.error || identityWarning;
                 updateScope();
-                if (await metadata(run, !!locked())) finish(run);
+                if (await metadata(run, !!locked())) {
+                    if(currentUserKey && typeof store.saveLastProject==='function')try {store.saveLastProject(key);} catch(ignore) {}
+                    finish(run);
+                }
             } catch (error) { fail(run, error, 'metadata'); }
             return getState();
         }
@@ -2949,28 +3034,32 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             remember();var owner=scopes;
             await creator.reconcileUnknown({draft:state.draft,resolution:resolution,issueKey:key},function(d,info) {creationUpdate(owner,d,info);});return getState();
         }
-        async function newDraft() {
+        async function newDraft(resetOptions) {
             if (destroyed || !state.draft || durableGuard() || ['submitting','unknown','preflight'].indexOf(state.draft.creation.status)!==-1 || state.draft.attachments.some(function(a) {return a.status==='uploading';})) return getState();
             var previous=state.draft,entry=scopes[previous.projectKey],next=drafts.createDraft({projectKey:previous.projectKey});
-            next=drafts.setSelection(next,{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+            rememberRecentSelection();
+            next=resetSelection(drafts.setSelection(next,{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature}),resetOptions);
             var result=store.save(previous.projectKey,{draft:next,settings:state.settings},entry.revision,{newDraft:true,draftId:previous.id,attemptId:previous.creation.attemptId});
             if (!result.ok) {state.error=errorState(null,'conflict');return emit();}
-            previous.attachments.forEach(function(a) {runtimeFiles.delete(a.id);});entry.revision=result.revision;state.draft=next;state.validation=null;state.error=identityWarning;remember();updateScope();
+            stop();providerUsage=null;budgetCache=null;
+            previous.attachments.forEach(function(a) {runtimeFiles.delete(a.id);});entry.revision=result.revision;state.draft=next;state.validation=null;state.error=identityWarning;
+            state.routeCandidates=[];state.stage='idle';remember();updateScope();
             if (!state.meta) {
                 var run=begin('newDraft');
                 try {if(await metadata(run)) finish(run);} catch(error) {fail(run,error,'metadata');}
             }
             return emit();
         }
-        async function discardDraft(confirmed) {
+        async function discardDraft(confirmed,resetOptions) {
             if (confirmed!==true || destroyed || !state.draft || active || locked() || state.draft.creation.status==='preflight') return getState();
             if (durableGuard()) return emit();
             var previous=state.draft,entry=scopes[previous.projectKey];
+            rememberRecentSelection();
             try {
                 var result=store.clearDraft(previous.projectKey,entry.revision);
                 if (!result.ok) {state.error=errorState(null,result.reason==='conflict' || result.reason==='creation-guard' ? 'conflict':'storage');return emit();}
-                stop();previous.attachments.forEach(function(file) {runtimeFiles.delete(file.id);});
-                state.draft=drafts.setSelection(drafts.createDraft({projectKey:previous.projectKey}),{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+                stop();providerUsage=null;budgetCache=null;previous.attachments.forEach(function(file) {runtimeFiles.delete(file.id);});
+                state.draft=resetSelection(drafts.setSelection(drafts.createDraft({projectKey:previous.projectKey}),{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature}),resetOptions);
                 entry.revision=result.revision;entry.error=null;state.validation=null;state.routeCandidates=[];state.stage='idle';state.error=identityWarning;
                 remember();updateScope();return emit();
             } catch(error) {state.error=errorState(null,'storage');return emit();}
@@ -3389,6 +3478,30 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         var requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
         return requirements && requirements.sections || [];
     }
+    function stableDeploymentSummary(controller,value) {
+        var s=controller.getState(),d=s.draft,requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
+        if(typeof value!=='string' || !d || !requirements || requirements.kind!=='deployment' || d.templateId!=='deployment' ||
+            !s.generationFieldIds.includes('summary') || d.protectedFields.summary || Object.hasOwn(d.pendingFields,'summary') ||
+            d.pendingAssistance && d.pendingAssistance.fieldId==='summary' || d.creation.issueKey || !['idle','rejected'].includes(d.creation.status))return value;
+        // Only a simple deployment/update heading with a trailing schedule is
+        // eligible. Restrictions and service-behaviour statements are subjects.
+        if(!/^(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|выкатка|установка|deploy|upgrade|rollout)\s+/i.test(value) ||
+            /[,;!?]|(?:^|\s)(?:только|исключительно|запрет\p{L}*|разреш\p{L}*|огранич\p{L}*|правил\p{L}*|политик\p{L}*|расписани\p{L}*|график\p{L}*|работающ\p{L}*|доступн\p{L}*)(?=$|\s)/iu.test(value))return value;
+        var schedule=/\s+(?:в\s+рабочее\s+время|в\s+рабочие\s+часы|в\s+нерабочее\s+время|в\s+ночное\s+время|(?:(?:с|в)\s+)?(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:до|[–—-])\s*(?:[01]?\d|2[0-3]):[0-5]\d|(?:в|после|до)\s+(?:[01]?\d|2[0-3]):[0-5]\d)(?:\s+(?:МСК|UTC|GMT)(?:[+-]\d{1,2}(?::[0-5]\d)?)?)?([.!]?)$/.exec(value);
+        if(!schedule)return value;
+        var subject=value.slice(0,schedule.index);
+        if(/(?:^|\s)(?:и|или|но|а|затем)$|[,;:—–-]$|^(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|выкатка|установка|deploy|upgrade|rollout)$/i.test(subject))return value;
+        return subject+schedule[1];
+    }
+    function withStableDeploymentSummary(controller,proposal,text) {
+        var supplied=proposal.fields || {},hasSummary=Object.hasOwn(supplied,'summary');
+        if(!hasSummary && !Object.hasOwn(supplied,'description') && !Object.hasOwn(proposal.descriptionSections || {},'window'))return proposal;
+        var value=hasSummary?supplied.summary:controller.getState().draft.fields.summary;
+        var literal=/(?:^|[;\n])\s*(?:тема|заголовок|summary)\s*:\s*([^;\n]+)/i.exec(text || '');
+        if(literal && literal[1].trim()===value)return proposal;
+        var summary=stableDeploymentSummary(controller,value);
+        return summary===value?proposal:Object.assign({},proposal,{fields:Object.assign({},supplied,{summary:summary})});
+    }
     // Read explicit section headings and catalog labels, never infer missing facts.
     // Unsupported or protected clauses remain unresolved alongside any safe edits.
     function literalAnswerPatch(controller,text) {
@@ -3549,6 +3662,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                             return {ok:false,reason:'Сохрани оговорку пользователя в подходящем descriptionSections, включая полный текст раздела extra при его изменении: '+added};
                     } else args=withNotes;
                 }
+                args=withStableDeploymentSummary(controller,args,options.getTurnText ? options.getTurnText() : '');
                 var result=await mutate(function() {
                     var source=options.getSourceText ? options.getSourceText() : undefined;
                     return managed || explicitReview ? controller.chatUpdate(args,snapshot(),source,{appManagedQuestions:managed,reconcileUnresolvedFacts:explicitReview}) : controller.chatUpdate(args,snapshot(),source);
@@ -3572,7 +3686,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
             })
         ];
     }
-    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,literalAnswerPatch:literalAnswerPatch,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
+    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,stableDeploymentSummary:stableDeploymentSummary,withStableDeploymentSummary:withStableDeploymentSummary,literalAnswerPatch:literalAnswerPatch,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
 });
 
 /* === Module: chat.js === */
@@ -3989,7 +4103,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 !Object.prototype.hasOwnProperty.call(d.pendingFields,id) && !String(d.fields[id] || '').trim();
         }
         function placeholderSummary(value) {return drafts.placeholderSummary(value);}
-        function narrativeSummary(description) {return drafts.narrativeSummary(description);}
+        function narrativeSummary(description) {return chatTools.stableDeploymentSummary(controller,drafts.narrativeSummary(description));}
         function savedNarrative() {
             var users=state.transcript.filter(function(m){return m.role==='user';});
             if(!users.length)return null;
@@ -4074,7 +4188,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // A retained original narrative belongs to the existing exact-retry
             // and source-equivalence guards, not partial correction extraction.
             if(run.initialRecoveredNarrative || run.initialSource===text && answer.unresolved.length)return false;
-            var patch=answer.proposal;
+            var patch=chatTools.withStableDeploymentSummary(controller,answer.proposal,text);
             // Even literal local changes cannot discharge custom semantic rules.
             var review=await mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
             if(!current(run) || !review.ok)return true;
@@ -5335,7 +5449,11 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     var defaults=(field.allowedValues || []).filter(function(option){return byId?option.id===inherited.id:field.optionsComplete===true && typeof inherited==='string' && option.label===inherited;});
                     if(defaults.length===1){displayedValue={id:defaults[0].id};priorityDefault=true;}
                 }
-                entry.view.update({field:field, value:displayedValue, errors:state.validation && state.validation.fieldErrors[field.id] || [],
+                var errors=state.validation && state.validation.fieldErrors[field.id] || [];
+                var linkQuestion=field.id==='description' && (state.validation?.questions || []).find(function(q) {
+                    return q.id==='devops:links' && errors.includes(q.text);
+                });
+                entry.view.update({field:field, value:displayedValue, errors:linkQuestion?errors.filter(function(message){return message!==linkQuestion.text;}):errors,
                     scopeKey:JSON.stringify([d.projectKey,d.issueTypeId,state.meta && state.meta.signature]),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
@@ -5343,6 +5461,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                     priorityDefault?'По умолчанию Jira; ручной выбор заменит это значение.':
                     field.kind==='number' && field.supported && field.writable?'Числовое значение задаётся вручную; AI его не рассчитывает.':
                     field.kind==='timetracking' && field.supported && field.writable?'Указывайте только явно названные трудозатраты, например 2h или 1d 30m. Длительность окна выкладки не является оценкой.':'';
+                if(linkQuestion)help=linkQuestion.text;
                 entry.help.text(help).prop('hidden',!help);
                 if(help) {
                     var control=entry.host.find('.ta-field-body').find('input,textarea,[data-ta-picker]').first(),helpId=control.attr('id')+'-help';
@@ -5632,6 +5751,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false,retryReconcileScope=null;
         var messageRows=new Map(),expandedDrafts=new Map(),lastFields=null,changedFields=[],jiraRetrying=false,reconciling=false;
         var localCheck=null;
+        var resetting=false;
         var liveEditor=false,chatLayout=null,releaseEditor=null;
         var assigneeHost,assigneeRequest=null,assigneePicker=null;
         function cancelAssignee() {
@@ -5764,9 +5884,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             if(liveEditor)chatLayout=$('<div class="ta-chat-workspace" data-ta-chat-workspace>').appendTo(root.children('.ta-layout'));
             host=$('<section class="ta-chat" aria-label="Подготовка задачи">').appendTo(chatLayout || root.children('.ta-layout'));
             root.find('.ta-header h2').text('Помощник по задачам');
-            var newButton=button('Новый разговор','Plus',{'data-ta-chat-new':'','aria-label':'Новый разговор',title:'Новый разговор'},function() {
-                cancelAssignee();run(function(){chat.stop();return c.newDraft();});
-            }).addClass('ta-icon-button');
+            var newButton=button('Очистить','Plus',{'data-ta-chat-new':'','aria-label':'Очистить',title:'Очистить карточку, чат и вложения, сохранив тип и шаблон'},resetDraft).addClass('ta-header-reset');
             root.find('.ta-header-tools').prepend(newButton);
             log=$('<div class="ta-chat-log" data-ta-chat-log role="log" aria-label="Сообщения" aria-live="polite" aria-relevant="additions text">').appendTo(host);
             assigneeHost=$('<section data-ta-chat-assignee aria-label="Выбор исполнителя в чате" hidden>').appendTo(host);
@@ -5815,7 +5933,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             composerActions.append($('<span class="ta-muted">').text('Enter — отправить · Shift+Enter — новая строка'),
                 button('Повторить','RefreshCw',{'data-ta-chat-retry':'',hidden:true},function(){
                     var d=c.getState().draft;
-                    if(dead || sending || reconciling || chat.getState().status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope)return;
+                    if(dead || resetting || sending || reconciling || chat.getState().status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope)return;
                     if(retryReconcileScope===scope)reconcile();
                     else if(lastSent){input.val(lastSent);send();}
                 }),
@@ -5828,6 +5946,38 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             update(c.getState());
         }
         function locked(d) {return !!d && (!!d.creation.issueKey || ['preflight','submitting','unknown','created'].indexOf(d.creation.status)!==-1);}
+        function canReset(d) {return !!d && ['preflight','submitting','unknown'].indexOf(d.creation.status)===-1 && !(d.attachments || []).some(function(a){return a.status==='uploading';});}
+        async function resetDraft() {
+            var before=c.getState(),d=before.draft;
+            if(dead || resetting || !canReset(d) || before.error && before.error.code==='conflict')return;
+            var requestedScope=JSON.stringify([d.projectKey,d.id]),failed=false,cleared=false;
+            resetting=true;cancelAssignee();
+            if(localCheck){localCheck.abort();localCheck=null;}
+            update(before);
+            try {
+                await Promise.resolve();
+                var current=c.getState(),now=current.draft;
+                if(dead || !now || JSON.stringify([now.projectKey,now.id])!==requestedScope || !canReset(now) || current.error && current.error.code==='conflict')return;
+                chat.stop();
+                if(['metadata','routing','preparing','assisting','checking'].indexOf(current.stage)!==-1 && typeof c.cancel==='function') {
+                    await c.cancel();current=c.getState();now=current.draft;
+                    if(dead || !now || JSON.stringify([now.projectKey,now.id])!==requestedScope || !canReset(now) || current.error && current.error.code==='conflict')return;
+                }
+                if(now.creation.issueKey || now.creation.status==='created')await c.newDraft({preserveSelection:true});
+                else await c.discardDraft(true,{preserveSelection:true});
+                var after=c.getState().draft;
+                cleared=!!after && after.projectKey===d.projectKey && after.id!==d.id;
+            } catch(error) {failed=true;}
+            finally {
+                resetting=false;
+                if(!dead) {
+                    var next=c.getState();update(next);
+                    if(failed)host.find('[data-ta-chat-error]').text('Не удалось очистить карточку. Данные и неотправленный текст сохранены; повторите действие.').prop('hidden',false);
+                    else if(!cleared && next.draft && next.draft.id===d.id && next.error)host.find('[data-ta-chat-error]').text(next.error.message || String(next.error)).prop('hidden',false);
+                    if(cleared && next.draft.projectKey===d.projectKey)input.trigger('focus');
+                }
+            }
+        }
         function canCheckFields(d) {
             return !!d && !locked(d) && !d.checked && d.issueTypeId && d.templateId &&
                 typeof d.fields.summary==='string' && d.fields.summary.trim() &&
@@ -5835,7 +5985,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         async function checkCurrentFields() {
             var s=chat.getState(),d=c.getState().draft;
-            if(dead || localCheck || sending || reconciling || s.status==='running' || c.getState().error || !canCheckFields(d))return;
+            if(dead || resetting || localCheck || sending || reconciling || s.status==='running' || c.getState().error || !canCheckFields(d))return;
             cancelAssignee();
             var check=new AbortController();
             var snapshot=c.chatSnapshot();
@@ -5847,14 +5997,14 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             } catch(error) {
                 failed=true;
             } finally {
-                localCheck=null;if(!dead)update(c.getState());
+                if(localCheck===check)localCheck=null;if(!dead)update(c.getState());
                 if(failed && !dead && !check.signal.aborted && c.getState().draft?.id===d.id) {
                     host.find('[data-ta-chat-error]').text('Не удалось проверить поля в Jira. Повторите проверку, когда Jira будет доступна.').prop('hidden',false);
                 }
             }
         }
         function reconcile() {
-            if(dead || localCheck || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
+            if(dead || resetting || localCheck || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
             cancelAssignee();
             var requestedScope=scope;
             retryReconcileScope=requestedScope;lastSent='';
@@ -5864,7 +6014,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(dead || !d || JSON.stringify([d.projectKey,d.id])!==requestedScope || locked(d) || chat.getState().status==='running')return;
                 return chat.reconcile();
             },true).finally(function(){
-                reconciling=false;
+                if(scope===requestedScope)reconciling=false;
                 if(retryReconcileScope===requestedScope && ['error','stopped'].indexOf(chat.getState().status)===-1)retryReconcileScope=null;
                 if(!dead)update(c.getState());
             });
@@ -5875,17 +6025,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         function retryRateLimit() {
             var next=c.getState(),d=next.draft,s=chat.getState();
-            if(dead || localCheck || sending || reconciling || s.status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope || !hasRateLimit(s))return;
+            if(dead || resetting || localCheck || sending || reconciling || s.status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope || !hasRateLimit(s))return;
             if(!(s.error && s.error.retryTarget==='turn') && (s.status==='idle' || retryReconcileScope===scope || d.fields.summary || d.fields.description || d.source)) {reconcile();return;}
             var original=(s.transcript || []).filter(function(m){return m.role==='user';}).pop();
             if(original) {cancelAssignee();sendText(original.text,true);}
         }
         function updateSend() {
-            var busy=chat.getState().status==='running' || sending || reconciling || !!localCheck;
+            var busy=resetting || chat.getState().status==='running' || sending || reconciling || !!localCheck;
             host.find('[data-ta-chat-send]').prop('disabled',busy || !state || !state.draft || locked(state.draft) || !input.val().trim());
         }
         function send() {
-            var text=input.val();if(localCheck || sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
+            var text=input.val();if(resetting || localCheck || sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
             cancelAssignee();
             var intent=assigneeIntent(text);
             if(intent) {
@@ -5905,7 +6055,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(dead || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==requestedScope)return;
                 return chat.send(text,preserveComposer?{retryRateLimit:true}:undefined);
             }).then(function(){
-                if(dead)return;sending=false;
+                if(dead)return;if(scope===requestedScope)sending=false;
                 var current=chat.getState();
                 if(!preserveComposer && scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
                 update(c.getState());
@@ -5941,6 +6091,8 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             var s=chat.getState(),d=state.draft,newScope=d && JSON.stringify([d.projectKey,d.id]);
             if(scope!==newScope) {
                 cancelAssignee();
+                if(localCheck){localCheck.abort();localCheck=null;}
+                sending=false;reconciling=false;
                 if(scope!==null) {input.val('');expandedDrafts.set(scope,card.find('[data-ta-card-details]')[0].open);}
                 scope=newScope;lastSent='';retryReconcileScope=null;lastFields=null;changedFields=[];cardKey=null;pendingKey=null;
                 card.find('[data-ta-card-details]').prop('open',expandedDrafts.get(scope)===true);
@@ -5986,7 +6138,8 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             host.find('[data-ta-chat-error-actions]').prop('hidden',busy || !s.error || ['connection','budget','editor'].indexOf(s.error.action)===-1 || s.error.action==='editor' && !d);
             host.find('[data-ta-jira-retry]').prop('hidden',!state.error || ['network','metadata'].indexOf(state.error.code)===-1)
                 .prop('disabled',jiraRetrying || busy || state.stage==='metadata');
-            root.find('[data-ta-chat-new]').prop('disabled',!d || ['preflight','submitting','unknown'].indexOf(d.creation.status)!==-1 || (d.attachments || []).some(function(a){return a.status==='uploading';}));
+            var resetLabel=d && (d.creation.issueKey || d.creation.status==='created')?'Новая задача':'Очистить';
+            root.find('[data-ta-chat-new]').prop('disabled',resetting || !canReset(d) || !!state.error && state.error.code==='conflict').attr({'aria-label':resetLabel,title:resetLabel==='Очистить'?'Очистить карточку, чат и вложения, сохранив тип и шаблон':'Начать новую задачу с теми же типом и шаблоном'}).children('span').text(resetLabel);
             proposal.find('button').prop('disabled',busy || locked(d));
             updateSend();
         }

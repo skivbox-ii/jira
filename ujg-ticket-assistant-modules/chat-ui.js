@@ -5,6 +5,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         var transcriptKey=null,proposalKey=null,cardKey=null,pendingKey=null,scope=null,lastSent='',sending=false,retryReconcileScope=null;
         var messageRows=new Map(),expandedDrafts=new Map(),lastFields=null,changedFields=[],jiraRetrying=false,reconciling=false;
         var localCheck=null;
+        var resetting=false;
         var liveEditor=false,chatLayout=null,releaseEditor=null;
         var assigneeHost,assigneeRequest=null,assigneePicker=null;
         function cancelAssignee() {
@@ -137,9 +138,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             if(liveEditor)chatLayout=$('<div class="ta-chat-workspace" data-ta-chat-workspace>').appendTo(root.children('.ta-layout'));
             host=$('<section class="ta-chat" aria-label="Подготовка задачи">').appendTo(chatLayout || root.children('.ta-layout'));
             root.find('.ta-header h2').text('Помощник по задачам');
-            var newButton=button('Новый разговор','Plus',{'data-ta-chat-new':'','aria-label':'Новый разговор',title:'Новый разговор'},function() {
-                cancelAssignee();run(function(){chat.stop();return c.newDraft();});
-            }).addClass('ta-icon-button');
+            var newButton=button('Очистить','Plus',{'data-ta-chat-new':'','aria-label':'Очистить',title:'Очистить карточку, чат и вложения, сохранив тип и шаблон'},resetDraft).addClass('ta-header-reset');
             root.find('.ta-header-tools').prepend(newButton);
             log=$('<div class="ta-chat-log" data-ta-chat-log role="log" aria-label="Сообщения" aria-live="polite" aria-relevant="additions text">').appendTo(host);
             assigneeHost=$('<section data-ta-chat-assignee aria-label="Выбор исполнителя в чате" hidden>').appendTo(host);
@@ -188,7 +187,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             composerActions.append($('<span class="ta-muted">').text('Enter — отправить · Shift+Enter — новая строка'),
                 button('Повторить','RefreshCw',{'data-ta-chat-retry':'',hidden:true},function(){
                     var d=c.getState().draft;
-                    if(dead || sending || reconciling || chat.getState().status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope)return;
+                    if(dead || resetting || sending || reconciling || chat.getState().status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope)return;
                     if(retryReconcileScope===scope)reconcile();
                     else if(lastSent){input.val(lastSent);send();}
                 }),
@@ -201,6 +200,38 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             update(c.getState());
         }
         function locked(d) {return !!d && (!!d.creation.issueKey || ['preflight','submitting','unknown','created'].indexOf(d.creation.status)!==-1);}
+        function canReset(d) {return !!d && ['preflight','submitting','unknown'].indexOf(d.creation.status)===-1 && !(d.attachments || []).some(function(a){return a.status==='uploading';});}
+        async function resetDraft() {
+            var before=c.getState(),d=before.draft;
+            if(dead || resetting || !canReset(d) || before.error && before.error.code==='conflict')return;
+            var requestedScope=JSON.stringify([d.projectKey,d.id]),failed=false,cleared=false;
+            resetting=true;cancelAssignee();
+            if(localCheck){localCheck.abort();localCheck=null;}
+            update(before);
+            try {
+                await Promise.resolve();
+                var current=c.getState(),now=current.draft;
+                if(dead || !now || JSON.stringify([now.projectKey,now.id])!==requestedScope || !canReset(now) || current.error && current.error.code==='conflict')return;
+                chat.stop();
+                if(['metadata','routing','preparing','assisting','checking'].indexOf(current.stage)!==-1 && typeof c.cancel==='function') {
+                    await c.cancel();current=c.getState();now=current.draft;
+                    if(dead || !now || JSON.stringify([now.projectKey,now.id])!==requestedScope || !canReset(now) || current.error && current.error.code==='conflict')return;
+                }
+                if(now.creation.issueKey || now.creation.status==='created')await c.newDraft({preserveSelection:true});
+                else await c.discardDraft(true,{preserveSelection:true});
+                var after=c.getState().draft;
+                cleared=!!after && after.projectKey===d.projectKey && after.id!==d.id;
+            } catch(error) {failed=true;}
+            finally {
+                resetting=false;
+                if(!dead) {
+                    var next=c.getState();update(next);
+                    if(failed)host.find('[data-ta-chat-error]').text('Не удалось очистить карточку. Данные и неотправленный текст сохранены; повторите действие.').prop('hidden',false);
+                    else if(!cleared && next.draft && next.draft.id===d.id && next.error)host.find('[data-ta-chat-error]').text(next.error.message || String(next.error)).prop('hidden',false);
+                    if(cleared && next.draft.projectKey===d.projectKey)input.trigger('focus');
+                }
+            }
+        }
         function canCheckFields(d) {
             return !!d && !locked(d) && !d.checked && d.issueTypeId && d.templateId &&
                 typeof d.fields.summary==='string' && d.fields.summary.trim() &&
@@ -208,7 +239,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         async function checkCurrentFields() {
             var s=chat.getState(),d=c.getState().draft;
-            if(dead || localCheck || sending || reconciling || s.status==='running' || c.getState().error || !canCheckFields(d))return;
+            if(dead || resetting || localCheck || sending || reconciling || s.status==='running' || c.getState().error || !canCheckFields(d))return;
             cancelAssignee();
             var check=new AbortController();
             var snapshot=c.chatSnapshot();
@@ -220,14 +251,14 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             } catch(error) {
                 failed=true;
             } finally {
-                localCheck=null;if(!dead)update(c.getState());
+                if(localCheck===check)localCheck=null;if(!dead)update(c.getState());
                 if(failed && !dead && !check.signal.aborted && c.getState().draft?.id===d.id) {
                     host.find('[data-ta-chat-error]').text('Не удалось проверить поля в Jira. Повторите проверку, когда Jira будет доступна.').prop('hidden',false);
                 }
             }
         }
         function reconcile() {
-            if(dead || localCheck || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
+            if(dead || resetting || localCheck || sending || reconciling || chat.getState().status==='running' || !state.draft || locked(state.draft) || typeof chat.reconcile!=='function')return;
             cancelAssignee();
             var requestedScope=scope;
             retryReconcileScope=requestedScope;lastSent='';
@@ -237,7 +268,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(dead || !d || JSON.stringify([d.projectKey,d.id])!==requestedScope || locked(d) || chat.getState().status==='running')return;
                 return chat.reconcile();
             },true).finally(function(){
-                reconciling=false;
+                if(scope===requestedScope)reconciling=false;
                 if(retryReconcileScope===requestedScope && ['error','stopped'].indexOf(chat.getState().status)===-1)retryReconcileScope=null;
                 if(!dead)update(c.getState());
             });
@@ -248,17 +279,17 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
         }
         function retryRateLimit() {
             var next=c.getState(),d=next.draft,s=chat.getState();
-            if(dead || localCheck || sending || reconciling || s.status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope || !hasRateLimit(s))return;
+            if(dead || resetting || localCheck || sending || reconciling || s.status==='running' || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==scope || !hasRateLimit(s))return;
             if(!(s.error && s.error.retryTarget==='turn') && (s.status==='idle' || retryReconcileScope===scope || d.fields.summary || d.fields.description || d.source)) {reconcile();return;}
             var original=(s.transcript || []).filter(function(m){return m.role==='user';}).pop();
             if(original) {cancelAssignee();sendText(original.text,true);}
         }
         function updateSend() {
-            var busy=chat.getState().status==='running' || sending || reconciling || !!localCheck;
+            var busy=resetting || chat.getState().status==='running' || sending || reconciling || !!localCheck;
             host.find('[data-ta-chat-send]').prop('disabled',busy || !state || !state.draft || locked(state.draft) || !input.val().trim());
         }
         function send() {
-            var text=input.val();if(localCheck || sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
+            var text=input.val();if(resetting || localCheck || sending || reconciling || !text.trim() || chat.getState().status==='running' || !state.draft || locked(state.draft))return;
             cancelAssignee();
             var intent=assigneeIntent(text);
             if(intent) {
@@ -278,7 +309,7 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
                 if(dead || !d || locked(d) || JSON.stringify([d.projectKey,d.id])!==requestedScope)return;
                 return chat.send(text,preserveComposer?{retryRateLimit:true}:undefined);
             }).then(function(){
-                if(dead)return;sending=false;
+                if(dead)return;if(scope===requestedScope)sending=false;
                 var current=chat.getState();
                 if(!preserveComposer && scope===requestedScope && current.status!=='error' && input.val()===text)input.val('');
                 update(c.getState());
@@ -314,6 +345,8 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             var s=chat.getState(),d=state.draft,newScope=d && JSON.stringify([d.projectKey,d.id]);
             if(scope!==newScope) {
                 cancelAssignee();
+                if(localCheck){localCheck.abort();localCheck=null;}
+                sending=false;reconciling=false;
                 if(scope!==null) {input.val('');expandedDrafts.set(scope,card.find('[data-ta-card-details]')[0].open);}
                 scope=newScope;lastSent='';retryReconcileScope=null;lastFields=null;changedFields=[];cardKey=null;pendingKey=null;
                 card.find('[data-ta-card-details]').prop('open',expandedDrafts.get(scope)===true);
@@ -359,7 +392,8 @@ define('_ujgTA_chatUi', ['_ujgTA_icons'], function(icon) {
             host.find('[data-ta-chat-error-actions]').prop('hidden',busy || !s.error || ['connection','budget','editor'].indexOf(s.error.action)===-1 || s.error.action==='editor' && !d);
             host.find('[data-ta-jira-retry]').prop('hidden',!state.error || ['network','metadata'].indexOf(state.error.code)===-1)
                 .prop('disabled',jiraRetrying || busy || state.stage==='metadata');
-            root.find('[data-ta-chat-new]').prop('disabled',!d || ['preflight','submitting','unknown'].indexOf(d.creation.status)!==-1 || (d.attachments || []).some(function(a){return a.status==='uploading';}));
+            var resetLabel=d && (d.creation.issueKey || d.creation.status==='created')?'Новая задача':'Очистить';
+            root.find('[data-ta-chat-new]').prop('disabled',resetting || !canReset(d) || !!state.error && state.error.code==='conflict').attr({'aria-label':resetLabel,title:resetLabel==='Очистить'?'Очистить карточку, чат и вложения, сохранив тип и шаблон':'Начать новую задачу с теми же типом и шаблоном'}).children('span').text(resetLabel);
             proposal.find('button').prop('disabled',busy || locked(d));
             updateSend();
         }

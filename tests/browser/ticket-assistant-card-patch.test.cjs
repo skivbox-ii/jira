@@ -62,6 +62,9 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     assert.equal(state.draft.fields.duedate, '2026-11-20');
     assert.equal(state.draft.fields.priority.id, '3');
     assert.deepEqual(state.validation.questions.map(q => q.id), ['devops:links']);
+    const linkHint = editor.locator('[data-ta-field=description] [data-ta-field-help]');
+    assert.match(await linkHint.innerText(), /ссылку/i);
+    assert.equal(await description.getAttribute('aria-invalid'), 'false');
     const log = page.locator('[data-ta-chat-log]');
     assert.match(await log.innerText(), /ссылк[ау] на репозиторий/i);
     const create = page.locator('[data-ta-card-create]:visible, [data-ta-create]:visible').first();
@@ -74,6 +77,7 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     assert.equal(await create.isEnabled(), false);
     await send('https://git.example/devops/demo-api');
     await page.waitForFunction(() => !!window.taPreview.instance.controller.getState().draft.checked);
+    assert.equal(await linkHint.isVisible(), false);
     await create.click();
     await page.waitForFunction(() => !!window.taPreview.createdPayload);
     const sent = await page.evaluate(() => ({fields: window.taPreview.createdPayload.fields, calls: window.taPreview.patchRequests}));

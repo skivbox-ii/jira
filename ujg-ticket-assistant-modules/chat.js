@@ -411,7 +411,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 !Object.prototype.hasOwnProperty.call(d.pendingFields,id) && !String(d.fields[id] || '').trim();
         }
         function placeholderSummary(value) {return drafts.placeholderSummary(value);}
-        function narrativeSummary(description) {return drafts.narrativeSummary(description);}
+        function narrativeSummary(description) {return chatTools.stableDeploymentSummary(controller,drafts.narrativeSummary(description));}
         function savedNarrative() {
             var users=state.transcript.filter(function(m){return m.role==='user';});
             if(!users.length)return null;
@@ -496,7 +496,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // A retained original narrative belongs to the existing exact-retry
             // and source-equivalence guards, not partial correction extraction.
             if(run.initialRecoveredNarrative || run.initialSource===text && answer.unresolved.length)return false;
-            var patch=answer.proposal;
+            var patch=chatTools.withStableDeploymentSummary(controller,answer.proposal,text);
             // Even literal local changes cannot discharge custom semantic rules.
             var review=await mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
             if(!current(run) || !review.ok)return true;

@@ -24,7 +24,9 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         var memory = Object.create(null);
         var observed = Object.create(null), startedAt = eventRevision;
         var persistent = typeof options.userKey === 'string' && !!options.userKey.trim() && typeof options.origin === 'string' && !!options.origin && !!options.storage;
-        var conversationPersistent = persistent;
+        var readable=persistent,overlays=Object.create(null);
+        var conversationPersistent = persistent,conversationReadable=persistent,conversationOverlays=Object.create(null),quotaBlocked=false;
+        function quotaError(error) {return !!error && (error.name==='QuotaExceededError' || error.code===22 || error.code===1014 || /quota/i.test(error.message || ''));}
         function warn(reason) {
             if (typeof options.onWarning === 'function') options.onWarning(reason);
         }
@@ -34,7 +36,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         function empty() { return { revision: 0, settings: profiles.createDefaults(), draft: null }; }
         function load(projectKey) {
             var scope = key(projectKey);
-            if (persistent) {
+            if (readable && !overlays[scope]) {
                 var change = changes[scope];
                 var externalRevision = Math.max(
                     change && change.area === options.storage ? change.revision : 0,
@@ -72,7 +74,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                         memory[scope] = { revision: parsed.revision, settings: settings.value, draft: draft };
                     }
                 } catch (error) {
-                    persistent = false;
+                    readable=false;persistent = false;
                     warn('Persistent storage unavailable or damaged; using memory.');
                 }
             }
@@ -95,10 +97,14 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             var next;
             try { next = { revision: current.revision + 1, settings: settings.value, draft: copyDraft(value.draft) }; }
             catch (error) { return { ok: false, revision: current.revision, reason: 'invalid' }; }
-            memory[key(projectKey)] = next;
+            memory[key(projectKey)] = next;overlays[key(projectKey)]=true;
             if (persistent) {
-                try { options.storage.setItem(key(projectKey), JSON.stringify(next)); }
+                try {
+                    if(quotaBlocked) {persistent=false;warn('Persistent storage unavailable; changes retained in memory.');}
+                    else {options.storage.setItem(key(projectKey), JSON.stringify(next));delete overlays[key(projectKey)];}
+                }
                 catch (error) {
+                    if(quotaError(error))quotaBlocked=true;
                     persistent = false;
                     warn('Persistent storage unavailable; changes retained in memory.');
                 }
@@ -138,7 +144,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
         }
         function loadConversation(projectKey,draftId) {
             var scope=conversationKey(projectKey,draftId);
-            if(conversationPersistent) try {
+            if(conversationReadable && !conversationOverlays[scope]) try {
                 var raw=options.storage.getItem(scope);
                 if(raw===null) conversations[scope]={revision:0,value:null};
                 else {
@@ -146,7 +152,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                     if(!Number.isSafeInteger(parsed.revision) || parsed.revision<0) throw new Error('Invalid conversation revision');
                     conversations[scope]={revision:parsed.revision,value:cleanConversation(parsed.value)};
                 }
-            } catch(error) {conversationPersistent=false;warn('Conversation storage unavailable; using memory.');}
+            } catch(error) {conversationReadable=false;conversationPersistent=false;warn('Conversation storage unavailable; using memory.');}
             return clone(conversations[scope] || {revision:0,value:null});
         }
         function saveConversation(projectKey,draftId,value,expectedRevision) {
@@ -154,10 +160,51 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
             if(current.revision!==expectedRevision) return {ok:false,reason:'conflict',revision:current.revision};
             if(current.revision===Number.MAX_SAFE_INTEGER) return {ok:false,reason:'invalid',revision:current.revision};
             var next;try {next={revision:current.revision+1,value:cleanConversation(value)};} catch(error) {return {ok:false,reason:'invalid',revision:current.revision};}
-            var scope=conversationKey(projectKey,draftId);conversations[scope]=next;
-            if(conversationPersistent) try {options.storage.setItem(scope,JSON.stringify(next));}
-            catch(error) {conversationPersistent=false;warn('Conversation storage unavailable; changes retained in memory.');}
+            var scope=conversationKey(projectKey,draftId);conversations[scope]=next;conversationOverlays[scope]=true;
+            if(quotaBlocked)conversationPersistent=false;
+            if(conversationPersistent) try {options.storage.setItem(scope,JSON.stringify(next));delete conversationOverlays[scope];}
+            catch(error) {if(quotaError(error))quotaBlocked=true;conversationPersistent=false;warn('Conversation storage unavailable; changes retained in memory.');}
             return {ok:true,revision:next.revision};
+        }
+        // Navigation preferences never participate in the draft/creation CAS.
+        // Per-project keys also keep independent tabs' recent choices separate.
+        var preferenceMemory=Object.create(null),preferencePersistent=persistent,preferenceReadable=readable,preferenceOverlays=Object.create(null);
+        function preferenceString(value) {return typeof value==='string' && value.trim()===value && !!value && value.length<=255 && !/[\u0000-\u0020]/.test(value);}
+        function projectPreference(value) {return preferenceString(value) && /^[a-z][a-z0-9_]*$/i.test(value);}
+        function preference(scope,normalize) {
+            if(preferenceReadable && !preferenceOverlays[scope])try {
+                var raw=options.storage.getItem(scope);
+                preferenceMemory[scope]=raw===null?null:normalize(JSON.parse(raw));
+            } catch(error) {preferenceReadable=false;preferencePersistent=false;warn('Navigation preferences unavailable; using memory.');}
+            return clone(preferenceMemory[scope] || null);
+        }
+        function savePreference(scope,value) {
+            preferenceMemory[scope]=value;preferenceOverlays[scope]=true;
+            if(!persistent || quotaBlocked)preferencePersistent=false;
+            if(preferencePersistent)try {
+                var encoded=JSON.stringify(value);
+                if(options.storage.getItem(scope)!==encoded)options.storage.setItem(scope,encoded);
+                delete preferenceOverlays[scope];
+            } catch(error) {if(quotaError(error))quotaBlocked=true;preferencePersistent=false;warn('Navigation preferences unavailable; changes retained in memory.');}
+            return {ok:true};
+        }
+        function loadLastProject() {
+            return preference(key('$navigation'),function(value) {return projectPreference(value)?value:null;});
+        }
+        function saveLastProject(projectKey) {
+            return projectPreference(projectKey)?savePreference(key('$navigation'),projectKey):{ok:false,reason:'invalid'};
+        }
+        function cleanSelection(value) {
+            if(!value || typeof value!=='object' || Array.isArray(value) ||
+                !preferenceString(value.issueTypeId) || !preferenceString(value.templateId) || !preferenceString(value.profileId))return null;
+            return {issueTypeId:value.issueTypeId,templateId:value.templateId,profileId:value.profileId};
+        }
+        function loadProjectSelection(projectKey) {
+            return projectPreference(projectKey)?preference(key(projectKey)+':selection',cleanSelection):null;
+        }
+        function saveProjectSelection(projectKey,value) {
+            var clean=cleanSelection(value);
+            return projectPreference(projectKey) && clean?savePreference(key(projectKey)+':selection',clean):{ok:false,reason:'invalid'};
         }
         function withCreationLock(projectKey,draftId,action) {
             var locks=options.locks || (typeof navigator!=='undefined' && navigator.locks);
@@ -166,7 +213,7 @@ define('_ujgTA_storage', ['_ujgTA_profiles', '_ujgTA_draft'], function(profiles,
                 return lock ? action() : {ok:false,reason:'busy'};
             });
         }
-        return { isConversationPersistent:function() {return conversationPersistent;},withCreationLock:withCreationLock,loadConversation:loadConversation,saveConversation:saveConversation,load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
+        return {loadLastProject:loadLastProject,saveLastProject:saveLastProject,loadProjectSelection:loadProjectSelection,saveProjectSelection:saveProjectSelection, isConversationPersistent:function() {return conversationPersistent;},withCreationLock:withCreationLock,loadConversation:loadConversation,saveConversation:saveConversation,load: load, save: save, clearDraft: clearDraft, isPersistent: function() { return persistent; } };
     }
 
     return { createStore: createStore };

@@ -70,7 +70,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         var explicitGeneration = null;
         var creator = null, runtimeFiles = new Map(), fileSequence = 0;
         var budgetCache = null, providerUsage = null;
-        var metadataReady = false, currentReporterName = null,templateQuestionCandidate=null;
+        var metadataReady = false, currentReporterName = null,templateQuestionCandidate=null,currentUserKey=null,rememberedSelections=Object.create(null);
         var listeners = new Set();
         var relationConfirmations = Object.create(null), relationSearches = new Map();
         function locked() {return state.draft && (state.draft.creation.issueKey || ['submitting','unknown','created'].indexOf(state.draft.creation.status) !== -1);}
@@ -252,8 +252,37 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                     state.error = entry.error;
                     return;
                 }
-                entry.revision = result.revision; entry.error = null;
+                entry.revision = result.revision; entry.error = null;rememberRecentSelection();
             } catch (error) { entry.error = errorState(null, 'storage'); state.error = entry.error; }
+        }
+        function rememberRecentSelection() {
+            if(!currentUserKey || !store || typeof store.saveProjectSelection!=='function' || !metadataReady ||
+                !state.draft || !state.meta || state.meta.projectKey!==state.draft.projectKey || !compatible(state.draft.issueTypeId,state.draft.templateId))return;
+            var selected={issueTypeId:state.draft.issueTypeId,templateId:state.draft.templateId,profileId:profile().id},signature=JSON.stringify(selected);
+            if(rememberedSelections[state.draft.projectKey]===signature)return;
+            try {if(store.saveProjectSelection(state.draft.projectKey,selected).ok)rememberedSelections[state.draft.projectKey]=signature;}
+            catch(ignore) { /* Draft persistence remains authoritative. */ }
+        }
+        function restoreRecentSelection(draft) {
+            if(!state.meta || state.meta.projectKey!==draft.projectKey || !profile())return draft;
+            var type=state.meta.issueTypes.find(function(t) {return t.id===draft.issueTypeId && !t.subtask;}),
+                template=profile().templates.find(function(t) {return t.id===draft.templateId;});
+            var selection={};
+            if(draft.issueTypeId && !type)selection.issueTypeId=null;
+            if(draft.templateId && (!template || template.issueTypeId!==null && (!type || template.issueTypeId!==type.id)))selection.templateId=null;
+            draft=drafts.setSelection(draft,selection);
+            if(draft.issueTypeId || draft.templateId || !currentUserKey || !store || typeof store.loadProjectSelection!=='function')return draft;
+            var recent;
+            try {recent=store.loadProjectSelection(draft.projectKey);} catch(ignore) {return draft;}
+            if(!recent || recent.profileId!==profile().id || !compatible(recent.issueTypeId,recent.templateId))return draft;
+            return drafts.setSelection(draft,{issueTypeId:recent.issueTypeId,templateId:recent.templateId});
+        }
+        function resetSelection(draft,resetOptions) {
+            if(!resetOptions || resetOptions.preserveSelection!==true)return draft;
+            var current=state.draft;
+            if(current && compatible(current.issueTypeId,current.templateId))
+                draft=drafts.setSelection(draft,{issueTypeId:current.issueTypeId,templateId:current.templateId});
+            return fillMissingReporter(restoreRecentSelection(draft));
         }
         function fillMissingReporter(draft) {
             if (!metadataReady || !currentReporterName || !draft || draft.protectedFields.reporter === true ||
@@ -357,6 +386,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!readOnly) state.draft = drafts.setSelection(state.draft, { metaSignature: state.meta.signature });
             if(!readOnly)syncProjectSelection();
             metadataReady = true;
+            if(!readOnly) {state.draft=restoreRecentSelection(state.draft);syncProjectSelection();}
             if (!readOnly) state.draft = fillMissingReporter(state.draft);
             if(!readOnly) {
                 var summaryField=fields.getField(state.meta,state.draft.issueTypeId,'summary');
@@ -390,7 +420,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             var run = begin('init');
             if (creator) creator.destroy();creator=null;runtimeFiles=new Map();
             store = null; scopes = Object.create(null); explicitGeneration = null; identityWarning = null;
-            budgetCache=null;providerUsage=null;metadataReady=false;currentReporterName=null;
+            budgetCache=null;providerUsage=null;metadataReady=false;currentReporterName=null;currentUserKey=null;rememberedSelections=Object.create(null);
             state = { draft: null, settings: null, meta: null, projects: [], stage: 'idle', startedAt: null,
                 error: null, validation: null, routeCandidates: [], generationFieldIds: [], contextScope: null, assistance: null };
             emit();
@@ -403,12 +433,15 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 currentReporterName = user && typeof user.name === 'string' && user.name.trim() && user.name.trim() === user.name ? user.name : null;
                 var key = user && (typeof user.key === 'string' && user.key.trim() ? user.key : typeof user.name === 'string' && user.name.trim() ? user.name : null);
                 if (!key) { key = null; identityWarning = errorState(null, 'identity'); state.error = identityWarning; }
-                store = options.createStore(key);
+                currentUserKey=key;store = options.createStore(key);
                 creator = creators.create({api:api,store:store,now:options.now,currentReporterName:currentReporterName});
                 var projects = await api.getProjects({ signal: run.abort.signal });
                 if (!current(run)) return getState();
                 state.projects = projects.values.map(function(p) { return { id: String(p.id), key: String(p.key), name: String(p.name || p.key) }; });
-                finish(run);
+                var lastProject=null;
+                if(key && typeof store.loadLastProject==='function')try {lastProject=store.loadLastProject();} catch(ignore) {}
+                if(lastProject && state.projects.some(function(p) {return p.key===lastProject;}))await selectProject(lastProject);
+                else finish(run);
             } catch (error) { fail(run, error, 'network'); }
             return getState();
         }
@@ -418,7 +451,9 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!store || !state.projects.some(function(p) { return p.key === key; })) {
                 state.error = errorState(null, 'input'); return emit();
             }
+            var retained=state.draft && state.draft.projectKey===key?state.draft:null;
             var run = begin('project');
+            if(retained)state.draft=retained;
             save();
             try {
                 var entry = scopes[key];
@@ -436,7 +471,10 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                 providerUsage=null;
                 state.validation = null; state.routeCandidates = []; state.error = entry.error || identityWarning;
                 updateScope();
-                if (await metadata(run, !!locked())) finish(run);
+                if (await metadata(run, !!locked())) {
+                    if(currentUserKey && typeof store.saveLastProject==='function')try {store.saveLastProject(key);} catch(ignore) {}
+                    finish(run);
+                }
             } catch (error) { fail(run, error, 'metadata'); }
             return getState();
         }
@@ -782,28 +820,32 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             remember();var owner=scopes;
             await creator.reconcileUnknown({draft:state.draft,resolution:resolution,issueKey:key},function(d,info) {creationUpdate(owner,d,info);});return getState();
         }
-        async function newDraft() {
+        async function newDraft(resetOptions) {
             if (destroyed || !state.draft || durableGuard() || ['submitting','unknown','preflight'].indexOf(state.draft.creation.status)!==-1 || state.draft.attachments.some(function(a) {return a.status==='uploading';})) return getState();
             var previous=state.draft,entry=scopes[previous.projectKey],next=drafts.createDraft({projectKey:previous.projectKey});
-            next=drafts.setSelection(next,{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+            rememberRecentSelection();
+            next=resetSelection(drafts.setSelection(next,{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature}),resetOptions);
             var result=store.save(previous.projectKey,{draft:next,settings:state.settings},entry.revision,{newDraft:true,draftId:previous.id,attemptId:previous.creation.attemptId});
             if (!result.ok) {state.error=errorState(null,'conflict');return emit();}
-            previous.attachments.forEach(function(a) {runtimeFiles.delete(a.id);});entry.revision=result.revision;state.draft=next;state.validation=null;state.error=identityWarning;remember();updateScope();
+            stop();providerUsage=null;budgetCache=null;
+            previous.attachments.forEach(function(a) {runtimeFiles.delete(a.id);});entry.revision=result.revision;state.draft=next;state.validation=null;state.error=identityWarning;
+            state.routeCandidates=[];state.stage='idle';remember();updateScope();
             if (!state.meta) {
                 var run=begin('newDraft');
                 try {if(await metadata(run)) finish(run);} catch(error) {fail(run,error,'metadata');}
             }
             return emit();
         }
-        async function discardDraft(confirmed) {
+        async function discardDraft(confirmed,resetOptions) {
             if (confirmed!==true || destroyed || !state.draft || active || locked() || state.draft.creation.status==='preflight') return getState();
             if (durableGuard()) return emit();
             var previous=state.draft,entry=scopes[previous.projectKey];
+            rememberRecentSelection();
             try {
                 var result=store.clearDraft(previous.projectKey,entry.revision);
                 if (!result.ok) {state.error=errorState(null,result.reason==='conflict' || result.reason==='creation-guard' ? 'conflict':'storage');return emit();}
-                stop();previous.attachments.forEach(function(file) {runtimeFiles.delete(file.id);});
-                state.draft=drafts.setSelection(drafts.createDraft({projectKey:previous.projectKey}),{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature});
+                stop();providerUsage=null;budgetCache=null;previous.attachments.forEach(function(file) {runtimeFiles.delete(file.id);});
+                state.draft=resetSelection(drafts.setSelection(drafts.createDraft({projectKey:previous.projectKey}),{settingsRevision:state.settings.revision,metaSignature:state.meta && state.meta.signature}),resetOptions);
                 entry.revision=result.revision;entry.error=null;state.validation=null;state.routeCandidates=[];state.stage='idle';state.error=identityWarning;
                 remember();updateScope();return emit();
             } catch(error) {state.error=errorState(null,'storage');return emit();}

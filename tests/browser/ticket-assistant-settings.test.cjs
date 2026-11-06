@@ -5,6 +5,7 @@ const path = require('node:path');
 const {JSDOM} = require('jsdom');
 const jquery = require('jquery');
 const {loadUnit, memoryStorage} = require('../helpers/ticket-assistant-fixture');
+const draftStorageKey = 'ujg-ticket-assistant:v1:http%3A%2F%2Flocalhost:synthetic-settings-test:DO';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function setup(t, backend = memoryStorage(), searchUsers = async()=>({values:[{name:'anna',displayName:'Anna'}]})) {
@@ -36,7 +37,8 @@ async function setup(t, backend = memoryStorage(), searchUsers = async()=>({valu
     const input = (selector,value)=>{const el=q(selector);el.value=value;el.dispatchEvent(new window.Event('input',{bubbles:true}));};
     const click = async selector=>{q(selector).click();await tick();};
     const pick = async (host,text)=>{await click(host+' [data-ta-picker]');const b=[...q(host).querySelectorAll('[data-ta-candidate]')].find(el=>el.textContent.includes(text));assert.ok(b,text);b.click();await tick();};
-    await c.init(); await pick('[data-ta-project]','DO');
+    await c.init();
+    if (c.getState().draft?.projectKey !== 'DO') await pick('[data-ta-project]','DO');
     if (!c.getState().draft.issueTypeId) await pick('[data-ta-type]','10');
     if (!c.getState().draft.templateId) await pick('[data-ta-template]','task');
     input('[data-ta-source]','Original source');input('[data-ta-field="summary"] input','Manual title');
@@ -130,7 +132,7 @@ test('conflict remains visible with local copy; load saved settings preserves lo
     assert.equal(a.q('[data-ta-profile-instructions]').value,'Local settings');
     await a.click('[data-ta-conflict-load]');assert.equal(a.q('[data-ta-profile-instructions]').value,'Remote settings');
     assert.equal(a.c.getState().draft.source,'Original source');
-    const saved=()=>JSON.parse(backend.getItem(backend.key(0)));
+    const saved=()=>JSON.parse(backend.getItem(draftStorageKey));
     assert.equal(saved().draft.source,'Remote draft');
     a.input('[data-ta-profile-instructions]','Resolved settings');await a.click('[data-ta-settings-apply]');
     assert.equal(saved().draft.source,'Original source');assert.equal(saved().settings.profiles[0].instructions,'Resolved settings');
@@ -171,9 +173,9 @@ test('loading saved rules with a different profile clears the old template but n
     const backend=memoryStorage(),a=await setup(t,backend),b=await setup(t,backend);
     await b.click('[data-ta-open-settings]');await b.click('[data-ta-profile-row][data-id="devops"]');await b.click('[data-ta-settings-apply]');
     await a.click('[data-ta-open-settings]');a.input('[data-ta-profile-name]','Local');await a.click('[data-ta-settings-apply]');
-    const before=backend.getItem(backend.key(0));await a.click('[data-ta-conflict-load]');
+    const before=backend.getItem(draftStorageKey);await a.click('[data-ta-conflict-load]');
     assert.equal(a.c.getState().settings.activeProfileId,'devops');assert.equal(a.c.getState().draft.templateId,null);
-    assert.equal(a.c.getState().draft.fields.summary,'Manual title');assert.equal(backend.getItem(backend.key(0)),before);
+    assert.equal(a.c.getState().draft.fields.summary,'Manual title');assert.equal(backend.getItem(draftStorageKey),before);
     assert.equal(a.q('[data-ta-settings-conflict]').hidden,false);
 });
 

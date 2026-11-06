@@ -45,6 +45,29 @@ test('unchanged model patches do not hide unresolved instructions when literal f
 });
 const liveAnswer='Окно развёртывания с 19:00 до 20:00. Приоритет высокий. Дежурный проверит HTTP 200 на /health.';
 const liveProse='Спасибо за уточнение. Я зафиксировал окно развёртывания (19:00–20:00)…';
+test('stable deployment subjects preserve restrictions, service facts and untouched formatting',async t=>{
+    const h=await setup(t);
+    for(const summary of ['Запретить развёртывание в рабочее время','Разрешить запуск только в рабочее время','Обновить правила запуска только в рабочее время','Сервис demo-api доступен в рабочее время','Обновить сервис, работающий в рабочее время','Обновить demo-api в рабочее время и перезапустить worker','Обновить demo-api и в рабочее время','Обновить demo-api, в рабочее время','Обновить  demo-api — DEV.','Обновить demo-api  в DEV.'])
+        assert.equal(h.Tools.stableDeploymentSummary(h.controller,summary),summary,summary);
+    assert.equal(h.Tools.stableDeploymentSummary(h.controller,'Обновить сервис рабочего времени в DEV в рабочее время.'),'Обновить сервис рабочего времени в DEV.');
+    assert.equal(h.Tools.stableDeploymentSummary(h.controller,'Развернуть demo-api в DEV с 19:00 до 20:00 UTC+3.'),'Развернуть demo-api в DEV.');
+});
+for(const mode of ['model-window','model-summary','model-new-schedule','literal'])test('restored automatic deployment subject drops stale schedule and preserves the action: '+mode,async t=>{
+    const original=await setup(t),old='Обновить сервис demo-api в DEV до версии 1.0 в рабочее время.';
+    await original.controller.chatUpdate({fields:{summary:old}},original.controller.chatSnapshot());original.controller.destroy();
+    const h=await setup(t,{backend:original.backend}),c=h.controller;assert.equal(c.getState().draft.fields.summary,old);
+    const {chat}=h.create(async()=>({text:mode==='literal'?liveProse:JSON.stringify({fields:mode==='model-summary'?{summary:old}:mode==='model-new-schedule'?{summary:'Обновить сервис demo-api в DEV до версии 1.0 с 19:00 до 20:00 UTC+3.'}:{},descriptionSections:{window:'С 19:00 до 20:00.'}})}));
+    await chat.send('Окно развёртывания с 19:00 до 20:00.');const d=c.getState().draft;
+    assert.equal(chat.getState().error,null);assert.equal(d.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0.');assert.match(d.fields.description,/19:00 до 20:00/);
+    assert.doesNotMatch(d.fields.summary,/рабочее время|19:00|20:00/);assert.equal(d.checked,null);assert.equal(h.posts(),0);
+});
+for(const mode of ['model','literal'])for(const pending of [false,true])test('deployment schedule correction preserves manual subject and pending proposal: '+mode+' '+pending,async t=>{
+    const h=await setup(t),c=h.controller,manual='Обновить demo-api в рабочее время — моя тема';await c.updateField('summary',manual);
+    if(pending)await c.chatUpdate({fields:{summary:'Моя неподтверждённая тема'}},c.chatSnapshot());
+    const before=c.getState().draft,{chat}=h.create(async()=>({text:mode==='literal'?liveProse:JSON.stringify({descriptionSections:{window:'С 19:00 до 20:00.'}})}));
+    await chat.send('Окно развёртывания с 19:00 до 20:00.');const d=c.getState().draft;
+    assert.equal(chat.getState().error,null);assert.equal(d.fields.summary,manual);assert.deepEqual(d.pendingFields.summary,before.pendingFields.summary);assert.match(d.fields.description,/19:00 до 20:00/);assert.equal(h.posts(),0);
+});
 for(const resolution of ['reconcile','explicit-answer','literal-answer'])test('unresolved prohibition survives a link, local revalidation and reload until '+resolution,async t=>{
     const first=await setup(t),c=first.controller,{chat}=first.create(async()=>({text:liveProse}));
     const mixed='Окно развёртывания с 19:00 до 20:00. Приоритет высокий. Миграции не выполнять.';

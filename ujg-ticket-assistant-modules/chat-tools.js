@@ -109,6 +109,30 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         var requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
         return requirements && requirements.sections || [];
     }
+    function stableDeploymentSummary(controller,value) {
+        var s=controller.getState(),d=s.draft,requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
+        if(typeof value!=='string' || !d || !requirements || requirements.kind!=='deployment' || d.templateId!=='deployment' ||
+            !s.generationFieldIds.includes('summary') || d.protectedFields.summary || Object.hasOwn(d.pendingFields,'summary') ||
+            d.pendingAssistance && d.pendingAssistance.fieldId==='summary' || d.creation.issueKey || !['idle','rejected'].includes(d.creation.status))return value;
+        // Only a simple deployment/update heading with a trailing schedule is
+        // eligible. Restrictions and service-behaviour statements are subjects.
+        if(!/^(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|выкатка|установка|deploy|upgrade|rollout)\s+/i.test(value) ||
+            /[,;!?]|(?:^|\s)(?:только|исключительно|запрет\p{L}*|разреш\p{L}*|огранич\p{L}*|правил\p{L}*|политик\p{L}*|расписани\p{L}*|график\p{L}*|работающ\p{L}*|доступн\p{L}*)(?=$|\s)/iu.test(value))return value;
+        var schedule=/\s+(?:в\s+рабочее\s+время|в\s+рабочие\s+часы|в\s+нерабочее\s+время|в\s+ночное\s+время|(?:(?:с|в)\s+)?(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:до|[–—-])\s*(?:[01]?\d|2[0-3]):[0-5]\d|(?:в|после|до)\s+(?:[01]?\d|2[0-3]):[0-5]\d)(?:\s+(?:МСК|UTC|GMT)(?:[+-]\d{1,2}(?::[0-5]\d)?)?)?([.!]?)$/.exec(value);
+        if(!schedule)return value;
+        var subject=value.slice(0,schedule.index);
+        if(/(?:^|\s)(?:и|или|но|а|затем)$|[,;:—–-]$|^(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|выкатка|установка|deploy|upgrade|rollout)$/i.test(subject))return value;
+        return subject+schedule[1];
+    }
+    function withStableDeploymentSummary(controller,proposal,text) {
+        var supplied=proposal.fields || {},hasSummary=Object.hasOwn(supplied,'summary');
+        if(!hasSummary && !Object.hasOwn(supplied,'description') && !Object.hasOwn(proposal.descriptionSections || {},'window'))return proposal;
+        var value=hasSummary?supplied.summary:controller.getState().draft.fields.summary;
+        var literal=/(?:^|[;\n])\s*(?:тема|заголовок|summary)\s*:\s*([^;\n]+)/i.exec(text || '');
+        if(literal && literal[1].trim()===value)return proposal;
+        var summary=stableDeploymentSummary(controller,value);
+        return summary===value?proposal:Object.assign({},proposal,{fields:Object.assign({},supplied,{summary:summary})});
+    }
     // Read explicit section headings and catalog labels, never infer missing facts.
     // Unsupported or protected clauses remain unresolved alongside any safe edits.
     function literalAnswerPatch(controller,text) {
@@ -269,6 +293,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                             return {ok:false,reason:'Сохрани оговорку пользователя в подходящем descriptionSections, включая полный текст раздела extra при его изменении: '+added};
                     } else args=withNotes;
                 }
+                args=withStableDeploymentSummary(controller,args,options.getTurnText ? options.getTurnText() : '');
                 var result=await mutate(function() {
                     var source=options.getSourceText ? options.getSourceText() : undefined;
                     return managed || explicitReview ? controller.chatUpdate(args,snapshot(),source,{appManagedQuestions:managed,reconcileUnresolvedFacts:explicitReview}) : controller.chatUpdate(args,snapshot(),source);
@@ -292,5 +317,5 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
             })
         ];
     }
-    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,literalAnswerPatch:literalAnswerPatch,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
+    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,stableDeploymentSummary:stableDeploymentSummary,withStableDeploymentSummary:withStableDeploymentSummary,literalAnswerPatch:literalAnswerPatch,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
 });

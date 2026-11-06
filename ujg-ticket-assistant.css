@@ -26,6 +26,7 @@
 .ujg-ticket-assistant .ta-header .ta-field-body { margin-top: 0; }
 .ujg-ticket-assistant .ta-header .ta-picker { min-height: 32px; padding: 4px 8px; }
 .ujg-ticket-assistant .ta-header-tools { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
+.ujg-ticket-assistant .ta-header-reset { min-height: 32px; padding: 4px 8px; gap: 5px; white-space: nowrap; }
 .ujg-ticket-assistant .ta-icon-button { width: 32px; height: 32px; min-height: 32px; padding: 7px; flex-shrink: 0; }
 .ujg-ticket-assistant .ta-icon-button > span { display: none; }
 .ujg-ticket-assistant .ta-workspace { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; }
