@@ -220,3 +220,19 @@ test('multiline answers containing literal question delimiters remain idempotent
     assert.equal(d.sourceRevision, followed.sourceRevision);
     assert.equal(d.draftRevision, followed.draftRevision);
 });
+
+test('restoration repair replaces only a proven generated placeholder with the shared narrative action',()=>{
+    const api=draft(),source='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис.';
+    let d=api.createDraft({projectKey:'DEVOPS'});d=api.setSource(d,source);d.fields={summary:'Учебный черновик.',description:source};
+    const before=plain(d),repaired=api.repairAutomaticSummary(d);
+    assert.equal(repaired.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время.');
+    assert.equal(repaired.source,source);assert.equal(repaired.fields.description,source);assert.equal(repaired.protectedFields.summary,undefined);
+    assert.equal(repaired.checked,null);assert.equal(repaired.draftRevision,d.draftRevision+1);assert.deepEqual(plain(d),before);
+    assert.equal(api.repairAutomaticSummary(repaired),repaired);
+    for(const change of [
+        x=>{x.protectedFields.summary=true;},x=>{x.pendingFields.summary='Ручное предложение';},
+        x=>{x.fields.summary='Реальная тема';},x=>{x.source='Другой источник';},x=>{x.fields.description='Другое описание';},
+        x=>{x.source='Учебный черновик. Удалить другой сервис.';},x=>{x.creation.issueKey='DEVOPS-1';},
+        ...['preflight','submitting','unknown','created'].map(status=>x=>{x.creation.status=status;})
+    ]) {const candidate=plain(d);change(candidate);assert.equal(api.repairAutomaticSummary(candidate),candidate);}
+});

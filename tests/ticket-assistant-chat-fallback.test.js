@@ -114,13 +114,13 @@ for(const restored of [false,true])test('greeted narrative recovers from user te
     assert.equal(r.calls(),2);
     assert.equal(h.store.loadConversation('DO',d.id).value.transcript.filter(m=>m.role==='user').length,1);
 });
-test('exact retries collapse uninterrupted legacy user entries and preserve a later identical answer',async t=>{
+test('exact malformed retries collapse legacy user entries and do not duplicate the recovered narrative',async t=>{
     const h=await setup(t),r=await restoreMalformed(t,h,[greeted,greeted,greeted]);
     await r.chat.send(greeted);
     assert.equal(r.chat.getState().transcript.filter(m=>m.role==='user').length,1);
     assert.equal(h.controller.getState().draft.source,greeted);
     await r.chat.send(greeted);
-    assert.equal(r.chat.getState().transcript.filter(m=>m.role==='user').length,2);
+    assert.equal(r.chat.getState().transcript.filter(m=>m.role==='user').length,1);
     assert.equal(h.controller.getState().draft.source,greeted);
 });
 test('the same short answer to successive assistant questions stays visible',async t=>{
@@ -329,4 +329,49 @@ test('successful fallback notice describes recovery without retry instructions: 
     const h=await setup(t,mode);await h.chat.send(narrative);
     const notices=h.chat.getState().notices.join(' ');
     assert.match(notices,/провер|Провер/);assert.doesNotMatch(notices,/повтор|обновите|продолжите.*редактор|требуют проверки|проверьте доступность/i);
+});
+
+const liveTraining='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
+const liveSummary='Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время.';
+test('malformed fallback uses the live task action and exact retries retain one user turn and one recovery notice',async t=>{
+    const h=await setup(t),r=await restoreMalformed(t,h,[]);
+    await r.chat.send(liveTraining);assert.equal(h.controller.getState().draft.fields.summary,liveSummary);
+    await r.chat.send(liveTraining);await r.chat.send(liveTraining);
+    const s=r.chat.getState(),d=h.controller.getState().draft;
+    assert.equal(s.transcript.filter(m=>m.role==='user').length,1);assert.equal(d.source,liveTraining);assert.equal(d.fields.summary,liveSummary);
+    assert.equal(s.notices.filter(n=>/формата|получить ответ/.test(n)).length,1);
+    assert.doesNotMatch(s.transcript.filter(m=>m.role==='assistant').at(-1).text,/Получен ответ неверного формата/);
+    const saved=h.store.loadConversation('DO',d.id).value;
+    assert.equal(saved.transcript.filter(m=>m.role==='user').length,1);assert.equal(saved.messages.filter(m=>m.role==='user').length,1);
+});
+for(const manual of [false,true])test('legacy placeholder summary is repaired only when generated; manual real edits remain: '+manual,async t=>{
+    const h=await setup(t),c=h.controller;
+    await c.chatUpdate({fields:{summary:'Учебный черновик.',description:liveTraining},questions:[]},c.chatSnapshot(),liveTraining);
+    if(manual)await c.updateField('summary','Ручная тема: сохранить demo-api');
+    const r=await restoreMalformed(t,h,[liveTraining]);await r.chat.send(liveTraining);
+    assert.equal(c.getState().draft.fields.summary,manual?'Ручная тема: сохранить demo-api':liveSummary);
+    assert.equal(c.getState().draft.pendingFields.summary,undefined);
+});
+
+for(const modelQuestion of [false,true])test('restored raw DEVOPS retry revalidates local questions but retains genuine model blockers: '+modelQuestion,async t=>{
+    const h=await setup(t),c=h.controller,read=h.api.getCreateMeta;
+    h.api.getProjects=async()=>({values:[{key:'DEVOPS',id:'DO-project',name:'DEVOPS'}]});
+    h.api.getCreateMeta=async key=>{const raw=await read(key);raw.projects[0].issuetypes.forEach(type=>{type.fields.priority={name:'Приоритет',schema:{type:'priority',system:'priority'},hasDefaultValue:true,defaultValue:{id:'medium'},allowedValues:[{id:'medium',name:'Средний'}]};});return raw;};
+    h.api.checkDevopsIssue=async()=>({fieldErrors:{},warnings:[],link:null});
+    await c.init();await c.selectProject('DEVOPS');await c.selectIssueType('12');
+    const Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields}),Chat=loadUnit('chat',{_ujgTA_chatTools:Tools,_ujgTA_draft:h.drafts},{AbortController});
+    const makeChat=()=>Chat.create({controller:c,store:h.store,runtime:{createSession(){return {prompt:async()=>{throw Error('Invalid Pico text envelope');},getMessages:()=>[],abort(){},dispose(){}};}}});
+    let chat=makeChat();await chat.send(liveTraining);assert.equal(chat.getState().error,null);assert.equal(c.getState().draft.fields.description,liveTraining);
+    const draftId=c.getState().draft.id;chat.destroy();
+    // Reproduce the old generated summary alongside local validation.questions.
+    await c.chatUpdate({fields:{summary:'Учебный черновик.'},questions:modelQuestion?[{id:'model:question',text:'Нужно ли затронуть второй сервис?',required:true}]:[]},c.chatSnapshot());
+    await c.chatValidate(c.chatSnapshot());assert.ok(c.getState().validation.questions.some(q=>q.id==='devops:links'));
+    await c.init();await c.selectProject('DEVOPS');chat=makeChat();t.after(()=>chat.destroy());
+    assert.equal(c.getState().draft.id,draftId);
+    await chat.send(liveTraining);const state=chat.getState(),d=c.getState().draft;
+    assert.equal(d.fields.summary,liveSummary);assert.equal(d.checked,null);assert.equal(d.source,liveTraining);
+    assert.equal(state.transcript.filter(m=>m.role==='user').length,1);
+    assert.equal(state.notices.filter(n=>/формата/.test(n)).length,1);
+    if(modelQuestion){assert.equal(state.error.code,'response');assert.ok(d.questions.some(q=>q.id==='model:question'));}
+    else {assert.equal(state.error,null);assert.equal(state.status,'idle');assert.deepEqual(Array.from(c.getState().validation.questions,q=>q.id),['devops:links']);assert.match(state.transcript.at(-1).text,/репозитор|ссылк/i);}
 });

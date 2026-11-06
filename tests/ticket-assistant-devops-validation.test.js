@@ -292,3 +292,44 @@ test('reviewer ambiguous targets source versions and placeholder tags stay incom
         assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),[missing],sentence);
     }
 });
+
+test('original raw production fallback paragraph leaves exactly the missing repository link',()=>{
+    const description='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
+    const supplied={summary:'Обновление сервиса demo-api в DEV до версии 1.0',description};
+    const result=validation.validateFields(meta(),'12',supplied);
+    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:links']);
+    assert.equal(supplied.description,description);
+});
+
+test('raw prose does not infer actual actions or verifier from negated or merely planned statements',()=>{
+    for(const sentence of ['Поменять образ и перезапустить сервис. Кто-то проверит HTTP 200 на /health.', 'Не поменять образ. Постановщик не проверит HTTP 200 на /health.']) {
+        const result=check('12','Обновить сервис API в DEV до версии 1.0 в рабочее время. '+sentence);
+        assert.ok(result.questions.some(q=>q.id==='devops:verification'),sentence);
+        if(sentence.startsWith('Не '))assert.ok(result.questions.some(q=>q.id==='devops:order'),sentence);
+    }
+});
+
+test('raw deployment operation must not be negated or explicitly unresolved after its verb',()=>{
+    for(const operation of [
+        'Поменять образ не нужно, порядок действий пока не согласован',
+        'Поменять образ пока не согласовано',
+        'Поменять образ. Порядок действий пока не определён'
+    ]) {
+        const description='Обновить API в DEV до версии 1.0 в рабочее время. '+operation+'. Постановщик проверит HTTP 200 на /health.';
+        const ids=Array.from(check('12',description).questions,q=>q.id).sort();
+        assert.deepEqual(ids,['devops:links','devops:order'],operation);
+    }
+});
+
+test('raw attributed HTTP check does not credit a negated or unspecified check outcome',()=>{
+    for(const verification of [
+        'Постановщик проверит HTTP 200 на /health не нужно, проверка отменена',
+        'Постановщик проверит HTTP 200 на /health, результат пока неизвестен',
+        'Постановщик проверит HTTP 200 на /health, ожидаемый код не определён',
+        'Постановщик проверит HTTP 200 на /health. Проверка пока не согласована'
+    ]) {
+        const description='Обновить API в DEV до версии 1.0 в рабочее время. Поменять образ и перезапустить API. '+verification+'.';
+        const ids=Array.from(check('12',description).questions,q=>q.id).sort();
+        assert.deepEqual(ids,['devops:links','devops:verification'],verification);
+    }
+});

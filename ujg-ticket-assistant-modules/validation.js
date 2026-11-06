@@ -100,6 +100,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return {id:s.id,label:s.label,question:s.question};
         })};
     }
+    function unresolvedInstruction(value) {
+        return /не\s+(?:нужн|надо|требу|согласован|определ[её]н|извест|выполн|провед|провер|ожида|подтвержд|будет|будут)|неизвест|отмен[её]н|уточн(?:им|ить)/i.test(value || '');
+    }
     function readSections(description) {
         var result=Object.create(null),current=[],intro=[],headed=false;
         // Models use both **Label:** and **Label**:, including several headings
@@ -155,6 +158,19 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(!meaningful(result.window)) {
             var workingHours=/(?:в\s+)?рабоч(?:ие|их|ее|ем)\s+(?:часы|часов|время|времени)/i.exec(facts);
             if(workingHours && !/(?:не|вне)\s*$/i.test(facts.slice(Math.max(0,workingHours.index-5),workingHours.index)))result.window=workingHours[0];
+        }
+        // A provider fallback may preserve the user's original paragraph. Credit
+        // explicit operational steps and an attributed observable check verbatim.
+        var paragraph=intro.join('\n');
+        if(!meaningful(result.order)) {
+            var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*)[^.!?\n]*|перезапустить\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
+            var unresolvedOrder=/(?:порядок(?:\s+действий)?)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н)|неизвест)/i.test(paragraph);
+            if(operation && !unresolvedOrder && !unresolvedInstruction(operation[1]))result.order=operation[1];
+        }
+        if(!meaningful(result.verification)) {
+            var attributedCheck=/(?:^|[.!?\n])\s*((?:постановщик|заказчик|QA|DevOps|команда\s+[\wА-Яа-яЁё-]+)\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/i.exec(paragraph);
+            var unresolvedCheck=/(?:проверка|результат(?:\s+проверки)?|ожидаемый\s+код|код\s+ответа)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н|извест)|неизвест|отмен[её]н)/i.test(paragraph);
+            if(attributedCheck && !unresolvedCheck && !unresolvedInstruction(attributedCheck[1]) && /\bHTTP\s+[1-5]\d{2}\b/i.test(attributedCheck[1]))result.verification=attributedCheck[1];
         }
         if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;

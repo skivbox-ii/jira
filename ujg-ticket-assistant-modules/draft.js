@@ -143,6 +143,31 @@ define('_ujgTA_draft', [], function() {
         next.checked = null;
         return next;
     }
+    function placeholderSummary(value) {
+        return /^(?:(?:учебный|тестовый) (?:черновик|пример)|черновик)[.!]?$/i.test(String(value || '').trim());
+    }
+    function narrativeSummary(description) {
+        var text=description.trim().replace(/^(?:(?:добрый (?:день|вечер)|доброе утро|здравствуйте|привет)(?=$|[!.,\s])[!.,\s]*)+/i,'').trim();
+        var sentences=text.split(/\r?\n/).flatMap(function(line){return line.match(/.+?(?:[.!?](?=\s|$)|$)/g) || [];});
+        var first=sentences.find(function(sentence){return sentence.trim() && !placeholderSummary(sentence);});
+        return first ? first.trim().slice(0,255) : '';
+    }
+    function repairAutomaticSummary(d, maxLength) {
+        maxLength=maxLength===undefined ? 255 : maxLength;
+        if(!d || !d.fields || !placeholderSummary(d.fields.summary) || d.protectedFields.summary ||
+            Object.prototype.hasOwnProperty.call(d.pendingFields,'summary') || d.pendingAssistance ||
+            d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1 ||
+            !Number.isSafeInteger(maxLength) || maxLength<1 || typeof d.fields.description!=='string')return d;
+        function opening(text) {
+            var first=text.trim().split(/\r?\n/)[0];
+            return ((first.match(/^.+?[.!?](?=\s|$)/) || [first])[0]).trim().replace(/[.!?]$/,'').toLocaleLowerCase('ru');
+        }
+        var marker=String(d.fields.summary).trim().replace(/[.!?]$/,'').toLocaleLowerCase('ru');
+        if(opening(d.fields.description)!==marker || opening(d.source)!==marker)return d;
+        var summary=narrativeSummary(d.fields.description);
+        if(!summary || summary!==narrativeSummary(d.source))return d;
+        var next=changed(d);next.fields.summary=summary.slice(0,Math.min(maxLength,255));return next;
+    }
     function setSource(d, text) {
         if (typeof text !== 'string') throw new Error('Expected source text');
         if (text === d.source) return d;
@@ -245,7 +270,7 @@ define('_ujgTA_draft', [], function() {
         next.checked = valid ? checked(d) : null;
         return next;
     }
-    return { recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
+    return {placeholderSummary:placeholderSummary,narrativeSummary:narrativeSummary,repairAutomaticSummary:repairAutomaticSummary,recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
         appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
         invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };

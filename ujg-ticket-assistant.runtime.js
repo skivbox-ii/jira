@@ -994,6 +994,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             return {id:s.id,label:s.label,question:s.question};
         })};
     }
+    function unresolvedInstruction(value) {
+        return /не\s+(?:нужн|надо|требу|согласован|определ[её]н|извест|выполн|провед|провер|ожида|подтвержд|будет|будут)|неизвест|отмен[её]н|уточн(?:им|ить)/i.test(value || '');
+    }
     function readSections(description) {
         var result=Object.create(null),current=[],intro=[],headed=false;
         // Models use both **Label:** and **Label**:, including several headings
@@ -1049,6 +1052,19 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(!meaningful(result.window)) {
             var workingHours=/(?:в\s+)?рабоч(?:ие|их|ее|ем)\s+(?:часы|часов|время|времени)/i.exec(facts);
             if(workingHours && !/(?:не|вне)\s*$/i.test(facts.slice(Math.max(0,workingHours.index-5),workingHours.index)))result.window=workingHours[0];
+        }
+        // A provider fallback may preserve the user's original paragraph. Credit
+        // explicit operational steps and an attributed observable check verbatim.
+        var paragraph=intro.join('\n');
+        if(!meaningful(result.order)) {
+            var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*)[^.!?\n]*|перезапустить\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
+            var unresolvedOrder=/(?:порядок(?:\s+действий)?)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н)|неизвест)/i.test(paragraph);
+            if(operation && !unresolvedOrder && !unresolvedInstruction(operation[1]))result.order=operation[1];
+        }
+        if(!meaningful(result.verification)) {
+            var attributedCheck=/(?:^|[.!?\n])\s*((?:постановщик|заказчик|QA|DevOps|команда\s+[\wА-Яа-яЁё-]+)\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/i.exec(paragraph);
+            var unresolvedCheck=/(?:проверка|результат(?:\s+проверки)?|ожидаемый\s+код|код\s+ответа)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н|извест)|неизвест|отмен[её]н)/i.test(paragraph);
+            if(attributedCheck && !unresolvedCheck && !unresolvedInstruction(attributedCheck[1]) && /\bHTTP\s+[1-5]\d{2}\b/i.test(attributedCheck[1]))result.verification=attributedCheck[1];
         }
         if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
@@ -1325,6 +1341,31 @@ define('_ujgTA_draft', [], function() {
         next.checked = null;
         return next;
     }
+    function placeholderSummary(value) {
+        return /^(?:(?:учебный|тестовый) (?:черновик|пример)|черновик)[.!]?$/i.test(String(value || '').trim());
+    }
+    function narrativeSummary(description) {
+        var text=description.trim().replace(/^(?:(?:добрый (?:день|вечер)|доброе утро|здравствуйте|привет)(?=$|[!.,\s])[!.,\s]*)+/i,'').trim();
+        var sentences=text.split(/\r?\n/).flatMap(function(line){return line.match(/.+?(?:[.!?](?=\s|$)|$)/g) || [];});
+        var first=sentences.find(function(sentence){return sentence.trim() && !placeholderSummary(sentence);});
+        return first ? first.trim().slice(0,255) : '';
+    }
+    function repairAutomaticSummary(d, maxLength) {
+        maxLength=maxLength===undefined ? 255 : maxLength;
+        if(!d || !d.fields || !placeholderSummary(d.fields.summary) || d.protectedFields.summary ||
+            Object.prototype.hasOwnProperty.call(d.pendingFields,'summary') || d.pendingAssistance ||
+            d.creation.issueKey || ['idle','rejected'].indexOf(d.creation.status)===-1 ||
+            !Number.isSafeInteger(maxLength) || maxLength<1 || typeof d.fields.description!=='string')return d;
+        function opening(text) {
+            var first=text.trim().split(/\r?\n/)[0];
+            return ((first.match(/^.+?[.!?](?=\s|$)/) || [first])[0]).trim().replace(/[.!?]$/,'').toLocaleLowerCase('ru');
+        }
+        var marker=String(d.fields.summary).trim().replace(/[.!?]$/,'').toLocaleLowerCase('ru');
+        if(opening(d.fields.description)!==marker || opening(d.source)!==marker)return d;
+        var summary=narrativeSummary(d.fields.description);
+        if(!summary || summary!==narrativeSummary(d.source))return d;
+        var next=changed(d);next.fields.summary=summary.slice(0,Math.min(maxLength,255));return next;
+    }
     function setSource(d, text) {
         if (typeof text !== 'string') throw new Error('Expected source text');
         if (text === d.source) return d;
@@ -1427,7 +1468,7 @@ define('_ujgTA_draft', [], function() {
         next.checked = valid ? checked(d) : null;
         return next;
     }
-    return { recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
+    return {placeholderSummary:placeholderSummary,narrativeSummary:narrativeSummary,repairAutomaticSummary:repairAutomaticSummary,recordAutomaticChange:recordAutomaticChange,createDraft: createDraft, setSource: setSource, setSelection: setSelection, editField: editField,
         appendAnswers: appendAnswers, applyProposal: applyProposal, applyFieldProposal: applyFieldProposal,
         invalidateAssistance: invalidateAssistance, rejectField: rejectField, acceptField: acceptField, markChecked: markChecked,
         snapshot: snapshot, isCurrent: isCurrent, serialize: serialize, restore: restore };
@@ -2723,6 +2764,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if(!readOnly)syncProjectSelection();
             metadataReady = true;
             if (!readOnly) state.draft = fillMissingReporter(state.draft);
+            if(!readOnly) {
+                var summaryField=fields.getField(state.meta,state.draft.issueTypeId,'summary');
+                if(summaryField && summaryField.supported && summaryField.writable && summaryField.kind==='string')
+                    state.draft=drafts.repairAutomaticSummary(state.draft,summaryField.maxLength || 255);
+            }
             if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
                 var confirmed = await fields.confirmRelations(state.meta,state.draft.issueTypeId,state.draft.fields,api,request);
                 if (!current(run)) return false;
@@ -3902,11 +3948,8 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             return s.generationFieldIds.includes(id) && !d.protectedFields[id] &&
                 !Object.prototype.hasOwnProperty.call(d.pendingFields,id) && !String(d.fields[id] || '').trim();
         }
-        function narrativeSummary(description) {
-            var text=description.trim().replace(/^(?:(?:добрый (?:день|вечер)|доброе утро|здравствуйте|привет)(?=$|[!.,\s])[!.,\s]*)+/i,'').trim();
-            var first=text.split(/\r?\n/).find(function(line){return line.trim();});
-            return first ? (first.trim().match(/^.*?[.!?](?=\s|$)/) || [first.trim()])[0].slice(0,255) : '';
-        }
+        function placeholderSummary(value) {return drafts.placeholderSummary(value);}
+        function narrativeSummary(description) {return drafts.narrativeSummary(description);}
         function savedNarrative() {
             var users=state.transcript.filter(function(m){return m.role==='user';});
             if(!users.length)return null;
@@ -3915,6 +3958,12 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 !text.trim().endsWith('?') && narrativeSummary(text) ? text : null;
         }
         function collapseExactRetry(text) {
+            var last=state.transcript.findLastIndex(function(m){return m.role==='user';}),d=controller.getState().draft;
+            var recovered=state.notices.some(obsoleteRecoveryNotice) && d.source===text && d.fields.description===text;
+            var failed=state.error && ['response','response-repair','draft-update'].includes(state.error.code);
+            if(last>=0 && last<state.transcript.length-1 && state.transcript[last].text===text && (recovered || failed) &&
+                state.transcript.slice(last+1).every(function(m){return m.role==='assistant' && !m.kind &&
+                    /^(?:Создание пока недоступно\.|Тема и описание взяты из вашего текста\.|Описание взято из вашего текста\.|Поля Jira проверены локально\.|Описание сохранено\. Не удалось проверить поля Jira\.|Получен ответ неверного формата\.|Сервис недоступен\.|Pico недоступен\.|Pico вернул ответ неверного формата\.)/.test(m.text);}))return true;
             // Only uninterrupted identical user entries are retries. An assistant
             // question may need the same answer as its preceding question.
             var matches=[];
@@ -3928,13 +3977,46 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             state.transcript=state.transcript.filter(function(m){return m===keep || !matches.includes(m);});
             return true;
         }
-        async function deriveSummary(run) {
+        function retryMessages(text,exactRetry) {
+            if(!exactRetry)return messages;
+            var index=messages.findLastIndex(function(m){return m.role==='user';});
+            if(index<0)return messages;
+            var content=messages[index].content,previous=typeof content==='string' ? content : Array.isArray(content) && content.every(function(p){return p.type==='text';}) ? content.map(function(p){return p.text;}).join('\n') : null;
+            if(previous!==text)return messages;
+            var failed=messages.slice(index+1);
+            return failed.length && failed.every(function(m){return m.role==='assistant' && m.stopReason==='error' &&
+                Array.isArray(m.content) && m.content.every(function(p){return p.type==='text';});}) ? messages.slice(0,index) : messages;
+        }
+        function recoveryNotice(notice) {
+            function key(value){return value.replace(/(?:Тема и описание взяты из вашего текста\.|Описание взято из вашего текста\.) /,'');}
+            if(!state.notices.some(function(n){return key(n)===key(notice);}))state.notices.push(notice);
+        }
+        function recoveryReply(run,text) {
+            var last=state.transcript.at(-1);
+            if(!run.exactRetry || !last || last.role!=='assistant' || last.text!==text)add('assistant',text);
+        }
+        async function deriveSummary(run,placeholderOnly) {
             if(!current(run))return;
             var s=controller.getState(), description=s.draft.fields.description;
-            if(!emptyChatField(s,'summary') || typeof description!=='string' || !description.trim())return;
+            var repair=placeholderSummary(s.draft.fields.summary) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary');
+            if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
             var summary=narrativeSummary(description);
-            if(!summary)return;
+            if(!summary || summary===s.draft.fields.summary)return;
             await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot);});
+        }
+        function recoveryQuestions(draft,validation,priorEntry) {
+            // Only questions freshly produced by local DEVOPS validation may be
+            // recomputed from an unchanged raw narrative. Model questions keep
+            // their authority and still block deterministic recovery.
+            var local=draft.projectKey==='DEVOPS' && validation && Array.isArray(validation.questions) ? validation.questions.filter(function(q){return q.id && q.id.startsWith('devops:');}) : [];
+            var questions=(draft.questions || []).filter(function(q){return !local.some(function(l){return l.id===q.id && l.text===q.text;});}).map(function(q){return q.text;});
+            if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template') {
+                priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}).forEach(function(line){
+                    var key=questionKey(line),localEcho=local.some(function(q){return key===questionKey(q.text) || key===questionKey('Создание пока недоступно. '+q.text);});
+                    if(!localEcho)questions.push(line);
+                });
+            }
+            return questions;
         }
         async function recoverUnavailable(run,text,reassessment,reconcile) {
             if(!current(run) || reassessment && !reconcile || run.templateAction ||
@@ -3959,9 +4041,10 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 collapseExactRetry(text);
             }
             if(inquiry(text) || connectionCommand(text) || !narrativeSummary(text))return;
+            await deriveSummary(run,true);if(!current(run))return;s=controller.getState();d=s.draft;
             // A protocol failure grants no authority to use model fields or to
             // resolve semantic questions, overrides, or a pending rules review.
-            if((malformed || reconcile) && (run.reviewPending || d.taskExceptions.length || run.priorQuestions.length ||
+            if((malformed || reconcile) && (run.reviewPending || d.taskExceptions.length || run.recoveryQuestions.length ||
                 run.sourceAppended && !run.verbatimDescription ||
                 run.initialDescription && run.initialDescription!==text && !run.verbatimDescription))return;
             if(run.sourceAppended && (!run.descriptionReviewed ||
@@ -3975,7 +4058,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // Later answers must not authorize creation while their facts are missing.
             var description=d.fields.description;
             if(!run.sourceAppended) {
-                if(savedNarrative()!==text || run.priorQuestions.length || text.trim().endsWith('?'))return;
+                if(savedNarrative()!==text || run.recoveryQuestions.length || text.trim().endsWith('?'))return;
                 if(d.source===text && description===text) {
                     // An exact retry of an already recovered narrative adds no source.
                 } else {
@@ -4008,17 +4091,17 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 var http=/\bHTTP ([45]\d{2})\b/.exec(state.error.message);
                 var diagnostic=(malformed?providerNote:http?'Сервис модели вернул HTTP '+http[1]+'.':
                     state.error.code==='runtime'?'Сервис недоступен.':'Не удалось получить ответ.')+' Карточка прошла локальную проверку Jira.';
-                if(!state.notices.includes(diagnostic))state.notices.push(diagnostic);
+                recoveryNotice(diagnostic);
                 state.error=null;state.status='idle';
-                add('assistant',providerNote+' '+provenance+'Поля Jira проверены локально. Проверка пройдена. Откройте карточку, чтобы сверить её перед созданием.');
+                recoveryReply(run,provenance+'Поля Jira проверены локально. Проверка пройдена. Откройте карточку, чтобы сверить её перед созданием.');
             } else {
                 var why=Object.values(checked.validation.fieldErrors || {}).flat().concat(d.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
                 if(checked.validation.fieldErrors.timetracking)why.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
                 var notice=providerNote+' '+provenance+'Поля Jira проверены локально.';
                 if(/\bHTTP 429\b/.test(state.error.message))notice='HTTP 429. '+notice;
-                if(!state.notices.includes(notice))state.notices.push(notice);
+                recoveryNotice(notice);
                 state.error=null;state.status='idle';
-                add('assistant','Создание пока недоступно. '+(blockerText(why) || 'Откройте редактор и проверьте карточку.')+
+                recoveryReply(run,'Создание пока недоступно. '+(blockerText(why) || 'Откройте редактор и проверьте карточку.')+
                     ((checked.validation.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira».':''));
             }
         }
@@ -4045,8 +4128,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var priorEntry=state.transcript[state.transcript.length-1];
             if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
                 priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
-            if(!reassessment && !retryRateLimit && !collapseExactRetry(text)) add('user',text);state.error=null;state.status='running';
-            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,
+            var exactRetry=!reassessment && !retryRateLimit && collapseExactRetry(text);
+            if(!reassessment && !retryRateLimit && !exactRetry)add('user',text);state.error=null;state.status='running';
+            var run={session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',
                 verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
@@ -4087,7 +4171,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                     run.sourceAppended=true;run.descriptionReviewed=true;
                 }
                 if(!runtime || typeof runtime.createSession!=='function') throw new Error('Runtime unavailable');
-                run.session=runtime.createSession({system:instructions,messages:copy(messages),tools:tools,requestText:options.requestText,allowPlainTextFinal:true,repairMisplacedQuestions:true,
+                run.session=runtime.createSession({system:instructions,messages:copy(retryMessages(text,exactRetry)),tools:tools,requestText:options.requestText,allowPlainTextFinal:true,repairMisplacedQuestions:true,
                     draftReviewPrompt:reconcile ? draftReviewPrompt : null,
                     draftExtractionPrompt:!reassessment && !inquiry(text) && !text.trim().endsWith('?') ? draftReviewPrompt : null,currentTurnWithEvidence:!!(reviewEvidence || earlierEvidence),afterStep:function(step){return draftStep(run,step,reconcile,text);},
                     tokenBudget:controller.getState().settings.tokenBudget,onEvent:function(e) {event(run,e);},getContext:function(request) {if(!current(run)) throw new Error('stale');var extractionEvidence=request && request.purpose==='draft-extraction' && !reassessment && !run.templateAction && !inquiry(text) && !text.trim().endsWith('?') ? extractionTranscript() : null;

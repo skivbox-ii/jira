@@ -311,6 +311,11 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if(!readOnly)syncProjectSelection();
             metadataReady = true;
             if (!readOnly) state.draft = fillMissingReporter(state.draft);
+            if(!readOnly) {
+                var summaryField=fields.getField(state.meta,state.draft.issueTypeId,'summary');
+                if(summaryField && summaryField.supported && summaryField.writable && summaryField.kind==='string')
+                    state.draft=drafts.repairAutomaticSummary(state.draft,summaryField.maxLength || 255);
+            }
             if (fields.hasRelationValues(state.meta,state.draft.issueTypeId,state.draft.fields)) {
                 var confirmed = await fields.confirmRelations(state.meta,state.draft.issueTypeId,state.draft.fields,api,request);
                 if (!current(run)) return false;

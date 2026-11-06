@@ -96,3 +96,16 @@ test('a removed saved Jira type clears the stale selection while preserving draf
     await c.selectProject('DEVOPS');const s=c.getState();assert.equal(s.draft.issueTypeId,null);assert.equal(s.draft.templateId,null);
     assert.equal(s.draft.fields.summary,'Сохранённое название');assert.match(s.typeTemplateSelection.reason,/Выберите доступный тип/);c.destroy();
 });
+
+test('reload repairs the persisted live auto-placeholder without chat or any model call',async()=>{
+    const h=await setup(),c=h.controller;await c.selectIssueType('12');
+    const source='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
+    await c.chatUpdate({fields:{summary:'Учебный черновик.',description:source},questions:[]},c.chatSnapshot(),source);
+    const id=c.getState().draft.id;
+    await c.init();await c.selectProject('DEVOPS');const state=c.getState();
+    assert.equal(state.draft.id,id);assert.equal(state.draft.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время.');
+    assert.equal(state.draft.source,source);assert.equal(state.draft.fields.description,source);assert.equal(state.draft.protectedFields.summary,undefined);
+    assert.equal(h.store.load('DEVOPS').draft.fields.summary,state.draft.fields.summary);
+    assert.equal(state.draft.checked,null);assert.ok(state.validation.questions.some(q=>q.id==='devops:links'));
+    await c.init();await c.selectProject('DEVOPS');assert.equal(c.getState().draft.fields.summary,state.draft.fields.summary);c.destroy();
+});
