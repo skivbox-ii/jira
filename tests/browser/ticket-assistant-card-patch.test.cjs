@@ -31,9 +31,10 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
         preview.instance = new Widget({getGadgetContentEl: () => window.jQuery('#ticket-assistant')}, {
             storage: null, api, requestText: async () => {
                 preview.patchRequests++;
-                if (preview.patchRequests > 1) throw Error('Unexpected second model call');
+                if (preview.patchRequests > 3) throw Error('Unexpected additional model call');
+                if (preview.patchRequests > 1) return {text: 'Спасибо за уточнение. Я зафиксировал окно развёртывания и высокий приоритет.'};
                 return {text: JSON.stringify({
-                    fields: {priority: {id: '2'}, duedate: '2026-11-20'},
+                    fields: {priority: {id: '3'}, duedate: '2026-11-20'},
                     descriptionSections: {location: 'DEV, demo-api', release: 'demo-api v1.0', order: 'Перезапустить сервис',
                         window: 'После 18:00', verification: 'Дежурный проверит HTTP 200 на /health'}
                 })};
@@ -50,7 +51,7 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     await subject.press('Tab');
     const input = page.locator('[data-ta-chat-input]');
     const send = async text => {await input.fill(text); await input.press('Enter');};
-    await send('Развернуть demo-api v1.0 в DEV, после 18:00 перезапустить сервис. Дежурный проверит HTTP 200 на /health. Приоритет высокий. Срок 20.11.2026.');
+    await send('Развернуть demo-api v1.0 в DEV, после 18:00 перезапустить сервис. Дежурный проверит HTTP 200 на /health. Приоритет обычный. Срок 20.11.2026.');
     await page.locator('[data-ta-chat-log] [data-role=assistant]').first().waitFor();
     const description = editor.locator('[data-ta-field=description] textarea:visible');
     assert.match(await description.inputValue(), /Окно: После 18:00/);
@@ -59,18 +60,24 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     const state = await page.evaluate(() => window.taPreview.instance.controller.getState());
     assert.equal(state.draft.protectedFields.summary, true);
     assert.equal(state.draft.fields.duedate, '2026-11-20');
-    assert.equal(state.draft.fields.priority.id, '2');
+    assert.equal(state.draft.fields.priority.id, '3');
     assert.deepEqual(state.validation.questions.map(q => q.id), ['devops:links']);
     const log = page.locator('[data-ta-chat-log]');
     assert.match(await log.innerText(), /ссылк[ау] на репозиторий/i);
     const create = page.locator('[data-ta-card-create]:visible, [data-ta-create]:visible').first();
+    assert.equal(await create.isEnabled(), false);
+    await send('Окно развёртывания с 19:00 до 20:00. Приоритет высокий. Дежурный проверит HTTP 200 на /health.');
+    await page.waitForFunction(() => window.taPreview.instance.controller.getState().draft.fields.priority.id === '2');
+    assert.match(await description.inputValue(), /Окно:[^\n]*19:00[^\n]*20:00/);
+    assert.match(await description.inputValue(), /Версия и состав: demo-api v1.0/);
+    assert.equal(await subject.inputValue(), 'Обновить demo-api на DEV');
     assert.equal(await create.isEnabled(), false);
     await send('https://git.example/devops/demo-api');
     await page.waitForFunction(() => !!window.taPreview.instance.controller.getState().draft.checked);
     await create.click();
     await page.waitForFunction(() => !!window.taPreview.createdPayload);
     const sent = await page.evaluate(() => ({fields: window.taPreview.createdPayload.fields, calls: window.taPreview.patchRequests}));
-    assert.equal(sent.calls, 1);
+    assert.equal(sent.calls, 3);
     assert.equal(sent.fields.summary, 'Обновить demo-api на DEV');
     assert.match(sent.fields.description, /Ссылки: https:\/\/git.example\/devops\/demo-api/);
     assert.equal(sent.fields.priority.id, '2');

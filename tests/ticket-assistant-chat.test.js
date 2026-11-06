@@ -585,8 +585,7 @@ test('reused update_001 is never replayed; compact recovery applies fresh Pico v
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
         calls++;
         if(calls===1)return {text:JSON.stringify({text:'',toolCalls:[{id:'update_001',name:'update_task',arguments:{fields:{summary:'Первая тема',description:'Старый стенд TEST'},questions:[]}}]})};
-        if(calls===2)return {text:'Проверка пройдена.'};
-        if(calls===3)return {text:JSON.stringify({text:'',toolCalls:[{id:'update_001',name:'update_task',arguments:{fields:{summary:'REPLAY',description:'REPLAY'},questions:[]}}]})};
+        if(calls===2)return {text:JSON.stringify({text:'',toolCalls:[{id:'update_001',name:'update_task',arguments:{fields:{summary:'REPLAY',description:'REPLAY'},questions:[]}}]})};
         const data=JSON.parse(r.user);
         assert.deepEqual(data.userAnswers.map(m=>m.text),['Теперь стенд DEV, проверка — вход по RDP.']);
         assert.equal(data.current.description,'Текущая ручная версия: DEV');
@@ -594,12 +593,13 @@ test('reused update_001 is never replayed; compact recovery applies fresh Pico v
         return {text:JSON.stringify({fields:{summary:'Тема от Pico',description:'Среда: DEV.\n\nПроверка: вход по RDP.'},missing:[]})};
     }});
     await chat.send('Старый стенд TEST');
+    assert.equal(chat.getState().lastTurnUsage.modelCalls,1);
     assert.equal(h.controller.getState().draft.fields.summary,'Первая тема');
     await h.controller.updateField('summary','Ручная тема');
     await h.controller.updateField('description','Текущая ручная версия: DEV');
     await chat.send('Теперь стенд DEV, проверка — вход по RDP.');
     const d=h.controller.getState().draft;
-    assert.equal(calls,4);assert.equal(d.fields.summary,'Ручная тема');assert.equal(d.pendingFields.summary,'Тема от Pico');
+    assert.equal(calls,3);assert.equal(d.fields.summary,'Ручная тема');assert.equal(d.pendingFields.summary,'Тема от Pico');
     assert.equal(d.fields.description,'Текущая ручная версия: DEV');
     assert.equal(d.pendingFields.description,'Среда: DEV.\n\nПроверка: вход по RDP.');
     assert.equal(d.checked,null);assert.doesNotMatch(chat.getState().notices.join(' '),/повторный идентификатор/);

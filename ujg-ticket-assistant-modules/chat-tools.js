@@ -109,6 +109,65 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         var requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
         return requirements && requirements.sections || [];
     }
+    // Read explicit section headings and catalog labels, never infer missing facts.
+    // Unsupported or protected clauses remain unresolved alongside any safe edits.
+    function literalAnswerPatch(controller,text) {
+        var s=controller.getState(),d=s.draft,requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
+        if(!d || d.projectKey!=='DEVOPS' || !requirements || requirements.kind==='unsupported' ||
+            typeof d.fields.description!=='string' || !d.fields.description.trim() || typeof text!=='string')return null;
+        var definitions=descriptionSectionDefinitions(controller),type=s.meta && s.meta.issueTypes.find(function(t){return t.id===d.issueTypeId;});
+        if(!definitions.length || !type)return null;
+        var patchFields={},sections={},unresolved=[],seen=Object.create(null),conflicts=new Set();
+        function key(value) {return value.toLocaleLowerCase('ru').replace(/ё/g,'е').trim();}
+        function available(id) {return s.generationFieldIds.includes(id) && !d.protectedFields[id] && !Object.hasOwn(d.pendingFields,id);}
+        function assign(map,id,value,clause) {
+            var topic=(map===sections?'section:':'field:')+id;
+            if(conflicts.has(topic)) {unresolved.push(clause);return;}
+            if(Object.hasOwn(map,id) && JSON.stringify(map[id])!==JSON.stringify(value)) {
+                unresolved.push(seen[topic],clause);delete map[id];conflicts.add(topic);return;
+            }
+            map[id]=value;seen[topic]=clause;
+        }
+        var clauses=text.trim().split(/(?:\r?\n+|;\s*|(?<=[.!?])\s+)/).map(function(clause){return clause.trim();}).filter(Boolean);
+        clauses.forEach(function(clause) {
+            var clean=clause.replace(/[.!]$/,''),colon=clean.indexOf(':'),heading=colon<0?'':key(clean.slice(0,colon)),value=colon<0?'':clean.slice(colon+1).trim();
+            if(/[?？][»”"')\].!]*\s*$/.test(clause) || /(?:^|[\s,:])(?:если|возможно|вероятно|при условии|при наличии|в случае|может быть|или)(?=$|[\s,:])/i.test(clean)) {
+                unresolved.push(clause);return;
+            }
+            var definition=definitions.find(function(section){return [section.label].concat(section.aliases || []).some(function(label){return heading===key(label);});});
+            if(definition && value) {
+                if(!available('description')) {unresolved.push(clause);return;}
+                assign(sections,definition.id,value,clause,definition.label);return;
+            }
+            // Catalog fields may use a colon or ordinary "Приоритет высокий".
+            var spec=type.fields.find(function(field) {return field.kind==='option' &&
+                (heading===key(field.name) || key(clean).startsWith(key(field.name)+' '));});
+            if(spec) {
+                var literal=heading===key(spec.name)?value:clean.slice(spec.name.length).trim();
+                var choices=(spec.allowedValues || []).filter(function(option){return key(option.label)===key(literal);});
+                if(!spec.supported || !spec.writable || !spec.optionsComplete || !available(spec.id) || choices.length!==1) {unresolved.push(clause);return;}
+                assign(patchFields,spec.id,{id:choices[0].id},clause,spec.name);return;
+            }
+            // Reusable literal deployment phrases: preserve the whole stated
+            // window/check, without computing duration, role, endpoint or status.
+            var window=definitions.find(function(section){return section.id==='window';});
+            var match=window && /^окно(?:\s+(?:разв[её]ртывания|работ|выполнения))?\s+((?:с|в)\s+.+)$/i.exec(clean);
+            if(match) {
+                if(!available('description')) {unresolved.push(clause);return;}
+                assign(sections,window.id,match[1],clause,window.label);return;
+            }
+            var verification=definitions.find(function(section){return section.id==='verification';}),verifier=definitions.find(function(section){return section.id==='verifier';});
+            match=verification && verifier && /^(.+?)\s+(?:проверит|проверяет|проверят|проверяют)\s+(.+)$/i.exec(clean);
+            if(match && !/(?:^|\s)не$/i.test(match[1]) && !/^(?:если|когда|возможно|никто|кто|почему|пусть|попроси)(?:\s|$)/i.test(match[1])) {
+                if(!available('description')) {unresolved.push(clause);return;}
+                assign(sections,verification.id,clean,clause,verification.label);
+                assign(sections,verifier.id,match[1],clause,verifier.label);return;
+            }
+            unresolved.push(clause);
+        });
+        if(!Object.keys(patchFields).length && !Object.keys(sections).length)return null;
+        return {proposal:Object.assign({fields:patchFields},Object.keys(sections).length?{descriptionSections:sections}:{}),unresolved:unresolved};
+    }
     function create(options) {
         var controller=options.controller;
         function fresh(request) {
@@ -212,7 +271,7 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                 }
                 var result=await mutate(function() {
                     var source=options.getSourceText ? options.getSourceText() : undefined;
-                    return managed ? controller.chatUpdate(args,snapshot(),source,{appManagedQuestions:true}) : controller.chatUpdate(args,snapshot(),source);
+                    return managed || explicitReview ? controller.chatUpdate(args,snapshot(),source,{appManagedQuestions:managed,reconcileUnresolvedFacts:explicitReview}) : controller.chatUpdate(args,snapshot(),source);
                 });
                 if(!result.ok) fail(result.code);if(localRejected.length)result=Object.assign({},result,{rejected:(result.rejected || []).concat(localRejected)});if(options.onSourceApplied) options.onSourceApplied();if(options.onTaskUpdated) options.onTaskUpdated(args,{appManagedQuestions:managed,result:result});return Object.assign(result,{task:task()});
             }),
@@ -233,5 +292,5 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
             })
         ];
     }
-    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
+    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,literalAnswerPatch:literalAnswerPatch,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
 });

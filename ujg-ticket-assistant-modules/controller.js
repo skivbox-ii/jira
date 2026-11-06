@@ -306,7 +306,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
         }
         function currentQuestions(questions,result) {
             if(!Array.isArray(result.questions))return questions;
-            return (questions || []).filter(function(q) {return q.id.indexOf('devops:')!==0;}).concat(result.questions);
+            return (questions || []).filter(function(q) {return q.id.indexOf('devops:')!==0 && !q.id.startsWith('app:_unresolvedChatFacts:');}).concat(result.questions);
         }
         function input() {
             return copy({ source: state.draft.source, meta: state.meta, profile: profile(), issueTypeId: state.draft.issueTypeId,
@@ -371,7 +371,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             }
             state.validation = null;
             if(!readOnly && key==='DEVOPS' && state.draft.issueTypeId) {
-                var restoredValidation=validation.validateFields(state.meta,state.draft.issueTypeId,state.draft.fields,policy());
+                var restoredValidation=unresolvedFactValidation(validation.validateFields(state.meta,state.draft.issueTypeId,state.draft.fields,policy()));
                 restoredValidation.warnings=warningUnion(restoredValidation.warnings,state.draft.warnings);
                 state.validation=restoredValidation;
                 state.draft=Object.assign({},state.draft,{questions:currentQuestions(state.draft.questions,restoredValidation)});
@@ -687,7 +687,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
                         });
                         state.draft = drafts.applyProposal(state.draft, { fields: generated, questions: result.questions, warnings: result.warnings, evidence: result.evidence }, snapshot);
                     }
-                    state.validation = validation.validateFields(state.meta, state.draft.issueTypeId, state.draft.fields, policy());
+                    state.validation = unresolvedFactValidation(validation.validateFields(state.meta, state.draft.issueTypeId, state.draft.fields, policy()));
                     if (kind === 'check') {
                         // This explicit AI check used the current selected rules and passed the snapshot guard.
                         if(Array.isArray(result.questions)) state.draft=Object.assign({},state.draft,{templateReviewPending:false,
@@ -918,9 +918,17 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             });
             return retainReviewedQuestions(questions);
         }
+        function unresolvedFactValidation(result) {
+            var facts=state.draft.unresolvedChatFacts || [];
+            if(!facts.length)return result;
+            result.ok=false;
+            result.fieldErrors._unresolvedChatFacts=facts.map(function(fact) {return 'Не перенесено в карточку: '+fact+' Повторите это указание явно или запустите сверку, чтобы учесть его в описании.';});
+            result.questions=(result.questions || []).filter(function(q){return !q.id.startsWith('app:_unresolvedChatFacts:');}).concat(result.fieldErrors._unresolvedChatFacts.map(function(text,index){return {id:'app:_unresolvedChatFacts:'+index,text:text,required:true};}));
+            return result;
+        }
         function localChatValidation(managed,reviewedTemplateRevision,reviewQuestions) {
             var p=policy();p.appManagedQuestions=managed || state.draft.appManagedQuestions===true;p.templateId=state.draft.templateId;
-            var result=validation.validateFields(state.meta,state.draft.issueTypeId,state.draft.fields,p);
+            var result=unresolvedFactValidation(validation.validateFields(state.meta,state.draft.issueTypeId,state.draft.fields,p));
             var description=fields.getField(state.meta,state.draft.issueTypeId,'description');
             if(description && description.supported && description.writable &&
                 (typeof state.draft.fields.description!=='string' || !state.draft.fields.description.trim())) {
@@ -989,6 +997,25 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             });
             if(Object.prototype.hasOwnProperty.call(patch,'description') && literal)next.protectedFields.description=true;
             if(proposal.taskException!==undefined)next.taskExceptions=before.taskExceptions.concat([proposal.taskException]);
+            var unresolved=original.unresolvedChatFacts || [];
+            var incoming=updateOptions && updateOptions.unresolvedChatFacts;
+            if(Array.isArray(incoming))unresolved=Array.from(new Set(unresolved.concat(incoming.filter(function(fact){return typeof fact==='string' && fact.trim();}))));
+            if(Object.prototype.hasOwnProperty.call(patch,'description') && !Object.prototype.hasOwnProperty.call(next.pendingFields,'description')) {
+                function normalizedFact(text) {return String(text || '').replace(/\s+/g,' ').trim().replace(/[.!]$/,'');}
+                function containsFact(text,fact) {
+                    return String(text || '').split(/(?:\r?\n+|(?<=[.!;])\s+)/).some(function(statement) {
+                        var value=normalizedFact(statement);
+                        if(value===fact)return true;
+                        var colon=value.indexOf(':'),label=colon<0?'':value.slice(0,colon).trim();
+                        return validation.descriptionSectionDefinitions(state.meta,next.issueTypeId,next.templateId).some(function(section){return section.label===label;}) && normalizedFact(value.slice(colon+1))===fact;
+                    });
+                }
+                unresolved=unresolved.filter(function(fact) {
+                    var literal=normalizedFact(fact),addressed=updateOptions && updateOptions.reconcileUnresolvedFacts===true || typeof sourceText==='string' && containsFact(sourceText,literal);
+                    return !addressed || !containsFact(next.fields.description,literal);
+                });
+            }
+            next.unresolvedChatFacts=unresolved;
             next=drafts.recordAutomaticChange(next,before);
             var explicitQuestions=!form && original.templateReviewPending && Array.isArray(proposal.questions)?semanticTemplateQuestions(proposal.questions):undefined;
             edited(next,{reviewQuestions:explicitQuestions});
@@ -1001,7 +1028,7 @@ define('_ujgTA_controller', ['_ujgTA_draft', '_ujgTA_profiles', '_ujgTA_fields',
             if (!chatCanUndo() || !chatFresh(state.draft.automaticUndo.after)) return chatFailure();
             var previous=state.draft.automaticUndo.before, next=Object.assign({},state.draft,{
                 fields:copy(previous.fields),pendingFields:copy(previous.pendingFields),protectedFields:copy(previous.protectedFields),
-                questions:copy(previous.questions),warnings:copy(previous.warnings),evidence:copy(previous.evidence),taskExceptions:copy(previous.taskExceptions),templateReviewPending:previous.templateReviewPending===true,appManagedQuestions:previous.appManagedQuestions===true,
+                questions:copy(previous.questions),warnings:copy(previous.warnings),evidence:copy(previous.evidence),taskExceptions:copy(previous.taskExceptions),unresolvedChatFacts:Array.from(new Set((state.draft.unresolvedChatFacts || []).concat(previous.unresolvedChatFacts || []))),templateReviewPending:previous.templateReviewPending===true,appManagedQuestions:previous.appManagedQuestions===true,
                 checked:null,draftRevision:state.draft.draftRevision+1});
             next.automaticUndo=null;edited(next);return {ok:true,snapshot:chatSnapshot()};
         }

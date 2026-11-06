@@ -1,6 +1,6 @@
 import { Agent } from '@earendil-works/pi-agent-core';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
-import { abortable, copy, emptyUsage, estimateTokens, makeDraftRequest, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseDraftData, parseEnvelope, requestSize, sameJson, validateBudget, validateDraftFields } from './transport.mjs';
+import { abortable, copy, emptyUsage, estimateTokens, makeDraftRequest, makePatchRequest, makeRequest, MAX_PROMPT_BYTES, misplacedQuestionsCandidate, parseDraftData, parseEnvelope, parsePatchData, requestSize, sameJson, validateBudget, validateDraftFields } from './transport.mjs';
 
 export const VERSION = '1.4.0';
 export const LIMITS = Object.freeze({modelCalls: 8, toolCalls: 12, wallMs: 180000});
@@ -136,6 +136,15 @@ export function createSession({system = '', messages = [], tools = [], requestTe
             }), signal);
             live(run, signal);
             const safe = copy(result);
+            if (t.name === 'update_task' && safe && typeof safe === 'object' && safe.ok !== false) {
+                const reported = Array.isArray(safe.appliedFields) || Array.isArray(safe.appliedSections);
+                const updated = safe.task?.draft;
+                const patchState = updated && JSON.stringify([updated.fields, updated.pendingFields]);
+                const changed = patchState === undefined || run.patchState === undefined || patchState !== run.patchState;
+                if (patchState !== undefined) run.patchState = patchState;
+                if (changed && (reported ? (safe.appliedFields || []).length || (safe.appliedSections || []).length :
+                    Object.keys(args.fields || {}).length || Object.keys(args.descriptionSections || {}).length)) run.usablePatch = true;
+            }
             // Never truncate evidence: a large result stays in history; the next model
             // request either fits or visibly stops on the configured context bound.
             return {content: [{type: 'text', text: JSON.stringify(safe)}], details: safe};
@@ -148,6 +157,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                 if (run.usage.modelCalls >= bounds.modelCalls) limit('Pico model call limit reached (maximum ' + bounds.modelCalls + ' per turn).');
                 let state = getContext ? copy(await abortable(Promise.resolve().then(() => getContext()), signal)) : null;
                 live(run, signal);
+                if (appManagedPatch && state?.draft) run.patchState = JSON.stringify([state.draft.fields, state.draft.pendingFields]);
                 const full = context.messages.filter(m => m.role !== 'system');
                 // A review request supplies the saved user conversation as authoritative
                 // evidence. Keep prior protocol messages for restore/ID guards without
@@ -160,7 +170,10 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                         state.usedToolCallIds = [...seenIds];
                     }
                 }
+                const patchCorrection = run.patchCorrectionPending === true;
+                if (patchCorrection) {run.patchCorrectionPending = false; run.patchCorrectionUsed = true;}
                 function buildRequest() {
+                    if (patchCorrection) return makePatchRequest(state, run.currentTurn);
                     if (!draftReviewPrompt) return makeRequest(system, tools, projected, state, compaction, appManagedPatch);
                     // Reconciliation is a single, scoped local field update. The
                     // model supplies field data; the application owns call IDs and
@@ -169,7 +182,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                 }
                 let request = buildRequest(), size = requestSize(request);
                 const fits = () => size.tokens <= budget.context - budget.reserve && size.bytes <= MAX_PROMPT_BYTES;
-                if (!fits() && getContext && !draftReviewPrompt) {
+                if (!fits() && getContext && !draftReviewPrompt && !patchCorrection) {
                     // Compact only complete older user turns. Keep the current user turn,
                     // all its tool-call/result pairs, and fresh authoritative application state.
                     const starts = full.flatMap((m, i) => m.role === 'user' ? [i] : []);
@@ -210,7 +223,10 @@ export function createSession({system = '', messages = [], tools = [], requestTe
                     if (strict) validateDraftFields(args.fields, state);
                     return parseEnvelope(JSON.stringify({text:'',toolCalls:[{id:'draft_'+seq,name:'update_task',arguments:args}]}),tools,seenIds);
                 };
-                if (draftReviewPrompt) {
+                if (patchCorrection) {
+                    try {envelope = parsePatchData(response.text, state, run.currentTurn, tools, seenIds);}
+                    catch {throw Error('Pico draft update missing');}
+                } else if (draftReviewPrompt) {
                     try {envelope=readDraft(response.text);}
                     catch {
                         if(run.reformatted)throw Error('Pico draft update missing');
@@ -276,11 +292,18 @@ export function createSession({system = '', messages = [], tools = [], requestTe
             if (active.usage.toolCalls >= bounds.toolCalls) {stop('limit', 'Pico tool call limit reached.'); return {block: true, terminate: true, reason: active.reason};}
             active.usage.toolCalls++;
         },
-        finishTurn: ({message, toolResults}) => {
+        finishTurn: async ({message, toolResults}) => {
             if (active?.status) return {action:'end'};
             if (afterStep && !['error','aborted'].includes(message.stopReason)) {
-                return afterStep({draftExtracted:active.extracted === true, hasTools:toolResults.length > 0, failedTool:toolResults.some(r=>r.isError),
+                const run = active;
+                const decision = await afterStep({draftExtracted:run.extracted === true, hasTools:toolResults.length > 0, failedTool:toolResults.some(r=>r.isError),
                     text:message.content.filter(c=>c.type==='text').map(c=>c.text).join('\n')});
+                if (active === run && !run.status && appManagedPatch && !draftReviewPrompt && getContext &&
+                    decision?.action === 'continue' && !run.usablePatch) {
+                    if (run.patchCorrectionUsed) throw Error('Pico draft update missing');
+                    run.patchCorrectionPending = true;
+                }
+                return decision;
             }
         }});
     const unsubscribe = agent.subscribe(event => {
@@ -298,6 +321,7 @@ export function createSession({system = '', messages = [], tools = [], requestTe
         if (active) throw Error('Pico is already running');
         if (typeof text !== 'string' || !text.trim()) throw Error('Pico prompt must be non-empty text');
         const run = {controller: new AbortController(), status: null, reason: null, started: Date.now(),
+            currentTurn: text,
             usage: {modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, compactions: 0, elapsedMs: 0}};
         active = run;
         const timer = setTimeout(() => stop('limit', 'Pico wall time limit reached (maximum ' + bounds.wallMs + ' ms per turn).'), bounds.wallMs);

@@ -22,7 +22,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         if(!Object.prototype.hasOwnProperty.call(failures,code)) {
             code=isLimit?'limit':'transport';
             if(typeof reason==='string') {
-                if(reason==='Pico draft update missing')code='draft-update';
+                if(reason==='Pico draft update missing' || reason==='Error: Pico draft update missing')code='draft-update';
                 else if(/^(?:AI config is invalid|Pico connection configuration invalid)$/.test(reason))code='config';
                 else if(reason==='Pico response correction failed')code='response-repair';
                 else if(/^(?:Pico response must be a JSON text envelope|Invalid Pico text envelope|Malformed Pico tool call|Duplicate Pico tool call id|Shared requestText returned no text|JSON nesting exceeds safety limit|Unsafe JSON property)$/.test(reason) || /^(?:Unknown Pico tool|Invalid arguments for Pico tool): /.test(reason))code='response';
@@ -274,7 +274,11 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var saved=run.sourceAppended && hasDescription;
             if(step.hasTools) {
                 if(!step.failedTool && step.draftExtracted)run.recoveredDraft=true;
-                if(!step.failedTool && run.appManagedAttempted && !run.templateAction)return {action:'end'};
+                if(!step.failedTool && run.appManagedAttempted && !run.templateAction) {
+                    if(run.appManagedUpdated || (run.patchRejections || []).length)return {action:'end'};
+                    if(run.fillRequested)throw Error('Pico draft update missing');
+                    run.fillRequested=true;return {action:'continue'};
+                }
                 if(!step.failedTool && (reconcile || step.draftExtracted) && run.questionsEvaluated && hasDescription &&
                     (!descriptionExpected || run.descriptionReviewed))return {action:'end'};
                 return;
@@ -285,9 +289,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             // requires a verified field operation before the assistant can finish.
             var plainInquiry=inquiry(text);
             var claimsWrite=createClaim.test(step.text) || /(?:тема|описание|карточка|задача|поля|данные)\s+(?:успешно\s+)?(?:заполнен|записан|обновлен|обновлён|внесен|внесён|сохранен|сохранён|добавлен)/i.test(step.text);
-            var needsWrite=reconcile ? !run.questionsEvaluated || !hasDescription || descriptionExpected && !run.descriptionReviewed :
+            var needsWrite=run.appManagedPatch && !plainInquiry && !run.appManagedUpdated || (reconcile ? !run.questionsEvaluated || !hasDescription || descriptionExpected && !run.descriptionReviewed :
                 !plainInquiry && ((!saved && (claimsWrite || run.priorQuestions.length || !hasDescription && !text.trim().endsWith('?'))) ||
-                    step.text.includes('?') && descriptionExpected && (!run.descriptionReviewed || !run.questionsEvaluated));
+                    step.text.includes('?') && descriptionExpected && (!run.descriptionReviewed || !run.questionsEvaluated)));
             var checkedQuestions=run.questionsEvaluated && d.questions.filter(function(q){return q.required;});
             var repeated=checkedQuestions && checkedQuestions.some(function(q){return run.priorQuestions.some(function(prior){return questionKey(prior)===questionKey(q.text);});});
             if(run.catalogNeedsChoice && step.text.includes('?') && !claimsWrite && !reconcile && !saved)return;
@@ -483,10 +487,52 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             }
             return questions;
         }
+        async function recoverLiteralAnswer(run,text) {
+            var d=controller.getState().draft;
+            if(!run.appManagedPatch || run.reviewPending || run.modelFieldsUpdated ||
+                JSON.stringify([d.fields,d.pendingFields])!==run.initialPatchState)return false;
+            var answer=chatTools.literalAnswerPatch(controller,text);
+            if(!answer)return false;
+            // A retained original narrative belongs to the existing exact-retry
+            // and source-equivalence guards, not partial correction extraction.
+            if(run.initialRecoveredNarrative || run.initialSource===text && answer.unresolved.length)return false;
+            var patch=answer.proposal;
+            // Even literal local changes cannot discharge custom semantic rules.
+            var review=await mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
+            if(!current(run) || !review.ok)return true;
+            var source=('\n\n'+d.source+'\n\n').includes('\n\n'+text+'\n\n')?undefined:text;
+            var applied=await mutate(run,function(){return controller.chatUpdate(patch,run.snapshot,source,{appManagedQuestions:true,preservePendingFields:true,unresolvedChatFacts:answer.unresolved});});
+            if(!current(run))return true;
+            var updated=controller.getState().draft,rejections=applied.rejected || [],changed=JSON.stringify([updated.fields,updated.pendingFields])!==run.initialPatchState;
+            if(!applied.ok || !changed && !rejections.length)return false;
+            if(!changed) {
+                recoveryReply(run,'Изменения не применены. '+rejectedPatchText(rejections));
+                state.error=null;state.status='idle';return true;
+            }
+            if(answer.unresolved.length) {
+                var unresolved='Не перенесено из сообщения: '+answer.unresolved.join(' ');
+                recoveryReply(run,'Изменения перенесены частично из вашего сообщения. '+(rejections.length?rejectedPatchText(rejections)+' ':'')+unresolved+' Уточните эти сведения или повторите запрос. Готовность не подтверждена.');
+                state.error={code:'draft-update',action:'retry',message:unresolved+' Уточните эти сведения или повторите запрос.'};state.status='error';return true;
+            }
+            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
+            if(!current(run))return true;
+            var verified=controller.getState(),v=checked.validation;
+            if(!v) {
+                recoveryReply(run,'Изменения перенесены из вашего сообщения. '+(rejections.length?rejectedPatchText(rejections)+' ':'')+'Не удалось проверить поля Jira. Откройте карточку и повторите проверку.');
+                state.error=null;state.status='idle';return true;
+            }
+            var blockers=Object.values(v.fieldErrors || {}).flat().concat(verified.draft.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
+            var reply=rejections.length?'Изменения применены частично. '+rejectedPatchText(rejections)+' Подтверждённые изменения взяты из вашего сообщения. Поля Jira проверены локально. ':
+                'Изменения перенесены из вашего сообщения. Поля Jira проверены локально. ';
+            reply+=checked.ok && verified.draft.checked && !verified.error?(rejections.length?'Сверьте неприменённые изменения в карточке.':'Сверьте карточку перед созданием.'):
+                'Создание пока недоступно. '+(blockerText(blockers) || 'Откройте карточку и проверьте оставшиеся поля.');
+            state.notices=state.notices.filter(function(notice){return !obsoleteRecoveryNotice(notice);});
+            recoveryReply(run,reply);state.error=null;state.status='idle';return true;
+        }
         async function recoverUnavailable(run,text,reassessment,reconcile) {
             if(!current(run) || reassessment && !reconcile || run.templateAction ||
-                !state.error || !(['transport','runtime','response','response-repair'].includes(state.error.code) ||
-                    reconcile && state.error.code==='draft-update'))return;
+                !state.error || !['transport','runtime','response','response-repair','draft-update'].includes(state.error.code))return;
+            if(!reconcile && await recoverLiteralAnswer(run,text))return;
             var s=controller.getState(), d=s.draft, patch={},copiedDescription=false,copiedSummary=false;
             // A rejected provider request cannot invalidate an unchanged card that
             // already passed Jira checks. Recheck it locally; never infer readiness
@@ -590,7 +636,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var lastUser=state.transcript.filter(function(m){return m.role==='user';}).slice(-1)[0],sameUser=!!lastUser && lastUser.text===text;
             // A control-only readiness check contains no new task facts. Reuse
             // the actual Jira validator without clearing an already reviewed card.
-            var localReady=!reassessment && !reconcile && !d.templateReviewPending && (d.checked || d.appManagedQuestions===true) &&
+            var lastAssistant=state.transcript.findLast(function(entry){return entry.role==='assistant';});
+            var unresolvedLocalReply=lastAssistant && lastAssistant.text.startsWith('Изменения перенесены частично из вашего сообщения.');
+            var localReady=!reassessment && !reconcile && !unresolvedLocalReply && state.error?.code!=='draft-update' && !d.templateReviewPending && (d.checked || d.appManagedQuestions===true) &&
                 /^(?:подтверди(?:те)?|проверь(?:те)?)\s+готовность(?:\s+(?:задачи|карточки))?[.!?]?$/i.test(text.trim());
             var referenceAnswer=!reassessment && controller.chatDevopsReferenceAnswer ? controller.chatDevopsReferenceAnswer(text,sameUser) : null;
             if((reconcile || !localReady && !reassessment && d.checked && !inquiry(text) && !connectionCommand(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
@@ -603,7 +651,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var exactRetry=!reassessment && !retryRateLimit && (referenceAnswer && sameUser || collapseExactRetry(text));
             if(!reassessment && !retryRateLimit && !exactRetry)add('user',text);state.error=null;state.status='running';
             var appManagedPatch=!localReady && !reassessment && !!d.issueTypeId && !!d.templateId && !d.templateReviewPending && !inquiry(text) && chatTools.descriptionSectionDefinitions(controller).length>0;
-            var run={appManagedPatch:!!appManagedPatch,session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,referenceAnswer:referenceAnswer,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
+            var run={appManagedPatch:!!appManagedPatch,patchState:JSON.stringify([d.fields,d.pendingFields]),initialPatchState:JSON.stringify([d.fields,d.pendingFields]),initialSource:d.source,session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,referenceAnswer:referenceAnswer,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
                 reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',initialRecoveredNarrative:sameRecoveredNarrative(text),
                 verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,appManagedQuestions:function(){return run.appManagedPatch && !run.templateAction;},explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
@@ -616,6 +664,10 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                     var result=info && info.result,appliedFields=result && result.appliedFields,appliedSections=result && result.appliedSections;
                     var managed=!!(info && info.appManagedQuestions),hasPatch=(Array.isArray(appliedFields) || Array.isArray(appliedSections)) ?
                         !!((appliedFields || []).length || (appliedSections || []).length) : !!(Object.keys(args.fields || {}).length || Object.keys(args.descriptionSections || {}).length);
+                    if(managed) {
+                        var updated=controller.getState().draft,patchState=JSON.stringify([updated.fields,updated.pendingFields]);
+                        hasPatch=hasPatch && patchState!==run.patchState;run.patchState=patchState;
+                    }
                     if(managed){run.appManagedAttempted=true;run.appManagedUpdated=hasPatch;run.patchRejections=result && result.rejected || [];run.questionsEvaluated=true;}
                     if(hasPatch)run.modelFieldsUpdated=true;
                     if((!appliedFields || appliedFields.includes('description')) && args.fields && typeof args.fields.description==='string' && args.fields.description.trim()) {
@@ -675,7 +727,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                         if(extractionEvidence){data.conversationForExtraction=extractionEvidence;data.extractionEstimates=chatTools.statedEstimates(extractionEvidence);}if(reviewEvidence)data.conversationForReview=reviewEvidence;
                         if(earlierEvidence)data.conversationForTask=earlierEvidence;
                         if(run.questionReviewed)data.questionReview='Проверь снова только повторённый вопрос по текущему description и ответу пользователя. Если ответ уже есть или указана причина пропуска, убери вопрос через update_task. Если он необходим, уточни ровно оставшийся пробел и reason.';
-                        if(run.fillRequested)data.requiredDraftUpdate='Предыдущий ответ не заполнил карточку. Примени подтверждённые факты через update_task, передай полное описание из ответов пользователя, подходящие поля Jira и актуальные questions. Не сообщай о готовности до проверки.';
+                        if(run.fillRequested)data.requiredDraftUpdate=data.appManagedPatch?
+                            'Предыдущий ответ не перенёс новые сведения в карточку. Верни один патч fields и/или descriptionSections с фактически изменёнными значениями по текущему сообщению пользователя. Объедини все поддерживаемые изменения: поля Jira выбирай из fieldSchema и trusted choices, разделы — из descriptionSectionIds. Сохрани остальные разделы. Отсутствующие обязательные сведения не мешают перенести известные факты: приложение само покажет следующий вопрос. Не передавай questions и не подменяй патч уточнением или прежними значениями.':
+                            'Предыдущий ответ не заполнил карточку. Примени подтверждённые факты через update_task, передай полное описание из ответов пользователя, подходящие поля Jira и актуальные questions. Не сообщай о готовности до проверки.';
                         return data;}});
                 var result=await run.session.prompt(text);
                 if(!current(run)) return getState();

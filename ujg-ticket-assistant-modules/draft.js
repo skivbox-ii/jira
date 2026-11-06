@@ -91,7 +91,7 @@ define('_ujgTA_draft', [], function() {
         snapshotKeys.forEach(function(k) {after[k]=input.after[k];});
         var before=input.before;
         return {after:after,before:{fields:fields(before.fields),pendingFields:fields(before.pendingFields),protectedFields:fields(before.protectedFields,true),
-            questions:questions(before.questions),warnings:strings(before.warnings),evidence:evidence(before.evidence,source),taskExceptions:strings(before.taskExceptions),appManagedQuestions:before.appManagedQuestions===true,templateReviewPending:before.templateReviewPending===true}};
+            questions:questions(before.questions),warnings:strings(before.warnings),evidence:evidence(before.evidence,source),taskExceptions:strings(before.taskExceptions),unresolvedChatFacts:strings(before.unresolvedChatFacts),appManagedQuestions:before.appManagedQuestions===true,templateReviewPending:before.templateReviewPending===true}};
     }
     function recordAutomaticChange(next, before) {
         var result=Object.assign({},next);
@@ -109,13 +109,13 @@ define('_ujgTA_draft', [], function() {
                 typeof input.pendingAssistance.fieldId === 'string' && ['generate', 'improve', 'shorten'].indexOf(input.pendingAssistance.action) !== -1 &&
                 Object.prototype.hasOwnProperty.call(fields(input.pendingFields), input.pendingAssistance.fieldId) ?
                 {fieldId: input.pendingAssistance.fieldId, action: input.pendingAssistance.action} : null,
-            taskExceptions: strings(input.taskExceptions),
+            taskExceptions: strings(input.taskExceptions), unresolvedChatFacts:strings(input.unresolvedChatFacts),
             reviewedTemplateQuestions:questions(input.reviewedTemplateQuestions), questions: questions(input.questions), warnings: strings(input.warnings), evidence: evidence(input.evidence, source),
             sourceRevision: revision(input.sourceRevision), settingsRevision: revision(input.settingsRevision), draftRevision: revision(input.draftRevision),
             metaSignature: str(input.metaSignature), checked: checked(input.checked), creation: creation(input.creation), attachments: attachments(input.attachments)
         };
         result.questions=includeReviewedQuestions(result.questions,result.reviewedTemplateQuestions);
-        if(result.templateReviewPending || result.reviewedTemplateQuestions.some(function(q) {return q.required;})) result.checked=null;
+        if(result.unresolvedChatFacts.length || result.templateReviewPending || result.reviewedTemplateQuestions.some(function(q) {return q.required;})) result.checked=null;
         if (result.checked && !revisionKeys.every(function(k) { return result.checked[k] === result[k]; })) result.checked = null;
         return result;
     }
@@ -279,7 +279,7 @@ define('_ujgTA_draft', [], function() {
         next.attachments = (d.attachments || []).map(function(a) { return Object.assign({}, a); });
         next.questions = includeReviewedQuestions(currentQuestions,next.reviewedTemplateQuestions);
         next.warnings = strings(validation.warnings);
-        var valid = !next.templateReviewPending && !next.reviewedTemplateQuestions.some(function(q) {return q.required;}) && validation.ok === true && !strings(validation.unsupportedRequired).length &&
+        var valid = !next.unresolvedChatFacts.length && !next.templateReviewPending && !next.reviewedTemplateQuestions.some(function(q) {return q.required;}) && validation.ok === true && !strings(validation.unsupportedRequired).length &&
             !Object.keys(validation.fieldErrors || {}).some(function(k) { return validation.fieldErrors[k].length; }) &&
             !next.questions.some(function(q) { return q.required; });
         next.checked = valid ? checked(d) : null;
