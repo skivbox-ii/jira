@@ -5,7 +5,7 @@ define("_ujgTicketAssistant", [], function() {
   var widgetRuntimeFile = "ujg-ticket-assistant.runtime.js";
   var sharedJsFiles = [];
   var runtimeAmd = "_ujgTicketAssistantRuntime";
-  var releaseRef = "4bffed9a79dc6dbd01cd498923393be2967b9509";
+  var releaseRef = "4401310eff45cdd2688fd3872a0c3579c64519fd";
   var w = typeof window !== "undefined" && window ? window : (typeof globalThis !== "undefined" ? globalThis : {});
   w.__UJG_BOOTSTRAP__ = w.__UJG_BOOTSTRAP__ || { scriptPromises: {}, stylePromises: {} };
   var cache = w.__UJG_BOOTSTRAP__;
