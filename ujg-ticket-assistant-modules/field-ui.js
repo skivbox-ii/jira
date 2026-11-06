@@ -153,14 +153,30 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     .on('click',function() {boardId=null;userOptions=[];runSearch();}));
             }
         }
+        function renderDescription() {
+            preview.empty();
+            if (typeof options.descriptionTableRows!=='function') {markdown($,preview,String(current.value || ''));return true;}
+            var rows=options.descriptionTableRows(String(current.value || ''));
+            if(!rows.length)return false;
+            var table=$('<table class="ta-description-table">').append($('<caption class="ta-visually-hidden">').text('Описание задачи по разделам'));
+            table.append($('<thead>').append($('<tr>').append($('<th scope="col">').text('Поле'),$('<th scope="col">').text('Описание'))));
+            var body=$('<tbody>').appendTo(table);
+            rows.forEach(function(row) {
+                var cell=$('<td>'),value=String(row.value || '');
+                if(value.trim())cell.append($('<div class="ta-description-value">').text(value));
+                else cell.append($('<span class="ta-muted" data-ta-description-empty>').text('Не заполнено'));
+                body.append($('<tr>').append($('<th scope="row">').text(row.label),cell));
+            });
+            preview.addClass('ta-description-table-preview').append(table);return true;
+        }
         function showDescription() {
             if (!preview) return;
-            var available = current.descriptionPreview === true && !!String(current.value || '').trim();
+            var available = current.descriptionPreview === true && (!!String(current.value || '').trim() || typeof options.descriptionTableRows==='function');
+            preview.empty();if(available && !renderDescription())available=false;
             previewToggle.prop('hidden', !available).attr({'aria-expanded':String(available && previewEditing),'aria-label':previewEditing?'Показать описание':'Редактировать описание'})
                 .text(previewEditing ? 'Показать описание' : 'Редактировать');
             preview.prop('hidden', !available || previewEditing);
             control.prop('hidden', available && !previewEditing);
-            preview.empty();if(available)markdown($,preview,String(current.value));
         }
         function build(kind) {
             cancelSearch(); body.empty(); preview=null;previewToggle=null;previewEditing=false; control = null; panel = null; query = ''; userOptions = []; localEdit = null;
@@ -220,7 +236,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     body.prepend(previewToggle,preview);
                     previewToggle.on('click',function(){previewEditing=!previewEditing;showDescription();if(previewEditing)control.trigger('focus');});
                     control.on('taEditDescription',function(){previewEditing=true;showDescription();});
-                    control.on('input.taPreview',function(){current.value=control.val();if(preview) {preview.empty();markdown($,preview,String(current.value));}});
+                    control.on('input.taPreview',function(){current.value=control.val();if(preview && current.descriptionPreview===true)renderDescription();});
                 }
             }
             label.attr('for', uid);

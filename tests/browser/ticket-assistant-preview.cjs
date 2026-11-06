@@ -3,6 +3,7 @@
     'use strict';
     var $ = window.jQuery, shared = window.taRequire('_ujgTA_llmClient');
     var parameters=new URLSearchParams(window.location.search),review=parameters.get('review');
+    var devopsPreview=parameters.get('devops')==='1';
     if(['obsolete','catalog','storage','response','guided'].indexOf(review)===-1)review='';
     var records = {calls:[], pending:0}; window.taPreview = records;
     var legacyForm=parameters.get('form')==='1' || !!review;
@@ -12,10 +13,29 @@
     var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
     ['success','rejected','lostresponse','filefail'].forEach(function(value) {
         controls.append($('<button type="button">').attr({'data-ta-preview-scenario':value,'aria-pressed':String(value===scenario)}).text(value).on('click',function() {
-            scenario=value;failedFiles.clear();controls.find('button').attr('aria-pressed','false');$(this).attr('aria-pressed','true');
+            scenario=value;failedFiles.clear();controls.find('[data-ta-preview-scenario]').attr('aria-pressed','false');$(this).attr('aria-pressed','true');
         }));
     });
     $('#ticket-assistant').before(controls);
+    var devopsExamples={
+        '10':'Цель: вернуть команде доступ к API.\nЧто сделать: обновить конфигурацию API и перезапустить сервис.\nГде: API на TEST, узел test-01.\nКритерии приёмки: API отвечает HTTP 200 на /health.\nСсылки: https://example.org/api/runbook\nОценка: 30 минут.',
+        '11':'Что происходит: API на TEST возвращает HTTP 500 при загрузке sample.csv.\nЧто ожидалось: API принимает файл с HTTP 201.\nШаги воспроизведения: открыть загрузку и отправить sample.csv.\nГде: API версии 2.3 на TEST.\nЛоги / скриншоты: https://example.org/logs/123\nКритерии приёмки: sample.csv загружается с HTTP 201.\nСсылки: https://example.org/api\nОценка: 1 час.',
+        '12':'Обновить виджет Jira в DEV из коммита 5961fa4 в рабочее время. Заменить скрипт и перезагрузить страницу. Постановщик проверит открытие карточки DEVOPS. Оценка: 30 минут. Ссылки: https://example.org/mama-myla-ramu'
+    };
+    if(devopsPreview) {
+        controls.append($('<p>').text('Демо DEVOPS: чат работает локально, ключ не нужен. Jira и модель не вызываются. Для нового примера нажмите «Очистить», выберите пример и отправьте его. Недостающий раздел можно дописать, например «Окно: в рабочее время».'));
+        Object.keys(devopsExamples).forEach(function(id){
+            controls.append($('<button type="button">').attr('data-ta-preview-example',id).text({'10':'Пример задачи','11':'Пример ошибки','12':'Пример развёртывания'}[id]).on('click',async function(){
+                await records.instance.controller.selectIssueType(id);
+                $('[data-ta-chat-input]').val(devopsExamples[id]).trigger('input').trigger('focus');
+            }));
+        });
+        ['normal','error','slow'].forEach(function(mode){
+            controls.append($('<button type="button">').attr({'data-ta-preview-pico':mode,'aria-pressed':String(mode==='normal')}).text({normal:'Pico: работает',error:'Pico: ошибка',slow:'Pico: задержка'}[mode]).on('click',function(){
+                records.chatMode=mode;controls.find('[data-ta-preview-pico]').attr('aria-pressed','false');$(this).attr('aria-pressed','true');
+            }));
+        });
+    }
     var failStorage=false;
     if(review==='storage') controls.append($('<button type="button" data-ta-preview-storage-fail>').text('Имитировать отказ хранилища').on('click',function(){failStorage=true;$(this).text('Следующее сохранение завершится отказом');}));
     var rawFields = {
@@ -33,6 +53,10 @@
     if(parameters.get('effort')==='required') {
         rawFields.timetracking={name:'Учёт времени',required:true,schema:{system:'timetracking',type:'timetracking'}};
         rawFields.reporter.required=true;
+    }
+    if(devopsPreview) {
+        rawFields.timetracking={name:'Учёт времени',schema:{system:'timetracking',type:'timetracking'}};
+        rawFields.priority.hasDefaultValue=true;rawFields.priority.defaultValue={id:'3'};
     }
     if(review==='guided') {
         rawFields.environment={name:'Окружение',schema:{type:'string',system:'environment'}};
@@ -52,13 +76,14 @@
     if(review==='catalog') rawFields.customfield_50={name:'Контур приёмки',required:true,schema:{type:'option',custom:'com.atlassian.jira.plugin.system.customfieldtypes:select'},allowedValues:[],autoCompleteUrl:'https://never-follow.invalid/catalog'};
     function result(name, value) {records.calls.push(name); return Promise.resolve(value);}
     var api = {
-        getCurrentUser:function() {return result('identity', {key:'synthetic-ticket-assistant-preview-v1'+(review?'-review-'+review:''),name:'preview'});},
-        getProjects:function() {return result('projects',{values:[{id:'101',key:'DEMO',name:'Демонстрационный проект'},{id:'102',key:'APP',name:'Приложение'}],complete:true});},
-        getCreateMeta:function(key) {return result('metadata',{projects:[{key:key,id:key === 'DEMO' ? '101':'102',issuetypes:[
+        getCurrentUser:function() {return result('identity', {key:'synthetic-ticket-assistant-preview-v1'+(devopsPreview?'-devops':'')+(review?'-review-'+review:''),name:'preview'});},
+        getProjects:function() {return result('projects',{values:(devopsPreview?[{id:'103',key:'DEVOPS',name:'DEVOPS — локальная демонстрация'}]:[]).concat([{id:'101',key:'DEMO',name:'Демонстрационный проект'},{id:'102',key:'APP',name:'Приложение'}]),complete:true});},
+        getCreateMeta:function(key) {return result('metadata',{projects:[{key:key,id:key==='DEVOPS'?'103':key === 'DEMO' ? '101':'102',issuetypes:[
             {id:key==='APP'?'20':'10',name:'Задача',subtask:false,fields:review==='obsolete'?Object.assign({},rawFields,{customfield_10:{name:'Заметки только для задачи',schema:{type:'string',custom:'com.atlassian.jira.plugin.system.customfieldtypes:textarea'}}}):rawFields},
             {id:key==='APP'?'21':'11',name:'Ошибка',subtask:false,fields:rawFields},
-            {id:key==='APP'?'22':'12',name:'Согласование',subtask:false,fields:Object.assign({},rawFields,{customfield_99:{name:'Согласующий комитет',required:true,schema:{type:'string',custom:'fixture:unsupported'}}})}
+            {id:key==='APP'?'22':'12',name:key==='DEVOPS'?'Задача развёртывания':'Согласование',subtask:false,fields:key==='DEVOPS'?rawFields:Object.assign({},rawFields,{customfield_99:{name:'Согласующий комитет',required:true,schema:{type:'string',custom:'fixture:unsupported'}}})}
         ]}]});},
+        checkDevopsIssue:function(){return result('devops-check',{fieldErrors:{},warnings:[],link:null});},
         getComponents:function(key) {return result('components',{values:[{id:'31',name:'API'},{id:'32',name:'Интерфейс'},{id:'33',name:'Инфраструктура'}].concat(review==='guided'?Array.from({length:180},function(unused,index){return {id:String(100+index),name:'Компонент тестовой системы '+index};}):[]),complete:true,projectKey:key});},
         getVersions:function(key) {return result('versions',{values:[{id:'41',name:'2026.10'},{id:'42',name:'2026.11'}],complete:true,projectKey:key});},
         searchEpics:function(key,query) {return records.lookupDenied?Promise.reject({kind:'forbidden'}):result('epics',{values:query==='none'?[]:[{id:key+'-42',label:'Работа с ошибками API'}],complete:false,projectKey:key});},
@@ -73,7 +98,7 @@
             return new Promise(function(resolve,reject) {setTimeout(function() {
                 if(mode==='rejected')reject({outcome:'rejected',fieldErrors:{summary:['Synthetic field rejection.']}});
                 else if(mode==='lostresponse')reject({outcome:'unknown'});
-                else resolve({id:String(++issueSequence),key:payload.fields.project.id==='102'?'APP-'+issueSequence:'DEMO-'+issueSequence});
+                else resolve({id:String(++issueSequence),key:(payload.fields.project.id==='103'?'DEVOPS-':payload.fields.project.id==='102'?'APP-':'DEMO-')+issueSequence});
             },650);});
         },
         uploadAttachment:function(key,file) {
@@ -86,6 +111,25 @@
         getIssueAttachments:function() {return result('attachment-reconcile',[]);}
     };
     records.api=api;
+    function devopsPatch(current,text) {
+        var state=records.instance.controller.getState(),definitions=window.taRequire('_ujgTA_validation').descriptionSectionDefinitions(state.meta,state.draft.issueTypeId,state.draft.templateId);
+        var formatted=window.taRequire('_ujgTA_validation').formatDevopsDescription(state.meta,state.draft.issueTypeId,text,true),sections={},active=null;
+        formatted.split(/\r?\n/).forEach(function(line){
+            var match=/^([^:]+):\s*(.*)$/.exec(line),section=match && definitions.find(function(d){return d.label===match[1];});
+            if(section){active=section.id;if(match[2].trim())sections[active]=match[2].trim();}
+            else if(active && line.trim())sections[active]=(sections[active]?sections[active]+'\n':'')+line;
+        });
+        if(!Object.keys(sections).length)sections.extra=text;
+        var fields={},topic=/^\s*(?:тема|summary)\s*:\s*(.+)$/im.exec(text);
+        if(topic)fields.summary=topic[1];
+        else if(!current.draft.fields.summary) {
+            var opening=window.taRequire('_ujgTA_draft').narrativeSummary(text);
+            fields.summary=(/^[^:\n]{1,80}:/.test(opening)?sections.work || sections.actual || sections.release || opening:opening).split(/\r?\n/)[0].slice(0,255);
+        }
+        var estimates=window.taRequire('_ujgTA_chatTools').statedEstimates([{role:'user',text:text}]);
+        if(Object.keys(estimates).length)fields.timetracking=estimates;
+        return {fields:fields,descriptionSections:sections};
+    }
     var llm = Object.assign({},shared,{requestText:function(config, request) {
         var input = JSON.parse(request.userPrompt); records.calls.push('ai:'+input.action); records.pending++;
         return new Promise(function(resolve,reject) {var mode=records.assistMode;setTimeout(function() {
@@ -154,6 +198,9 @@
                 } else if(/измени шаблон/i.test(text)) {
                     if(!toolResults.length)call('propose_template_change',{changes:{instructions:(template && template.instructions || '')+'\nОбязательно укажи среду проверки.'}});
                     else response.text='Предложение готово. Примените его кнопкой, чтобы сохранить новую ревизию.';
+                } else if(devopsPreview && current.draft.projectKey==='DEVOPS') {
+                    if(!toolResults.length)call('update_task',devopsPatch(current,text));
+                    else response.text='Сведения перенесены. Готовность проверяет карточка.';
                 } else if(/компонент/i.test(text) && !/выбираю/i.test(text)) {
                     if(!toolResults.length)call('find_options',{fieldId:'components',query:'',limit:10});
                     else response.text='Найдено несколько компонентов: API, Интерфейс, Инфраструктура. Какой выбрать?';
@@ -193,7 +240,7 @@
             },mode==='slow'?2200:90);});
         },
         createStore:function(userKey) {
-            var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1'+(review?'/review-'+review:''),userKey:userKey});
+            var store=window.taRequire('_ujgTA_storage').createStore({storage:window.localStorage,origin:window.location.origin+'/offline-ticket-assistant-preview-v1'+(devopsPreview?'/devops':'')+(review?'/review-'+review:''),userKey:userKey});
             return {load:function(key){var snapshot=store.load(key);records.restored=!!snapshot.draft;return snapshot;},save:store.save,clearDraft:store.clearDraft,isPersistent:store.isPersistent,
                 loadConversation:store.loadConversation,saveConversation:store.saveConversation};
         }};
@@ -205,8 +252,10 @@
     }
     var instance = new Gadget({getGadgetContentEl:function() {return $('#ticket-assistant');}}, dependencies);
     records.instance = instance;
-    records.ready = instance.ready.then(function() {return instance.controller.selectProject('DEMO');}).then(function() {
-        if (!records.restored) return instance.controller.selectIssueType('10').then(function(){return instance.controller.selectTemplate('task');});
+    records.ready = instance.ready.then(function() {return instance.controller.selectProject(devopsPreview?'DEVOPS':'DEMO');}).then(function() {
+        if (!records.restored) return instance.controller.selectIssueType(devopsPreview?'12':'10').then(function(){
+            return devopsPreview?instance.chat.send(devopsExamples['12']):instance.controller.selectTemplate('task');
+        });
     }).then(function() {
         document.documentElement.setAttribute('data-ta-preview-ready','true');
     });

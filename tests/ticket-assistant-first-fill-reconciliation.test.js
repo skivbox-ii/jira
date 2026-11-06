@@ -36,7 +36,7 @@ for(const sections of [false,true])for(const summary of ['Среда:',null])tes
  assert.deepEqual(s.draft.fields.labels,['widget']);assert.equal(s.draft.fields.priority.id,'high');
  assert.equal(s.draft.fields.timetracking.originalEstimate,'30m');
  assert.equal(s.validation.ok,true,JSON.stringify(s.validation));assert.ok(s.draft.checked);assert.equal(h.posts.length,0);
- await c.submit();assert.equal(h.posts.length,1);assert.match(h.posts[0].fields.description,/\*Среда:\*/);assert.equal(h.posts[0].fields.timetracking.originalEstimate,'30m');
+ await c.submit();assert.equal(h.posts.length,1);assert.ok(h.posts[0].fields.description.startsWith("||Поле||Описание||\n|Среда|в DEV|\n"));assert.equal(h.posts[0].fields.timetracking.originalEstimate,'30m');
 });
 test('description reconciliation is independent of missing Jira estimate and priority',async t=>{
  const h=await setup(t,{required:true,priority:false}),c=h.controller,text=live.replace('Оценка: 30 минут. ','');

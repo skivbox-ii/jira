@@ -14,6 +14,7 @@ function memoryStorage() {
 }
 
 function loadUnit(name, deps = {}, globals = {}) {
+    if (name === 'ui') deps = { _ujgTA_validation: loadUnit('validation', {_ujgTA_fields: loadUnit('fields')}), ...deps };
     if (name === 'creator') deps = { _ujgTA_profiles: loadUnit('profiles'), ...deps };
     return loadAmdModule(path.resolve(__dirname, '../../ujg-ticket-assistant-modules', name + '.js'), deps, globals);
 }

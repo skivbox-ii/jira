@@ -63,8 +63,8 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     await page.locator('[data-ta-chat-log] [data-role=assistant]').first().waitFor();
     const descriptionPreview = editor.locator('[data-ta-description-preview]');
     assert.equal(await descriptionPreview.isVisible(), true);
-    assert.match(await descriptionPreview.innerText(), /Окно: После 18:00/);
-    assert.match(await descriptionPreview.innerText(), /Проверка: Дежурный проверит/);
+    assert.match(await descriptionPreview.locator('tbody tr').filter({hasText:/Окно/}).locator('td').innerText(), /После 18:00/);
+    assert.match(await descriptionPreview.locator('tbody tr').filter({hasText:/Проверка/}).locator('td').innerText(), /Дежурный проверит/);
     await editor.getByRole('button', {name: 'Редактировать описание', exact: true}).click();
     const description = editor.locator('[data-ta-field=description] textarea:visible');
     assert.match(await description.inputValue(), /Окно: После 18:00/);
@@ -93,10 +93,12 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
     assert.equal(await linkHint.isVisible(), false);
     await create.click();
     await page.waitForFunction(() => !!window.taPreview.createdPayload);
-    const sent = await page.evaluate(() => ({fields: window.taPreview.createdPayload.fields, calls: window.taPreview.patchRequests}));
+    const sent = await page.evaluate(() => ({fields: window.taPreview.createdPayload.fields, calls: window.taPreview.patchRequests, canonical: window.taPreview.instance.controller.getState().draft.fields.description}));
     assert.equal(sent.calls, 3);
     assert.equal(sent.fields.summary, 'Обновить demo-api на DEV');
-    assert.match(sent.fields.description, /\*Ссылки:\* https:\/\/git.example\/devops\/demo-api/);
+    assert.match(sent.fields.description, /^\|\|Поле\|\|Описание\|\|/);
+    assert.match(sent.canonical, /Ссылки: https:\/\/git.example\/devops\/demo-api/);
+    assert.match(sent.fields.description, /\|\s*Ссылки\s*\|\s*https:\/\/git.example\/devops\/demo-api/);
     assert.equal(sent.fields.priority.id, '2');
     assert.equal(sent.fields.duedate, '2026-11-20');
 });

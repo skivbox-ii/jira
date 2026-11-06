@@ -39,7 +39,7 @@ test('typing into an initially empty description stays in the editor across cont
 const {liveFixture}=require('./helpers/ticket-assistant-live-card-fixture');
 test('live editor trusts only controller standardDescriptionTemplate eligibility with no project fallback',async t=>{
  const h=await liveFixture(t);await h.controller.updateField('description','Цель: Не менять исходный текст');
- const base=h.controller.getState(),state={...base,draft:{...base.draft,projectKey:'DEVOPS'},settings:{...base.settings,descriptionFormat:'markdown'}};
+ const base=h.controller.getState(),state={...base,meta:{...base.meta,projectKey:'DEVOPS'},draft:{...base.draft,projectKey:'DEVOPS'},settings:{...base.settings,descriptionFormat:'markdown'}};
  const preview=h.doc.querySelector('[data-ta-description-preview]'),toggle=h.doc.querySelector('[data-ta-description-edit]'),textarea=h.doc.querySelector('[data-ta-field=description] textarea');
  h.ui.update({...state,standardDescriptionTemplate:true});assert.equal(preview.hidden,false);assert.equal(textarea.hidden,true);
  for(const eligibility of [false,undefined,null,'true']) {

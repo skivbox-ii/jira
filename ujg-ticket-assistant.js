@@ -517,9 +517,13 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         });
     }
     function mergeDescriptionSections(meta,typeId,description,updates,templateId) {
+        if(devopsRequirements(meta,typeId))description=canonicalTableDescription(description);
         var result={description:description,applied:[],rejected:[]},definitions=descriptionSectionDefinitions(meta,typeId,templateId);
         if(typeof description!=='string' || !updates || typeof updates!=='object' || Array.isArray(updates)) {
             result.rejected.push({id:'descriptionSections',message:'Ожидается объект разделов описания с текстовыми значениями.'});return result;
+        }
+        if(parsedDescriptionTable(description)) {
+            result.rejected.push({id:'descriptionSections',message:'Внутри ячеек таблицы есть неоднозначные заголовки. Уточните описание перед изменением разделов.'});return result;
         }
         var spec=fields.getField(meta,typeId,'description'),newline=description.indexOf('\r\n')!==-1?'\r\n':'\n';
         Object.keys(updates).forEach(function(id) {
@@ -576,33 +580,26 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             !/(?:^|[\s,:])(?:текущ\p{L}*|исходн\p{L}*|предыдущ\p{L}*|стар\p{L}*|уже|раньше)(?=$|[\s,:])/iu.test(prefix);
     }
     function codeRanges(text) {
-        var ranges=[],open=null,offset=0;
-        text.split('\n').forEach(function(line) {
-            var fence=/^[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line);
-            if(fence) {
-                if(!open)open={start:offset,mark:fence[1][0],length:fence[1].length};
-                else if(fence[1][0]===open.mark && fence[1].length>=open.length && !fence[2].trim()) {ranges.push({start:open.start,end:offset+line.length});open=null;}
+        var ranges=[],open=null,match,pattern=/^[ \t]*(`{3,}|~{3,})([^\r\n]*)|\{(code|noformat)(?::[^}\n]*)?\}|(`+)/gim;
+        while((match=pattern.exec(text))) {
+            var ticks=match[1] || match[4],kind=match[3] && match[3].toLowerCase();
+            if(open) {
+                if(open.kind==='fence' && match[1] && ticks[0]===open.mark && ticks.length>=open.length && !match[2].trim()) {
+                    ranges.push({start:open.start,end:pattern.lastIndex});open=null;
+                } else if(open.kind==='jira' && kind===open.mark) {
+                    ranges.push({start:open.start,end:pattern.lastIndex});open=null;
+                } else if(open.kind==='inline' && ticks && ticks[0]==='`' && ticks.length===open.length) {
+                    var end=match.index+match[0].indexOf(ticks)+ticks.length;
+                    ranges.push({start:open.start,end:end});open=null;pattern.lastIndex=end;
+                }
+                continue;
             }
-            offset+=line.length+1;
-        });
-        if(open)ranges.push({start:open.start,end:text.length});
-        function covered(index) {return ranges.some(function(range){return index>=range.start && index<range.end;});}
-        var pattern=/\{(code|noformat)(?::[^}\n]*)?\}/gi,match;
-        open=null;
-        while((match=pattern.exec(text))) {
-            if(covered(match.index))continue;
-            if(!open)open={start:match.index,kind:match[1].toLowerCase()};
-            else if(match[1].toLowerCase()===open.kind) {ranges.push({start:open.start,end:pattern.lastIndex});open=null;}
+            if(match[1])open={kind:'fence',mark:ticks[0],length:ticks.length,start:match.index};
+            else if(kind)open={kind:'jira',mark:kind,start:match.index};
+            else open={kind:'inline',length:ticks.length,start:match.index};
         }
         if(open)ranges.push({start:open.start,end:text.length});
-        pattern=/`+/g;open=null;
-        while((match=pattern.exec(text))) {
-            if(covered(match.index))continue;
-            if(!open)open={start:match.index,length:match[0].length};
-            else if(match[0].length===open.length) {ranges.push({start:open.start,end:pattern.lastIndex});open=null;}
-        }
-        if(open) {var end=text.indexOf('\n',open.start);ranges.push({start:open.start,end:end<0?text.length:end});}
-        return ranges.sort(function(a,b){return a.start-b.start;});
+        return ranges;
     }
     function codeAt(ranges,index) {return ranges.some(function(range){return index>=range.start && index<range.end;});}
     function maskCode(text) {
@@ -648,17 +645,137 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     function normalizedDescriptionText(description) {
         var text=String(description || '');return renderSectionMarkers(text,sectionMarkers(text),false);
     }
-    function jiraTemplateDescription(meta,typeId,text) {
+    function decodeTableEntities(value) {
+        return value.replace(/&(?:amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi,function(entity) {
+            var named={'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"'},key=entity.toLowerCase();
+            if(named[key])return named[key];
+            var number=key.startsWith('&#x')?parseInt(key.slice(3,-1),16):parseInt(key.slice(2,-1),10);
+            return number>=0 && number<=0x10ffff && !(number>=0xd800 && number<=0xdfff)?String.fromCodePoint(number):entity;
+        });
+    }
+    function splitTableCells(line) {
+        if(!line.startsWith('|') || !line.endsWith('|'))return null;
+        var cells=[],value='',slashes=0;
+        for(var i=1;i<line.length-1;i++) {
+            var character=line[i];
+            if(character==='|' && slashes%2===0) {cells.push(value);value='';}
+            else value+=character;
+            slashes=character==='\\'?slashes+1:0;
+        }
+        cells.push(value);return cells.length===2?cells:null;
+    }
+    function decodeMarkdownTableCell(cell) {
+        var value='',codeTicks=0;
+        for(var i=0;i<cell.length;) {
+            var character=cell[i],next=cell[i+1],code=next && next.charCodeAt(0),match;
+            if(character==='`') {
+                match=/^`+/.exec(cell.slice(i));value+=match[0];
+                codeTicks=codeTicks===match[0].length?0:codeTicks || match[0].length;i+=match[0].length;continue;
+            }
+            if(codeTicks) {
+                if(character==='\\' && next==='|') {value+='|';i+=2;}
+                else {value+=character;i++;}
+                continue;
+            }
+            if(character==='\\' && (code>=33 && code<=47 || code>=58 && code<=64 || code>=91 && code<=96 || code>=123 && code<=126)) {
+                value+=next;i+=2;continue;
+            }
+            if(character==='<' && (match=/^<br\s*\/?\s*>/i.exec(cell.slice(i)))) {
+                value+='\n';i+=match[0].length;continue;
+            }
+            if(character==='&' && (match=/^&(?:amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/i.exec(cell.slice(i)))) {
+                value+=decodeTableEntities(match[0]);i+=match[0].length;continue;
+            }
+            value+=character;i++;
+        }
+        return value;
+    }
+    function parsedDescriptionTable(description) {
+        if(typeof description!=='string')return null;
+        var lines=description.trim().split(/\r?\n/),wiki=lines[0]==='||Поле||Описание||',start=wiki?1:2;
+        if(!wiki && (!/^\|\s*Поле\s*\|\s*Описание\s*\|$/.test(lines[0]) || !/^\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|$/.test(lines[1] || '')))return null;
+        var rows=[];
+        for(var i=start;i<lines.length;i++) {
+            var cells=splitTableCells(lines[i].trim());if(!cells)return null;
+            cells=cells.map(function(cell) {
+                if(!wiki) {
+                    if(cell.startsWith(' '))cell=cell.slice(1);if(cell.endsWith(' '))cell=cell.slice(0,-1);
+                    return decodeMarkdownTableCell(cell);
+                }
+                return decodeTableEntities(cell.replace(/\\([\\|{}\[\]*_!^~#+-])/g,function(all,character){return character==='\\'?'\n':character;}));
+            });
+            rows.push({label:cells[0],value:cells[1]});
+        }
+        if(!rows.length || !rows.some(function(row){return devopsSections.some(function(section){return [section.label].concat(section.aliases).some(function(label){return sectionKey(label)===sectionKey(row.label);});});}))return null;
+        return {rows:rows,wiki:wiki};
+    }
+    function canonicalTableDescription(description) {
+        var table=parsedDescriptionTable(description);
+        if(!table)return description;
+        var canonical=table.rows.map(function(row){return row.label+': '+row.value;}).join('\n\n');
+        function signature(value) {
+            var sections=readSections(value,false);
+            return JSON.stringify(Object.keys(sections).sort().map(function(id){return [id,String(sections[id]).replace(/\s+/g,' ').trim()];}));
+        }
+        // A cell containing label-like literal text must not become new fields.
+        return signature(description)===signature(canonical)?canonical:description;
+    }
+    function descriptionTableRows(meta,typeId,description) {
         var requirements=devopsRequirements(meta,typeId);
-        if(typeof text!=='string' || !requirements || requirements.kind==='unsupported')return text;
-        return renderSectionMarkers(text,sectionMarkers(text,descriptionSectionDefinitions(meta,typeId)),true);
+        if(typeof description!=='string' || !requirements || requirements.kind==='unsupported')return [];
+        var definitions=descriptionSectionDefinitions(meta,typeId),table=parsedDescriptionTable(description),entries=[];
+        if(!description.trim())return definitions.filter(function(section){return section.required;}).map(function(section){return {label:section.label,value:''};});
+        if(table)entries=table.rows;
+        else {
+            var markers=sectionMarkers(description,definitions);if(!markers.length)return [];
+            var prefix=description.slice(0,markers[0].start);
+            if(prefix.trim())entries.push({label:'Дополнительно',value:prefix});
+            markers.forEach(function(marker,index) {
+                var value=description.slice(marker.end,index+1<markers.length?markers[index+1].start:description.length);
+                if(value.startsWith(' '))value=value.slice(1);
+                if(index+1<markers.length)value=value.replace(/(?:\r?\n){1,2}$/,'');
+                entries.push({label:marker.canonical,value:value});
+            });
+        }
+        var values=Object.create(null);
+        entries.forEach(function(entry) {
+            var definition=definitions.find(function(section){var original=devopsSections.find(function(item){return item.id===section.id;});return [section.label].concat(original.aliases).some(function(label){return sectionKey(label)===sectionKey(entry.label);});});
+            var id=definition?definition.id:'extra',value=definition?entry.value:entry.label+': '+entry.value;
+            values[id]=Object.hasOwn(values,id)?values[id]+'\n\n'+value:value;
+        });
+        return definitions.filter(function(section){return section.required || Object.hasOwn(values,section.id);}).map(function(section){return {label:section.label,value:values[section.id] || ''};});
+    }
+    function markdownTableCell(value) {
+        return value.replace(/[&<>|\\`*_\[\]{}~#\r\t]/g,function(character) {
+            return character==='&'?'&amp;':character==='<'?'&lt;':character==='>'?'&gt;':'&#'+character.charCodeAt(0)+';';
+        }).replace(/\n/g,'<br>').replace(/^ +| +$/g,function(spaces){return spaces.replace(/ /g,'&#32;');});
+    }
+    function markdownTemplateDescription(meta,typeId,description) {
+        var rows=descriptionTableRows(meta,typeId,description);
+        return rows.length?'| Поле | Описание |\n| --- | --- |\n'+rows.map(function(row){return '| '+markdownTableCell(row.label)+' | '+markdownTableCell(row.value)+' |';}).join('\n'):description;
+    }
+    function wikiTableCell(value) {
+        var urls=[],match,pattern=/https?:\/\/[^\s<>"`]+/g;
+        while((match=pattern.exec(value)))urls.push({start:match.index,end:pattern.lastIndex});
+        return value.replace(/[&<>\\|{}\[\]*_!^~#+-]/g,function(character,index) {
+            if('-+_*^~#'.includes(character) && codeAt(urls,index))return character;
+            return character==='&'?'&amp;':character==='<'?'&lt;':character==='>'?'&gt;':character==='\\'?'&#92;':String.fromCharCode(92)+character;
+        }).replace(/\r\n|\r|\n/g,String.fromCharCode(92).repeat(2));
+    }
+    function jiraTemplateDescription(meta,typeId,description) {
+        var rows=descriptionTableRows(meta,typeId,description);
+        return rows.length?'||Поле||Описание||\n'+rows.map(function(row){return '|'+wikiTableCell(row.label)+'|'+wikiTableCell(row.value)+'|';}).join('\n'):description;
     }
     function readSections(description,infer) {
         var result=Object.create(null),current=[],intro=[],headed=false;
         // Models use both **Label:** and **Label**:, including several headings
         // on one line. Strip heading formatting before assigning the actual text.
         var text=normalizedDescriptionText(maskCode(String(description || '')));
-        text.split(/\r?\n/).forEach(function(line) {
+        var table=parsedDescriptionTable(description);
+        if(table)table.rows.forEach(function(row) {
+            devopsSections.filter(function(section){return [section.label].concat(section.aliases).some(function(label){return sectionKey(label)===sectionKey(row.label);});}).forEach(function(section){result[section.id]=(result[section.id]?result[section.id]+'\n\n':'')+maskCode(row.value);});
+        });
+        else text.split(/\r?\n/).forEach(function(line) {
             var clean=line.replace(/^\s*(?:h[1-6]\.\s*|#{1,6}\s*|[-•]\s*|\d+[.)]\s*)/,'').trim();
             var colon=clean.indexOf(':'),label=colon===-1 ? clean : clean.slice(0,colon);
             var key=sectionKey(label),sections=devopsSections.filter(function(s) {
@@ -737,6 +854,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
     function formatDevopsDescription(meta,typeId,description,strict) {
         var requirements=devopsRequirements(meta,typeId);
         if(typeof description!=='string' || !description.trim() || !requirements || requirements.kind==='unsupported')return description;
+        description=canonicalTableDescription(description);
+        if(parsedDescriptionTable(description))return description;
         var definitions=descriptionSectionDefinitions(meta,typeId),markers=sectionMarkers(description,definitions),normalized=normalizedDescriptionText(description);
         var complete=requirements.sections.every(function(section){return markers.some(function(marker){return marker.id===section.id;});});
         var links=readSections(description,false).links || '';
@@ -876,6 +995,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return headers;
     }
     function mergeDevopsReference(description,value) {
+        description=canonicalTableDescription(description);
+        if(parsedDescriptionTable(description))return {ok:false,description:description,code:'description',message:'Уточните неоднозначные заголовки внутри ячеек таблицы перед добавлением ссылки.'};
         var parsed=parseDevopsReferenceAnswer(value);
         if(!parsed.ok || typeof description!=='string')return {ok:false,description:description,code:parsed.code || 'description',message:parsed.message || 'Описание задачи должно быть текстом.'};
         var newline=description.indexOf('\r\n')!==-1?'\r\n':'\n',headers=descriptionHeaders(description);
@@ -917,7 +1038,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         }
         if(requirements.kind==='unsupported')missing('type','Для DEVOPS выберите тип «Задача», «Ошибка» или «Задача развёртывания».','issuetype');
         var structured=meta.projectKey==='DEVOPS' && policy.requireStructuredDescription===true && (!policy.templateId || policy.templateId===requirements.kind);
-        var inlineStructure=structured && sectionMarkers(String(values.description || ''),descriptionSectionDefinitions(meta,typeId)).some(function(marker){return marker.inline;});
+        var inlineStructure=structured && !parsedDescriptionTable(values.description) && sectionMarkers(String(values.description || ''),descriptionSectionDefinitions(meta,typeId)).some(function(marker){return marker.inline;});
         var sections=readSections(values.description,!structured),summary=typeof values.summary==='string'?values.summary.trim():'';
         if(!meaningful(summary) || /^(?:сделать обновление|задача|ошибка|тест|test|обновить|развернуть)[.!?\s]*$/i.test(summary))
             missing('summary','Укажите содержательную тему с действием или сбоем, сервисом и местом.','summary');
@@ -1029,7 +1150,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         return { fields: checked.output };
     }
 
-    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, jiraTemplateDescription:jiraTemplateDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
+    return { validateFields: validateFields, buildCreatePayload: buildCreatePayload, normalizeTimeTracking:fields.timeTrackingValue, devopsRequirements:devopsRequirements, formatDevopsDescription:formatDevopsDescription, jiraTemplateDescription:jiraTemplateDescription, descriptionTableRows:descriptionTableRows, markdownTemplateDescription:markdownTemplateDescription, parseDevopsReferenceAnswer:parseDevopsReferenceAnswer, mergeDevopsReference:mergeDevopsReference, descriptionSectionDefinitions:descriptionSectionDefinitions, mergeDescriptionSections:mergeDescriptionSections };
 });
 
 /* === Module: draft.js === */
@@ -4931,14 +5052,30 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     .on('click',function() {boardId=null;userOptions=[];runSearch();}));
             }
         }
+        function renderDescription() {
+            preview.empty();
+            if (typeof options.descriptionTableRows!=='function') {markdown($,preview,String(current.value || ''));return true;}
+            var rows=options.descriptionTableRows(String(current.value || ''));
+            if(!rows.length)return false;
+            var table=$('<table class="ta-description-table">').append($('<caption class="ta-visually-hidden">').text('Описание задачи по разделам'));
+            table.append($('<thead>').append($('<tr>').append($('<th scope="col">').text('Поле'),$('<th scope="col">').text('Описание'))));
+            var body=$('<tbody>').appendTo(table);
+            rows.forEach(function(row) {
+                var cell=$('<td>'),value=String(row.value || '');
+                if(value.trim())cell.append($('<div class="ta-description-value">').text(value));
+                else cell.append($('<span class="ta-muted" data-ta-description-empty>').text('Не заполнено'));
+                body.append($('<tr>').append($('<th scope="row">').text(row.label),cell));
+            });
+            preview.addClass('ta-description-table-preview').append(table);return true;
+        }
         function showDescription() {
             if (!preview) return;
-            var available = current.descriptionPreview === true && !!String(current.value || '').trim();
+            var available = current.descriptionPreview === true && (!!String(current.value || '').trim() || typeof options.descriptionTableRows==='function');
+            preview.empty();if(available && !renderDescription())available=false;
             previewToggle.prop('hidden', !available).attr({'aria-expanded':String(available && previewEditing),'aria-label':previewEditing?'Показать описание':'Редактировать описание'})
                 .text(previewEditing ? 'Показать описание' : 'Редактировать');
             preview.prop('hidden', !available || previewEditing);
             control.prop('hidden', available && !previewEditing);
-            preview.empty();if(available)markdown($,preview,String(current.value));
         }
         function build(kind) {
             cancelSearch(); body.empty(); preview=null;previewToggle=null;previewEditing=false; control = null; panel = null; query = ''; userOptions = []; localEdit = null;
@@ -4998,7 +5135,7 @@ define('_ujgTA_fieldUi', ['_ujgTA_icons', '_ujgTA_fields'], function(icon, field
                     body.prepend(previewToggle,preview);
                     previewToggle.on('click',function(){previewEditing=!previewEditing;showDescription();if(previewEditing)control.trigger('focus');});
                     control.on('taEditDescription',function(){previewEditing=true;showDescription();});
-                    control.on('input.taPreview',function(){current.value=control.val();if(preview) {preview.empty();markdown($,preview,String(current.value));}});
+                    control.on('input.taPreview',function(){current.value=control.val();if(preview && current.descriptionPreview===true)renderDescription();});
                 }
             }
             label.attr('for', uid);
@@ -5244,7 +5381,7 @@ define('_ujgTA_settingsUi', ['_ujgTA_profiles', '_ujgTA_fieldUi', '_ujgTA_icons'
 });
 
 /* === Module: ui.js === */
-define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], function(fieldUi, icon, settingsUi) {
+define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi', '_ujgTA_validation'], function(fieldUi, icon, settingsUi, validation) {
     'use strict';
     var connectionSequence = 0;
     function create(options) {
@@ -5633,9 +5770,13 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if(host.parent()[0]!==target[0])target.append(host);
             typeHome.toggleClass('ta-has-type',!inPanel);
         }
+        function descriptionMarkdown() {
+            return state.standardDescriptionTemplate===true && (!state.settings || state.settings.descriptionFormat===undefined || state.settings.descriptionFormat==='markdown');
+        }
         function copy(id) {
             if (!state.draft) return;
             var text = state.draft.fields[id] == null ? '' : String(state.draft.fields[id]);
+            if(id==='description' && descriptionMarkdown())text=validation.markdownTemplateDescription(state.meta,state.draft.issueTypeId,text);
             var area = root.find('[data-ta-copy-text]').prop('hidden', false).val(text); area[0].focus(); area[0].select();
             root.find('[data-ta-copy-status]').text('Текст выделен для копирования.');
             if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
@@ -5672,7 +5813,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 if (!entry) {
                     var host = $('<div>').attr('data-ta-field', field.id), pending = $('<div class="ta-pending" hidden>');
                     var editor = $('<div>'); host.append(editor, pending); fieldsHost.append(host);
-                    var view = fieldUi.create({$: $, onChange: function(id, value) {
+                    var view = fieldUi.create({$: $, descriptionTableRows:function(text){return validation.descriptionTableRows(state.meta,state.draft.issueTypeId,text);}, onChange: function(id, value) {
                         if(!canEditField(id))return;
                         var saved=c.updateField(id,value);
                         if(liveEditorHost && options.onManualField)Promise.resolve(saved).then(options.onManualField);
@@ -5727,7 +5868,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 });
                 entry.view.update({field:field, value:displayedValue, errors:linkQuestion?errors.filter(function(message){return message!==linkQuestion.text;}):errors,
                     scopeKey:JSON.stringify([d.projectKey,d.id,d.issueTypeId,d.templateId,state.meta && state.meta.signature]),
-                    descriptionPreview:field.id==='description' && state.standardDescriptionTemplate===true && (!state.settings || state.settings.descriptionFormat===undefined || state.settings.descriptionFormat==='markdown'),
+                    descriptionPreview:field.id==='description' && descriptionMarkdown(),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
                     'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':

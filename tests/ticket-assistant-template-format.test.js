@@ -30,10 +30,15 @@ for(const type of ['10','11','12'])for(const markdown of [false,true])test('all 
     const wiki=validation.jiraTemplateDescription(meta(),type,formatted);assert.equal(check(type,wiki,{requireStructuredDescription:true}).ok,true);
     assert.equal(validation.jiraTemplateDescription(meta(),type,wiki),wiki);
 });
-test('Jira wiki conversion changes recognized headings only, preserving literal body and CRLF',()=>{
+test('table projection preserves literal bodies and custom continuation from plain Markdown headings',()=>{
     const text='**Среда:**\tDEV **body** _exact_\r\n\r\n## Версия и состав\r\ncommit 5961fa4\r\n\r\n__Ссылки__: '+url+'?a=1&b=2\r\nМой раздел: НеМенять **body**';
     const wiki=validation.jiraTemplateDescription(meta(),'12',text);
-    assert.equal(wiki,'*Среда:*\tDEV **body** _exact_\r\n\r\n*Версия и состав:*\r\ncommit 5961fa4\r\n\r\n*Ссылки:* '+url+'?a=1&b=2\r\nМой раздел: НеМенять **body**');
+    assert.match(wiki,/^\|\|Поле\|\|Описание\|\|/);
+    const rows=validation.descriptionTableRows(meta(),'12',text);
+    assert.equal(rows.find(row=>row.label==='Среда').value,'\tDEV **body** _exact_');
+    assert.equal(rows.find(row=>row.label==='Версия и состав').value,'\r\ncommit 5961fa4');
+    assert.equal(rows.find(row=>row.label==='Ссылки').value,url+'?a=1&b=2\r\nМой раздел: НеМенять **body**');
+    assert.equal(validation.descriptionTableRows(meta(),'12',validation.markdownTemplateDescription(meta(),'12',text)).find(row=>row.label==='Ссылки').value,rows.find(row=>row.label==='Ссылки').value);
 });
 test('malformed saved narrative with an inline link repairs once; reference retry does not duplicate URL',()=>{
     const saved=live.replace('Ссылки:','Дополнительно:\nСсылки:');
@@ -60,7 +65,7 @@ for(const type of ['10','11','12'])test('explicit due date is optional and is pr
     const plain=examples[type]+' Срок: 2026-12-01.',formatted=validation.formatDevopsDescription(meta(),type,plain);
     assert.ok(validation.descriptionSectionDefinitions(meta(),type).some(section=>section.id==='due' && section.required===false));
     assert.match(formatted,/\nСрок \(опционально\): 2026-12-01/);
-    const wiki=validation.jiraTemplateDescription(meta(),type,formatted);assert.match(wiki,/\*Срок \(опционально\):\*/);
+    const wiki=validation.jiraTemplateDescription(meta(),type,formatted);assert.match(wiki,/\|Срок \(опционально\)\|/);
     assert.equal(check(type,wiki,{requireStructuredDescription:true}).ok,true);assert.equal(check(type,validation.formatDevopsDescription(meta(),type,examples[type]),{requireStructuredDescription:true}).ok,true);
 });
 test('description maxlength uses the actual Jira wiki payload and reports overflow before creation',()=>{
@@ -71,7 +76,7 @@ test('description maxlength uses the actual Jira wiki payload and reports overfl
     const result=validation.validateFields(m,'12',values,policy);assert.equal(result.ok,false);assert.match(result.fieldErrors.description.join(' '),/формате Jira.*лимит/);
     assert.throws(()=>validation.buildCreatePayload(m,'12',values,policy));
     field.maxLength=wiki.length;assert.equal(validation.validateFields(m,'12',values,policy).ok,true);assert.equal(validation.buildCreatePayload(m,'12',values,policy).fields.description,wiki);
-    const markdown=wiki.replace(/\*([^*]+:)\*/g,'**$1**');assert.ok(markdown.length>wiki.length);
+    const markdown=validation.markdownTemplateDescription(m,'12',plain);assert.ok(markdown.length>wiki.length);
     assert.equal(validation.validateFields(m,'12',{...values,description:markdown},policy).ok,true);
 });
 test('structured policy rejects raw standard descriptions and holes without inventing missing body',()=>{

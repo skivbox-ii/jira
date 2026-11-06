@@ -7,7 +7,7 @@ async function liveFixture(t,{legacy=false}={}) {
     const globals={window,document:window.document,AbortController,URL,setInterval,clearInterval},icons=loadUnit('icons',{},globals);
     const fieldUi=loadUnit('field-ui',{_ujgTA_fields:h.fields,_ujgTA_icons:icons},globals);
     const settingsUi=loadUnit('settings-ui',{_ujgTA_profiles:loadUnit('profiles'),_ujgTA_fieldUi:fieldUi,_ujgTA_icons:icons},globals);
-    const UI=loadUnit('ui',{_ujgTA_fieldUi:fieldUi,_ujgTA_icons:icons,_ujgTA_settingsUi:settingsUi},globals);
+    const UI=loadUnit('ui',{_ujgTA_fieldUi:fieldUi,_ujgTA_icons:icons,_ujgTA_settingsUi:settingsUi,_ujgTA_validation:h.validation},globals);
     const Chat=loadUnit('chat',{_ujgTA_chatTools:loadUnit('chat-tools',{_ujgTA_fields:h.fields}),_ujgTA_draft:h.drafts},{AbortController});
     let chatUi,prompt=async()=>{throw Error('Pico HTTP 429');};
     const chat=Chat.create({controller:h.controller,store:h.store,runtime:{createSession(config){return {prompt:async text=>prompt(config,text),getMessages:()=>[],abort(){},dispose(){}};}},onChange:()=>{if(chatUi)chatUi.update(h.controller.getState());}});

@@ -103,10 +103,6 @@ async function fill(t,h,scenario,description,via) {
     assert.equal(c.getState().draft.source,description);assert.equal(h.posts.length,0);
 }
 
-function plainContent(value) {
-    return value.replace(/^\*([^*\n]+:)\*/gm,'$1').replace(/\s+/g,' ').trim();
-}
-
 for(const scenario of cases)for(const format of ['markdown','plain'])for(const via of ['controller','chat']) {
     const label=scenario.template+' / '+format+' / '+via;
     test('DEVOPS default template reaches mock create POST with structured description: '+label,async t=>{
@@ -118,11 +114,17 @@ for(const scenario of cases)for(const format of ['markdown','plain'])for(const v
         assert.equal(payload.fields.summary,scenario.summary);
         const description=payload.fields.description;
         if(format==='markdown') {
-            for(const block of scenario.description.split('\n\n')) {
-                const heading=block.slice(0,block.indexOf(':')+1);
-                assert.ok(description.includes('*'+heading+'*'),heading+' must use Jira Markdown bold, e.g. *Среда:*');
-            }
-            assert.equal(plainContent(description),plainContent(scenario.description));
+            assert.ok(description.startsWith('||Поле||Описание||\n'));
+            // The literal source fixtures independently define expected table cells.
+            const posted=description.split('\n').slice(1).map(line=>{
+                assert.ok(line.startsWith('|') && line.endsWith('|'));
+                const cells=line.slice(1,-1).split('|');assert.equal(cells.length,2);
+                return {label:cells[0],value:cells[1].replace(/\\([|{}\[\]*_!^~#+-])/g,'$1').replace(/&amp;/g,'&')};
+            });
+            assert.deepEqual(posted,scenario.description.split('\n\n').map(block=>{
+                const colon=block.indexOf(':');return {label:block.slice(0,colon),value:block.slice(colon+2)};
+            }));
+            assert.equal(h.controller.getState().draft.fields.description,scenario.description,'serialized wiki must not replace canonical draft state');
         } else assert.equal(description,scenario.description);
         assert.equal(h.controller.getState().draft.creation.status,'created');
         await h.controller.submit();assert.equal(h.posts.length,1,'a successful create must not be repeated');

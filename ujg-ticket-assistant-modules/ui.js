@@ -1,4 +1,4 @@
-define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], function(fieldUi, icon, settingsUi) {
+define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi', '_ujgTA_validation'], function(fieldUi, icon, settingsUi, validation) {
     'use strict';
     var connectionSequence = 0;
     function create(options) {
@@ -387,9 +387,13 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
             if(host.parent()[0]!==target[0])target.append(host);
             typeHome.toggleClass('ta-has-type',!inPanel);
         }
+        function descriptionMarkdown() {
+            return state.standardDescriptionTemplate===true && (!state.settings || state.settings.descriptionFormat===undefined || state.settings.descriptionFormat==='markdown');
+        }
         function copy(id) {
             if (!state.draft) return;
             var text = state.draft.fields[id] == null ? '' : String(state.draft.fields[id]);
+            if(id==='description' && descriptionMarkdown())text=validation.markdownTemplateDescription(state.meta,state.draft.issueTypeId,text);
             var area = root.find('[data-ta-copy-text]').prop('hidden', false).val(text); area[0].focus(); area[0].select();
             root.find('[data-ta-copy-status]').text('Текст выделен для копирования.');
             if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
@@ -426,7 +430,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 if (!entry) {
                     var host = $('<div>').attr('data-ta-field', field.id), pending = $('<div class="ta-pending" hidden>');
                     var editor = $('<div>'); host.append(editor, pending); fieldsHost.append(host);
-                    var view = fieldUi.create({$: $, onChange: function(id, value) {
+                    var view = fieldUi.create({$: $, descriptionTableRows:function(text){return validation.descriptionTableRows(state.meta,state.draft.issueTypeId,text);}, onChange: function(id, value) {
                         if(!canEditField(id))return;
                         var saved=c.updateField(id,value);
                         if(liveEditorHost && options.onManualField)Promise.resolve(saved).then(options.onManualField);
@@ -481,7 +485,7 @@ define('_ujgTA_ui', ['_ujgTA_fieldUi', '_ujgTA_icons', '_ujgTA_settingsUi'], fun
                 });
                 entry.view.update({field:field, value:displayedValue, errors:linkQuestion?errors.filter(function(message){return message!==linkQuestion.text;}):errors,
                     scopeKey:JSON.stringify([d.projectKey,d.id,d.issueTypeId,d.templateId,state.meta && state.meta.signature]),
-                    descriptionPreview:field.id==='description' && state.standardDescriptionTemplate===true && (!state.settings || state.settings.descriptionFormat===undefined || state.settings.descriptionFormat==='markdown'),
+                    descriptionPreview:field.id==='description' && descriptionMarkdown(),
                     disabled:writeLocked() || d.creation.status==='preflight' || field.id === 'assignee' && (!profile || !profile.allowAssignee), selectedUsers:[]});
                 var help=field.id==='assignee' && (!profile || !profile.allowAssignee) && !Object.prototype.hasOwnProperty.call(d.fields,field.id)?
                     'Ручной выбор отключён профилем. Разрешите его в настройках; иначе назначение определят правила Jira.':
