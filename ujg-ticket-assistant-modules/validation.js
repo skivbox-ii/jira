@@ -315,7 +315,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(!table)return description;
         var canonical=table.rows.map(function(row){return row.label+': '+row.value;}).join('\n\n');
         function signature(value) {
-            var sections=readSections(value,false);
+            var sections=readSections(value);
             return JSON.stringify(Object.keys(sections).sort().map(function(id){return [id,String(sections[id]).replace(/\s+/g,' ').trim()];}));
         }
         // A cell containing label-like literal text must not become new fields.
@@ -367,8 +367,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         var rows=descriptionTableRows(meta,typeId,description);
         return rows.length?'||Поле||Описание||\n'+rows.map(function(row){return '|'+wikiTableCell(row.label)+'|'+wikiTableCell(row.value)+'|';}).join('\n'):description;
     }
-    function readSections(description,infer) {
-        var result=Object.create(null),current=[],intro=[],headed=false;
+    function readSections(description) {
+        var result=Object.create(null),current=[];
         // Models use both **Label:** and **Label**:, including several headings
         // on one line. Strip heading formatting before assigning the actual text.
         var text=normalizedDescriptionText(maskCode(String(description || '')));
@@ -383,7 +383,6 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 return [s.label].concat(s.aliases).some(function(alias) {return sectionKey(alias)===key;});
             });
             if(sections.length) {
-                headed=true;
                 current=sections.map(function(s) {return s.id;});
                 current.forEach(function(id) {
                     if(!result[id])result[id]='';
@@ -391,65 +390,9 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 });
             } else if (/^(?:срок(?: \(опционально\))?|родительская история|влияние \(опционально\)|история|приоритет|исполнитель)\s*:/i.test(clean)) current=[];
             else {
-                if(!headed)intro.push(line);
                 current.forEach(function(id) {result[id]+='\n'+line;});
             }
         });
-        if(infer===false)return result;
-        // Credit literal facts in task prose without rewriting the description or
-        // inventing missing data. Links/tags/examples alone cannot name a target.
-        var facts=[intro.join('\n'),result.work || '',result.actual || '',result.steps || '',result.location || '',result.extra || ''].join('\n');
-        if(!meaningful(result.location)) {
-            var location=/(?:в|на)\s+(?:(?:сред[еу]|стенд[еу]|окружени[еи]|контур[еу])\s+)?(?:[«"'`])?(DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)(?=$|[^a-z0-9_-])/ig;
-            var match,locations=[];
-            var alternativeLocation=/(?:DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)\s*(?:или|либо|\/)\s*(?:(?:в|на)\s+)?(?:(?:сред[еу]|стенд[еу]|окружени[еи]|контур[еу])\s+)?(?:DEV|TEST|PREPROD|PROD|UAT|STAGE|QA)(?=$|[^a-z0-9_-])/i.test(facts);
-            while((match=location.exec(facts))) {
-                var before=facts.slice(Math.max(0,match.index-15),match.index);
-                if(/(?:не|например)\s*$/i.test(before))continue;
-                locations.push(match);
-            }
-            var targets=Array.from(new Set(locations.map(function(item) {return item[1].toUpperCase();})));
-            if(!alternativeLocation && targets.length===1)result.location=locations[0][0];
-        }
-        if(!meaningful(result.release) && /обнов|разверн|разв[её]рт|выкат|установ|deploy|upgrade|rollout/i.test(facts)) {
-            // Only an explicitly stated target version, tag or commit identifies a release.
-            // A current/source version is useful context, never the target by itself.
-            var release=/(?:до\s+версии|на\s+версию)\s+([vV]?\d[\w.-]*)|(?:из\s+)?тег[а]?\s+[`"']?([\w][\w./-]*)/i.exec(facts);
-            var commit=false;
-            if(!release) {
-                release=/(?:из|на)\s+коммит[а]?\s+([a-f0-9]{7,40})(?![a-z0-9_-])/i.exec(facts);
-                commit=!!release;
-            }
-            var unknownTarget=/(?:целевая|новая|нужная)\s+версия\s+(?:пока\s+)?(?:неизвестна|не определена|не указана)/i.test(facts);
-            if(release) {
-                var beforeRelease=facts.slice(0,release.index),afterRelease=facts.slice(release.index+release[0].length);
-                var alternativeRelease=/^\s*(?:или|либо|\/)\s*(?:(?:до|на|из)\s+)?(?:(?:версии|версию|тега)\s+)?[\w\d]/i.test(afterRelease);
-                var placeholderTag=release[2] && /^(?:tbd|todo|unknown|none|n\/a)[.!?]*$/i.test(release[2]);
-                if(!unknownTarget && !alternativeRelease && !placeholderTag && !/(?:не|нет|уточнить|например)\s*$/i.test(beforeRelease) &&
-                    (!commit || targetCommit(facts,release) && assertedProse(facts,release[0],release.index)))result.release=release[0];
-            }
-        }
-        if(!meaningful(result.window)) {
-            var workingHours=/(?:в\s+)?рабоч(?:ие|их|ее|ем)\s+(?:часы|часов|время|времени)/i.exec(facts);
-            if(workingHours && !/(?:не|вне)\s*$/i.test(facts.slice(Math.max(0,workingHours.index-5),workingHours.index)))result.window=workingHours[0];
-        }
-        // A provider fallback may preserve the user's original paragraph. Credit
-        // explicit operational steps and an attributed observable check verbatim.
-        var paragraph=facts;
-        if(!meaningful(result.order)) {
-            var operation=/(?:^|[.!?\n])\s*((?:поменять|заменить|обновить)\s+(?:образ|конфигураци\S*|манифест\S*|скрипт\S*|файл\S*|пакет\S*|бандл\S*)[^.!?\n]*|(?:перезапустить|перезагрузить)\s+[^.!?\n]+|выполнить\s+(?:миграци\S*|скрипт\S*)[^.!?\n]*)/i.exec(paragraph);
-            var unresolvedOrder=/(?:порядок(?:\s+действий)?)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н)|неизвест)/i.test(paragraph);
-            if(operation && !unresolvedOrder && !unresolvedInstruction(operation[1]) && assertedProse(paragraph,operation[1],operation.index))result.order=operation[1];
-        }
-        if(!meaningful(result.verification)) {
-            var attributedCheck=/(?:^|[.!?\n])\s*((?:постановщик|заказчик|дежурный|QA|DevOps|команда\s+[\wА-Яа-яЁё-]+)\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/i.exec(paragraph) ||
-                /(?:^|[.!?\n])\s*((?:[А-ЯЁ][а-яё-]+\s+){1,2}[А-ЯЁ][а-яё-]+\s+(?:проверит|проверяет|проверят|проверяют)\s+[^.!?\n]+)/.exec(paragraph);
-            var unresolvedCheck=/(?:проверка|результат(?:\s+проверки)?|ожидаемый\s+код|код\s+ответа)\s+(?:пока\s+|ещ[её]\s+)?(?:не\s+(?:согласован|определ[её]н|извест)|неизвест|отмен[её]н)/i.test(paragraph);
-            if(attributedCheck && !unresolvedCheck && !unresolvedInstruction(attributedCheck[1]) && assertedProse(paragraph,attributedCheck[1],attributedCheck.index) &&
-                (/\bHTTP\s+[1-5]\d{2}\b/i.test(attributedCheck[1]) ||
-                    /(?:^|\s)(?:открыти[ея]|отображени[ея]|появлени[ея]|загрузк[ауи]|запуск[ау]?)\s+(?!(?:чего|что|результат)(?:\s|[.-]))[\wА-Яа-яЁё/-]{2,}/i.test(attributedCheck[1])))result.verification=attributedCheck[1];
-        }
-        if(!meaningful(result.verification) && meaningful(result.acceptance))result.verification=result.acceptance;
         return result;
     }
     function formatDevopsDescription(meta,typeId,description,strict) {
@@ -459,7 +402,7 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(parsedDescriptionTable(description))return description;
         var definitions=descriptionSectionDefinitions(meta,typeId),markers=sectionMarkers(description,definitions),normalized=normalizedDescriptionText(description);
         var complete=requirements.sections.every(function(section){return markers.some(function(marker){return marker.id===section.id;});});
-        var links=readSections(description,false).links || '';
+        var links=readSections(description).links || '';
         if(complete && dedupeReferences(links)===links)return markers.some(function(marker){return marker.inline;})?renderSectionMarkers(description,markers,false,true):description;
         var parsed=readSections(description),groups=Object.create(null),extra=[];
         var order=definitions.filter(function(section){return section.id!=='extra';}).map(function(section){return section.id;});
@@ -476,16 +419,12 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
             groups[id].push(value);
         }
         // A decimal or version dot is not a sentence boundary. Keep each source
-        // sentence exactly once, moving only literal facts into template groups.
+        // sentence exactly once under its explicit section heading.
         var active=null;
         descriptionParts(normalized).forEach(function(part) {
             if(part.code) {if(active && active!=='extra' && active!=='custom')append(active,part.text);else extra.push(part.text);return;}
             var sentence=part.text.trim();
             if(!sentence)return;
-            if(/ссылк|репозитори|документаци|баз[а-яё]* знаний/i.test(sentence) &&
-                /нет(?:$|[.\s])|неизвест|отсутств|не (?:указан|предоставлен)|требуется для создания/i.test(sentence)) {
-                append('links',sentence);return;
-            }
             var heading=/^([^:\n]{1,80}):[ \t]*([\s\S]*)$/.exec(sentence);
             if(heading && !/^https?$/i.test(heading[1]) && /^[a-zа-яё][^:\n]{0,79}$/i.test(heading[1])) {
                 var definition=definitions.find(function(section){var original=devopsSections.find(function(item){return item.id===section.id;});return [section.label].concat(original.aliases).some(function(label){return sectionKey(label)===sectionKey(heading[1]);});});
@@ -493,15 +432,8 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
                 active='custom';extra.push(sentence);return;
             }
             if(active==='custom') {extra.push(sentence);return;}
-            var matches=known.filter(function(id) {return sentence.indexOf(parsed[id].trim())!==-1;});
-            if(!matches.length) {if(active && active!=='extra')append(active,sentence);else extra.push(sentence);return;}
-            var id=matches.indexOf('release')!==-1 ? 'release' : matches[0];
-            if(id==='release') ['location','window'].forEach(function(other) {
-                if(matches.indexOf(other)===-1)return;
-                var value=parsed[other].trim();
-                append(other,value);sentence=sentence.replace(value,'');
-            });
-            append(id,sentence.replace(/[ \t]{2,}/g,' ').replace(/\s+([.!?])/g,'$1').trim());
+            if(active && active!=='extra' && active!=='custom')append(active,sentence);
+            else extra.push(sentence);
         });
         var blocks=[];
         order.forEach(function(id) {
@@ -640,8 +572,12 @@ define('_ujgTA_validation', ['_ujgTA_fields'], function(fields) {
         if(requirements.kind==='unsupported')missing('type','Для DEVOPS выберите тип «Задача», «Ошибка» или «Задача развёртывания».','issuetype');
         var structured=meta.projectKey==='DEVOPS' && policy.requireStructuredDescription===true && (!policy.templateId || policy.templateId===requirements.kind);
         var inlineStructure=structured && !parsedDescriptionTable(values.description) && sectionMarkers(String(values.description || ''),descriptionSectionDefinitions(meta,typeId)).some(function(marker){return marker.inline;});
-        var sections=readSections(values.description,!structured),summary=typeof values.summary==='string'?values.summary.trim():'';
-        if(!meaningful(summary) || /^(?:сделать обновление|задача|ошибка|тест|test|обновить|развернуть)[.!?\s]*$/i.test(summary))
+        var sections=readSections(values.description),summary=typeof values.summary==='string'?values.summary.trim():'';
+        var titleKey=sectionKey(summary).replace(/:$/,'').trim();
+        var sectionTitle=descriptionSectionDefinitions(meta,typeId,policy.templateId).some(function(section) {
+            return sectionKey(section.label)===titleKey;
+        });
+        if(!meaningful(summary) || sectionTitle || /^(?:сделать обновление|задача|ошибка|тест|test|обновить|развернуть)[.!?\s]*$/i.test(summary))
             missing('summary','Укажите содержательную тему с действием или сбоем, сервисом и местом.','summary');
         requirements.sections.forEach(function(s) {
             if(s.id==='evidence')return;

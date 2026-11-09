@@ -38,7 +38,8 @@ test('one conversation edits multiple Jira fields and only asks for the remainin
             storage: null, api, requestText: async () => {
                 preview.patchRequests++;
                 if (preview.patchRequests > 3) throw Error('Unexpected additional model call');
-                if (preview.patchRequests > 1) return {text: 'Спасибо за уточнение. Я зафиксировал окно развёртывания и высокий приоритет.'};
+                if (preview.patchRequests === 2) return {text: JSON.stringify({fields:{priority:{id:'2'}},descriptionSections:{window:'С 19:00 до 20:00',verification:'Дежурный проверит HTTP 200 на /health'}})};
+                if (preview.patchRequests === 3) return {text: JSON.stringify({fields:{},descriptionSections:{links:'https://git.example/devops/demo-api'}})};
                 return {text: JSON.stringify({
                     fields: {priority: {id: '3'}, duedate: '2026-11-20'},
                     descriptionSections: {location: 'DEV, demo-api', release: 'demo-api v1.0', order: 'Перезапустить сервис',

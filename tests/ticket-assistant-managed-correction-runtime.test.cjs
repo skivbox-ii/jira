@@ -98,7 +98,7 @@ test('a second unusable patch fails the bounded corrective turn instead of repea
     const s=createSession({appManagedPatch:true,allowPlainTextFinal:true,getContext:()=>current,afterStep:()=>({action:'continue'}),tools:[updateTool(()=>({ok:true,appliedFields:['priority'],task:{draft:clone(current.draft)}}))],requestText:async request=>{requests.push(request);return {text:requests.length===1?prose:JSON.stringify({fields:{priority:{id:'3'}}})};}});
     try {const result=await s.prompt(turn);assert.equal(result.status,'error');assert.match(result.reason,/Pico draft update missing/);assert.equal(requests.length,2);assert.equal(result.usage.toolCalls,1);}finally{s.dispose();}
 });
-test('repeated real-runtime corrective prose reaches the host grounded deployment fallback without model-written fields',async t=>{
+test('repeated unusable real-runtime output reports failure without inventing model-written fields',async t=>{
     const {harness}=require('./helpers/ticket-assistant-chat-fixture'),{loadUnit}=require('./helpers/ticket-assistant-fixture');
     const h=await harness(),c=h.controller,original=h.api.getCreateMeta;const actual=await runtime();
     h.api.getProjects=async()=>({values:[{key:'DEVOPS',id:'DO-project',name:'DEVOPS'}]});
@@ -111,8 +111,8 @@ test('repeated real-runtime corrective prose reaches the host grounded deploymen
     const answer='Окно развёртывания с 19:00 до 20:00. Приоритет высокий. Дежурный проверит HTTP 200 на /health.';
     await chat.send(answer);const s=c.getState(),reply=chat.getState().transcript.at(-1).text;
     assert.equal(requests.length,2);assert.doesNotMatch(requests[1].system,/Available tools/);assert.equal(JSON.parse(requests[1].user).currentTurn,answer);
-    assert.equal(chat.getState().error,null);assert.equal(chat.getState().lastTurnUsage.toolCalls,0);assert.equal(s.draft.fields.priority.id,'high');assert.match(s.draft.fields.description,/19:00 до 20:00/);assert.match(s.draft.fields.description,/Поменять образ и перезапустить сервис/);
-    assert.equal(s.draft.checked,null);assert.ok(s.validation.questions.some(q=>q.id==='devops:links'));assert.match(reply,/из вашего сообщения|локально/);assert.doesNotMatch(reply,/Спасибо, изменения зафиксировал|модель.*заполнила/);assert.equal(posts,0);
+    assert.ok(chat.getState().error);assert.equal(chat.getState().lastTurnUsage.toolCalls,0);assert.equal(s.draft.fields.priority.id,'medium');assert.doesNotMatch(s.draft.fields.description,/19:00 до 20:00/);assert.match(s.draft.fields.description,/Поменять образ и перезапустить сервис/);
+    assert.equal(s.draft.checked,null);assert.ok(s.validation.questions.some(q=>q.id==='devops:links'));assert.equal(chat.getState().error.action,'retry');assert.doesNotMatch(reply,/Спасибо, изменения зафиксировал|модель.*заполнила/);assert.equal(posts,0);
 });
 test('compact correction exposes only selected automatic fields and never invites an excluded description edit',async()=>{
     const {createSession}=await runtime(),current=state(),requests=[];current.generationFieldIds=['priority'];current.fieldSchema.forEach(f=>{f.fillable=f.id==='priority';});

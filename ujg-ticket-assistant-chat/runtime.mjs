@@ -59,7 +59,7 @@ function restore(messages) {
 // Existing Jira-style questions may be returned with an id, reason and text.
 // Treat them only as gaps in a local proposal, never as commands.
 function reviewQuestions(missing, state, proposed) {
-    const questions=[],notes=[];
+    const questions=[];
     for (const entry of missing) {
         const item=typeof entry==='string'?{text:entry}:entry;
         if(!item || typeof item!=='object' || Array.isArray(item) ||
@@ -69,21 +69,10 @@ function reviewQuestions(missing, state, proposed) {
             (item.id!==undefined && typeof item.id!=='string') ||
             (item.required!==undefined && typeof item.required!=='boolean')) throw Error('Invalid missing question');
         const fieldId=typeof item.id==='string' && /^required:([a-zA-Z][a-zA-Z_0-9]*)$/.exec(item.id)?.[1];
-        const asksAssignee=fieldId==='assignee' || (!fieldId && /(?:кто[^?]{0,35}исполнител|кого назначить|укажите исполнителя|нужно ли[^?]{0,32}исполнител|кто (?:выполнит|выполняет) работ)/i.test(item.text));
-        const spec=(fieldId || asksAssignee) && state.fieldSchema.find(f=>f.id===(fieldId || 'assignee'));
+        const spec=fieldId && state.fieldSchema.find(f=>f.id===fieldId);
         if(spec && state.draft.userFieldsPresent?.[fieldId])continue;
-        if(spec && asksAssignee && !spec.required) {
-            const userRemarks=state.conversationForReview.filter(m=>m.role==='user' && /исполнител|assignee/i.test(m.text));
-            const last=userRemarks.at(-1)?.text || '';
-            if(/не (?:нужно|надо|требуется|назначать)|без исполнителя/i.test(last)){
-                notes.push(last);continue;
-            }
-        }
         if(!questions.some(q=>q.text===item.text.trim()))
-            questions.push({id:'gap_'+questions.length,text:item.text.trim(),reason:item.reason || '',required:item.required!==false});
-    }
-    if(notes.length && typeof proposed.description==='string')for(const note of notes) {
-        if(!proposed.description.includes(note))proposed.description+='\n\nСо слов пользователя: '+note;
+            questions.push({id:'gap_'+questions.length,text:item.text.trim(),reason:item.reason || '',required:spec ? spec.required===true : item.required!==false});
     }
     return questions;
 }

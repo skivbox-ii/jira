@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const task='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
+const modelDescription='Среда: DEV\n\nВерсия и состав: demo-api 1.0, тег v1.0\n\nПорядок: Поменять образ и перезапустить сервис.\n\nОкно: рабочее время\n\nПроверка: HTTP 200 на /health.\n\nКто проверяет: Постановщик\n\nСсылки: ссылка на репозиторий отсутствует.';
 const good='https://git.example/team/demo-api/tree/v1.0';
 const dashboard='https://jira.example/secure/Dashboard.jspa?selectPageId=123';
 async function setup(t,{estimate=false}={}) {
@@ -14,22 +15,22 @@ async function setup(t,{estimate=false}={}) {
     });return raw;};
     h.api.checkDevopsIssue=async()=>({fieldErrors:{},warnings:[],link:null});h.api.createIssue=async()=>{posts++;throw Error('Must never create');};
     await c.init();await c.selectProject('DEVOPS');await c.selectIssueType('12');
-    await c.chatUpdate({fields:{summary:'Обновить сервис demo-api в DEV',description:task},questions:[]},c.chatSnapshot(),task);
+    await c.chatUpdate({fields:{summary:'Обновить сервис demo-api в DEV',description:modelDescription},questions:[]},c.chatSnapshot(),task);
     await c.chatValidate(c.chatSnapshot());assert.ok(c.getState().validation.questions.some(q=>q.id==='devops:links'));
     const Chat=loadUnit('chat',{_ujgTA_chatTools:loadUnit('chat-tools',{_ujgTA_fields:h.fields}),_ujgTA_draft:h.drafts},{AbortController});
-    const makeChat=()=>Chat.create({controller:c,store:h.store,runtime:{createSession(){return {prompt:async()=>{models++;throw Error('Invalid Pico text envelope');},getMessages:()=>[],abort(){},dispose(){}};}}});
-    const chat=makeChat();t.after(()=>{chat.destroy();c.destroy();});return {...h,chat,makeChat,models:()=>models,posts:()=>posts};
+    let action=async()=>{throw Error('Invalid Pico text envelope');};
+    const makeChat=()=>Chat.create({controller:c,store:h.store,runtime:{createSession(config){return {prompt:async()=>{models++;await action(config);return {status:'complete'};},getMessages:()=>[],abort(){},dispose(){}};}}});
+    const chat=makeChat();t.after(()=>{chat.destroy();c.destroy();});return {...h,chat,makeChat,models:()=>models,posts:()=>posts,setAction:fn=>{action=fn;},linkModel:async config=>{await config.tools.find(t=>t.name==='update_task').execute({descriptionSections:{links:good}},{});config.afterStep({hasTools:true,failedTool:false,draftExtracted:true});}};
 }
-test('actual DEVOPS conversation rejects dashboard clearly, then fills a correct link without model or automatic creation',async t=>{
+test('failed dashboard reply leaves fields intact; a successful model patch saves the repository link',async t=>{
     const h=await setup(t),c=h.controller,before=c.getState().draft;
-    await h.chat.send(dashboard);assert.equal(h.models(),0);assert.equal(h.chat.getState().error,null);
-    assert.match(h.chat.getState().transcript.at(-1).text,/дашборд Jira/);assert.match(h.chat.getState().transcript.at(-1).text,/репозитор|документац/);
+    await h.chat.send(dashboard);assert.equal(h.models(),1);assert.equal(h.chat.getState().error.code,'response');
     assert.equal(c.getState().draft.fields.description,before.fields.description);assert.equal(c.getState().draft.source,before.source);
-    await h.chat.send(good);const d=c.getState().draft;
-    assert.equal(h.models(),0);assert.equal(h.posts(),0);assert.match(d.fields.description,/Ссылки: https:\/\/git.example/);
+    h.setAction(h.linkModel);await h.chat.send(good);const d=c.getState().draft;
+    assert.equal(h.models(),2);assert.equal(h.posts(),0);assert.match(d.fields.description,/Ссылки: https:\/\/git.example/);
     assert.equal(d.fields.summary,before.fields.summary);assert.ok(d.checked);assert.equal(h.chat.getState().error,null);
-    assert.equal(d.source,before.source+'\n\n'+good);assert.match(h.chat.getState().transcript.at(-1).text,/Ссылка сохранена/);
-    await h.chat.send(good);assert.equal(c.getState().draft.source,d.source);assert.equal(h.chat.getState().transcript.filter(m=>m.role==='user' && m.text===good).length,1);assert.equal(h.models(),0);
+    assert.equal(d.source,before.source+'\n\n'+good);assert.match(h.chat.getState().transcript.at(-1).text,/Проверка пройдена/);
+    assert.equal(d.source.split(good).length-1,1);assert.equal(h.chat.getState().transcript.filter(m=>m.role==='user' && m.text===good).length,1);assert.equal(h.posts(),0);
 });
 for(const text of [dashboard,good])test('persisted screenshot user answer is handled once on retry without duplicated transcript/source: '+text,async t=>{
     const h=await setup(t),c=h.controller;h.chat.destroy();
@@ -37,24 +38,28 @@ for(const text of [dashboard,good])test('persisted screenshot user answer is han
     const notices=['Получен ответ неверного формата. Поля Jira проверены локально.','Уведомление хранилища.'];
     h.store.saveConversation('DEVOPS',d.id,{transcript:[{id:'q',role:'assistant',text:c.getState().validation.questions.find(q=>q.id==='devops:links').text},{id:'answer',role:'user',text}],messages:[],pendingTemplateProposal:null,notices},loaded?.revision || 0);
     await c.init();await c.selectProject('DEVOPS');const chat=h.makeChat();t.after(()=>chat.destroy());await chat.send(text);
-    assert.equal(h.models(),0);assert.equal(chat.getState().error,null);assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
-    assert.ok(chat.getState().notices.includes('Уведомление хранилища.'));assert.doesNotMatch(chat.getState().notices.join(' '),/неверного формата/);
+    assert.equal(h.models(),1);assert.equal(chat.getState().error.code,'response');assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
+    assert.ok(chat.getState().notices.includes('Уведомление хранилища.'));
+    assert.equal(c.getState().draft.fields.description,d.fields.description);assert.equal(c.getState().draft.source,d.source);
     const source=c.getState().draft.source;await chat.send(text);assert.equal(c.getState().draft.source,source);assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
 });
-test('local link patch preserves other fields and revalidates remaining required Jira blockers',async t=>{
+test('model link patch preserves other fields and revalidates remaining required Jira blockers',async t=>{
     const h=await setup(t,{estimate:true}),c=h.controller;await c.updateField('environment','Ручная среда');
-    const before=c.getState().draft;await h.chat.send('Ссылка на репозиторий: '+good);
-    const d=c.getState().draft;assert.equal(h.models(),0);assert.equal(d.fields.environment,before.fields.environment);assert.equal(d.protectedFields.environment,true);
+    const before=c.getState().draft;h.setAction(h.linkModel);await h.chat.send('Ссылка на репозиторий: '+good);
+    const d=c.getState().draft;assert.equal(h.models(),1);assert.match(d.fields.description,/git.example/);assert.equal(d.fields.environment,before.fields.environment);assert.equal(d.protectedFields.environment,true);
     assert.equal(d.fields.timetracking,undefined);assert.equal(d.checked,null);assert.ok(c.getState().validation.fieldErrors.timetracking);
     assert.match(h.chat.getState().transcript.at(-1).text,/оценк/i);assert.equal(h.posts(),0);
 });
-for(const pending of [false,true])test('manual description remains protected and pending content is not overwritten: '+pending,async t=>{
+for(const pending of [false,true])for(const model of [false,true])test('manual description and pending proposal survive link '+(model?'model patch':'failure')+': '+pending,async t=>{
     const h=await setup(t),c=h.controller;await c.updateField('description',c.getState().draft.fields.description);
     if(pending)await c.chatUpdate({fields:{description:c.getState().draft.fields.description+'\nДополнительно: моё предложение'}},c.chatSnapshot());
-    await c.chatValidate(c.chatSnapshot());const before=c.getState().draft;await h.chat.send(good);const d=c.getState().draft;
-    assert.equal(h.models(),0);assert.equal(d.fields.description,before.fields.description);assert.equal(d.protectedFields.description,true);assert.equal(d.checked,null);
-    if(pending)assert.equal(d.pendingFields.description,before.pendingFields.description);else assert.match(d.pendingFields.description,/git.example/);
-    assert.match(h.chat.getState().transcript.at(-1).text,/предложен|подтверд|отклон/i);assert.equal(h.posts(),0);
+    await c.chatValidate(c.chatSnapshot());const before=c.getState().draft;
+    if(model)h.setAction(h.linkModel);await h.chat.send(good);const d=c.getState().draft;
+    assert.equal(h.models(),1);assert.equal(d.fields.description,before.fields.description);assert.equal(d.protectedFields.description,true);assert.equal(d.checked,null);
+    if(!model)assert.equal(d.pendingFields.description,before.pendingFields.description);
+    else {assert.match(d.pendingFields.description,/git.example/);if(pending)assert.match(d.pendingFields.description,/Дополнительно: моё предложение/);}
+    if(!model)assert.equal(h.chat.getState().error.code,'response');
+    assert.equal(h.posts(),0);
 });
 for(const text of [good+' И ещё сменить версию на 2.0.','Ссылка: '+good+'\nМиграции не выполнять.'])test('mixed link reply keeps all extra instructions for ordinary model handling: '+text,async t=>{
     const h=await setup(t),before=h.controller.getState().draft;await h.chat.send(text);

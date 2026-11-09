@@ -60,10 +60,10 @@ test('normal literal description overrides model rewrite exactly without duplica
     assert.equal(h.c.getState().draft.fields.description,literal);assert.equal(h.store.load('DO').draft.fields.description,literal);
     assert.doesNotMatch(h.c.getState().draft.fields.description,/Со слов пользователя/);
 });
-test('other normal turns retain both refusal reason and taskException note',async t=>{
+test('normal turns store the model exception without extracting a refusal reason from source',async t=>{
     const h=await setup(t,{explicitReview:false,getTurnText:()=> 'Версия не нужна. Причина: восстанавливаем доступ.'});
     await h.update({fields:{description:'Проверить вход.'},taskException:'Однократное исключение: без версии',questions:[]});
-    const d=h.store.load('DO').draft;assert.match(d.fields.description,/Причина: восстанавливаем доступ/);assert.match(d.fields.description,/Однократное исключение: без версии/);
+    const d=h.store.load('DO').draft;assert.doesNotMatch(d.fields.description,/Причина: восстанавливаем доступ/);assert.equal(d.fields.description,'Проверить вход.');
     assert.ok(d.taskExceptions.includes('Однократное исключение: без версии'));
 });
 test('actual flat reconciliation filters invalid additions while saving core and disclosing omissions',async t=>{

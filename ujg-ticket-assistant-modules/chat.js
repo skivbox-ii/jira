@@ -324,7 +324,7 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
         function setFailure(error,isLimit,run) {
             state.status='error';state.error=safeFailure(error,isLimit);
             if(/\bHTTP 429\b/.test(state.error.message)) {
-                if(run.informational)state.error.retryTarget='turn';
+                state.error.retryTarget='turn';
             } else state.notices=state.notices.filter(function(notice){return !/\bHTTP 429\b/.test(notice);});
             if(run.verbatimDescription) {
                 var d=controller.getState().draft;
@@ -338,98 +338,9 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(state.notices.indexOf(notice)===-1)state.notices.push(notice);
             }
         }
-        async function ensureManagedQuestions(run) {
-            if(!run.appManagedPatch)return true;
-            if(controller.getState().draft.appManagedQuestions===true)return true;
-            var result=await mutate(run,function(){return controller.chatUpdate({fields:{}},run.snapshot,undefined,{appManagedQuestions:true});});
-            return current(run) && result.ok;
-        }
-        async function beginLocalReview(run) {
-            if(run.appManagedPatch)return true;
-            // Establish custom semantic review before applying the local patch,
-            // so the patch's undo snapshot remains the current revision.
-            var review=await mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
-            return current(run) && review.ok;
-        }
-        async function fillReferenceAnswer(run,text) {
-            var answer=run.referenceAnswer;
-            if(!answer)return false;
-            // Old provider diagnostics no longer explain a local link answer. Keep
-            // rate-limit/storage notices and every historical message intact.
-            state.notices=state.notices.filter(function(n){return !obsoleteRecoveryNotice(n) || /\bHTTP 429\b/.test(n);});
-            if(answer.kind==='explain') {
-                recoveryReply(run,answer.message);state.status='idle';state.error=null;return true;
-            }
-            if(!await beginLocalReview(run))return true;
-            var d=controller.getState().draft;
-            if(!answer.unchanged) {
-                var already=('\n\n'+d.source+'\n\n').includes('\n\n'+text+'\n\n');
-                var applied=await mutate(run,function(){return controller.chatUpdate({fields:{description:answer.description}},run.snapshot,already?undefined:text,{preservePendingFields:true,appManagedQuestions:run.appManagedPatch});});
-                if(!current(run))return true;
-                if(!applied.ok){recoveryReply(run,'Не удалось добавить ссылку в описание. Откройте карточку и проверьте поле.');state.status='idle';return true;}
-            }
-            if(!await ensureManagedQuestions(run))return true;
-            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-            if(!current(run))return true;
-            var verified=controller.getState(),v=checked.validation;
-            var pending=Object.prototype.hasOwnProperty.call(verified.draft.pendingFields,'description'),reply;
-            if(pending)reply='Ссылка подготовлена как предложение к ручному описанию. Подтвердите или отклоните его в карточке.';
-            else if(!v)reply='Ссылка сохранена в описании. Не удалось проверить поля Jira. Повторите проверку в карточке.';
-            else if(checked.ok && verified.draft.checked && !verified.error)reply='Ссылка сохранена в описании. Проверка пройдена. Сверьте карточку перед созданием.';
-            else {
-                var blockers=Object.values(v.fieldErrors || {}).flat().concat(verified.draft.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
-                if(v.fieldErrors.timetracking)blockers.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
-                reply='Ссылка сохранена в описании. Создание пока недоступно. '+(blockerText(blockers) || 'Проверьте оставшиеся поля в карточке.');
-            }
-            recoveryReply(run,reply);state.status='idle';state.error=null;return true;
-        }
-        async function fillEffortAnswer(run,text,priorEntry) {
-            var currentState=controller.getState(),d=currentState.draft,validation=currentState.validation;
-            if(!validation || !validation.fieldErrors.timetracking || !currentState.generationFieldIds.includes('timetracking'))return false;
-            var question=priorEntry && priorEntry.role==='assistant' ? priorEntry.text : '';
-            var estimate=chatTools.estimateFromAnswer(text,question);
-            if(!estimate)return false;
-            if(!await beginLocalReview(run))return true;
-            var questions=d.questions.filter(function(q){return !Object.hasOwn(estimate,chatTools.estimateTopic(q.text));});
-            var result=await mutate(run,function(){return controller.chatUpdate({
-                fields:{timetracking:Object.assign({},d.fields.timetracking,estimate)},questions:questions
-            },run.snapshot,text,{appManagedQuestions:run.appManagedPatch});});
-            if(!current(run))return true;
-            if(!result.ok)throw Error('Pico draft update missing');
-            if(!await ensureManagedQuestions(run))return true;
-            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-            if(!current(run))return true;
-            var blockers=checked.validation ? Object.values(checked.validation.fieldErrors).flat().concat(questions.filter(function(q){return q.required;}).map(function(q){return q.text;})) : ['Проверка Jira прервана.'];
-            var pending=Object.prototype.hasOwnProperty.call(controller.getState().draft.pendingFields,'timetracking');
-            add('assistant',pending?'Оценка отличается от значения, которое вы указали вручную. Подтвердите нужную оценку в карточке.':
-                'Оценка сохранена в поле Jira. '+(checked.ok?'Проверка пройдена. Можно нажать «Создать».':blockerText(blockers)));
-            state.status='idle';return true;
-        }
-        function emptyChatField(s,id) {
-            var d=s.draft;
-            return s.generationFieldIds.includes(id) && !d.protectedFields[id] &&
-                !Object.prototype.hasOwnProperty.call(d.pendingFields,id) && !String(d.fields[id] || '').trim();
-        }
-        function placeholderSummary(value) {return drafts.placeholderSummary(value);}
-        function narrativeSummary(description) {return chatTools.stableDeploymentSummary(controller,drafts.narrativeSummary(description));}
-        function savedNarrative() {
-            var users=state.transcript.filter(function(m){return m.role==='user';});
-            if(!users.length)return null;
-            var text=users[0].text;
-            return users.every(function(m){return m.text===text;}) && !inquiry(text) && !connectionCommand(text) &&
-                !text.trim().endsWith('?') && narrativeSummary(text) ? text : null;
-        }
-        function sameRecoveredNarrative(text) {
-            var d=controller.getState().draft;
-            return controller.chatDescriptionMatchesSource ? controller.chatDescriptionMatchesSource(text) : d.source===text && d.fields.description===text;
-        }
         function collapseExactRetry(text) {
             var last=state.transcript.findLastIndex(function(m){return m.role==='user';});
-            var recovered=state.notices.some(obsoleteRecoveryNotice) && sameRecoveredNarrative(text);
-            var failed=state.error && ['response','response-repair','draft-update'].includes(state.error.code);
-            if(last>=0 && last<state.transcript.length-1 && state.transcript[last].text===text && (recovered || failed) &&
-                state.transcript.slice(last+1).every(function(m){return m.role==='assistant' && !m.kind &&
-                    /^(?:Создание пока недоступно\.|Тема и описание взяты из вашего текста\.|Описание взято из вашего текста\.|Поля Jira проверены локально\.|Описание сохранено\. Не удалось проверить поля Jira\.|Получен ответ неверного формата\.|Сервис недоступен\.|Pico недоступен\.|Pico вернул ответ неверного формата\.)/.test(m.text);}))return true;
+            if(state.error && last>=0 && state.transcript[last].text===text)return true;
             // Only uninterrupted identical user entries are retries. An assistant
             // question may need the same answer as its preceding question.
             var matches=[];
@@ -449,193 +360,17 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             if(index<0)return messages;
             var content=messages[index].content,previous=typeof content==='string' ? content : Array.isArray(content) && content.every(function(p){return p.type==='text';}) ? content.map(function(p){return p.text;}).join('\n') : null;
             if(previous!==text)return messages;
-            var failed=messages.slice(index+1);
-            return failed.length && failed.every(function(m){return m.role==='assistant' && m.stopReason==='error' &&
-                Array.isArray(m.content) && m.content.every(function(p){return p.type==='text';});}) ? messages.slice(0,index) : messages;
+            // prompt() appends the retried user text. Keep completed tool pairs
+            // as evidence, but remove the old copy of that same user turn.
+            return messages.slice(0,index).concat(messages.slice(index+1));
         }
-        function recoveryNotice(notice) {
-            function key(value){return value.replace(/(?:Тема и описание взяты из вашего текста\.|Описание взято из вашего текста\.) /,'');}
-            if(!state.notices.some(function(n){return key(n)===key(notice);}))state.notices.push(notice);
-        }
-        function recoveryReply(run,text) {
-            var last=state.transcript.at(-1);
-            if(!run.exactRetry || !last || last.role!=='assistant' || last.text!==text)add('assistant',text);
-        }
-        async function deriveSummary(run,placeholderOnly) {
-            if(!current(run))return;
-            var s=controller.getState(), description=s.draft.fields.description;
-            var heading=s.standardDescriptionTemplate && (controller.chatDescriptionSections ? controller.chatDescriptionSections():[]).some(function(section){
-                return String(s.draft.fields.summary || '').replace(/[*_`#]/g,'').trim().replace(/:$/,'').trim().toLocaleLowerCase('ru')===section.label.toLocaleLowerCase('ru');
-            });
-            var sourceMatches=controller.chatDescriptionMatchesSource && controller.chatDescriptionMatchesSource(s.draft.source);
-            var sourceSummary=heading && !sourceMatches && savedNarrative()===s.draft.source && controller.chatSourceSummary ? controller.chatSourceSummary():null;
-            var repair=(placeholderSummary(s.draft.fields.summary) || heading && (sourceMatches || sourceSummary)) && s.generationFieldIds.includes('summary') && !s.draft.protectedFields.summary && !Object.hasOwn(s.draft.pendingFields,'summary') && !s.draft.pendingAssistance;
-            if(placeholderOnly && !repair || !emptyChatField(s,'summary') && !repair || typeof description!=='string' || !description.trim())return;
-            var summary=narrativeSummary(sourceSummary || (sourceMatches ? s.draft.source : description));
-            if((s.draft.projectKey==='DEVOPS' || run.appManagedPatch) && /^[^:\n]{1,80}:\s/.test(summary))return;
-            if(!summary || summary===s.draft.fields.summary)return;
-            await mutate(run,function(){return controller.chatUpdate({fields:{summary:summary}},run.snapshot,undefined,placeholderOnly?undefined:{appManagedQuestions:run.appManagedPatch});});
-        }
-        async function fillOriginalEstimate(run,text) {
-            var s=controller.getState(),d=s.draft;
-            if(!run.originalDescriptionPreferred || !current(run) || !s.generationFieldIds.includes('timetracking') ||
-                d.protectedFields.timetracking || Object.hasOwn(d.pendingFields,'timetracking') || d.fields.timetracking)return;
-            // Preserve explicit units through the same parser used for chat
-            // answers; sentence boundaries do not turn the work window into effort.
-            var estimate=chatTools.statedEstimates([{role:'user',text:text.replace(/(?<=[.!?])\s+/g,'\n')}]);
-            if(!Object.keys(estimate).length)return;
-            await mutate(run,function(){return controller.chatUpdate({fields:{timetracking:estimate}},run.snapshot,undefined,{appManagedQuestions:run.appManagedPatch});});
-        }
-        function recoveryQuestions(draft,validation,priorEntry) {
-            // Only questions freshly produced by local DEVOPS validation may be
-            // recomputed from an unchanged raw narrative. Model questions keep
-            // their authority and still block deterministic recovery.
-            var errors=Object.values(validation && validation.fieldErrors || {}).flat();
-            var local=validation && Array.isArray(validation.questions) ? validation.questions.filter(function(q){return /^(?:devops:|template:|app:)/.test(q.id || '') && errors.includes(q.text);}) : [];
-            var questions=(draft.questions || []).filter(function(q){return !local.some(function(l){return l.id===q.id && l.text===q.text;});}).map(function(q){return q.text;});
-            if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template') {
-                priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}).forEach(function(line){
-                    var key=questionKey(line),localEcho=local.some(function(q){return key===questionKey(q.text) || key===questionKey('Создание пока недоступно. '+q.text);});
-                    if(!localEcho)questions.push(line);
-                });
-            }
-            return questions;
-        }
-        async function recoverLiteralAnswer(run,text) {
-            var d=controller.getState().draft;
-            if(!run.appManagedPatch || run.reviewPending || run.modelFieldsUpdated ||
-                JSON.stringify([d.fields,d.pendingFields])!==run.initialPatchState)return false;
-            var answer=chatTools.literalAnswerPatch(controller,text);
-            if(!answer)return false;
-            // A retained original narrative belongs to the existing exact-retry
-            // and source-equivalence guards, not partial correction extraction.
-            if(run.initialRecoveredNarrative || run.initialSource===text && answer.unresolved.length)return false;
-            var patch=chatTools.withStableDeploymentSummary(controller,answer.proposal,text);
-            // Even literal local changes cannot discharge custom semantic rules.
-            var review=await mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
-            if(!current(run) || !review.ok)return true;
-            var source=('\n\n'+d.source+'\n\n').includes('\n\n'+text+'\n\n')?undefined:text;
-            var applied=await mutate(run,function(){return controller.chatUpdate(patch,run.snapshot,source,{appManagedQuestions:true,preservePendingFields:true,unresolvedChatFacts:answer.unresolved});});
-            if(!current(run))return true;
-            var updated=controller.getState().draft,rejections=applied.rejected || [],changed=JSON.stringify([updated.fields,updated.pendingFields])!==run.initialPatchState;
-            if(!applied.ok || !changed && !rejections.length)return false;
-            if(!changed) {
-                recoveryReply(run,'Изменения не применены. '+rejectedPatchText(rejections));
-                state.error=null;state.status='idle';return true;
-            }
-            if(answer.unresolved.length) {
-                var unresolved='Не перенесено из сообщения: '+answer.unresolved.join(' ');
-                recoveryReply(run,'Изменения перенесены частично из вашего сообщения. '+(rejections.length?rejectedPatchText(rejections)+' ':'')+unresolved+' Уточните эти сведения или повторите запрос. Готовность не подтверждена.');
-                state.error={code:'draft-update',action:'retry',message:unresolved+' Уточните эти сведения или повторите запрос.'};state.status='error';return true;
-            }
-            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-            if(!current(run))return true;
-            var verified=controller.getState(),v=checked.validation;
-            if(!v) {
-                recoveryReply(run,'Изменения перенесены из вашего сообщения. '+(rejections.length?rejectedPatchText(rejections)+' ':'')+'Не удалось проверить поля Jira. Откройте карточку и повторите проверку.');
-                state.error=null;state.status='idle';return true;
-            }
-            var blockers=Object.values(v.fieldErrors || {}).flat().concat(verified.draft.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
-            var reply=rejections.length?'Изменения применены частично. '+rejectedPatchText(rejections)+' Подтверждённые изменения взяты из вашего сообщения. Поля Jira проверены локально. ':
-                'Изменения перенесены из вашего сообщения. Поля Jira проверены локально. ';
-            reply+=checked.ok && verified.draft.checked && !verified.error?(rejections.length?'Сверьте неприменённые изменения в карточке.':'Сверьте карточку перед созданием.'):
-                'Создание пока недоступно. '+(blockerText(blockers) || 'Откройте карточку и проверьте оставшиеся поля.');
-            state.notices=state.notices.filter(function(notice){return !obsoleteRecoveryNotice(notice);});
-            recoveryReply(run,reply);state.error=null;state.status='idle';return true;
-        }
-        async function recoverUnavailable(run,text,reassessment,reconcile) {
-            if(!current(run) || reassessment && !reconcile || run.templateAction ||
-                !state.error || !['transport','runtime','response','response-repair','draft-update'].includes(state.error.code))return;
-            if(!reconcile && await recoverLiteralAnswer(run,text))return;
-            var s=controller.getState(), d=s.draft, patch={},copiedDescription=false,copiedSummary=false;
-            // A rejected provider request cannot invalidate an unchanged card that
-            // already passed Jira checks. Recheck it locally; never infer readiness
-            // after model mutations or a stale controller snapshot.
-            if(reconcile && run.verifiedCard && /\bHTTP 429\b/.test(state.error.message) && run.verifiedCard===cardContent(d)) {
-                var rechecked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-                if(!current(run))return;
-                if(rechecked.ok && controller.getState().draft.checked) {
-                    if(!state.notices.some(function(n){return /\bHTTP 429\b/.test(n);}))state.notices.push('Сервис модели вернул HTTP 429. Карточка прошла локальную проверку Jira.');
-                    state.error=null;state.status='idle';return;
-                }
-            }
-            var malformed=['response','response-repair','draft-update'].includes(state.error.code);
-            if(reconcile) {
-                text=savedNarrative();
-                if(!text || d.source || !emptyChatField(s,'description'))return;
-                collapseExactRetry(text);
-            }
-            if(inquiry(text) || connectionCommand(text) || !narrativeSummary(text))return;
-            await deriveSummary(run,true);if(!current(run))return;s=controller.getState();d=s.draft;
-            // A protocol failure grants no authority to use model fields or to
-            // resolve semantic questions, overrides, or a pending rules review.
-            if((malformed || reconcile) && (run.reviewPending || d.taskExceptions.length || run.recoveryQuestions.length ||
-                run.sourceAppended && !run.verbatimDescription ||
-                run.initialDescription && run.initialDescription!==text && !run.initialRecoveredNarrative && !run.verbatimDescription))return;
-            if(run.sourceAppended && (!run.descriptionReviewed ||
-                run.initialDescription && d.fields.description===run.initialDescription && !run.verbatimDescription)) {
-                // Appending the correction to source, or echoing the old description,
-                // is not evidence that the card incorporated it.
-                if(d.checked)mutate(run,function(){return controller.chatBeginReview(run.snapshot);});
-                return;
-            }
-            // Only an initial narrative can be copied without a semantic review.
-            // Later answers must not authorize creation while their facts are missing.
-            var description=d.fields.description;
-            if(!run.sourceAppended) {
-                if(savedNarrative()!==text || run.recoveryQuestions.length || text.trim().endsWith('?'))return;
-                if(sameRecoveredNarrative(text)) {
-                    // An exact retry of an already recovered narrative adds no source.
-                } else {
-                    if(d.source || !emptyChatField(s,'description'))return;
-                    description=text;patch.description=description;
-                    if(emptyChatField(s,'summary'))patch.summary=narrativeSummary(description);
-                }
-            }
-            if(typeof description!=='string' || !description.trim())return;
-            if(!await beginLocalReview(run))return;
-            if(Object.keys(patch).length) {
-                var applied=await mutate(run,function(){return controller.chatUpdate({fields:patch},run.snapshot,run.sourceAppended ? undefined : text,{appManagedQuestions:run.appManagedPatch});});
-                if(!current(run) || !applied.ok)return;
-                run.sourceAppended=true;
-                copiedDescription=Object.hasOwn(patch,'description');copiedSummary=Object.hasOwn(patch,'summary');
-            }
-            await deriveSummary(run);
-            if(!current(run) || !await ensureManagedQuestions(run))return;
-            var checked=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-            if(!current(run))return;
-            if(!checked.validation) {
-                add('assistant','Описание сохранено. Не удалось проверить поля Jira. Откройте редактор и повторите проверку.');
-                return;
-            }
-            var verified=controller.getState();
-            var providerNote=malformed?'Получен ответ неверного формата.':'Сервис недоступен.';
-            var provenance=copiedDescription ? (copiedSummary?'Тема и описание взяты из вашего текста. ':'Описание взято из вашего текста. ') : '';
-            if(checked.ok && verified.draft.checked && !verified.error) {
-                // Keep the safe provider diagnostic as a notice. It is no longer
-                // a blocking error once this exact card passed the local check.
-                var http=/\bHTTP ([45]\d{2})\b/.exec(state.error.message);
-                var diagnostic=(malformed?providerNote:http?'Сервис модели вернул HTTP '+http[1]+'.':
-                    state.error.code==='runtime'?'Сервис недоступен.':'Не удалось получить ответ.')+' Карточка прошла локальную проверку Jira.';
-                recoveryNotice(diagnostic);
-                state.error=null;state.status='idle';
-                recoveryReply(run,provenance+'Поля Jira проверены локально. Проверка пройдена. Откройте карточку, чтобы сверить её перед созданием.');
-            } else {
-                var why=Object.values(checked.validation.fieldErrors || {}).flat().concat(d.questions.filter(function(q){return q.required;}).map(function(q){return q.text;}));
-                if(checked.validation.fieldErrors.timetracking)why.unshift('Какую исходную оценку трудозатрат указать? Например, «Оценка: 2 часа».');
-                var notice=providerNote+' '+provenance+'Поля Jira проверены локально.';
-                if(/\bHTTP 429\b/.test(state.error.message))notice='HTTP 429. '+notice;
-                recoveryNotice(notice);
-                state.error=null;state.status='idle';
-                recoveryReply(run,'Создание пока недоступно. '+(blockerText(why) || 'Откройте редактор и проверьте карточку.')+
-                    ((checked.validation.unsupportedRequired || []).length?' В редакторе есть ссылка «Открыть форму Jira».':''));
-            }
-        }
-        function cardContent(d) {var card=Object.assign({},d);delete card.checked;delete card.draftRevision;return JSON.stringify(card);}
         async function runTurn(text,reassessment,reconcile,retryRateLimit) {
             if(dead || active || applying || controller.getState().destroyed) return getState();
             controllerChanged();selectScope();
             if(typeof text!=='string' || !text.trim() || !scope) return getState();
+            // A readiness command must review the full conversation through the
+            // model, including any earlier user edit interrupted by a failure.
+            if(!reassessment && /^(?:подтверди(?:те)?|проверь(?:те)?)\s+готовность(?:\s+(?:задачи|карточки))?[.!?]?$/i.test(text.trim()))reconcile=true;
             var d=controller.getState().draft;
             if(d.creation.issueKey || ['preflight','submitting','unknown','created'].indexOf(d.creation.status)!==-1) {
                 state.error={code:'creation',message:'Создание уже выполняется или результат сохранён. Откройте новую задачу для нового разговора.'};return emit();
@@ -647,36 +382,28 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 add('assistant','Откройте «Подключение AI», чтобы изменить URL, модель или ключ.');
                 state.error=null;state.status='idle';save();return emit();
             }
-            var lastUser=state.transcript.filter(function(m){return m.role==='user';}).slice(-1)[0],sameUser=!!lastUser && lastUser.text===text;
-            // A control-only readiness check contains no new task facts. Reuse
-            // the actual Jira validator without clearing an already reviewed card.
-            var lastAssistant=state.transcript.findLast(function(entry){return entry.role==='assistant';});
-            var unresolvedLocalReply=lastAssistant && lastAssistant.text.startsWith('Изменения перенесены частично из вашего сообщения.');
-            var localReady=!reassessment && !reconcile && !unresolvedLocalReply && state.error?.code!=='draft-update' && !d.templateReviewPending && (d.checked || d.appManagedQuestions===true) &&
-                /^(?:подтверди(?:те)?|проверь(?:те)?)\s+готовность(?:\s+(?:задачи|карточки))?[.!?]?$/i.test(text.trim());
-            var referenceAnswer=!reassessment && controller.chatDevopsReferenceAnswer ? controller.chatDevopsReferenceAnswer(text,sameUser) : null;
-            if((reconcile || !localReady && !reassessment && d.checked && !inquiry(text) && !connectionCommand(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
+            if((reconcile || !reassessment && d.checked && !inquiry(text) && !connectionCommand(text)) && !controller.chatBeginReview(controller.chatSnapshot()).ok) {
                 state.status='error';state.error={code:'review',action:'editor',message:'Не удалось начать сверку текущего черновика. Откройте редактор и проверьте состояние Jira.'};return emit();
             }
+            d=controller.getState().draft;
             var priorQuestions=(d.questions || []).map(function(q){return q.text;});
             var priorEntry=state.transcript[state.transcript.length-1];
             if(priorEntry && priorEntry.role==='assistant' && priorEntry.kind!=='template')
                 priorQuestions.push.apply(priorQuestions,priorEntry.text.split('\n').filter(function(line){return line.trim().endsWith('?');}));
-            var exactRetry=!reassessment && !retryRateLimit && (referenceAnswer && sameUser || collapseExactRetry(text));
+            var exactRetry=!reassessment && (retryRateLimit || collapseExactRetry(text));
             if(!reassessment && !retryRateLimit && !exactRetry)add('user',text);state.error=null;state.status='running';
-            var appManagedPatch=!localReady && !reassessment && !!d.issueTypeId && !!d.templateId && !d.templateReviewPending && !inquiry(text) && chatTools.descriptionSectionDefinitions(controller).length>0;
-            var run={appManagedPatch:!!appManagedPatch,patchState:JSON.stringify([d.fields,d.pendingFields]),initialPatchState:JSON.stringify([d.fields,d.pendingFields]),initialSource:d.source,session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,referenceAnswer:referenceAnswer,priorQuestions:priorQuestions,recoveryQuestions:recoveryQuestions(d,controller.getState().validation,priorEntry),exactRetry:exactRetry,
-                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,initialDescription:d.fields.description || '',initialRecoveredNarrative:sameRecoveredNarrative(text),
-                verifiedCard:reconcile && d.checked?cardContent(d):null,informational:!reassessment && inquiry(text)};active=run;
+            var appManagedPatch=!reconcile && !reassessment && !!d.issueTypeId && !!d.templateId && !d.templateReviewPending && !inquiry(text) && chatTools.descriptionSectionDefinitions(controller).length>0;
+            var run={appManagedPatch:!!appManagedPatch,patchState:JSON.stringify([d.fields,d.pendingFields]),session:null,scope:scope,store:getStore(),aborter:new AbortController(),expected:fingerprint(),snapshot:controller.chatSnapshot(),mutating:false,sourceAppended:false,priorQuestions:priorQuestions,exactRetry:exactRetry,
+                reviewPending:d.templateReviewPending===true,templateRevision:d.settingsRevision,questionsEvaluated:false,
+                informational:!reassessment && inquiry(text)};active=run;
             var tools=chatTools.create({controller:controller,appManagedQuestions:function(){return run.appManagedPatch && !run.templateAction;},explicitReview:!!reconcile,reviewUserText:(d.fields.description || '')+'\n'+state.transcript.filter(function(m){return m.role==='user';}).map(function(m){return m.text;}).join('\n'),isCurrent:function() {return current(run);},getSnapshot:function() {return run.snapshot;},
                 mutate:function(fn) {return mutate(run,fn);},
                 getVerbatimDescription:function(){return run.verbatimDescription;},
-                getTurnText:function(){return reassessment ? '' : text;},
+                getTurnText:function(){return reassessment || reconcile ? '' : text;},
                 getEstimates:function(){return chatTools.statedEstimates(state.transcript);},
-                getSourceText:function() {return reassessment || run.sourceAppended ? undefined : text;},
+                getSourceText:function() {return reassessment || reconcile || run.sourceAppended ? undefined : text;},
                 validationNotice:function(){return reconcile ? (run.questionsEvaluated?'Сверка получена; заверши ответ. Приложение проверит обязательные поля.':'Сначала сверь ответы с карточкой и передай актуальные questions через update_task.') : null;},onTaskUpdated:function(args,info) {
                     var result=info && info.result,appliedFields=result && result.appliedFields,appliedSections=result && result.appliedSections;
-                    if(result && result.originalDescriptionPreferred)run.originalDescriptionPreferred=true;
                     var managed=!!(info && info.appManagedQuestions),hasPatch=(Array.isArray(appliedFields) || Array.isArray(appliedSections)) ?
                         !!((appliedFields || []).length || (appliedSections || []).length) : !!(Object.keys(args.fields || {}).length || Object.keys(args.descriptionSections || {}).length);
                     if(managed) {
@@ -701,17 +428,6 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
             var earlierEvidence=!reassessment && state.transcript.length>8 ? reviewTranscript(state.transcript.slice(0,-1)) : null;
             save();emit();
             try {
-                if(localReady) {
-                    var readyCheck=await controller.chatValidate(run.snapshot,{signal:run.aborter.signal});
-                    if(!current(run))return getState();
-                    var readyState=controller.getState(),readyValidation=readyCheck.validation;
-                    var readyBlockers=readyValidation?Object.values(readyValidation.fieldErrors || {}).flat().concat(readyState.draft.questions.filter(function(q){return q.required;}).map(function(q){return q.text;})):[];
-                    add('assistant',readyCheck.ok && readyState.draft.checked && !readyState.error?'Проверка пройдена. Сверьте карточку перед созданием.':
-                        'Создание пока недоступно. '+(blockerText(readyBlockers) || 'Проверьте карточку в редакторе.'));
-                    state.status='idle';return getState();
-                }
-                if(!reassessment && await fillReferenceAnswer(run,text))return getState();
-                if(!reassessment && controller.getState().validation?.fieldErrors?.timetracking && await fillEffortAnswer(run,text,priorEntry))return getState();
                 if(!current(run))return getState();
                 // A user can supply the finished description itself. Save it before
                 // any provider call; the model may then fill the remaining fields.
@@ -752,12 +468,6 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 state.lastTurnUsage=safeUsage(result && result.usage,result && result.status) || state.lastTurnUsage;
                 var complete=!result || result.status==='complete' || result.status==='completed';
                 var allRejected=run.appManagedAttempted && !run.appManagedUpdated && (run.patchRejections || []).length>0;
-                if(complete && state.status==='running' && run.descriptionReviewed && !run.templateAction) {
-                    await fillOriginalEstimate(run,text);
-                    if(!current(run))return getState();
-                    await deriveSummary(run);
-                    if(!current(run))return getState();
-                }
                 if(complete && state.status==='running' && run.reviewPending && !(run.informational && !run.modelFieldsUpdated)) {
                     if(run.questionsEvaluated) {
                         var review=await controller.chatCompleteTemplateReview(run.snapshot,run.templateRevision,{signal:run.aborter.signal});
@@ -800,12 +510,10 @@ define('_ujgTA_chat', ['_ujgTA_chatTools', '_ujgTA_draft'], function(chatTools, 
                 if(complete && state.status==='running' && run.lastReply) add('assistant',groundedReply(omitAnsweredEcho(run.lastReply,run,controller.getState().draft)));
                 if(state.status==='running') state.status=result && result.status==='aborted' ? 'stopped' : 'idle';
                 if(result && ['error','limit'].indexOf(result.status)!==-1 && !state.error) setFailure(result,result.status==='limit',run);
-                await recoverUnavailable(run,text,reassessment,reconcile);
             } catch(error) {
                 if(!current(run)) return getState();
                 rememberMessages(run);state.status='error';
                 if(!state.error) setFailure(error,false,run);
-                await recoverUnavailable(run,text,reassessment,reconcile);
             } finally {
                 if(active===run) {active=null;if(run.session) run.session.dispose();save();emit();}
             }

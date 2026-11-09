@@ -15,13 +15,21 @@ const examples={
     '12':'Среда: DEV. Версия и состав: commit 5961fa4. Порядок: Заменить скрипт. Окно: рабочее время. Проверка: Постановщик проверит открытие карточки DEVOPS. Ссылки: '+url
 };
 function check(type,description,policy={}) {return validation.validateFields(meta(),type,{summary:'Обновить виджет Jira в DEV',description},policy);}
-test('live inline link is canonicalized with all deployment facts and without repeating its URL',()=>{
+test('inline labeled link is canonicalized while deployment prose remains incomplete in extra',()=>{
     const formatted=validation.formatDevopsDescription(meta(),'12',live);
-    assert.match(formatted,/^Среда:/);assert.match(formatted,/\n\nВерсия и состав:.*5961fa4/);assert.match(formatted,/\n\nПорядок: Заменить скрипт/);
-    assert.match(formatted,/\n\nПроверка: Постановщик/);assert.match(formatted,/\n\nСсылки: https:\/\/example.org/);
-    assert.equal(formatted.split(url).length-1,1);assert.ok(formatted.includes('Оценка: 30 минут.'));assert.equal(check('12',formatted,{requireStructuredDescription:true}).ok,true);
+    assert.match(formatted,/^Среда: /);
+    assert.match(formatted,/\n\nСсылки: https:\/\/example.org/);
+    const rows=validation.descriptionTableRows(meta(),'12',formatted);
+    const narrative=live.slice(0,live.indexOf(' Ссылки:'));
+    assert.equal(rows.find(row=>row.label==='Дополнительно').value.trim().replace(/\n/g,' '),narrative);
+    for(const row of rows.filter(row=>!['Дополнительно','Ссылки'].includes(row.label)))assert.equal(row.value,'',row.label);
+    assert.equal(formatted.split(url).length-1,1);
+    const result=check('12',formatted,{requireStructuredDescription:true});
+    assert.equal(result.ok,false);
+    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:location','devops:release','devops:order','devops:window','devops:verification']);
     assert.equal(validation.formatDevopsDescription(meta(),'12',formatted),formatted);
 });
+
 for(const type of ['10','11','12'])for(const markdown of [false,true])test('all actual types split inline explicit labels, keeping requirements and body: '+type+' '+markdown,()=>{
     const input=markdown?examples[type].replace(/(?:^|(?<=\. ))([^:]+): /g,'**$1:** '):examples[type];
     const formatted=validation.formatDevopsDescription(meta(),type,input);
@@ -40,12 +48,13 @@ test('table projection preserves literal bodies and custom continuation from pla
     assert.equal(rows.find(row=>row.label==='Ссылки').value,url+'?a=1&b=2\r\nМой раздел: НеМенять **body**');
     assert.equal(validation.descriptionTableRows(meta(),'12',validation.markdownTemplateDescription(meta(),'12',text)).find(row=>row.label==='Ссылки').value,rows.find(row=>row.label==='Ссылки').value);
 });
-test('malformed saved narrative with an inline link repairs once; reference retry does not duplicate URL',()=>{
+test('saved narrative remains incomplete after table rendering and idempotent reference retry',()=>{
     const saved=live.replace('Ссылки:','Дополнительно:\nСсылки:');
     const formatted=validation.formatDevopsDescription(meta(),'12',saved),wiki=validation.jiraTemplateDescription(meta(),'12',formatted);
-    assert.equal(check('12',wiki,{requireStructuredDescription:true}).ok,true);
+    assert.equal(check('12',wiki,{requireStructuredDescription:true}).ok,false);
+    assert.ok(validation.descriptionTableRows(meta(),'12',wiki).find(row=>row.label==='Дополнительно').value.includes('Обновить виджет Jira в DEV из коммита 5961fa4'));
     const once=validation.mergeDevopsReference(wiki,url),twice=validation.mergeDevopsReference(once.description,url);
-    assert.equal(once.ok,true);assert.equal(twice.description,once.description);assert.equal(twice.description.split(url).length-1,1);
+    assert.equal(once.ok,true);assert.equal(check('12',once.description,{requireStructuredDescription:true}).ok,false);assert.equal(twice.description,once.description);assert.equal(twice.description.split(url).length-1,1);
 });
 test('exact saved live paragraph plus a second link retains other facts and different URLs',()=>{
     const other='https://docs.example/widget?a=1&b=2',saved=live+'\n\nСсылки: '+url+'\nДокументация команды: '+other+'\nКонтекст клиента: Сохранить регистр vRC-2.';
@@ -80,7 +89,8 @@ test('description maxlength uses the actual Jira wiki payload and reports overfl
     assert.equal(validation.validateFields(m,'12',{...values,description:markdown},policy).ok,true);
 });
 test('structured policy rejects raw standard descriptions and holes without inventing missing body',()=>{
-    assert.equal(check('12',live).ok,true);
+    assert.equal(check('12',live).ok,false);
+    assert.ok(check('12',live).questions.some(q=>q.id==='devops:location'));
     assert.equal(check('12',live,{requireStructuredDescription:true}).ok,false);
     const hole=examples['12'].replace('Порядок: Заменить скрипт. ','');
     const result=check('12',hole,{requireStructuredDescription:true});assert.equal(result.ok,false);assert.ok(result.questions.some(q=>q.id==='devops:order'));

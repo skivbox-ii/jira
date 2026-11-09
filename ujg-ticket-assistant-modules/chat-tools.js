@@ -72,34 +72,6 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         });
         return estimates;
     }
-    function keepTaskNote(args, state, text) {
-        if(!state.generationFieldIds.includes('description'))return args;
-        var sentences=String(text || '').split(/(?:\r?\n|(?<=[.!?;])\s+)/).map(function(s){return s.trim();});
-        var notes=[];
-        sentences.forEach(function(line,i){
-            if(!/не (?:нужн|нужен|требуется|применим|имеет значения)|нет возможности|недоступн\S* (?:потому|так как)|неизвестн\S* (?:потому|так как)/i.test(line) ||
-                /(?:спрашива|переспрашива|редактор|шаблон|повторяй|чат[-еау ]|не нужно менять описание)/i.test(line))return;
-            var note=line;
-            for(var j=i+1;j<sentences.length && /^(?:причина\s*[:—–-]|потому что|поскольку|так как)/i.test(sentences[j]);j++)note+=' '+sentences[j];
-            notes.push(note);
-        });
-        if(typeof args.taskException==='string' && args.taskException.trim())notes.push(args.taskException.trim());
-        // Preserve attributed user statements from the current canonical text
-        // across generated rewrites. The free-form editor can explicitly edit them.
-        var previous=state.draft.pendingFields.description || state.draft.fields.description || '';
-        String(previous).split('\n').forEach(function(line){
-            if(line.startsWith('Со слов пользователя: '))notes.push(line.slice('Со слов пользователя: '.length));
-        });
-        if(!notes.length)return args;
-        var description=Object.hasOwn(args.fields,'description')?args.fields.description:
-            state.draft.pendingFields.description || state.draft.fields.description || '';
-        if(typeof description!=='string')return args;
-        notes.forEach(function(note){
-            if(!description.toLocaleLowerCase('ru').includes(note.toLocaleLowerCase('ru')))
-                description+=(description.trim()?'\n\n':'')+'Со слов пользователя: '+note;
-        });
-        return Object.assign({},args,{fields:Object.assign({},args.fields,{description:description})});
-    }
     function applicationQuestions(state) {
         var errors=Object.values(state.validation && state.validation.fieldErrors || {}).flat();
         return (state.validation && state.validation.questions || []).filter(function(question){return /^(?:app:|template:|devops:)/.test(question.id || '') && errors.includes(question.text);});
@@ -109,89 +81,9 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
         var requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
         return requirements && requirements.sections || [];
     }
-    function stableDeploymentSummary(controller,value) {
-        var s=controller.getState(),d=s.draft,requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
-        if(typeof value!=='string' || !d || !requirements || requirements.kind!=='deployment' || d.templateId!=='deployment' ||
-            !s.generationFieldIds.includes('summary') || d.protectedFields.summary || Object.hasOwn(d.pendingFields,'summary') ||
-            d.pendingAssistance && d.pendingAssistance.fieldId==='summary' || d.creation.issueKey || !['idle','rejected'].includes(d.creation.status))return value;
-        // Only a simple deployment/update heading with a trailing schedule is
-        // eligible. Restrictions and service-behaviour statements are subjects.
-        if(!/^(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|выкатка|установка|deploy|upgrade|rollout)\s+/i.test(value) ||
-            /[,;!?]|(?:^|\s)(?:только|исключительно|запрет\p{L}*|разреш\p{L}*|огранич\p{L}*|правил\p{L}*|политик\p{L}*|расписани\p{L}*|график\p{L}*|работающ\p{L}*|доступн\p{L}*)(?=$|\s)/iu.test(value))return value;
-        var schedule=/\s+(?:в\s+рабочее\s+время|в\s+рабочие\s+часы|в\s+нерабочее\s+время|в\s+ночное\s+время|(?:(?:с|в)\s+)?(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:до|[–—-])\s*(?:[01]?\d|2[0-3]):[0-5]\d|(?:в|после|до)\s+(?:[01]?\d|2[0-3]):[0-5]\d)(?:\s+(?:МСК|UTC|GMT)(?:[+-]\d{1,2}(?::[0-5]\d)?)?)?([.!]?)$/.exec(value);
-        if(!schedule)return value;
-        var subject=value.slice(0,schedule.index);
-        if(/(?:^|\s)(?:и|или|но|а|затем)$|[,;:—–-]$|^(?:обновить|развернуть|выкатить|установить|обновление|разв[её]ртывание|выкатка|установка|deploy|upgrade|rollout)$/i.test(subject))return value;
-        return subject+schedule[1];
-    }
-    function withStableDeploymentSummary(controller,proposal,text) {
-        var supplied=proposal.fields || {},hasSummary=Object.hasOwn(supplied,'summary');
-        if(!hasSummary && !Object.hasOwn(supplied,'description') && !Object.hasOwn(proposal.descriptionSections || {},'window'))return proposal;
-        var value=hasSummary?supplied.summary:controller.getState().draft.fields.summary;
-        var literal=/(?:^|[;\n])\s*(?:тема|заголовок|summary)\s*:\s*([^;\n]+)/i.exec(text || '');
-        if(literal && literal[1].trim()===value)return proposal;
-        var summary=stableDeploymentSummary(controller,value);
-        return summary===value?proposal:Object.assign({},proposal,{fields:Object.assign({},supplied,{summary:summary})});
-    }
-    // Read explicit section headings and catalog labels, never infer missing facts.
-    // Unsupported or protected clauses remain unresolved alongside any safe edits.
-    function literalAnswerPatch(controller,text) {
-        var s=controller.getState(),d=s.draft,requirements=controller.chatDevopsRequirements && controller.chatDevopsRequirements();
-        if(!d || d.projectKey!=='DEVOPS' || !requirements || requirements.kind==='unsupported' ||
-            typeof d.fields.description!=='string' || !d.fields.description.trim() || typeof text!=='string')return null;
-        var definitions=descriptionSectionDefinitions(controller),type=s.meta && s.meta.issueTypes.find(function(t){return t.id===d.issueTypeId;});
-        if(!definitions.length || !type)return null;
-        var patchFields={},sections={},unresolved=[],seen=Object.create(null),conflicts=new Set();
-        function key(value) {return value.toLocaleLowerCase('ru').replace(/ё/g,'е').trim();}
-        function available(id) {return s.generationFieldIds.includes(id) && !d.protectedFields[id] && !Object.hasOwn(d.pendingFields,id);}
-        function assign(map,id,value,clause) {
-            var topic=(map===sections?'section:':'field:')+id;
-            if(conflicts.has(topic)) {unresolved.push(clause);return;}
-            if(Object.hasOwn(map,id) && JSON.stringify(map[id])!==JSON.stringify(value)) {
-                unresolved.push(seen[topic],clause);delete map[id];conflicts.add(topic);return;
-            }
-            map[id]=value;seen[topic]=clause;
-        }
-        var clauses=text.trim().split(/(?:\r?\n+|;\s*|(?<=[.!?])\s+)/).map(function(clause){return clause.trim();}).filter(Boolean);
-        clauses.forEach(function(clause) {
-            var clean=clause.replace(/[.!]$/,''),colon=clean.indexOf(':'),heading=colon<0?'':key(clean.slice(0,colon)),value=colon<0?'':clean.slice(colon+1).trim();
-            if(/[?？][»”"')\].!]*\s*$/.test(clause) || /(?:^|[\s,:])(?:если|возможно|вероятно|при условии|при наличии|в случае|может быть|или)(?=$|[\s,:])/i.test(clean)) {
-                unresolved.push(clause);return;
-            }
-            var definition=definitions.find(function(section){return [section.label].concat(section.aliases || []).some(function(label){return heading===key(label);});});
-            if(definition && value) {
-                if(!available('description')) {unresolved.push(clause);return;}
-                assign(sections,definition.id,value,clause,definition.label);return;
-            }
-            // Catalog fields may use a colon or ordinary "Приоритет высокий".
-            var spec=type.fields.find(function(field) {return field.kind==='option' &&
-                (heading===key(field.name) || key(clean).startsWith(key(field.name)+' '));});
-            if(spec) {
-                var literal=heading===key(spec.name)?value:clean.slice(spec.name.length).trim();
-                var choices=(spec.allowedValues || []).filter(function(option){return key(option.label)===key(literal);});
-                if(!spec.supported || !spec.writable || !spec.optionsComplete || !available(spec.id) || choices.length!==1) {unresolved.push(clause);return;}
-                assign(patchFields,spec.id,{id:choices[0].id},clause,spec.name);return;
-            }
-            // Reusable literal deployment phrases: preserve the whole stated
-            // window/check, without computing duration, role, endpoint or status.
-            var window=definitions.find(function(section){return section.id==='window';});
-            var match=window && /^окно(?:\s+(?:разв[её]ртывания|работ|выполнения))?\s+((?:с|в)\s+.+)$/i.exec(clean);
-            if(match) {
-                if(!available('description')) {unresolved.push(clause);return;}
-                assign(sections,window.id,match[1],clause,window.label);return;
-            }
-            var verification=definitions.find(function(section){return section.id==='verification';}),verifier=definitions.find(function(section){return section.id==='verifier';});
-            match=verification && verifier && /^(.+?)\s+(?:проверит|проверяет|проверят|проверяют)\s+(.+)$/i.exec(clean);
-            if(match && !/(?:^|\s)не$/i.test(match[1]) && !/^(?:если|когда|возможно|никто|кто|почему|пусть|попроси)(?:\s|$)/i.test(match[1])) {
-                if(!available('description')) {unresolved.push(clause);return;}
-                assign(sections,verification.id,clean,clause,verification.label);
-                assign(sections,verifier.id,match[1],clause,verifier.label);return;
-            }
-            unresolved.push(clause);
-        });
-        if(!Object.keys(patchFields).length && !Object.keys(sections).length)return null;
-        return {proposal:Object.assign({fields:patchFields},Object.keys(sections).length?{descriptionSections:sections}:{}),unresolved:unresolved};
-    }
+    // Compatibility exports: model titles and proposals pass through unchanged.
+    function stableDeploymentSummary(controller,value) { return value; }
+    function withStableDeploymentSummary(controller,proposal,text) { return proposal; }
     function create(options) {
         var controller=options.controller;
         function fresh(request) {
@@ -284,16 +176,6 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
                         if(!skipped || accepted.length)args=Object.assign({},args,{fields:Object.assign({},args.fields,{labels:Array.from(new Set(old.concat(accepted)))})});
                     }
                 }
-                if(literal===null) {
-                    var withNotes=keepTaskNote(args,controller.getState(),options.getTurnText ? options.getTurnText() : '');
-                    if(hasSections && Object.hasOwn(withNotes.fields,'description') && !Object.hasOwn(args.fields,'description')) {
-                        var d=controller.getState().draft,old=String(d.pendingFields.description || d.fields.description || ''),noteText=withNotes.fields.description;
-                        var added=noteText.startsWith(old)?noteText.slice(old.length).trim():noteText;
-                        if(added && !added.split(/\n\n(?=Со слов пользователя: )/).every(function(note){var statement=note.replace(/^Со слов пользователя: /,'');return Object.values(args.descriptionSections).some(function(value){return value.includes(statement);});}))
-                            return {ok:false,reason:'Сохрани оговорку пользователя в подходящем descriptionSections, включая полный текст раздела extra при его изменении: '+added};
-                    } else args=withNotes;
-                }
-                args=withStableDeploymentSummary(controller,args,options.getTurnText ? options.getTurnText() : '');
                 var result=await mutate(function() {
                     var source=options.getSourceText ? options.getSourceText() : undefined;
                     return managed || explicitReview ? controller.chatUpdate(args,snapshot(),source,{appManagedQuestions:managed,reconcileUnresolvedFacts:explicitReview}) : controller.chatUpdate(args,snapshot(),source);
@@ -317,5 +199,5 @@ define('_ujgTA_chatTools', ['_ujgTA_fields'], function(fields) {
             })
         ];
     }
-    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,stableDeploymentSummary:stableDeploymentSummary,withStableDeploymentSummary:withStableDeploymentSummary,literalAnswerPatch:literalAnswerPatch,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
+    return {applicationQuestions:applicationQuestions,descriptionSectionDefinitions:descriptionSectionDefinitions,stableDeploymentSummary:stableDeploymentSummary,withStableDeploymentSummary:withStableDeploymentSummary,create:create,modelValue:modelValue,taskForModel:taskForModel,estimateFromAnswer:estimateFromAnswer,estimateTopic:estimateTopic,statedEstimates:statedEstimates};
 });

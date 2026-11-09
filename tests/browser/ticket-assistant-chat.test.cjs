@@ -509,14 +509,27 @@ test('retained manual editor opens as a focus-contained panel and restores the i
 
 test('chat alone populates reporter, description and stated effort in the actual Jira create payload',async t=>{
     const {page,send,state}=await browserFixture(t,1440,'?effort=required');
+    await page.evaluate(async()=>{
+        const f=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');f.instance.destroy();f.modelCalls=0;
+        f.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{api:f.api,storage:null,requestText:async request=>{
+            f.modelCalls++;
+            const fields={summary:'Исправить ошибку API при сохранении',description:'Цель: Восстановить сохранение.\n\nЧто сделать: Исправить ошибку API при сохранении.\n\nКритерии приёмки: Сохранение проходит.'};
+            if(request.user.includes('Тестовая среда'))fields.description+='\n\nГде: Тестовая среда, версия 1.0.';
+            if(request.user.includes('2 часа'))fields.timetracking={originalEstimate:'2h'};
+            const input=JSON.parse(request.user);
+            const response=input.userAnswers?{fields,missing:[]}:input.currentTurn?{fields}:{text:'',toolCalls:[{id:'estimate-'+f.modelCalls,name:'update_task',arguments:{fields}}]};
+            return {text:JSON.stringify(response)};
+        }});
+        await f.instance.ready;const c=f.instance.controller;await c.selectProject('DEMO');await c.selectIssueType('10');await c.selectTemplate('task');
+    });
     await send('При сохранении задача выдаёт ошибку API.');
     await send('Тестовая среда, версия 1.0. Проверка: сохранение проходит.');
     assert.equal(await page.locator('[data-ta-editor-panel]').isVisible(),false);
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),false);
     assert.match(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),/оценку трудозатрат/);
-    const calls=await page.evaluate(()=>window.taPreview.chatRequests.length);
+    const calls=await page.evaluate(()=>window.taPreview.modelCalls);
     await send('2 часа');
-    assert.equal(await page.evaluate(()=>window.taPreview.chatRequests.length),calls);
+    assert.ok(await page.evaluate(()=>window.taPreview.modelCalls)>calls);
     assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),true);
     await page.locator('[data-ta-card-create]').click();
     await page.waitForSelector('[data-ta-issue-link]');
@@ -524,6 +537,7 @@ test('chat alone populates reporter, description and stated effort in the actual
     assert.deepEqual(fields.reporter,{name:'preview'});assert.deepEqual(fields.timetracking,{originalEstimate:'2h'});
     assert.match(fields.description,/Тестовая среда/);assert.match(fields.summary,/ошибк/i);
     assert.equal((await state()).draft.creation.status,'created');
+    assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(x=>x==='create').length),1);
 });
 
 test('chat reports a visible HTTP 502 without disclosing gateway content or guessing a CORS status',async t=>{
@@ -555,7 +569,7 @@ test('chat reports a visible HTTP 502 without disclosing gateway content or gues
     }
 });
 
-test('a gateway outage still allows exactly one explicit issue creation from the chat card',async t=>{
+test('after a gateway outage explicit manual fields can be checked and created exactly once',async t=>{
     const {page,state,errors}=await browserFixture(t);
     await page.evaluate(async()=>{
         const fixture=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');
@@ -582,8 +596,12 @@ test('a gateway outage still allows exactly one explicit issue creation from the
     await composer.fill(description);await composer.press('Enter');
     await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
     const draft=(await state()).draft;
-    assert.equal(draft.fields.description,description);
-    assert.match(draft.fields.summary,/Проверить карточку развёртывания в DEV/);
+    assert.equal(draft.fields.description,undefined);
+    assert.equal(draft.fields.summary,undefined);
+    assert.equal(await page.locator('[data-ta-chat-retry]').isVisible(),true);
+    await page.evaluate(async description=>{const c=window.taPreview.instance.controller;await c.updateField('summary','Проверить карточку развёртывания в DEV');await c.updateField('description',description);},description);
+    await page.locator('[data-ta-card-local-check]').click();
+    await page.waitForFunction(()=>!!window.taPreview.instance.controller.getState().draft.checked);
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),0);
     const create=page.locator('[data-ta-card-create]');
     assert.equal(await create.isEnabled(),true);
@@ -628,14 +646,14 @@ test('after a transport failure a user can validate the current edited card with
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(c=>c==='create').length),0);
 });
 
-test('invalid Pico JSON preserves the incident narrative and a required Jira estimate can be answered in chat',async t=>{
+test('invalid Pico JSON preserves the transcript; valid model retry supplies narrative and required estimate',async t=>{
     const {page,state}=await browserFixture(t,1440,'?effort=required');
     await page.evaluate(async()=>{
         const fixture=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');
         fixture.instance.destroy();
-        fixture.attempts=0;
+        fixture.attempts=0;fixture.validResponse=null;
         fixture.instance=new Gadget({getGadgetContentEl:()=>window.jQuery('#ticket-assistant')},{
-            api:fixture.api,storage:null,requestText:async()=>{fixture.attempts++;return {text:'{"toolCalls":[{"name":"update_task","arguments":{"fields":{"summary":"UNTRUSTED"}}}'};}
+            api:fixture.api,storage:null,requestText:async()=>{fixture.attempts++;return {text:fixture.validResponse?JSON.stringify(fixture.validResponse):'{"toolCalls":[{"name":"update_task","arguments":{"fields":{"summary":"UNTRUSTED"}}}'};}
         });
         await fixture.instance.ready;
         const c=fixture.instance.controller;
@@ -652,15 +670,15 @@ test('invalid Pico JSON preserves the incident narrative and a required Jira est
     await composer.fill(narrative);await composer.press('Enter');
     await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
     const before=(await state()).draft;
-    assert.equal(before.fields.description,narrative);
-    assert.match(before.fields.summary,/доступ/);
-    assert.doesNotMatch(before.fields.summary,/UNTRUSTED|Добрый день/);
+    assert.equal(before.fields.description,undefined);assert.equal(before.fields.summary,undefined);
+    assert.equal(await page.locator('[data-ta-chat-log] [data-role=user] .ta-message-text').first().innerText(),narrative);
     assert.equal(await page.locator('[data-ta-card-create]').isDisabled(),true);
-    assert.match(await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText(),/оценк/i);
+    assert.equal(await page.locator('[data-ta-chat-retry]').isVisible(),true);
     const attempts=await page.evaluate(()=>window.taPreview.attempts);
-    await composer.fill('10 минут');await composer.press('Enter');
+    await page.evaluate(narrative=>{window.taPreview.validResponse={fields:{summary:'Восстановить доступ к тестовому серверу',description:narrative,timetracking:{originalEstimate:'10m'}},missing:[]};},narrative);
+    await composer.fill('Оценка: 10 минут');await composer.press('Enter');
     await page.waitForFunction(()=>!!window.taPreview.instance.controller.getState().draft.checked);
-    assert.equal(await page.evaluate(()=>window.taPreview.attempts),attempts);
+    assert.ok(await page.evaluate(()=>window.taPreview.attempts)>attempts);
     await page.locator('[data-ta-card-create]').click();
     await page.waitForSelector('[data-ta-issue-link]');
     const payload=await page.evaluate(()=>window.taPreview.createdPayload.fields);
@@ -725,7 +743,7 @@ test('visible HTTP 429 retry uses the saved chat and preserves unsent text acros
                     'Где: DEV, сервис demo-api.',
                     'Критерии приёмки: Постановщик проверит HTTP 200 на /health и версию 1.0.'
                 ].join('\n\n')}, missing:[]};
-                return Response.json({choices:[{message:{content:JSON.stringify(card)}}]});
+                return Response.json({choices:[{message:{content:JSON.stringify({text:'',toolCalls:[{id:'rate-fill-'+f.attempts,name:'update_task',arguments:{fields:card.fields}}]})}}]});
             }
         });
         await f.instance.ready;
@@ -744,10 +762,12 @@ test('visible HTTP 429 retry uses the saved chat and preserves unsent text acros
     ].join('\n\n');
     await composer.fill(source);
     await composer.press('Enter');
-    await page.waitForFunction(() => !!window.taPreview.instance.controller.getState().draft.checked);
-    const retry = page.getByRole('button', {name:/повторить/i});
+    await page.waitForFunction(() => window.taPreview.instance.chat.getState().status==='error');
+    assert.equal((await state()).draft.fields.summary,undefined);
+    assert.equal((await state()).draft.fields.description,undefined);
+    const retry = page.locator('[data-ta-chat-rate-retry]');
     await retry.waitFor({state:'visible', timeout:2000});
-    assert.equal(await page.locator('[data-ta-card-create]').isEnabled(), true);
+    assert.equal(await page.locator('[data-ta-card-create]').isDisabled(), true);
     const unsent = 'Уточнение, которое я ещё не отправил';
     await composer.fill(unsent);
     for (const expected of [2, 3]) {
@@ -779,7 +799,7 @@ test('read-only template inspection after custom rule edits preserves pending re
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(op=>op==='create').length),0);assert.deepEqual(errors,[]);
 });
 
-for(const failure of ['502','malformed'])test('incomplete '+failure+' fallback keeps generic template requirements blocking creation',async t=>{
+for(const failure of ['502','malformed'])test(failure+' leaves generic fields empty, preserves the transcript and offers Retry',async t=>{
     const {page,state,errors}=await browserFixture(t);
     await page.evaluate(async failure=>{
         const f=window.taPreview,Gadget=window.taRequire('_ujgTicketAssistantRuntime');f.instance.destroy();
@@ -791,9 +811,10 @@ for(const failure of ['502','malformed'])test('incomplete '+failure+' fallback k
     },failure);
     const source='Восстановить доступ на DEV.',composer=page.locator('[data-ta-chat-input]');
     await composer.fill(source);await composer.press('Enter');await page.waitForFunction(()=>window.taPreview.instance.chat.getState().status!=='running');
-    const s=await state();assert.equal(s.draft.fields.description,source);assert.equal(s.draft.source,source);assert.equal(s.draft.checked,null);
-    assert.equal(s.validation.ok,false);assert.ok(s.validation.questions.some(q=>q.id.startsWith('template:')));
-    assert.ok((await page.locator('[data-ta-chat-log] .ta-message-text').last().innerText()).includes(s.validation.questions[0].text));
+    const s=await state();assert.equal(s.draft.fields.description,undefined);assert.equal(s.draft.fields.summary,undefined);assert.equal(s.draft.checked,null);
+    assert.equal(s.validation,null);
+    assert.equal(await page.locator('[data-ta-chat-retry]').isVisible(),true);
+    assert.equal(await page.locator('[data-ta-chat-log] [data-role=user] .ta-message-text').first().innerText(),source);
     assert.doesNotMatch(JSON.stringify(s.draft.fields),/UNTRUSTED/);assert.equal(await page.locator('[data-ta-card-create]').isEnabled(),false);
     assert.equal(await page.evaluate(()=>window.taPreview.calls.filter(op=>op==='create').length),0);assert.deepEqual(errors,[]);
 });

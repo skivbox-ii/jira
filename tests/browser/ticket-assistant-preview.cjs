@@ -8,6 +8,8 @@
     var records = {calls:[], pending:0}; window.taPreview = records;
     var legacyForm=parameters.get('form')==='1' || !!review;
     records.chatMode='normal';records.chatRequests=[];
+    // Personal UI checks may inject a canned model result via the preview route.
+    records.screenshotExample=window.taScreenshotExample || null;
     if(review==='response') records.responseMode=new URLSearchParams(window.location.search).get('responseMode');
     var scenario='success', issueSequence=100, failedFiles=new Set();
     var controls=$('<nav aria-label="Synthetic creation scenario" class="ta-preview-scenarios">').append($('<strong>').text('Offline create: '));
@@ -18,20 +20,20 @@
     });
     $('#ticket-assistant').before(controls);
     var devopsExamples={
-        '10':'Цель: вернуть команде доступ к API.\nЧто сделать: обновить конфигурацию API и перезапустить сервис.\nГде: API на TEST, узел test-01.\nКритерии приёмки: API отвечает HTTP 200 на /health.\nСсылки: https://example.org/api/runbook\nОценка: 30 минут.',
-        '11':'Что происходит: API на TEST возвращает HTTP 500 при загрузке sample.csv.\nЧто ожидалось: API принимает файл с HTTP 201.\nШаги воспроизведения: открыть загрузку и отправить sample.csv.\nГде: API версии 2.3 на TEST.\nЛоги / скриншоты: https://example.org/logs/123\nКритерии приёмки: sample.csv загружается с HTTP 201.\nСсылки: https://example.org/api\nОценка: 1 час.',
-        '12':'Обновить виджет Jira в DEV из коммита 5961fa4 в рабочее время. Заменить скрипт и перезагрузить страницу. Постановщик проверит открытие карточки DEVOPS. Оценка: 30 минут. Ссылки: https://example.org/mama-myla-ramu'
+        '10':'Тема: Вернуть команде доступ к API.\nЦель: вернуть команде доступ к API.\nЧто сделать: обновить конфигурацию API и перезапустить сервис.\nГде: API на TEST, узел test-01.\nКритерии приёмки: API отвечает HTTP 200 на /health.\nСсылки: https://example.org/api/runbook\nОценка: 30 минут.',
+        '11':'Тема: Исправить загрузку sample.csv через API.\nЧто происходит: API на TEST возвращает HTTP 500 при загрузке sample.csv.\nЧто ожидалось: API принимает файл с HTTP 201.\nШаги воспроизведения: открыть загрузку и отправить sample.csv.\nГде: API версии 2.3 на TEST.\nЛоги / скриншоты: https://example.org/logs/123\nКритерии приёмки: sample.csv загружается с HTTP 201.\nСсылки: https://example.org/api\nОценка: 1 час.',
+        '12':'Тема: Обновить виджет Jira в DEV.\nСреда: DEV.\nВерсия и состав: Виджет Jira из коммита 5961fa4.\nПорядок: Заменить скрипт и перезагрузить страницу.\nОкно: в рабочее время.\nПроверка: Постановщик проверит открытие карточки DEVOPS.\nСсылки: https://example.org/mama-myla-ramu\nОценка: 30 минут.'
     };
     if(devopsPreview) {
-        controls.append($('<p>').text('Демо DEVOPS: чат работает локально, ключ не нужен. Jira и модель не вызываются. Для нового примера нажмите «Очистить», выберите пример и отправьте его. Недостающий раздел можно дописать, например «Окно: в рабочее время».'));
+        controls.append($('<p>').text('Демо DEVOPS: готовые примеры с явно подписанными полями. Ответы модели имитируются только по этим подписям; свободный текст не разбирается. Чат работает локально, ключ не нужен. Jira и модель не вызываются. Для нового примера нажмите «Очистить», выберите пример и отправьте его. Недостающий раздел можно дописать, например «Окно: в рабочее время».'));
         Object.keys(devopsExamples).forEach(function(id){
-            controls.append($('<button type="button">').attr('data-ta-preview-example',id).text({'10':'Пример задачи','11':'Пример ошибки','12':'Пример развёртывания'}[id]).on('click',async function(){
+            controls.append($('<button type="button">').attr('data-ta-preview-example',id).text({'10':'Готовый пример задачи','11':'Готовый пример ошибки','12':'Готовый пример развёртывания'}[id]).on('click',async function(){
                 await records.instance.controller.selectIssueType(id);
                 $('[data-ta-chat-input]').val(devopsExamples[id]).trigger('input').trigger('focus');
             }));
         });
-        ['normal','error','slow'].forEach(function(mode){
-            controls.append($('<button type="button">').attr({'data-ta-preview-pico':mode,'aria-pressed':String(mode==='normal')}).text({normal:'Pico: работает',error:'Pico: ошибка',slow:'Pico: задержка'}[mode]).on('click',function(){
+        ['normal','malformed','error','slow'].forEach(function(mode){
+            controls.append($('<button type="button">').attr({'data-ta-preview-pico':mode,'aria-pressed':String(mode==='normal')}).text({normal:'Pico: работает',malformed:'Pico: неверный ответ',error:'Pico: ошибка',slow:'Pico: задержка'}[mode]).on('click',function(){
                 records.chatMode=mode;controls.find('[data-ta-preview-pico]').attr('aria-pressed','false');$(this).attr('aria-pressed','true');
             }));
         });
@@ -111,23 +113,23 @@
         getIssueAttachments:function() {return result('attachment-reconcile',[]);}
     };
     records.api=api;
-    function devopsPatch(current,text) {
+    function devopsPatch(text) {
         var state=records.instance.controller.getState(),definitions=window.taRequire('_ujgTA_validation').descriptionSectionDefinitions(state.meta,state.draft.issueTypeId,state.draft.templateId);
-        var formatted=window.taRequire('_ujgTA_validation').formatDevopsDescription(state.meta,state.draft.issueTypeId,text,true),sections={},active=null;
-        formatted.split(/\r?\n/).forEach(function(line){
-            var match=/^([^:]+):\s*(.*)$/.exec(line),section=match && definitions.find(function(d){return d.label===match[1];});
-            if(section){active=section.id;if(match[2].trim())sections[active]=match[2].trim();}
-            else if(active && line.trim())sections[active]=(sections[active]?sections[active]+'\n':'')+line;
+        // This is a canned transport, not a prose-to-fields fallback. Only
+        // explicit demo labels can supply model-authored fields or sections.
+        var fields={},sections={};
+        text.split(/\r?\n/).forEach(function(line){
+            var match=/^([^:]+):\s*(.*)$/.exec(line);
+            if(!match || !match[2].trim())return;
+            var label=match[1].trim(),value=match[2].trim();
+            var section=definitions.find(function(d){return d.label===label;});
+            if(section)sections[section.id]=value;
+            else if(/^(?:Тема|summary)$/i.test(label))fields.summary=value;
+            else if(label==='Оценка') {
+                var estimate=/^(\d+)\s*(минут(?:а|ы)?|час(?:а|ов)?)[.]?$/.exec(value);
+                if(estimate)fields.timetracking={originalEstimate:estimate[1]+(/^минут/.test(estimate[2])?'m':'h')};
+            }
         });
-        if(!Object.keys(sections).length)sections.extra=text;
-        var fields={},topic=/^\s*(?:тема|summary)\s*:\s*(.+)$/im.exec(text);
-        if(topic)fields.summary=topic[1];
-        else if(!current.draft.fields.summary) {
-            var opening=window.taRequire('_ujgTA_draft').narrativeSummary(text);
-            fields.summary=(/^[^:\n]{1,80}:/.test(opening)?sections.work || sections.actual || sections.release || opening:opening).split(/\r?\n/)[0].slice(0,255);
-        }
-        var estimates=window.taRequire('_ujgTA_chatTools').statedEstimates([{role:'user',text:text}]);
-        if(Object.keys(estimates).length)fields.timetracking=estimates;
         return {fields:fields,descriptionSections:sections};
     }
     var llm = Object.assign({},shared,{requestText:function(config, request) {
@@ -171,7 +173,10 @@
             var input=JSON.parse(request.user);
             if(input.userAnswers) {
                 records.calls.push('pico');records.chatRequests.push(input);
-                return Promise.resolve({text:JSON.stringify({fields:{description:input.current.description || 'Подготовлено по обращению.'},missing:[]})});
+                if(records.chatMode==='error')return Promise.reject(new Error('Synthetic transport failure'));
+                if(records.chatMode==='malformed')return Promise.resolve({text:'{"fields":'});
+                var answer=input.userAnswers[input.userAnswers.length-1],patch=devopsPreview?devopsPatch(answer && answer.text || ''):{fields:{}};
+                return Promise.resolve({text:JSON.stringify({fields:Object.assign({description:input.current.description || ''},patch.fields),missing:[]})});
             }
             var messages=input.messages,last=-1;
             messages.forEach(function(message,index){if(message.role==='user')last=index;});
@@ -182,6 +187,7 @@
             return new Promise(function(resolve,reject){setTimeout(function(){
                 records.pending--;
                 if(mode==='error'){reject(new Error('Synthetic transport failure'));return;}
+                if(mode==='malformed'){resolve({text:'{"toolCalls":[{"name":"update_task","arguments":{"fields":{"summary":"UNTRUSTED"}}}'});return;}
                 var response={text:'Карточка обновлена. Проверьте сведения перед созданием.',toolCalls:[]};
                 function call(name,args){response={text:'',toolCalls:[{id:'offline_'+Date.now()+'_'+records.chatRequests.length,name:name,arguments:args}]};}
                 var current=input.authoritativeContext,template=current.template && current.template.template;
@@ -198,8 +204,11 @@
                 } else if(/измени шаблон/i.test(text)) {
                     if(!toolResults.length)call('propose_template_change',{changes:{instructions:(template && template.instructions || '')+'\nОбязательно укажи среду проверки.'}});
                     else response.text='Предложение готово. Примените его кнопкой, чтобы сохранить новую ревизию.';
+                } else if(records.screenshotExample && text===records.screenshotExample.source) {
+                    if(!toolResults.length)call('update_task',{fields:records.screenshotExample.fields,descriptionSections:records.screenshotExample.descriptionSections});
+                    else response.text='Сведения перенесены из имитации ответа модели. Проверьте недостающие сведения в карточке.';
                 } else if(devopsPreview && current.draft.projectKey==='DEVOPS') {
-                    if(!toolResults.length)call('update_task',devopsPatch(current,text));
+                    if(!toolResults.length)call('update_task',devopsPatch(text));
                     else response.text='Сведения перенесены. Готовность проверяет карточка.';
                 } else if(/компонент/i.test(text) && !/выбираю/i.test(text)) {
                     if(!toolResults.length)call('find_options',{fieldId:'components',query:'',limit:10});
@@ -254,7 +263,7 @@
     records.instance = instance;
     records.ready = instance.ready.then(function() {return instance.controller.selectProject(devopsPreview?'DEVOPS':'DEMO');}).then(function() {
         if (!records.restored) return instance.controller.selectIssueType(devopsPreview?'12':'10').then(function(){
-            return devopsPreview?instance.chat.send(devopsExamples['12']):instance.controller.selectTemplate('task');
+            return devopsPreview?(parameters.get('screenshot')==='1'?undefined:instance.chat.send(devopsExamples['12'])):instance.controller.selectTemplate('task');
         });
     }).then(function() {
         document.documentElement.setAttribute('data-ta-preview-ready','true');

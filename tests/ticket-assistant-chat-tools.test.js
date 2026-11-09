@@ -137,7 +137,7 @@ test('original and remaining estimates have distinct questions; a bare duration 
     assert.equal(t.estimateFromAnswer('2 часа','Какая исходная оценка и какая оставшаяся оценка работы?'),null);
 });
 
-test('subsequent description rewrite preserves the reason supplied in a previous turn',async()=>{
+test('model description is stored unchanged without appending narrative notes',async()=>{
     const h=await harness(),Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields});
     let userText='Версия не нужна. Причина: работы касаются доступа.';
     const tools=Tools.create({controller:h.controller,getTurnText:()=>userText});
@@ -146,6 +146,7 @@ test('subsequent description rewrite preserves the reason supplied in a previous
     userText='Проверим по RDP.';
     await update.execute({fields:{description:'Недоступен стенд. Критерий: подключение по RDP.'},questions:[]},{});
     const desc=h.store.load('DO').draft.fields.description;
-    assert.match(desc,/RDP/);assert.match(desc,/Версия не нужна\. Причина: работы касаются доступа\./);
-    assert.equal(desc.split('Со слов пользователя:').length,2);
+    assert.equal(desc,'Недоступен стенд. Критерий: подключение по RDP.');
+    const task=await tools.find(t=>t.name==='get_task').execute({},{});
+    assert.equal(task.draft.fields.description,desc);
 });

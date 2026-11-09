@@ -4,13 +4,7 @@ const {harness}=require('./helpers/ticket-assistant-chat-fixture');
 const {loadUnit}=require('./helpers/ticket-assistant-fixture');
 const raw='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
 const modified=raw.replace('Ссылки на репозиторий для примера нет.','')+'\nНеизвестно: ссылка на репозиторий отсутствует.';
-const linkQuestion='Добавьте ссылку на репозиторий, документацию или базу знаний.';
-function assertMissingLink(h,chat) {
-    const s=h.controller.getState();
-    assert.equal(s.draft.checked,null);assert.equal(s.validation.ok,false);
-    assert.equal(s.validation.questions[0].id,'devops:links');assert.equal(s.validation.questions[0].text,linkQuestion);
-    assert.equal(chat.getState().transcript.at(-1).text,'Карточка заполнена по вашему сообщению. Создание пока недоступно. '+linkQuestion);
-}
+const modelSections='Среда: DEV\n\nВерсия и состав: v1.0\n\nПорядок: Поменять образ и перезапустить сервис.\n\nОкно: рабочее время\n\nПроверка: HTTP 200 на /health\n\nКто проверяет: Постановщик\n\nСсылки: ссылка на репозиторий отсутствует';
 async function setup(t,actual=false) {
     const h=await harness();h.calls=[];
     if(!actual)h.validation.formatDevopsDescription=(meta,typeId,description)=>{h.calls.push({project:meta.projectKey,typeId,description});return description.startsWith('Отформатировано: ')?description:'Отформатировано: '+description;};
@@ -23,35 +17,36 @@ async function setup(t,actual=false) {
 }
 test('normal automatic model update formats the actual Jira field and keeps applied-model provenance',async t=>{
     const h=await setup(t,true),c=h.controller,format=h.validation.formatDevopsDescription;
-    const expected=format(c.getState().meta,'12',raw);
-    assert.match(expected,/^Среда:/);
+    const expected=format(c.getState().meta,'12',modelSections);
+    assert.match(expected,/Среда/);
     h.validation.formatDevopsDescription=(meta,typeId,value)=>{
         h.calls.push({typeId,description:value});
         return format(meta,typeId,value);
     };
     const chat=h.makeChat(async config=>{
-        await config.tools.find(x=>x.name==='update_task').execute({fields:{summary:'Обновить demo-api в DEV',description:raw},questions:[]},{});
+        await config.tools.find(x=>x.name==='update_task').execute({fields:{summary:'Обновить demo-api в DEV',description:modelSections},questions:[]},{});
         config.afterStep({hasTools:true,failedTool:false,draftExtracted:true});
     });t.after(()=>chat.destroy());await chat.send(raw);
     assert.equal(c.getState().draft.fields.description,expected);assert.equal(c.getState().draft.source,raw);
-    assert.equal(chat.getState().error,null);assertMissingLink(h,chat);
-    assert.ok(h.calls.some(x=>x.typeId==='12' && x.description===raw));
+    assert.equal(chat.getState().error,null);assert.equal(c.getState().draft.checked,null);
+    assert.ok(h.calls.some(x=>x.typeId==='12' && x.description===modelSections));
 });
-test('malformed fallback and exact retry use the actual formatted field without duplicate user messages',async t=>{
+test('malformed response and retry never copy or format the narrative',async t=>{
     const h=await setup(t),c=h.controller,chat=h.makeChat(async()=>{throw Error('Invalid Pico text envelope');});t.after(()=>chat.destroy());
     await chat.send(raw);await chat.send(raw);
-    assert.equal(c.getState().draft.fields.description,'Отформатировано: '+raw);assert.equal(c.getState().draft.source,raw);
-    assert.equal(chat.getState().error,null);assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
+    assert.equal(c.getState().draft.fields.description,undefined);assert.equal(c.getState().draft.fields.summary,undefined);
+    assert.equal(h.calls.length,0);assert.equal(c.getState().draft.checked,null);
+    assert.equal(chat.getState().error.code,'response');assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
     assert.equal(h.store.load('DEVOPS').draft.fields.description,c.getState().draft.fields.description);
 });
-test('restore formats the existing unprotected screenshot description, including its added unknown note',async t=>{
+test('restore preserves existing unprotected description and placeholder title including unknown note',async t=>{
     const h=await setup(t),c=h.controller;
     const saved=h.store.load('DEVOPS');saved.draft.source=raw;saved.draft.sourceRevision++;
     saved.draft.fields={summary:'Учебный черновик.',description:modified};
     assert.equal(h.store.save('DEVOPS',{draft:saved.draft,settings:saved.settings},saved.revision).ok,true);
     await c.init();await c.selectProject('DEVOPS');const d=c.getState().draft;
-    assert.equal(d.id,saved.draft.id);assert.equal(d.fields.description,'Отформатировано: '+modified);assert.equal(d.source,raw);
-    assert.match(d.fields.description,/Неизвестно: ссылка/);assert.equal(d.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время.');
+    assert.equal(d.id,saved.draft.id);assert.equal(d.fields.description,modified);assert.equal(d.source,raw);
+    assert.match(d.fields.description,/Неизвестно: ссылка/);assert.equal(d.fields.summary,'Учебный черновик.');assert.equal(h.calls.length,0);
     await c.init();await c.selectProject('DEVOPS');assert.equal(c.getState().draft.fields.description,d.fields.description);
 });
 for(const guard of ['protected','pending','verbatim','custom','generic'])test('description formatter preserves '+guard+' intent across updates and reload',async t=>{
@@ -71,18 +66,18 @@ for(const guard of ['protected','pending','verbatim','custom','generic'])test('d
 });
 
 
-for(const structured of [false,true])for(const placeholder of [false,true])test('real formatter derives an action topic from proven source, not a section heading: '+JSON.stringify({structured,placeholder}),async t=>{
-    const h=await setup(t,true),c=h.controller,formatted=h.validation.formatDevopsDescription(c.getState().meta,'12',raw);
-    assert.notEqual(formatted,raw);assert.match(formatted,/^Среда:/);
+for(const structured of [false,true])for(const placeholder of [false,true])test('formatter preserves model content without deriving a topic from the narrative: '+JSON.stringify({structured,placeholder}),async t=>{
+    const h=await setup(t,true),c=h.controller,formatted=h.validation.formatDevopsDescription(c.getState().meta,'12',modelSections);
+    assert.match(formatted,/Среда/);
     const chat=h.makeChat(async config=>{
         const fields={description:structured?formatted:raw};if(placeholder)fields.summary='Учебный черновик.';
         await config.tools.find(x=>x.name==='update_task').execute({fields,questions:[]},{});
         config.afterStep({hasTools:true,failedTool:false,draftExtracted:true});
     });t.after(()=>chat.destroy());await chat.send(raw);
-    assert.equal(c.getState().draft.fields.description,formatted);
-    assert.equal(c.getState().draft.fields.summary,'Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0.');
+    assert.equal(c.getState().draft.fields.description,structured?formatted:h.validation.formatDevopsDescription(c.getState().meta,'12',raw,true));
+    assert.equal(c.getState().draft.fields.summary,placeholder?'Учебный черновик.':undefined);
     assert.equal(c.getState().draft.source,raw);
-    assert.equal(chat.getState().error,null);assertMissingLink(h,chat);
+    assert.equal(chat.getState().error,null);assert.equal(c.getState().draft.checked,null);
 });
 test('opposite model facts never become source-equivalent or authorize local readiness on malformed retry',async t=>{
     const h=await setup(t,true),c=h.controller,source=raw+' Миграции не выполнять.';

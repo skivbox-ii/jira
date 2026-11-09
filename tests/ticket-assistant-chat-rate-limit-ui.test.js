@@ -29,18 +29,20 @@ async function setup(t,{persisted=false}={}) {
     async function success(config){await config.tools.find(t=>t.name==='update_task').execute({fields:{summary:'Доступ восстановить',description:narrative},questions:[]},{});config.onEvent({type:'assistant',text:'Сохранено'});}
     return {...h,chat,ui,doc:window.document,input,runs,send,settle,success,setAction:fn=>{action=fn;},retry:()=>window.document.querySelector('[data-ta-chat-rate-retry]')};
 }
-for(const origin of ['send','reconcile','persisted'])test(origin+' 429 exposes adjacent manual retry, keeps ready card and unsent composer; repeat then success retires notice',async t=>{
+for(const origin of ['send','reconcile','persisted'])test(origin+' 429 exposes manual retry without reserve fills, preserves composer, and successful model update retires notice',async t=>{
     const h=await setup(t,{persisted:origin!=='send'});
     if(origin==='send')await h.send(narrative);
     if(origin==='reconcile'){await h.chat.reconcile();h.ui.update(h.controller.getState());}
-    assert.equal(h.chat.getState().status,'idle');assert.equal(h.retry()?.hidden,false);
-    assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,false);
+    assert.equal(h.chat.getState().status,origin==='persisted'?'idle':'error');assert.equal(h.retry()?.hidden,false);
+    assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,origin!=='persisted');
+    const fields=JSON.stringify(h.controller.getState().draft.fields);
     const region=h.retry().parentElement;assert.match(region.textContent,/HTTP 429/);assert.match(region.textContent,/огранич|слишком много/i);assert.match(h.retry().textContent,/Повторить/);
     const count=h.runs.length,users=h.chat.getState().transcript.filter(m=>m.role==='user');await tick();assert.equal(h.runs.length,count);
     h.input.value='Неотправленные сведения';h.input.focus();h.input.setSelectionRange(3,3);
     h.retry().click();h.retry().click();await h.settle();assert.equal(h.runs.length,count+1);assert.equal(h.retry().hidden,false);
     assert.equal(h.input.value,'Неотправленные сведения');assert.equal(h.input.selectionStart,3);assert.deepEqual(h.chat.getState().transcript.filter(m=>m.role==='user'),users);
-    assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,false);
+    assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,true);
+    assert.equal(JSON.stringify(h.controller.getState().draft.fields),fields);
     h.setAction(h.success);h.retry().click();await h.settle();assert.equal(h.runs.length,count+2);assert.equal(h.retry().hidden,true);
     assert.doesNotMatch(h.chat.getState().notices.join(' '),/HTTP 429/);assert.deepEqual(h.chat.getState().transcript.filter(m=>m.role==='user'),users);
     if(origin==='persisted')assert.ok(h.chat.getState().notices.includes('Другое уведомление.'));
@@ -88,12 +90,12 @@ test('strict informational 429 with an existing ready card retries the original 
     assert.equal(h.chat.getState().transcript.filter(m=>m.role==='user' && m.text==='Покажи доступные поля').length,1);
     assert.equal(JSON.stringify(h.controller.getState().draft.fields),before);assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,false);assert.equal(h.input.value,'Неотправленный ответ');
 });
-test('incomplete fallback retains persisted 429 notice and manual retry without claiming creation readiness',async t=>{
+test('429 failure persists user evidence and offers manual retry without filling required fields',async t=>{
     const h=await setup(t),read=h.api.getCreateMeta;
     h.api.getCreateMeta=async key=>{const raw=await read(key);raw.projects[0].issuetypes.forEach(type=>{type.fields.customfield_2.required=true;});return raw;};
-    await h.controller.selectProject('DO');await h.send(narrative);assert.equal(h.chat.getState().status,'idle');assert.equal(h.chat.getState().error,null);
-    assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,true);assert.match(h.chat.getState().notices.join(' '),/HTTP 429/);assert.equal(h.retry().hidden,false);
-    const d=h.controller.getState().draft,saved=h.store.loadConversation('DO',d.id);assert.match(saved.value.notices.join(' '),/HTTP 429/);
+    await h.controller.selectProject('DO');await h.send(narrative);assert.equal(h.chat.getState().status,'error');assert.match(h.chat.getState().error.message,/HTTP 429/);
+    assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,true);assert.equal(h.controller.getState().draft.fields.description,undefined);assert.equal(h.controller.getState().draft.fields.summary,undefined);assert.equal(h.retry().hidden,false);
+    const d=h.controller.getState().draft,saved=h.store.loadConversation('DO',d.id);assert.equal(saved.value.transcript.filter(m=>m.role==='user').length,1);assert.equal(saved.value.transcript.find(m=>m.role==='user').text,narrative);
     h.input.value='Ещё не отправлено';h.retry().click();await h.settle();assert.equal(h.runs.length,2);assert.equal(h.retry().hidden,false);
     assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,true);assert.equal(h.input.value,'Ещё не отправлено');assert.equal(h.chat.getState().transcript.filter(m=>m.role==='user').length,1);
 });

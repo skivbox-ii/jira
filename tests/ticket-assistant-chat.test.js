@@ -92,17 +92,10 @@ for(const correction of ['valid','malformed','changed','prose']) test('primary c
         assert.ok(chat.getState().transcript.at(-1).text.includes(d.questions[0].text));assert.equal(d.checked,null);
         assert.equal(chat.getState().lastTurnUsage.toolCalls,1);
     } else {
-        assert.equal(chat.getState().error,null);assert.equal(n,2);
-        const d=h.controller.getState().draft;
-        assert.equal(d.fields.summary,'Приложение не запускается');assert.equal(d.fields.description,'Приложение не запускается');
-        assert.equal(d.source,'Приложение не запускается');
-        assert.deepEqual(Array.from(d.questions,q=>q.id),['template:goal','template:work','template:location','template:acceptance']);
-        assert.ok(d.questions.every(q=>q.required));assert.equal(d.questions.some(q=>q.id==='q1'),false);
-        assert.equal(d.appManagedQuestions,true);assert.equal(h.controller.getState().validation.ok,false);assert.equal(d.checked,null);
-        const reply=chat.getState().transcript.at(-1).text;
-        assert.ok(reply.includes(d.questions[0].text));assert.doesNotMatch(reply,/Когда появилась ошибка|Проверка пройдена|нажмите.*Создать/);
+        assert.equal(chat.getState().error.code,'response-repair');assert.equal(chat.getState().error.action,'retry');assert.equal(n,2);
+        const d=h.controller.getState().draft;assert.equal(JSON.stringify(d),before);assert.equal(d.checked,null);
+        assert.equal(chat.getState().transcript.length,1);assert.equal(chat.getState().transcript[0].text,'Приложение не запускается');
         assert.equal(chat.getState().lastTurnUsage.toolCalls,0);
-        assert.equal(chat.getState().transcript.filter(m=>m.role==='user').length,1);
         const saved=h.store.loadConversation('DO',d.id);
         assert.equal(saved.value.messages.some(m=>m.role==='toolResult' && m.toolCallId==='call_6'),false);
     }
@@ -434,8 +427,8 @@ test('a conversation claiming the description was filled must actually apply it 
         n++;
         if(n===1)return {text:'Описание заполнено. Задача готова к созданию.'};
         if(n===2){
-            assert.match(req.user,/requiredDraftUpdate/);
-            return {text:JSON.stringify({text:'',toolCalls:[{id:'fill',name:'update_task',arguments:{fields:{summary:'Восстановить доступ',description:accessDescription},questions:[]}}]})};
+            assert.equal(JSON.parse(req.user).currentTurn,accessDescription);
+            return {text:JSON.stringify({fields:{summary:'Восстановить доступ',description:accessDescription}})};
         }
         return {text:'Задача готова к созданию.'};
     }});
@@ -479,7 +472,7 @@ test('one data turn preserves saved facts and skip reasons and asks the app-gene
         const ctx=JSON.parse(r.user).authoritativeContext;
         n++;assert.equal(ctx.draft.fields.description,initial);assert.equal(ctx.appManagedPatch,true);
         return {text:JSON.stringify({text:'Какая версия ПО?',toolCalls:[{id:'answers',name:'update_task',arguments:{
-                fields:{description:accessDescription+'\nДата: 6 ноября.'},
+                fields:{description:accessDescription+'\nВерсия не нужна. Причина: восстанавливаем доступ.\nДата: 6 ноября.'},
                 questions:[{id:'effort',required:true,text:'На сколько оценить работу?',reason:'В описании есть дата, но нет трудозатрат.'}]
             }}]})};
     }});
@@ -498,7 +491,7 @@ test('reading options cannot substitute for a claimed write to the Jira descript
         n++;
         if(n===1)return {text:JSON.stringify({text:'',toolCalls:[{id:'lookup',name:'find_options',arguments:{fieldId:'components',query:'Backend'}}]})};
         if(n===2)return {text:'Описание заполнено.'};
-        if(n===3){assert.ok(JSON.parse(r.user).authoritativeContext.requiredDraftUpdate);return {text:JSON.stringify({text:'',toolCalls:[{id:'write',name:'update_task',arguments:{fields:{summary:'Исправить API',description:'Компонент Backend не отвечает.'},questions:[]}}]})};}
+        if(n===3){assert.equal(JSON.parse(r.user).currentTurn,'Компонент Backend не отвечает.');return {text:JSON.stringify({fields:{summary:'Исправить API',description:'Компонент Backend не отвечает.'}})};}
         return {text:'Задача готова к созданию.'};
     }});
     await chat.send('Компонент Backend не отвечает.');assert.equal(chat.getState().error,null);
@@ -537,7 +530,7 @@ test('a complete description supplied in chat is durable before the provider ans
     assert.equal(chat.getState().error,null);assert.equal(h.store.load('DO').draft.fields.description,exact);chat.destroy();
 });
 
-test('live-style review saves verified description despite invalid optional fields and an obsolete assignee question',async()=>{
+for(const modelQuestion of [false,'schema','template'])test('live-style review keeps model description and distinguishes schema from template questions: '+modelQuestion,async()=>{
     const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs'),h=await setup();
     await h.controller.chatUpdate({fields:{summary:'Доступ',description:'Стенд DEV'},questions:[]},h.controller.chatSnapshot());
     await h.chat.send('Исполнителя назначать не нужно. Проверка восстановления — вход по RDP.');
@@ -545,13 +538,14 @@ test('live-style review saves verified description despite invalid optional fiel
     const chat=h.Chat.create({controller:h.controller,runtime,store:h.store,requestText:async r=>{
         calls++;const request=JSON.parse(r.user);
         assert.ok(request.userAnswers.some(m=>m.text.includes('вход по RDP')));
-        return {text:JSON.stringify({fields:{summary:'Доступ',description:'Стенд DEV. Проверка — вход по RDP.',timetracking:{enabled:true},priority:'invented'},
-            missing:[{id:'required:assignee',text:'Кто исполнитель?',reason:'Выберите исполнителя.'},'Кто исполнитель?']})};
+        return {text:JSON.stringify({fields:{summary:'Доступ',description:'Стенд DEV. Проверка — вход по RDP. Исполнителя назначать не нужно.',timetracking:{enabled:true},priority:'invented'},
+            missing:modelQuestion?[{id:modelQuestion==='schema'?'required:assignee':'template:approval',text:'Кто исполнитель?',reason:'Выберите исполнителя.'}]:[]})};
     }});
     await chat.reconcile();assert.equal(calls,1);assert.equal(chat.getState().error,null);
     const saved=h.store.load('DO').draft;
     assert.match(saved.fields.description,/вход по RDP/);assert.match(saved.fields.description,/назначать не нужно/);
-    assert.equal(saved.fields.timetracking,undefined);assert.equal(saved.fields.priority,undefined);assert.equal(saved.questions.length,0);
+    assert.equal(saved.fields.timetracking,undefined);assert.equal(saved.fields.priority,undefined);assert.equal(saved.questions.length,modelQuestion?1:0);
+    if(modelQuestion){assert.equal(saved.questions[0].text,'Кто исполнитель?');assert.equal(saved.questions[0].required,modelQuestion==='template');}
     assert.ok(saved.warnings.length>0);chat.destroy();
 });
 

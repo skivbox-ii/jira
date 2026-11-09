@@ -10,19 +10,11 @@ function meta() {
     return m;
 }
 function missing(description) {return Array.from(validation.validateFields(meta(),'12',{summary:'Обновить виджет Jira в DEV',description}).questions,q=>q.id);}
-test('live commit/script/page/check narrative credits stated facts and preserves the real missing link',()=>{
-    assert.deepEqual(missing(live),['devops:links']);
-    const formatted=validation.formatDevopsDescription(meta(),'12',live);
-    assert.match(formatted,/Версия и состав:.*5961fa4/);assert.match(formatted,/Порядок: Заменить скрипт и перезагрузить страницу/);
-    assert.match(formatted,/Проверка: Постановщик проверит открытие карточки DEVOPS/);assert.deepEqual(missing(formatted),['devops:links']);
-    assert.equal(validation.formatDevopsDescription(meta(),'12',formatted),formatted);
-});
-test('different explicit commit artifacts, operational objects and observable UI checks are reusable',()=>{
-    const text='Развернуть портал в TEST из коммита a0b1c2d. Заменить пакет приложения и перезапустить сервис. В рабочее время. Заказчик проверит загрузку страницы отчёта.';
-    assert.deepEqual(missing(text),['devops:links']);
-    assert.deepEqual(missing(text.replace('a0b1c2d','a'.repeat(39)+'1')),['devops:links']);
-    assert.deepEqual(missing(text.replace('Развернуть портал','Необходимо развернуть портал')),['devops:links']);
-    assert.deepEqual(missing(text.replace('Заказчик проверит загрузку страницы отчёта','Мария Иванова проверит отображение страницы отчёта')),['devops:links']);
+test('unlabeled deployment prose remains incomplete until the model maps it',()=>{
+    for(const text of [live,'Развернуть портал в TEST из коммита a0b1c2d. Заменить пакет приложения и перезапустить сервис. В рабочее время. Заказчик проверит загрузку страницы отчёта.']) {
+        assert.deepEqual(missing(text).sort(),['devops:location','devops:release','devops:order','devops:window','devops:verification','devops:links'].sort());
+        assert.equal(validation.formatDevopsDescription(meta(),'12',text),text);
+    }
 });
 for(const action of ['Возможно, развернуть виджет в DEV из коммита 5961fa4.','Не разворачивать виджет в DEV из коммита a0b1c2d.','Если обновить виджет в DEV из коммита 123abcd.','Обновить виджет в DEV. Текущая сборка из коммита 5961fa4.','Обновить виджет в DEV, исходная сборка из коммита a0b1c2d.','Виджет собран из коммита 123abcd. Обновить его в DEV.','Обновить виджет в DEV с коммита 5961fa4.','Завершённое развёртывание в DEV выполнено из коммита 5961fa4.','Нужно ли развернуть портал в TEST из коммита a0b1c2d?'])
 test('a source-only, conditional, uncertain or prohibited commit is not a deployment target: '+action,()=>{
@@ -39,7 +31,7 @@ test('questioned or negated operational steps remain missing',()=>{
     for(const clause of ['Заменить скрипт и перезагрузить страницу?','Не заменять скрипт и не перезагружать страницу.'])
         assert.ok(missing(live.replace('Заменить скрипт и перезагрузить страницу.',clause)).includes('devops:order'));
 });
-test('invalid configured model response uses actual formatted Jira description and asks only for the link',async t=>{
+test('invalid model response keeps original text in chat without filling the card',async t=>{
     const h=await harness(),c=h.controller,read=h.api.getCreateMeta;
     h.api.getProjects=async()=>({values:[{key:'DEVOPS',id:'DEVOPS-project',name:'DEVOPS'}]});
     h.api.getCreateMeta=async key=>{const m=await read(key);for(const type of m.projects[0].issuetypes)type.fields.priority={name:'Приоритет',schema:{type:'priority',system:'priority'},hasDefaultValue:true,defaultValue:{id:'medium'},allowedValues:[{id:'medium',name:'Средний'}]};return m;};
@@ -49,7 +41,8 @@ test('invalid configured model response uses actual formatted Jira description a
     const Chat=loadUnit('chat',{_ujgTA_chatTools:loadUnit('chat-tools',{_ujgTA_fields:h.fields}),_ujgTA_draft:h.drafts},{AbortController});
     const chat=Chat.create({controller:c,store:h.store,runtime,requestText:async()=>({text:'```json\n{}\n```'})});t.after(()=>{chat.destroy();c.destroy();});
     await chat.send(live);const d=c.getState().draft;
-    assert.equal(chat.getState().error,null);assert.match(d.fields.description,/Версия и состав:.*5961fa4/);assert.match(d.fields.description,/Порядок: Заменить скрипт/);
-    assert.deepEqual(Array.from(c.getState().validation.questions,q=>q.id),['devops:links']);assert.match(chat.getState().transcript.at(-1).text,/ссылк/i);
-    assert.doesNotMatch(chat.getState().transcript.at(-1).text,/Какую версию|В каком порядке|Что проверяем/);assert.equal(d.checked,null);assert.equal(posts,0);
+    assert.ok(chat.getState().error);
+    assert.equal(d.fields.description,undefined);assert.equal(d.fields.summary,undefined);
+    assert.equal(chat.getState().transcript.some(e=>e.role==='user' && e.text===live),true);
+    assert.equal(d.checked,null);assert.equal(posts,0);
 });

@@ -17,47 +17,48 @@ async function setup(t,{required=false,priority=true}={}) {
  h.canonical=text=>h.validation.formatDevopsDescription(c.getState().meta,'12',text,true);
  t.after(()=>c.destroy());return h;
 }
-async function send(t,h,text,{sections=false,summary='Среда:',other={}}={}) {
- const runtime=await import('../ujg-ticket-assistant-chat/runtime.mjs');
- const Chat=loadUnit('chat',{_ujgTA_chatTools:loadUnit('chat-tools',{_ujgTA_fields:h.fields}),_ujgTA_draft:h.drafts},{AbortController});
- let calls=0;
- const chat=Chat.create({controller:h.controller,store:h.store,runtime,requestText:async()=>{
-  calls++;const fields={...other};if(summary!==null)fields.summary=summary;
-  const args=sections?{fields,descriptionSections:{location:poor.slice('Среда: '.length)}}:{fields:{...fields,description:poor}};
-  return {text:JSON.stringify({text:'',toolCalls:[{id:'fill-'+calls,name:'update_task',arguments:args}]})};
- }});t.after(()=>chat.destroy());await chat.send(text);return {chat,calls:()=>calls};
+function modelTools(h,source) {
+ const Tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields});
+ return Tools.create({controller:h.controller,getSourceText:()=>source,getTurnText:()=>source,appManagedQuestions:true});
 }
-for(const sections of [false,true])for(const summary of ['Среда:',null])test('one exact live message repairs valid incomplete model '+(sections?'sections':'full')+' / summary='+summary,async t=>{
- const h=await setup(t,{required:true}),c=h.controller;
- const r=await send(t,h,live,{sections,summary,other:{labels:['widget'],priority:{id:'high'}}});
- const s=c.getState();assert.equal(r.chat.getState().error,null);assert.equal(r.calls(),1);
- assert.equal(s.draft.source,live);assert.equal(s.draft.fields.description,h.canonical(live));
- assert.match(s.draft.fields.summary,/^Обновить виджет Jira в DEV из коммита 5961fa4/);assert.notEqual(s.draft.fields.summary,'Среда:');
+for(const sections of [false,true])for(const summary of ['Среда:',null])test('first fill keeps incomplete model '+(sections?'sections':'description')+' despite more complete source / summary='+summary,async t=>{
+ const h=await setup(t,{required:true}),c=h.controller,tools=modelTools(h,live);
+ const fields={labels:['widget'],priority:{id:'high'}};if(summary!==null)fields.summary=summary;
+ const proposal=sections?{fields,descriptionSections:{location:poor.slice('Среда: '.length)}}:{fields:{...fields,description:poor}};
+ const result=await tools.find(t=>t.name==='update_task').execute(proposal,{});
+ const s=c.getState();assert.equal(result.ok,true);assert.equal(result.originalDescriptionPreferred,false);
+ assert.equal(s.draft.source,live);assert.equal(s.draft.fields.description,h.canonical(poor));
+ assert.equal(s.draft.fields.summary,summary===null?undefined:summary);
  assert.deepEqual(s.draft.fields.labels,['widget']);assert.equal(s.draft.fields.priority.id,'high');
- assert.equal(s.draft.fields.timetracking.originalEstimate,'30m');
- assert.equal(s.validation.ok,true,JSON.stringify(s.validation));assert.ok(s.draft.checked);assert.equal(h.posts.length,0);
- await c.submit();assert.equal(h.posts.length,1);assert.ok(h.posts[0].fields.description.startsWith("||Поле||Описание||\n|Среда|в DEV|\n"));assert.equal(h.posts[0].fields.timetracking.originalEstimate,'30m');
+ assert.equal(s.draft.fields.timetracking,undefined);assert.equal(s.draft.checked,null);
+ assert.ok(s.validation.fieldErrors.timetracking);assert.ok(s.validation.fieldErrors.description);
+ const task=await tools.find(t=>t.name==='get_task').execute({},{});
+ assert.equal(task.draft.fields.description,s.draft.fields.description);assert.equal(h.posts.length,0);
 });
-test('description reconciliation is independent of missing Jira estimate and priority',async t=>{
+test('incomplete model retains local Jira estimate and priority validation',async t=>{
  const h=await setup(t,{required:true,priority:false}),c=h.controller,text=live.replace('Оценка: 30 минут. ','');
- await send(t,h,text);const s=c.getState();assert.equal(s.draft.fields.description,h.canonical(text));
+ await c.chatUpdate({fields:{description:poor,summary:'Среда:'}},c.chatSnapshot(),text,{appManagedQuestions:true});
+ const s=c.getState();assert.equal(s.draft.fields.description,h.canonical(poor));
  assert.equal(s.draft.source,text);assert.equal(s.draft.checked,null);assert.equal(s.validation.ok,false);
- assert.ok(s.validation.fieldErrors.timetracking);assert.ok(s.validation.fieldErrors.priority);assert.equal(s.validation.fieldErrors.description,undefined);
+ assert.ok(s.validation.fieldErrors.timetracking);assert.ok(s.validation.fieldErrors.priority);assert.ok(s.validation.fieldErrors.description);
 });
-test('a source missing only its link still wins over a strictly less complete model',async t=>{
+test('more complete source never replaces model-only location or repairs a heading title',async t=>{
  const h=await setup(t),c=h.controller,text=live.replace(' Ссылки: https://example.org/mama-myla-ramu','');
  const result=await c.chatUpdate({fields:{description:'Среда: DEV',summary:'Среда:'}},c.chatSnapshot(),text,{appManagedQuestions:true});
- assert.equal(result.ok,true);assert.equal(c.getState().draft.fields.description,h.canonical(text));assert.equal(c.getState().draft.source,text);
- await c.chatValidate(c.chatSnapshot());assert.equal(c.getState().draft.checked,null);
- assert.deepEqual(Array.from(c.getState().validation.questions,q=>q.id),['devops:links']);
+ assert.equal(result.ok,true);assert.equal(result.originalDescriptionPreferred,false);
+ assert.equal(c.getState().draft.fields.description,h.canonical('Среда: DEV'));
+ assert.equal(c.getState().draft.fields.summary,'Среда:');assert.equal(c.getState().draft.source,text);
+ assert.equal(c.chatSourceSummary(),null);await c.chatValidate(c.chatSnapshot());assert.equal(c.getState().draft.checked,null);
+ assert.ok(c.getState().validation.fieldErrors.description);
 });
-test('a model-only satisfied required section prevents replacement by an incomplete source',async t=>{
- const h=await setup(t),c=h.controller,text=live.replace(' в рабочее время','');
- const model='Среда: DEV\n\nОкно: рабочее время';
- await c.chatUpdate({fields:{description:model,summary:'Обновить виджет Jira в DEV'}},c.chatSnapshot(),text,{appManagedQuestions:true});
- assert.equal(c.getState().draft.fields.description,h.canonical(model));assert.notEqual(c.getState().draft.fields.description,h.canonical(text));
+test('actual model section values are formatted without source inference',async t=>{
+ const h=await setup(t),c=h.controller,model='Среда: TEST\n\nОкно: 22:00–23:00';
+ await c.chatUpdate({fields:{description:model,summary:'Выбранная моделью тема'}},c.chatSnapshot(),live,{appManagedQuestions:true});
+ assert.equal(c.getState().draft.fields.description,h.canonical(model));
+ assert.match(c.getState().draft.fields.description,/TEST/);assert.match(c.getState().draft.fields.description,/22:00–23:00/);
+ assert.doesNotMatch(c.getState().draft.fields.description,/5961fa4|mama-myla|рабочее время/);
 });
-for(const guard of ['existing','source','protected','pending','custom','excluded','verbatim'])test('first fill reconciliation respects '+guard,async t=>{
+for(const guard of ['existing','source','protected','pending','custom','excluded','verbatim'])test('model first fill respects '+guard,async t=>{
  const h=await setup(t),c=h.controller;
  if(guard==='existing')await c.chatUpdate({fields:{description:'Ранее сохранённое описание'}},c.chatSnapshot());
  if(guard==='source')await c.updateSource('Предыдущие сведения');
@@ -69,26 +70,11 @@ for(const guard of ['existing','source','protected','pending','custom','excluded
  await c.chatUpdate({fields:{description:poor}},c.chatSnapshot(),live,options);
  assert.notEqual(c.getState().draft.fields.description,h.canonical(live));
  if(guard==='protected' || guard==='pending')assert.equal(c.getState().draft.fields.description,'Ручное описание');
+ if(guard==='verbatim')assert.equal(c.getState().draft.fields.description,poor);
 });
-test('manual summary and estimate survive original-derived description',async t=>{
+test('manual summary and estimate remain protected while model description is formatted',async t=>{
  const h=await setup(t),c=h.controller;await c.updateField('summary','Моя тема');await c.updateField('timetracking',{originalEstimate:'2h'});
- await send(t,h,live);const d=c.getState().draft;
- assert.equal(d.fields.description,h.canonical(live));assert.equal(d.fields.summary,'Моя тема');assert.equal(d.fields.timetracking.originalEstimate,'2h');
-});
-test('later failed chat safely repairs a generated section-only summary on a source-matched card',async t=>{
- const h=await setup(t),c=h.controller;await c.chatUpdate({fields:{description:h.canonical(live),summary:'Среда:'}},c.chatSnapshot());
- await c.updateSource(live);
- const Chat=loadUnit('chat',{_ujgTA_chatTools:loadUnit('chat-tools',{_ujgTA_fields:h.fields}),_ujgTA_draft:h.drafts},{AbortController});
- const chat=Chat.create({controller:c,store:h.store,runtime:null});t.after(()=>chat.destroy());await chat.send(live);
- assert.match(c.getState().draft.fields.summary,/^Обновить виджет Jira/);assert.equal(c.getState().draft.source,live);
-});
-for(const manual of [false,true])test('retry of the original live message repairs only an automatic heading on the existing poor card; manual='+manual,async t=>{
- const h=await setup(t),c=h.controller;
- await c.chatUpdate({fields:{description:poor,summary:'Среда:'}},c.chatSnapshot());await c.updateSource(live);
- if(manual)await c.updateField('summary','Среда:');
- const before=c.getState().draft.fields.description;
- const Chat=loadUnit('chat',{_ujgTA_chatTools:loadUnit('chat-tools',{_ujgTA_fields:h.fields}),_ujgTA_draft:h.drafts},{AbortController});
- const chat=Chat.create({controller:c,store:h.store,runtime:null});t.after(()=>chat.destroy());await chat.send(live);
- if(manual)assert.equal(c.getState().draft.fields.summary,'Среда:');else assert.match(c.getState().draft.fields.summary,/^Обновить виджет Jira/);
- assert.equal(c.getState().draft.fields.description,before);assert.equal(c.getState().draft.source,live);assert.equal(c.getState().draft.checked,null);
+ await c.chatUpdate({fields:{description:poor,summary:'Среда:'}},c.chatSnapshot(),live,{appManagedQuestions:true});
+ const d=c.getState().draft;assert.equal(d.fields.description,h.canonical(poor));
+ assert.equal(d.fields.summary,'Моя тема');assert.equal(d.pendingFields.summary,'Среда:');assert.equal(d.fields.timetracking.originalEstimate,'2h');
 });

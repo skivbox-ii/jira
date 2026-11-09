@@ -152,16 +152,19 @@ test('create without attachments cannot reuse bug readiness grounded in a select
     await c.submit({withoutAttachments:true});assert.equal(h.posts.length,0);assert.match(c.getState().draft.creation.error,/лог|скриншот/i);
 });
 
-test('HTTP 429 local fallback asks one distinct next missing question and full blockers stay in card',async t=>{
+test('HTTP 429 preserves explicitly labeled draft fields and their local blockers',async t=>{
     const h=await devopsHarness(),c=h.controller;t.after(()=>c.destroy());
     const tools=loadUnit('chat-tools',{_ujgTA_fields:h.fields}),Chat=loadUnit('chat',{_ujgTA_chatTools:tools,_ujgTA_draft:h.drafts},{AbortController});
     const chat=Chat.create({controller:c,store:h.store,runtime:{createSession(){return {prompt:async()=>{throw Error('Pico HTTP 429');},abort(){},dispose(){},getMessages(){return [];}};}}});
     t.after(()=>chat.destroy());
-    await chat.send(remove(remove(descriptions['12'],'Окно'),'Проверка'));
-    const state=c.getState(),answer=chat.getState().transcript.filter(m=>m.role==='assistant').at(-1).text;
-    const question=state.validation.questions[0].text;
-    assert.equal(answer.split(question).length-1,1,answer);
-    assert.ok(!answer.includes(state.validation.questions[1].text),answer);
+    const description=remove(remove(descriptions['12'],'Окно'),'Проверка');
+    await c.updateField('summary','Обновить API в TEST');
+    await c.updateField('description',description);
+    await chat.send('Проверь заполненное описание.');
+    await c.chatValidate(c.chatSnapshot());
+    const state=c.getState();
+    assert.equal(state.draft.fields.description,description);
+    assert.deepEqual(Array.from(state.validation.questions,q=>q.id),['devops:window','devops:verification']);
     assert.equal(state.validation.questions.length,2);assert.equal(state.draft.checked,null);assert.equal(h.posts.length,0);
 });
 
@@ -228,7 +231,7 @@ test('compact typed facts and a dedicated QA verifier are accepted without repea
     assert.equal(check('11',fieldBug).ok,true);
 });
 
-test('live formatted deployment prose credits explicit environment release actions working hours and named verifier',()=>{
+test('deployment task prose does not fill environment or release outside their labeled sections',()=>{
     const description='**Задача:** Обновить сервис demo-api в среде DEV до версии 1.0 из тега v1.0.\n'+
         '**Действия:**\n1. Заменить образ сервиса.\n2. Перезапустить сервис.\n'+
         '**Окно:** В рабочее время.\n'+
@@ -236,12 +239,12 @@ test('live formatted deployment prose credits explicit environment release actio
         '**Критерии приемки:** Сервис запускается без ошибок, GET /health возвращает HTTP 200.\n'+
         '**Ссылки:** https://git.example/services/demo-api/releases/v1.0';
     const result=validation.validateFields(meta(),'12',{summary:'Обновление сервиса demo-api в DEV до версии 1.0',description});
-    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.questions.length,0);
+    assert.equal(result.ok,false);assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:location','devops:release']);
     const withoutWindow=description.replace('**Окно:** В рабочее время.\n','');
-    assert.deepEqual(Array.from(check('12',withoutWindow).questions,q=>q.id),['devops:window']);
+    assert.deepEqual(Array.from(check('12',withoutWindow).questions,q=>q.id),['devops:location','devops:release','devops:window']);
 });
 
-test('inline formatted headings and alternate real service values satisfy the same deployment rules',()=>{
+test('inline headings do not infer environment release or verification from task prose',()=>{
     const description='**Задача:** Развернуть reporting-worker в окружении PREPROD до версии 2026.11.6 из тега release-2026.11.6. '+
         '**Действия:** Обновить образ, затем перезапустить worker. '+
         '**Время выполнения:** В рабочие часы. '+
@@ -249,7 +252,8 @@ test('inline formatted headings and alternate real service values satisfy the sa
         '**Критерии готовности:** Очередь обрабатывается, ошибок в логах нет. '+
         '**Ссылки:** https://code.example/reporting/releases/2026.11.6';
     const result=check('12',description);
-    assert.equal(result.ok,true,JSON.stringify(result));
+    assert.equal(result.ok,false);
+    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:location','devops:release','devops:verification']);
 });
 
 test('environment and release examples negations and unresolved alternatives do not become task facts',()=>{
@@ -261,14 +265,15 @@ test('environment and release examples negations and unresolved alternatives do 
     }
 });
 
-test('complete production prose with working-time window health criterion and named requester leaves only link missing',()=>{
+test('acceptance prose does not substitute for explicit deployment fields',()=>{
     const description='**Задача:** Обновить сервис demo-api в среде DEV до версии 1.0 из тега v1.0.\n'+
         '**Действия:**\n1. Заменить образ сервиса.\n2. Перезапустить сервис.\n'+
         '**Окно выполнения:** Рабочее время.\n'+
         '**Критерии приёмки:**\n- Проверка HTTP 200 на эндпоинте /health\n- Проверку выполнит: Постановщик.';
     const result=validation.validateFields(meta(),'12',{summary:'Обновление сервиса demo-api в DEV до версии 1.0',description});
-    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:links']);
-    assert.equal(check('12',description+'\nСсылки: https://git.example/api/releases/v1.0').ok,true);
+    assert.equal(result.ok,false);
+    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:location','devops:links','devops:release','devops:verification']);
+    assert.deepEqual(Array.from(check('12',description+'\nСсылки: https://git.example/api/releases/v1.0').questions,q=>q.id),['devops:location','devops:release','devops:verification']);
 });
 
 test('an observable outcome without a person does not invent a named verifier',()=>{
@@ -278,26 +283,27 @@ test('an observable outcome without a person does not invent a named verifier',(
 
 test('deployment references do not invent environment and an unspecified tag does not invent a release',()=>{
     const description='Задача: Обновить сервис API из тега неизвестно.\nДействия: Перезапустить сервис.\nОкно выполнения: В рабочее время.\nКритерии приёмки: HTTP 200 на /health.\nКто проверяет: QA\nСсылки: Инструкция по обновлению API в DEV https://git.example/api';
-    assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),['devops:location','devops:release']);
+    assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),['devops:location','devops:release','devops:verification']);
 });
 
 test('reviewer ambiguous targets source versions and placeholder tags stay incomplete',()=>{
-    for(const [sentence,missing] of [
+    for(const [sentence] of [
         ['Обновить API в DEV или на TEST до версии 1.0','devops:location'],
         ['Обновить API в DEV с версии 1.0; целевая версия пока неизвестна','devops:release'],
         ['Обновить API в DEV из тега TBD','devops:release'],
         ['Обновить API в DEV до версии 1.0 или 2.0','devops:release']
     ]) {
         const description='Задача: '+sentence+'\nДействия: Заменить образ и перезапустить API.\nОкно: Рабочее время.\nПроверка: HTTP 200 на /health.\nКто проверяет: QA\nСсылки: https://git.example/api';
-        assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),[missing],sentence);
+        assert.deepEqual(Array.from(check('12',description).questions,q=>q.id),['devops:location','devops:release'],sentence);
     }
 });
 
-test('original raw production fallback paragraph leaves exactly the missing repository link',()=>{
+test('original raw production paragraph leaves all deployment sections missing',()=>{
     const description='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
     const supplied={summary:'Обновление сервиса demo-api в DEV до версии 1.0',description};
     const result=validation.validateFields(meta(),'12',supplied);
-    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:links']);
+    assert.equal(result.ok,false);
+    assert.deepEqual(Array.from(result.questions,q=>q.id),['devops:location','devops:links','devops:release','devops:order','devops:window','devops:verification']);
     assert.equal(supplied.description,description);
 });
 
@@ -317,7 +323,7 @@ test('raw deployment operation must not be negated or explicitly unresolved afte
     ]) {
         const description='Обновить API в DEV до версии 1.0 в рабочее время. '+operation+'. Постановщик проверит HTTP 200 на /health.';
         const ids=Array.from(check('12',description).questions,q=>q.id).sort();
-        assert.deepEqual(ids,['devops:links','devops:order'],operation);
+        assert.deepEqual(ids,['devops:location','devops:links','devops:release','devops:order','devops:window','devops:verification'].sort(),operation);
     }
 });
 
@@ -330,19 +336,22 @@ test('raw attributed HTTP check does not credit a negated or unspecified check o
     ]) {
         const description='Обновить API в DEV до версии 1.0 в рабочее время. Поменять образ и перезапустить API. '+verification+'.';
         const ids=Array.from(check('12',description).questions,q=>q.id).sort();
-        assert.deepEqual(ids,['devops:links','devops:verification'],verification);
+        assert.deepEqual(ids,['devops:location','devops:links','devops:release','devops:order','devops:window','devops:verification'].sort(),verification);
     }
 });
 
 const liveRaw='Учебный черновик. Обновить сервис demo-api в DEV до версии 1.0 из тега v1.0 в рабочее время. Поменять образ и перезапустить сервис. Постановщик проверит HTTP 200 на /health. Исходная оценка: 30 минут. Приоритет: Средний. Ссылки на репозиторий для примера нет.';
 
-test('pure formatter splits the live deployment paragraph into actual headings without duplicating raw text',()=>{
-    const m=meta(),before=JSON.stringify(m),formatted=validation.formatDevopsDescription(m,'12',liveRaw);
+test('strict formatter leaves deployment fields empty and preserves original prose in extra',()=>{
+    const m=meta(),before=JSON.stringify(m),formatted=validation.formatDevopsDescription(m,'12',liveRaw,true);
     for(const heading of ['Среда:','Версия и состав:','Порядок:','Окно:','Проверка:'])assert.ok(formatted.includes(heading),formatted);
     for(const fact of ['Учебный черновик','demo-api','DEV','1.0','v1.0','Поменять образ и перезапустить сервис','Постановщик проверит HTTP 200 на /health','Исходная оценка: 30 минут','Приоритет: Средний','Ссылки на репозиторий для примера нет'])assert.ok(formatted.includes(fact),fact);
+    assert.ok(formatted.endsWith('Дополнительно:\n'+liveRaw));
+    for(const row of validation.descriptionTableRows(m,'12',formatted).filter(row=>row.label!=='Дополнительно'))assert.equal(row.value,'',row.label);
     assert.equal(formatted.split('Обновить сервис demo-api').length-1,1);
     assert.equal(formatted.split('Постановщик проверит HTTP 200').length-1,1);
-    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:links']);
+    assert.equal(check('12',formatted).ok,false);
+    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:location','devops:links','devops:release','devops:order','devops:window','devops:verification']);
     assert.equal(validation.formatDevopsDescription(m,'12',formatted),formatted);
     assert.equal(JSON.stringify(m),before);
 });
@@ -355,7 +364,8 @@ test('formatter preserves structured descriptions exact custom content parent an
     const raw=liveRaw+'\nНеизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).\nРодительская история: APP-123\nВложение: trace-2026.LOG\nМой раздел: Не менять регистр vRC-1.';
     const formatted=validation.formatDevopsDescription(meta(),'12',raw);
     for(const fact of ['Неизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).','Родительская история: APP-123','Вложение: trace-2026.LOG','Мой раздел: Не менять регистр vRC-1.'])assert.ok(formatted.includes(fact),fact);
-    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:links']);
+    assert.equal(check('12',formatted).ok,false);
+    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:location','devops:links','devops:release','devops:order','devops:window','devops:verification']);
 });
 
 test('formatter leaves ambiguity negation and missing evidence unsatisfied and preserves other projects',()=>{
@@ -376,11 +386,13 @@ test('formatter leaves ambiguity negation and missing evidence unsatisfied and p
     assert.equal(validation.formatDevopsDescription(meta(),'11','Сбой API. Логи недоступны.'),'Сбой API. Логи недоступны.');
 });
 
-test('formatter groups confident task and bug location facts while retaining their unanswered requirements',()=>{
+test('formatter keeps task and bug prose in extra without inferring their location',()=>{
     for(const type of ['10','11']) {
         const source='Сервис API на TEST возвращает HTTP 500. Причина пока неизвестна. Требуется расследование.';
-        const formatted=validation.formatDevopsDescription(meta(),type,source);
+        const formatted=validation.formatDevopsDescription(meta(),type,source,true);
         assert.ok(formatted.includes('Где:'),formatted);
+        assert.ok(formatted.endsWith('Дополнительно:\n'+source));
+        assert.ok(check(type,formatted).questions.some(q=>q.id==='devops:location'));
         for(const sentence of source.split('. ').map(s=>s.replace(/\.$/,'')))assert.ok(formatted.includes(sentence),sentence);
         assert.deepEqual(Array.from(check(type,formatted).questions,q=>q.id),Array.from(check(type,source).questions,q=>q.id));
         assert.equal(validation.formatDevopsDescription(meta(),type,formatted),formatted);
@@ -393,22 +405,17 @@ test('formatter keeps custom headings in their own lines even when they contain 
     assert.ok(formatted.split('\n').includes('Контекст клиента: Обновить API в DEV до версии 1.0.'),formatted);
 });
 
-test('formatted deployment shows required groups first then literal missing-reference reasons and additional facts',()=>{
+test('strict deployment skeleton retains missing-reference reasons and prose in extra',()=>{
     const reason='Неизвестно: ссылка на репозиторий, документацию или базу знаний (требуется для создания).';
-    const formatted=validation.formatDevopsDescription(meta(),'12',liveRaw+'\n'+reason);
-    const headings=['Среда:','Версия и состав:','Порядок:','Окно:','Проверка:','Ссылки:','Дополнительно:'];
-    const positions=headings.map(heading=>formatted.indexOf(heading));
-    assert.ok(positions.every((position,index)=>position>=0 && (!index || position>positions[index-1])),formatted);
-    assert.ok(formatted.startsWith('Среда:'),formatted);
-    const links=formatted.slice(positions[5],positions[6]),extra=formatted.slice(positions[6]);
-    assert.ok(links.includes('Ссылки на репозиторий для примера нет.'));assert.ok(links.includes(reason));
-    for(const fact of ['Учебный черновик.','Исходная оценка: 30 минут.','Приоритет: Средний.'])assert.ok(extra.includes(fact),fact);
-    assert.equal(validation.formatDevopsDescription(meta(),'12',formatted),formatted);
-    assert.deepEqual(Array.from(check('12',formatted).questions,q=>q.id),['devops:links']);
+    const source=liveRaw+'\n'+reason;
+    const formatted=validation.formatDevopsDescription(meta(),'12',source,true);
+    assert.ok(formatted.startsWith('Среда: '),formatted);
+    assert.ok(formatted.endsWith('Дополнительно:\n'+source));
+    for(const row of validation.descriptionTableRows(meta(),'12',formatted).filter(row=>row.label!=='Дополнительно'))assert.equal(row.value,'',row.label);
+    assert.equal(check('12',formatted).ok,false);
     const withUrl=formatted.replace('Ссылки:','Ссылки: https://git.example/api/releases/v1.0\n');
-    assert.equal(check('12',withUrl).ok,true);
-    assert.doesNotThrow(()=>validation.buildCreatePayload(meta(),'12',values('12',withUrl)));
-    assert.deepEqual(Array.from(check('12',formatted+'\nДополнительно: Справочный URL https://unrelated.example/notes').questions,q=>q.id),['devops:links']);
+    assert.deepEqual(Array.from(check('12',withUrl).questions,q=>q.id),['devops:location','devops:release','devops:order','devops:window','devops:verification']);
+    assert.throws(()=>validation.buildCreatePayload(meta(),'12',values('12',withUrl)),e=>e.kind==='validation');
 });
 
 test('reference answer accepts only an explicit URL or short reference phrase and preserves internal URL query',()=>{

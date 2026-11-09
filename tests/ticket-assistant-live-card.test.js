@@ -24,9 +24,10 @@ test('manual field protection, proposals, local verification and one explicit cr
     let creates=0;h.api.createIssue=async()=>{creates++;return {id:'1',key:'DO-1'};};h.doc.querySelector('[data-ta-card-create]').click();await tick();await tick();
     assert.equal(creates,1);assert.equal(h.controller.getState().draft.creation.issueKey,'DO-1');assert.equal(summary.disabled,true);
 });
-test('429 fallback keeps the live card editable and ready, with recovery actions available only when needed',async t=>{
+test('429 leaves the live card editable without deriving fields or readiness',async t=>{
     const h=await liveFixture(t);assert.ok(h.doc.querySelector('[data-ta-live-editor]'));await h.chat.send('Восстановить доступ на DEV. Проверить вход по RDP.\nЦель: вернуть доступ для проверки сервиса.\nЧто сделать: восстановить доступ по RDP.\nГде: сервер на DEV.\nКритерии приёмки: команда входит по RDP.');
-    assert.equal(h.doc.querySelector('[data-ta-chat-rate-retry]').hidden,false);assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,false);
+    assert.equal(h.doc.querySelector('[data-ta-chat-rate-retry]').hidden,false);assert.equal(h.doc.querySelector('[data-ta-card-create]').disabled,true);
+    assert.equal(h.controller.getState().draft.fields.description,undefined);assert.equal(h.controller.getState().draft.fields.summary,undefined);assert.equal(h.controller.getState().draft.checked,null);
     assert.equal(h.doc.querySelector('[data-ta-card-check]').hidden,true);assert.equal(h.doc.querySelector('[data-ta-card-local-check]').hidden,true);
     h.ui.openEditor();assert.equal(h.doc.querySelector('[data-ta-editor-panel]').hidden,true);
     assert.ok(h.doc.querySelector('[data-ta-live-editor]').contains(h.doc.activeElement));
