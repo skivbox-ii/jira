@@ -1,3 +1,4 @@
+const { inspectWorkbook, confirmImport } = require("./helpers/import-confirmation");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
@@ -34,7 +35,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
       readFileBuffer: () => Promise.resolve(new ArrayBuffer(1)),
       readWorkbookFromBuffer: () => Promise.resolve({ SheetNames: ["Sheet1"] }),
     },
-    _ujgESI_parser: { parseWorkbook: () => ({ sheetName: "Sheet1", rows }) },
+    _ujgESI_parser: { inspectWorkbook, parseWorkbook: () => ({ sheetName: "Sheet1", rows }) },
     _ujgESI_creator: creatorOverride || creator,
     _ujgESI_mappingStore: null,
     _ujgESI_xlsxPatcher: patcherOverride || { patchWorkbook: () => Promise.resolve(new ArrayBuffer(1)) },
@@ -53,6 +54,7 @@ async function loadImporter(rows, api, creatorOverride, patcherOverride) {
   app.callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
   await flush();
+  confirmImport(app.state, app.callbacks);
   return app;
 }
 
@@ -875,19 +877,23 @@ test("owner selection and clearing patch the mapped Excel owner column", async f
     searchUsers: () => Promise.resolve({ users: [{ accountId: "owner-1", displayName: "Owner One" }] }),
     getIssuesByKeys: () => Promise.resolve({ issues: [{ key: "TEST-1", fields: { summary: "Story" } }] }),
   }, null, { patchWorkbook(_buffer, patch) { patches.push(plain(patch)); return Promise.resolve(new ArrayBuffer(1)); } });
-  app.state.mappingSettings.columnMap.owner = "Owner mapped";
+  app.callbacks.onMappingColumnChange("owner", "Owner mapped");
   app.callbacks.onRowOwnerSearch(0, "Owner");
   await flush();
   app.callbacks.onDialogAssigneeSelect("row-owner-0", "owner-1");
   app.callbacks.onSyncJira();
   await flush(); await flush();
-  assert.equal(patches[0].rows[0].values["Owner mapped"], "Owner One");
+  assert.equal(app.state.sourceColumnSettings.columnMap.owner, "Owner mapped");
+  assert.equal(app.state.sourceColumnSettings.headerRowNumber, 1);
+  assert.equal(patches[0].rows[0].values["Ответственный"], "Owner One");
+  assert.equal(patches[0].rows[0].values["Owner mapped"], undefined);
   app.callbacks.onDialogAssigneeClear("row-owner-0");
   assert.equal(app.state.rows[0].sourceColumns["Ответственный"], "");
   assert.deepEqual(Array.from(app.state.rows[0].ownerIdentifiers),[]);
   app.callbacks.onSyncJira();
   await flush(); await flush();
-  assert.equal(patches[1].rows[0].values["Owner mapped"], "");
+  assert.equal(patches[1].rows[0].values["Ответственный"], "");
+  assert.equal(patches[1].rows[0].values["Owner mapped"], undefined);
   assert.equal(app.state.rows[0].sourceColumns["Исполнитель"], "Fallback");
 });
 
@@ -905,7 +911,7 @@ test("owner export changes only the mapped worksheet column when both owner head
     outputs.push(patcher.patchWorksheetXml(worksheet, patch));
     return Promise.resolve(new ArrayBuffer(1));
   } });
-  app.state.mappingSettings.columnMap.owner = "Owner mapped";
+  app.callbacks.onMappingColumnChange("owner", "Owner mapped");
   app.state.parseMeta.headerRowNumber = 1;
   app.state.parseMeta.headerColumns = { "Ответственный": 2 };
   app.callbacks.onRowOwnerSearch(0, "New Owner");
@@ -1093,6 +1099,8 @@ for (const change of ["project", "workbook", "row"]) {
     else if (change === "workbook") {
       app.callbacks.onFileChange({ name: "replacement.xlsx" });
       await flush(); await flush();
+      assert.equal(app.state.pendingImport, null, "File selection is blocked during the parent read");
+      assert.equal(app.state.sourceFileName, "test.xlsx");
     } else app.state.rows[0] = { jiraKey: "TEST-1", summary: "Replacement", sourceColumns: {} };
     resolveParent({ issues: [parentPriorityIssue("TEST-1")] });
     await flush(); await flush();

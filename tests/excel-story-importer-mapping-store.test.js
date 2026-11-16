@@ -201,3 +201,15 @@ test("mapping store remembers validated bindings without header row or input mut
   assert.deepEqual(JSON.parse(JSON.stringify(loaded.columnBindings)),{remarkId:{header:"Код",occurrence:1},jira:null});
   assert.equal(JSON.parse(localStorage.getItem("ujg-esi-mapping-settings-test")).mappings.headerRowNumber,undefined);
 });
+
+test("mapping store remembers only validated scoped manual header selection", async () => {
+  const storage=createLocalStorage(),store=loadStore({},storage,{}).create();
+  const selection={sheetName:" Sheet ",headerRowNumber:7,signature:'[[0,"ID",0],[1,"Custom",0]]'};
+  await store.save({headerRowNumber:88,headerSelection:selection});
+  const result=await store.load();
+  assert.deepEqual(JSON.parse(JSON.stringify(result.headerSelection)),{...selection,sheetName:"Sheet"});
+  assert.equal(result.headerRowNumber,undefined);
+  for (const invalid of [{...selection,sheetName:""},{...selection,headerRowNumber:-1},{...selection,signature:""},{...selection,signature:123}]) {
+    assert.equal((await store.save({headerSelection:invalid})).headerSelection,null);
+  }
+});

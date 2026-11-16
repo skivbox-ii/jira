@@ -1079,12 +1079,12 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       );
   }
 
-  function appendTextInput(className, value, onChange) {
+  function appendTextInput(className, value, onChange, eventName) {
     var $input = $("<input/>")
       .attr("type", "text")
       .addClass(className || "")
       .val(value != null ? String(value) : "");
-    $input.on("input", function() {
+    $input.on(eventName || "input", function() {
       onChange($(this).val());
     });
     return $input;
@@ -1424,7 +1424,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
           $("<span/>").text("Лист"),
           appendTextInput("ujg-esi-mapping-sheet-name", sheetName, function(value) {
             if (services && services.onMappingSheetNameChange) services.onMappingSheetNameChange(value);
-          }).attr("placeholder", "Пусто = авто")
+          }, "change").attr("placeholder", "Пусто = авто")
         ),
       $("<label/>")
         .addClass("ujg-esi-mapping-start-field")
@@ -1749,9 +1749,20 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", epicOptions, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
-    appendConfirmControl($fields, "Название", appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
+    var $summary = appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
-    }), "story", state.llmLoadingTarget));
+      if (String(value || "").trim()) {
+        $summaryField.find(".ujg-esi-confirm-summary-error").remove();
+        $summary.find(".ujg-esi-confirm-summary").removeAttr("aria-invalid aria-describedby");
+      }
+    }), "story", state.llmLoadingTarget);
+    var $summaryField = $("<div/>").append($summary);
+    if (dialog.summaryError) {
+      $summary.find(".ujg-esi-confirm-summary").attr({"aria-invalid":"true","aria-describedby":"ujg-esi-confirm-summary-error"});
+      $summaryField.append($("<div/>").addClass("ujg-esi-confirm-due-error ujg-esi-confirm-summary-error")
+        .attr({id:"ujg-esi-confirm-summary-error",role:"alert"}).text(dialog.summaryError));
+    }
+    appendConfirmControl($fields, "Название", $summaryField);
     appendConfirmControl($fields, "Исполнитель", appendAssigneePicker("ujg-esi-confirm-assignee", "story", dialog.assigneeId || "", dialog.assigneeLabel || "", state, false));
     appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);

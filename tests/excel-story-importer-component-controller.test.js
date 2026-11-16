@@ -1,3 +1,4 @@
+const { inspectWorkbook, confirmImport } = require("./helpers/import-confirmation");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
@@ -18,7 +19,7 @@ test("Excel component command freezes project mapping and blocks context changes
     _ujgESI_deadlines:load(path.join(dir,"deadlines.js"),{}),
     _ujgESI_api:{getProjects:()=>Promise.resolve([]),getProjectEpics:()=>Promise.resolve({issues:[]}),getProjectCreateMeta:()=>Promise.resolve({projects:[]})},
     "_ujgESI_excel-loader":{readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:["Sheet1"]})},
-    _ujgESI_parser:{parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Модуль":"A"}}]})},
+    _ujgESI_parser:{inspectWorkbook,parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Модуль":"A"}}]})},
     _ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:{},_ujgShared_llmClient:null,
     _ujgESI_teams:null,_ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,
     _ujgESI_rendering:{init:(_,callbacks)=>{app.callbacks=callbacks;},render:state=>{app.state=state;app.fullRenders=(app.fullRenders||0)+1;},renderDueDateSync:state=>{app.state=state;}},
@@ -28,6 +29,7 @@ test("Excel component command freezes project mapping and blocks context changes
   for(let i=0;i<10 && (!app.state || app.state.loading);i++) await flush();
   app.callbacks.onFileChange({name:"source.xlsx"});
   for(let i=0;i<10 && app.state.loading;i++) await flush();
+  confirmImport(app.state, app.callbacks);
   app.callbacks.onProjectChange("TEST");
   for(let i=0;i<10 && app.state.loading;i++) await flush();
   app.callbacks.onOpenComponentSync();

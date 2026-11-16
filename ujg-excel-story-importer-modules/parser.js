@@ -63,6 +63,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       sheetName: source.sheetName != null && String(source.sheetName).trim() ? String(source.sheetName).trim() : "",
       columnMap: columnMap,
       columnBindings: source.columnBindings && typeof source.columnBindings === "object" ? source.columnBindings : {},
+      hasExplicitHeaderRow: Object.prototype.hasOwnProperty.call(source, "headerRowNumber"),
       headerRowNumber: Number.isInteger(source.headerRowNumber) && source.headerRowNumber > 0 ? source.headerRowNumber : 0,
       tableStart: {
         headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
@@ -214,11 +215,32 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function fieldCandidates(key, settings) {
     var expected = cellText(settings.columnMap[key]);
-    var aliases = key === "owner" && expected === "Ответственный" ? ["Ответственный от ТНТ"]
-      : key === "module" && expected === "Модуль" ? ["Компонент"]
-      : key === "remarkId" && expected === "ID" ? ["№", "номер", "Номер замечания"]
-      : key === "deadline" && expected === "Срок" ? ["Срок исполнения", "Срок исполнения замечания", "Срок устранения", "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения", "Срок выполнения", "Планируемая дата устранения"] : [];
+    var normalized = headerKey(expected);
+    var aliases = key === "owner" && normalized === headerKey("Ответственный") ? ["Ответственный от ТНТ"]
+      : key === "module" && normalized === headerKey("Модуль") ? ["Компонент"]
+      : key === "remarkId" && normalized === "id" ? ["№", "номер", "Номер замечания"]
+      : key === "deadline" && normalized === headerKey("Срок") ? ["Срок исполнения", "Срок исполнения замечания", "Срок устранения", "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения", "Срок выполнения", "Планируемая дата устранения"] : [];
     return [expected].concat(aliases);
+  }
+
+  function headerKey(value) {
+    return cellText(value).toLocaleLowerCase();
+  }
+
+  function fieldUsable(field) {
+    return field && field.selectedIndex != null && (field.status === "matched" || field.status === "empty");
+  }
+
+  function identityFields(fields) {
+    return fields.filter(function(field) {
+      return (field.key === "summary" || field.key === "remarkId") && fieldUsable(field);
+    });
+  }
+
+  function usableIdentity(row, identities) {
+    return identities.some(function(field) {
+      return !!cellText((row || [])[field.selectedIndex]);
+    });
   }
 
   function inspectWorkbook(workbook, options) {
@@ -227,95 +249,149 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     var name = settings.sheetName || "";
     var sheet = null, rows = [], header = null, error = "";
     if (name && sheetNames.indexOf(name) === -1) error = 'Лист "' + name + '" не найден';
+    else if (settings.hasExplicitHeaderRow && !settings.headerRowNumber) error = "Номер строки заголовков должен быть целым положительным числом";
     else {
-      for (var s = 0; s < (name ? 1 : sheetNames.length); s += 1) {
-        var candidate = name || sheetNames[s];
-        var candidateSheet = workbook.Sheets && workbook.Sheets[candidate];
+      // Normalize the configured vocabulary once, rather than rebuilding aliases for every cell.
+      var vocabulary = Object.create(null);
+      function addHeader(label, key) {
+        var normalized = headerKey(label);
+        if (!normalized) return;
+        if (!vocabulary[normalized]) vocabulary[normalized] = [];
+        if (vocabulary[normalized].indexOf(key) === -1) vocabulary[normalized].push(key);
+      }
+      Object.keys(FIELD_LABELS).forEach(function(key) {
+        fieldCandidates(key, settings).forEach(function(label) { addHeader(label, key); });
+        var binding = settings.columnBindings[key];
+        if (binding && typeof binding === "object") addHeader(binding.header, key);
+      });
+      addHeader(settings.tableStart.headerMarker, "summary");
+      var best = null, plausible = null, populated = null;
+      function prefer(candidate, current) {
+        if (!current) return true;
+        for (var rank = 0; rank < candidate.rank.length; rank += 1) {
+          if (candidate.rank[rank] !== current.rank[rank]) return candidate.rank[rank] > current.rank[rank];
+        }
+        return candidate.sheetIndex < current.sheetIndex || candidate.sheetIndex === current.sheetIndex && candidate.rowIndex < current.rowIndex;
+      }
+      var scanNames = name ? [name] : sheetNames;
+      for (var s = 0; s < scanNames.length; s += 1) {
+        var candidateName = scanNames[s];
+        var candidateSheet = workbook.Sheets && workbook.Sheets[candidateName];
         var candidateRows = sheetRows(candidateSheet, false, true);
-        var summaryBinding = settings.columnBindings.summary;
-        var found = settings.headerRowNumber
-          ? {rowIndex:settings.headerRowNumber - 1,summaryIndex:0}
-          : summaryBinding && typeof summaryBinding === "object"
-            ? findHeader(candidateRows, settings, summaryBinding)
-            : findHeader(candidateRows, settings);
-        if (found && candidateRows[found.rowIndex]) {
-          name = candidate; sheet = candidateSheet; rows = candidateRows; header = found; break;
+        var sheetMeta = workbook.Workbook && workbook.Workbook.Sheets && workbook.Workbook.Sheets[sheetNames.indexOf(candidateName)];
+        var visibleSheet = sheetMeta && sheetMeta.Hidden ? 0 : 1;
+        if (settings.hasExplicitHeaderRow) {
+          var manualRow = candidateRows[settings.headerRowNumber - 1];
+          if (manualRow && manualRow.some(function(value) { return !!cellText(value); })) {
+            best = {name:candidateName,sheet:candidateSheet,rows:candidateRows,rowIndex:settings.headerRowNumber - 1};
+            break;
+          }
+          continue;
+        }
+        // A backwards pass records visible values below each physical column in linear time.
+        var populatedBelow = [], anyBelow = false;
+        for (var r = candidateRows.length - 1; r >= 0; r -= 1) {
+          if (candidateSheet["!rows"] && candidateSheet["!rows"][r] && candidateSheet["!rows"][r].hidden) continue;
+          var row = candidateRows[r] || [], matched = Object.create(null), identityColumns = [], textCount = 0;
+          var texts = row.map(cellText);
+          texts.forEach(function(text, index) {
+            if (/[\p{L}]/u.test(text)) textCount += 1;
+            var keys = vocabulary[headerKey(text)] || [];
+            keys.forEach(function(key) { matched[key] = true; });
+            if (keys.indexOf("summary") !== -1 || keys.indexOf("remarkId") !== -1) identityColumns.push(index);
+          });
+          var candidate = {name:candidateName,sheet:candidateSheet,rows:candidateRows,rowIndex:r,sheetIndex:s};
+          var keys = Object.keys(matched), identities = (matched.summary ? 1 : 0) + (matched.remarkId ? 1 : 0);
+          var dataBelow = identityColumns.length ? identityColumns.some(function(index) { return populatedBelow[index]; }) : anyBelow;
+          if (keys.length) {
+            candidate.rank = [visibleSheet, dataBelow ? 1 : 0, identities ? 1 : 0, keys.length + identities * 2];
+            if (prefer(candidate, best)) best = candidate;
+          }
+          if (texts.some(function(text) { return !!text; })) {
+            var fallback = {name:candidateName,sheet:candidateSheet,rows:candidateRows,rowIndex:r,sheetIndex:s,rank:[visibleSheet]};
+            if (prefer(fallback, populated)) populated = fallback;
+            if (textCount >= 2 && prefer(fallback, plausible)) plausible = fallback;
+          }
+          texts.forEach(function(text, index) { if (text) { populatedBelow[index] = true; anyBelow = true; } });
         }
       }
-      if (!header) error = 'Колонка "' + String(settings.tableStart.headerMarker || config.SUMMARY_COLUMN) + '" не найдена';
+      var chosen = best || plausible || populated;
+      if (chosen) {
+        name = chosen.name; sheet = chosen.sheet; rows = chosen.rows; header = {rowIndex:chosen.rowIndex};
+      } else error = settings.hasExplicitHeaderRow ? "Выбранная строка заголовков пуста или отсутствует"
+        : "Не найдена заполненная строка заголовков";
     }
     var columns = [], fields = [], counts = {total:0,visible:0,hidden:0};
     if (header) {
-      var headerRow = rows[header.rowIndex] || [], occurrences = {};
+      var headerRow = rows[header.rowIndex] || [], occurrences = Object.create(null);
       headerRow.forEach(function(value, index) {
         var text = cellText(value);
         if (!text) return;
-        var occurrence = occurrences[text] || 0;
-        occurrences[text] = occurrence + 1;
+        var normalized = headerKey(text);
+        var occurrence = occurrences[normalized] || 0;
+        occurrences[normalized] = occurrence + 1;
         columns.push({index:index,header:text,letter:columnLetter(index),occurrence:occurrence,examples:[],nonEmptyCount:0});
       });
     }
     Object.keys(FIELD_LABELS).forEach(function(key) {
       var binding = settings.columnBindings[key], explicit = Object.prototype.hasOwnProperty.call(settings.columnBindings,key);
       var matches = [];
-      if (explicit && binding === null) fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:key === "summary",selectedIndex:null,status:"skipped"});
+      if (explicit && binding === null) fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:false,selectedIndex:null,status:"skipped"});
       else {
         if (explicit && binding && typeof binding === "object") matches = columns.filter(function(col) {
-          return col.header === cellText(binding.header) && col.occurrence === binding.occurrence;
+          return headerKey(col.header) === headerKey(binding.header) && col.occurrence === binding.occurrence;
         });
         else if (!explicit) {
-          var candidates = fieldCandidates(key, settings);
-          matches = columns.filter(function(col) { return col.header === candidates[0]; });
-          if (!matches.length) matches = columns.filter(function(col) { return candidates.slice(1).indexOf(col.header) !== -1; });
+          var candidates = fieldCandidates(key, settings).map(headerKey);
+          matches = columns.filter(function(col) { return headerKey(col.header) === candidates[0]; });
+          if (!matches.length) matches = columns.filter(function(col) { return candidates.slice(1).indexOf(headerKey(col.header)) !== -1; });
         }
         var chosen = matches.length === 1 ? matches[0] : null;
-        fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:key === "summary",
+        fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:false,
           selectedIndex:chosen ? chosen.index : null,
           status:matches.length > 1 ? "ambiguous" : !chosen ? "missing" : "matched"});
       }
     });
-    fields.forEach(function(field) {
-      if (field.selectedIndex != null && fields.some(function(other) { return other !== field && other.selectedIndex === field.selectedIndex; })) field.status = "conflict";
+    // Resolve a whole collision group before mutating it, so ordering cannot pick a winner.
+    columns.forEach(function(column) {
+      var group = fields.filter(function(field) { return field.selectedIndex === column.index; });
+      if (group.length < 2) return;
+      var explicit = group.filter(function(field) { return Object.prototype.hasOwnProperty.call(settings.columnBindings,field.key); });
+      var identities = group.filter(function(field) { return field.key === "summary" || field.key === "remarkId"; });
+      var winner = explicit.length === 1 ? explicit[0] : !explicit.length && identities.length === 1 ? identities[0] : null;
+      group.forEach(function(field) {
+        if (field === winner) return;
+        field.status = "conflict";
+        // Conflicting choices stay visible as warnings, but are never consumed semantically.
+        field.selectedIndex = null;
+      });
     });
+    var identities = identityFields(fields);
     if (header) {
-      var summary = fields.filter(function(field) { return field.key === "summary"; })[0];
-      if (summary.selectedIndex != null) {
-        for (var i = header.rowIndex + 1; i < rows.length; i += 1) {
-          if (!cellText((rows[i] || [])[summary.selectedIndex])) continue;
-          counts.total += 1;
-          if (sheet["!rows"] && sheet["!rows"][i] && sheet["!rows"][i].hidden) counts.hidden += 1;
-          else {
-            counts.visible += 1;
-            columns.forEach(function(column) {
-              var sample = cellText((rows[i] || [])[column.index]);
-              if (!sample) return;
-              column.nonEmptyCount += 1;
-              if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
-            });
-          }
-        }
-      } else {
-        for (var sampleRow = header.rowIndex + 1; sampleRow < rows.length; sampleRow += 1) {
-          if (sheet["!rows"] && sheet["!rows"][sampleRow] && sheet["!rows"][sampleRow].hidden) continue;
-          columns.forEach(function(column) {
-            var sample = cellText((rows[sampleRow] || [])[column.index]);
-            if (!sample) return;
-            column.nonEmptyCount += 1;
-            if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
-          });
-        }
+      for (var i = header.rowIndex + 1; i < rows.length; i += 1) {
+        var consumed = usableIdentity(rows[i], identities);
+        var hidden = sheet["!rows"] && sheet["!rows"][i] && sheet["!rows"][i].hidden;
+        if (consumed) { counts.total += 1; if (hidden) counts.hidden += 1; else counts.visible += 1; }
+        if (hidden || identities.length && !consumed) continue;
+        columns.forEach(function(column) {
+          var sample = cellText((rows[i] || [])[column.index]);
+          if (!sample) return;
+          column.nonEmptyCount += 1;
+          if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
+        });
       }
     }
     fields.forEach(function(field) {
-      if (field.status !== "matched") return;
-      if (!fields.some(function(candidate) { return candidate.key === "summary" && candidate.selectedIndex != null; })) return;
+      if (field.status !== "matched" || !identities.length) return;
       var selectedColumn = columns.filter(function(column) { return column.index === field.selectedIndex; })[0];
       if (selectedColumn && !selectedColumn.nonEmptyCount) field.status = "empty";
     });
+    if (!error && header && !identities.length && fields.some(function(field) {
+      return (field.key === "summary" || field.key === "remarkId") && field.status === "conflict";
+    })) error = 'Выберите независимую колонку "ID" или "Замечание": спорные назначения не импортируются';
+    if (!error && header && identities.length && !counts.visible) error = "Нет видимых строк с ID или текстом замечания. Проверьте лист, строку заголовков и выбранные колонки";
     var needsReview = !!error || fields.some(function(field) { return field.status !== "matched" && field.status !== "skipped"; });
-    var canApply = !error && fields.every(function(field) {
-      return field.status === "matched" || field.status === "empty" || field.status === "skipped" && !field.required;
-    });
+    var canApply = !error && identities.length > 0 && counts.visible > 0;
     var report = {sheetName:name,headerRowNumber:header ? header.rowIndex + 1 : 0,sheetNames:sheetNames,
       columns:columns,fields:fields,counts:counts,needsReview:needsReview,canApply:canApply};
     if (error) report.error = error;
@@ -396,7 +472,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     var headerIndex = report.headerRowNumber - 1;
     var selected = {}, indexes = {}, names = {};
     report.fields.forEach(function(field) {
-      if (field.selectedIndex != null && field.status !== "conflict") {
+      if (fieldUsable(field)) {
         selected[field.selectedIndex] = field.key;
         indexes[FIELD_LABELS[field.key]] = field.selectedIndex + 1;
       }
@@ -417,11 +493,12 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       indexes[name] = column.index + 1;
     });
     var summaryField = report.fields.filter(function(field) { return field.key === "summary"; })[0];
+    var identities = identityFields(report.fields);
     var out = [];
     for (var i = headerIndex + 1; i < rows.length; i += 1) {
       var row = rows[i] || [];
-      var summary = cellText(row[summaryField.selectedIndex]);
-      if (!summary) continue;
+      if (!usableIdentity(row, identities)) continue;
+      var summary = fieldUsable(summaryField) ? cellText(row[summaryField.selectedIndex]) : "";
       var sourceColumns = {};
       report.columns.forEach(function(column) {
         var index = column.index, key = selected[index];
@@ -441,12 +518,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function parseWorkbook(workbook, options) {
     var settings = parserSettings(options);
-    if (settings.headerRowNumber || Object.keys(settings.columnBindings).length) {
+    if (settings.hasExplicitHeaderRow || Object.keys(settings.columnBindings).length) {
       var report = inspectWorkbook(workbook, options);
-      var summary = report.fields.filter(function(field) { return field.key === "summary"; })[0];
       if (report.error) throw new Error(report.error);
-      if (summary.selectedIndex == null || summary.status === "conflict") throw new Error('Колонка "Замечание" не выбрана');
-      if (report.fields.some(function(field) { return field.status === "conflict"; })) throw new Error("Одна колонка выбрана для нескольких полей");
+      if (!identityFields(report.fields).length) throw new Error('Колонка "ID" или "Замечание" не выбрана');
       return parseBoundRows(workbook, report.sheetName, workbook.Sheets[report.sheetName], report, settings);
     }
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];

@@ -2497,6 +2497,7 @@ button.ujg-esi-activity-metric:focus-visible { outline: 2px solid #075fc4; outli
 .ujg-esi-preflight-table td { padding: 8px; border-bottom: 1px solid #edf0f3; border-right: 1px solid #edf0f3; vertical-align: top; overflow-wrap: anywhere; }
 .ujg-esi-preflight-table td small { color: #627184; display: block; padding-top: 4px; }
 .ujg-esi-preflight-choice { display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left; width: 100%; }
+.ujg-esi-preflight-choice.is-unmapped { color: #ae2a19; border-color: #e7a397; }
 .ujg-esi-preflight-status { display: inline-block; border-radius: 3px; padding: 3px 6px; background: #f0f2f5; color: #526578; }
 .ujg-esi-preflight-status.is-matched { color: #216e4e; background: #dcf2e7; }
 .ujg-esi-preflight-status.is-empty { color: #7b5200; background: #fff1bf; }

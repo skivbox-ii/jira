@@ -1,3 +1,4 @@
+const { inspectWorkbook, confirmImport } = require("./helpers/import-confirmation");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
@@ -38,7 +39,7 @@ async function loadImporter(options = {}) {
       getIssuesByKeys: () => Promise.resolve({ issues: [] }),
     },
     "_ujgESI_excel-loader": { readWorkbook: () => Promise.resolve({ SheetNames: ["S"] }) },
-    _ujgESI_parser: { parseWorkbook: () => ({ rows: [{ summary: "Remark", sourceColumns: {}, status: "ready" }] }) },
+    _ujgESI_parser: { inspectWorkbook, parseWorkbook: () => ({ rows: [{ summary: "Remark", sourceColumns: {}, status: "ready" }] }) },
     _ujgESI_creator: {},
     _ujgESI_mappingStore: null,
     _ujgESI_xlsxPatcher: null,
@@ -202,6 +203,7 @@ test("changing the create dialog project does not reset the main Epic preference
   app.callbacks.onEpicSelect("P1-10");
   app.callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
+  confirmImport(app.state, app.callbacks);
   app.callbacks.onCreateRow(0);
   app.callbacks.onDialogFieldChange("projectKey", "P2");
   await flush();
@@ -220,6 +222,7 @@ test("canceling a dialog restores main Epic options and ignores its pending resp
   app.callbacks.onEpicSelect("P1-10");
   app.callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
+  confirmImport(app.state, app.callbacks);
   app.callbacks.onCreateRow(0);
   app.callbacks.onDialogFieldChange("projectKey", "P2");
   app.callbacks.onCancelCreate();
@@ -364,7 +367,7 @@ test('reordering and duplicating the same epic set preserves the loaded rows',as
 });
 test('multi epic Story creation defaults to no epic and accepts a separate scalar choice',async()=>{
  const app=await loadImporter({storage:memoryStorage()});app.callbacks.onProjectChange('P1');await flush();
- app.callbacks.onEpicSelect(['P1-10','P1-20']);app.callbacks.onFileChange({name:'test.xlsx'});await flush();app.callbacks.onCreateRow(0);
+ app.callbacks.onEpicSelect(['P1-10','P1-20']);app.callbacks.onFileChange({name:'test.xlsx'});await flush();confirmImport(app.state,app.callbacks);app.callbacks.onCreateRow(0);
  assert.equal(app.state.createDialog.epicKey,'');assert.match(app.state.createDialog.epicSelectionNote,/несколько/);
  app.callbacks.onDialogFieldChange('epicKey','P1-20');assert.equal(app.state.createDialog.epicKey,'P1-20');assert.equal(app.state.epicKey,'');
 });

@@ -6,8 +6,21 @@ const loadRawAmdModule = require("./helpers/load-amd-module");
 
 const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules");
 const DEADLINES = loadRawAmdModule(path.join(MODULE_DIR,"deadlines.js"),{});
-const loadAmdModule = (file,deps,globals) => loadRawAmdModule(file,file === path.join(MODULE_DIR,"main.js")
-  ? Object.assign({_ujgESI_deadlines:DEADLINES},deps) : deps,globals);
+// Older controller fixtures use synthetic parser rows. Supply their inspection
+// contract explicitly; real parser/preflight behavior is covered in preflight-main.
+const loadAmdModule = (file,deps,globals) => {
+  if (file === path.join(MODULE_DIR,"main.js")) {
+    deps = Object.assign({_ujgESI_deadlines:DEADLINES},deps);
+    const parser = deps._ujgESI_parser;
+    if (parser && parser.parseWorkbook && !parser.inspectWorkbook) {
+      deps._ujgESI_parser = Object.assign({},parser,{inspectWorkbook(book,settings) {
+        return {sheetName:settings.sheetName || (book.SheetNames || [])[0] || "",headerRowNumber:0,
+          sheetNames:book.SheetNames || [],columns:[],fields:[],canApply:true,needsReview:false};
+      }});
+    }
+  }
+  return loadRawAmdModule(file,deps,globals);
+};
 const CONFIG = {
   STORY_ISSUE_TYPE: "Story",
   LLM_CONFIG_STORAGE_KEY: "ujg-test-llm",
@@ -77,6 +90,30 @@ function dueDialogHarness(sourceColumns, createResult) {
   state.rows=[{id:"row",summary:"Story",status:"ready",sourceColumns:Object.assign({},sourceColumns)}];
   return {get callbacks(){return callbacks;},get state(){return state;},calls};
 }
+
+test("ID-only Story requires a title before creation and stays editable after empty confirmation", async () => {
+  for (const summary of ["", "  \t\n "]) {
+    const x=dueDialogHarness({ID:"42"});await flush();
+    x.state.rows[0].summary=summary;
+    x.callbacks.onCreateRow(0);
+    const dialog=x.state.createDialog;
+    assert.ok(dialog);
+    x.callbacks.onConfirmCreate();await flush();await flush();
+    assert.equal(x.calls.length,0,"blank title must never reach creator/API");
+    assert.equal(x.state.createDialog,dialog,"the same dialog remains editable");
+    assert.match(dialog.summaryError,/Название/);
+    assert.equal(x.state.rows[0].status,"ready");
+    assert.equal(x.state.rows[0].sourceColumns.ID,"42");
+    x.callbacks.onConfirmCreate();await flush();
+    assert.equal(x.calls.length,0);
+    x.callbacks.onDialogFieldChange("summary","Manual Story title");
+    assert.equal(dialog.summaryError,"");
+    x.callbacks.onConfirmCreate();await flush();await flush();
+    assert.equal(x.calls.length,1);
+    assert.equal(x.calls[0].options.summary,"Manual Story title");
+    assert.equal(x.state.createDialog,null);
+  }
+});
 
 test("new Story Due draft resolves mapped Excel source and passes explicit date", async () => {
   const x=dueDialogHarness({"Мой срок":"29.09.2026"});
@@ -304,7 +341,7 @@ test("file import surfaces parser exceptions as visible errors", async function 
     render: function (state) {
       states.push({
         loading: !!state.loading,
-        error: state.error || "",
+        error: state.pendingImport && state.pendingImport.error || state.error || "",
       });
     },
   };
@@ -355,6 +392,8 @@ test("file import surfaces parser exceptions as visible errors", async function 
 
   callbacks.onFileChange({ name: "bad.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   const last = states[states.length - 1];
@@ -636,6 +675,8 @@ test("story and child summary LLM dialogs use full Excel remark when mapped summ
   await flush();
   callbacks.onFileChange({ name: "remarks.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
   callbacks.onCreateRow(0);
   await flush();
@@ -875,6 +916,8 @@ test("row create opens confirmation before creating without Epic", async functio
   await flush();
   callbacks.onFileChange({ name: "rows.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
   callbacks.onCreateRow(0);
   await flush();
@@ -1363,6 +1406,8 @@ test("sync from Jira updates parsed rows and prepares patched Excel for download
 
   callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
   callbacks.onSyncJira();
   await flush();
@@ -1520,6 +1565,8 @@ test("sync from Jira does not blank existing sprint when issue has no sprint fie
 
   callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
   callbacks.onSyncJira();
   await flush();
@@ -1659,6 +1706,8 @@ test("sync from Jira tries to find missing Jira key by summary in selected proje
   await flush();
   callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   callbacks.onSyncJira();
@@ -1806,6 +1855,8 @@ test("sync from Jira finds missing key by summary using project inferred from ex
   await flush();
   callbacks.onFileChange({ name: "journal.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   callbacks.onSyncJira();
@@ -1949,6 +2000,8 @@ test("sync from Jira picks the story when summary search also returns linked chi
   await flush();
   callbacks.onFileChange({ name: "journal.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   callbacks.onSyncJira();
@@ -2079,6 +2132,8 @@ test("sync from Jira retries shorter summary searches when the long Russian quer
   await flush();
   callbacks.onFileChange({ name: "journal.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   callbacks.onSyncJira();
@@ -2217,6 +2272,8 @@ test("sync from Jira picks the closest story when text search returns several st
   await flush();
   callbacks.onFileChange({ name: "journal.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   callbacks.onSyncJira();
@@ -2354,6 +2411,8 @@ test("sync from Jira prefers exact remark text found in issue description over s
   await flush();
   callbacks.onFileChange({ name: "journal.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   callbacks.onSyncJira();
@@ -2473,6 +2532,8 @@ test("column mapping changes reparse the loaded workbook before Jira sync export
 
   callbacks.onFileChange({ name: "test.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
   callbacks.onMappingColumnChange("statusInJira", "Статус исполнителя");
   await flush();
@@ -2622,7 +2683,7 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
   };
   const excelLoader = {
     readWorkbook: function () {
-      return Promise.resolve({ SheetNames: ["Лист1"] });
+      return Promise.resolve({ SheetNames: ["Замечания"] });
     },
   };
   const parser = {
@@ -2732,6 +2793,8 @@ test("mapping editor opens from renderer callbacks and mappings are passed into 
 
   callbacks.onFileChange({ name: "rows.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
   assert.equal(parserOptions.columnMap.summary, "Тема");
   assert.equal(parserOptions.tableStart.headerMarker, "Тема");
@@ -3074,6 +3137,8 @@ test("meta sheet picker saves selected sheet and reparses current workbook", asy
 
   callbacks.onFileChange({ name: "rows.xlsx" });
   await flush();
+  callbacks.onImportRememberChange(false);
+  callbacks.onConfirmColumnImport();
   await flush();
 
   let last = states[states.length - 1];
@@ -3095,4 +3160,133 @@ test("meta sheet picker saves selected sheet and reparses current workbook", asy
   assert.deepEqual(last.rows, ["Замечания row"]);
   assert.equal(savedMappings.sheetName, "Замечания");
   assert.equal(parserOptions[parserOptions.length - 1].sheetName, "Замечания");
+});
+
+
+function realWorkbookSheetHarness(workbook) {
+  let state,callbacks;
+  const saved=[];
+  const config=loadAmdModule(path.join(MODULE_DIR,"config.js"),{});
+  const mapping=loadAmdModule(path.join(MODULE_DIR,"mapping-store.js"),{jquery:{},_ujgESI_config:config});
+  const Gadget=loadAmdModule(path.join(MODULE_DIR,"main.js"),{
+    jquery:()=>({length:1}),_ujgESI_config:config,_ujgESI_api:{getProjects:()=>Promise.resolve([])},
+    "_ujgESI_excel-loader":{readWorkbook:()=>Promise.resolve(workbook)},
+    _ujgESI_parser:loadAmdModule(path.join(MODULE_DIR,"parser.js"),{_ujgESI_config:config}),
+    _ujgESI_creator:{createRow(){throw new Error("sheet changes must not create issues");}},
+    _ujgESI_mappingStore:{...mapping,create:()=>({load:()=>Promise.resolve(mapping.defaultSettings()),save:settings=>{saved.push(JSON.parse(JSON.stringify(settings)));return Promise.resolve(settings);}})},
+    _ujgESI_rendering:{init(_root,svc){callbacks=svc;},render(s){state=s;}},
+    _ujgESI_xlsxPatcher:null,_ujgShared_llmClient:null,_ujgESI_teams:null,
+    _ujgESI_activity:null,_ujgESI_dueDateSync:null,_ujgESI_componentSync:null,
+    _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null,
+    _ujgESI_activityLoader:require("./helpers/import-activity-loader"),
+  });
+  new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})})});
+  return {get state(){return state;},get callbacks(){return callbacks;},saved};
+}
+function sheetSwitchWorkbook() {
+  return {SheetNames:["First","Next","Empty"],Sheets:{
+    First:{__rows:[["ID","Ответственный","Manual owner","Модуль"],["1","Ann","Manual Ann","Module A"]]},
+    Next:{__rows:[["cover"],[],["Модуль","Приоритет","Manual owner","№","Ответственный от ТНТ"],["Module B","High","Manual Boris","2","Boris"]]},
+    Empty:{__rows:[]},
+  }};
+}
+for (const callback of ["onMetaSheetSelect","onMappingSheetNameChange"]) {
+  test(callback+" re-detects automatic aliases and new columns, retaining explicit skips in the workbook",async()=>{
+    for (const remember of [false,true]) {
+      const x=realWorkbookSheetHarness(sheetSwitchWorkbook());await flush();
+      x.callbacks.onFileChange({name:"sheets.xlsx"});await flush();
+      x.callbacks.onImportSheetChange("First");
+      x.callbacks.onImportColumnChoice("module",null);
+      x.callbacks.onImportRememberChange(remember);x.callbacks.onConfirmColumnImport();await flush();
+      assert.equal(x.state.parseMeta.sheetName,"First");
+      assert.equal(x.state.sourceColumnSettings.columnBindings.priority,null);
+      x.callbacks[callback]("Next");await flush();
+      assert.equal(x.state.parseMeta.sheetName,"Next");
+      assert.equal(x.state.rows[0].sourceColumns["Ответственный"],"Boris");
+      assert.equal(x.state.rows[0].sourceColumns["Приоритет"],"High");
+      assert.equal(x.state.rows[0].sourceColumns["Модуль"],undefined);
+      assert.equal(x.state.sourceColumnSettings.columnBindings.owner.header,"Ответственный от ТНТ");
+      assert.equal(x.state.sourceColumnSettings.columnBindings.module,null);
+      assert.equal(x.state.sourceColumnSettings.sheetName,"Next");
+      assert.equal(x.state.sourceColumnSettings.headerRowNumber,3);
+      assert.equal(x.state.parseMeta.headerRowNumber,3);
+      assert.equal(x.state.parseMeta.headerColumns["Ответственный"],5);
+      assert.equal(x.state.parseMeta.headerColumns.ID,4);
+    }
+  });
+  test(callback+" retains manual bindings with remember off and rejects an unusable sheet atomically",async()=>{
+    const x=realWorkbookSheetHarness(sheetSwitchWorkbook());await flush();
+    x.callbacks.onFileChange({name:"sheets.xlsx"});await flush();x.callbacks.onImportSheetChange("First");
+    x.callbacks.onImportColumnChoice("owner",2);x.callbacks.onImportRememberChange(false);
+    x.callbacks.onConfirmColumnImport();await flush();
+    x.callbacks[callback]("Next");await flush();
+    assert.equal(x.state.rows[0].sourceColumns["Ответственный"],"Manual Boris");
+    const rows=x.state.rows,meta=x.state.parseMeta,settings=JSON.stringify(x.state.mappingSettings);
+    const source=JSON.stringify(x.state.sourceColumnSettings),saveCount=x.saved.length;
+    x.state.exportBuffer={old:"valid export"};x.state.exportFileName="old.xlsx";
+    const buffer=x.state.exportBuffer;
+    x.callbacks[callback]("Empty");await flush();
+    assert.equal(x.state.rows,rows);assert.equal(x.state.parseMeta,meta);
+    assert.equal(JSON.stringify(x.state.mappingSettings),settings);
+    assert.equal(JSON.stringify(x.state.sourceColumnSettings),source);
+    assert.equal(x.saved.length,saveCount);assert.equal(x.state.exportBuffer,buffer);
+    assert.equal(x.state.exportFileName,"old.xlsx");assert.match(x.state.error,/лист|мапинг/i);
+  });
+}
+
+
+function renderingStubHarness(t) {
+  const {JSDOM}=require("jsdom"),jquery=require("jquery");
+  const dom=new JSDOM('<div id="root"></div>',{url:"http://localhost"});
+  t.after(()=>dom.window.close());dom.window.scrollTo=()=>{};
+  const $=jquery(dom.window);
+  const rendering=loadAmdModule(path.join(MODULE_DIR,"rendering.js"),{
+    jquery:$,_ujgESI_grid:{create:()=>({teamFilterButton:()=>$('<button/>'),resetFiltersButton:()=>$('<button/>'),mount(){},suspend(){}}),button:()=>$('<button/>')},
+    _ujgESI_icons:()=>$('<i/>'),_ujgESI_teamsUi:null,_ujgESI_statisticsUi:null,
+    _ujgESI_activityUi:null,_ujgESI_dueDateSyncUi:null,_ujgESI_columnPreflightUi:null,_ujgESI_statusTransitionUi:null,
+  },{window:dom.window,document:dom.window.document});
+  return {$,rendering};
+}
+
+test("Story title validation is shown next to the editable field and clears on input", t => {
+  const {$,rendering}=renderingStubHarness(t),changes=[];
+  rendering.init($("#root"),{onDialogFieldChange:(...args)=>changes.push(args)});
+  rendering.render({rows:[],projects:[],epics:[],mappingSettings:{},
+    createDialog:{mode:"story",summary:"",summaryError:"Заполните поле «Название» для создания Story.",childTasks:[]}});
+  const input=$(".ujg-esi-confirm-summary");
+  assert.match($(".ujg-esi-confirm-summary-error[role='alert']").text(),/Название/);
+  assert.equal(input.attr("aria-invalid"),"true");
+  assert.equal(input.prop("disabled"),false);
+  input.val("Manual title").trigger("input");
+  assert.deepEqual(changes,[["summary","Manual title"]]);
+  assert.equal($(".ujg-esi-confirm-summary-error").length,0);
+  assert.equal(input.attr("aria-invalid"),undefined);
+});
+
+
+test("sheet settings input keeps partial typing local and applies only a completed change", t => {
+  const {$,rendering}=renderingStubHarness(t),changes=[];
+  rendering.init($("#root"),{onMappingSheetNameChange:value=>changes.push(value)});
+  rendering.render({rows:[],projects:[],epics:[],mappingEditorOpen:true,activeMappingBlock:"tableStart",
+    mappingSettings:{sheetName:"First",tableStart:{headerMarker:"ID"}}});
+  const input=$(".ujg-esi-mapping-sheet-name");input.trigger("focus");
+  input.val("N").trigger("input");input.val("Ne").trigger("input");
+  assert.deepEqual(changes,[]);
+  assert.equal(input[0].ownerDocument.activeElement,input[0]);
+  input.val("Next").trigger("change");assert.deepEqual(changes,["Next"]);
+  input.val("").trigger("input");assert.deepEqual(changes,["Next"]);
+  input.trigger("change");assert.deepEqual(changes,["Next",""]);
+});
+
+test("clearing configured sheet keeps durable auto mode and a resolved export snapshot",async()=>{
+  const x=realWorkbookSheetHarness(sheetSwitchWorkbook());await flush();
+  x.callbacks.onFileChange({name:"sheets.xlsx"});await flush();x.callbacks.onImportSheetChange("First");
+  x.callbacks.onConfirmColumnImport();await flush();x.callbacks.onMappingSheetNameChange("Next");await flush();
+  assert.equal(x.state.mappingSettings.sheetName,"Next");
+  x.callbacks.onMappingSheetNameChange("");await flush();
+  assert.equal(x.state.mappingSettings.sheetName,"");
+  assert.equal(x.saved[x.saved.length-1].sheetName,"");
+  assert.ok(x.state.sourceColumnSettings.sheetName);
+  assert.equal(x.state.sourceColumnSettings.sheetName,x.state.parseMeta.sheetName);
+  assert.equal(x.state.sourceColumnSettings.headerRowNumber,x.state.parseMeta.headerRowNumber);
 });

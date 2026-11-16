@@ -23,7 +23,8 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
     return name ? node.append(icon(name)) : node.text(label);
   }
   function columnLabel(column, report) {
-    var count=(report.columns || []).filter(function(other) {return other.header===column.header;}).length;
+    var header=column.header.toLocaleLowerCase();
+    var count=(report.columns || []).filter(function(other) {return other.header.toLocaleLowerCase()===header;}).length;
     return column.letter+" · "+column.header+(count>1 ? " ("+(column.occurrence+1)+" из "+count+")":"");
   }
   function create() {
@@ -39,7 +40,7 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
     function fieldValue(field,id,report) {
       var column=(report.columns || []).filter(function(col) {return col.index===field.selectedIndex;})[0];
       if (id==="field") return field.label;
-      if (id==="column") return column ? columnLabel(column,report) : field.status==="skipped" ? "Не импортировать":"Выбрать колонку";
+      if (id==="column") return column ? columnLabel(column,report) : "Не импортировать";
       if (id==="examples") return column ? (column.examples || []).join(" · ") : "";
       return LABELS[field.status] || field.status;
     }
@@ -149,12 +150,12 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
         openPicker(this,"Лист Excel",(report.sheetNames || pending.workbook && pending.workbook.SheetNames || []).map(function(name) {return {value:name,label:name,sheet:true};}),services.onImportSheetChange,false);
       })));
       tools.append($("<label/>").text("Строка заголовков ").append($("<input type='number' min='1' step='1'/>").attr({"data-preflight-header":"","data-preflight-focus":"header","aria-label":"Строка заголовков"})
-        .val(report.headerRowNumber || pending.settings.headerRowNumber || "").on("change",function() {services.onImportHeaderChange(Number(this.value));})));
+        .val(report.headerRowNumber || pending.settings.headerRowNumber || "").on("change",function() {services.onImportHeaderChange(this.value === "" ? null : Number(this.value));})));
       dialog.append(tools);
       var counts=report.counts || {};
-      var summary=(report.fields || []).filter(function(field){return field.key==="summary";})[0];
-      dialog.append($("<div/>").addClass("ujg-esi-preflight-counts").text(!summary || summary.selectedIndex==null
-        ? "Число замечаний не определено: колонка замечания не выбрана"
+      var hasIdentity=(report.fields || []).some(function(field){return (field.key==="remarkId" || field.key==="summary") && field.selectedIndex!=null && field.status!=="conflict";});
+      dialog.append($("<div/>").addClass("ujg-esi-preflight-counts").text(!hasIdentity
+        ? "Число замечаний не определено. Выберите колонку с номером или текстом замечания."
         : "Замечаний: "+(counts.total || 0)+" · К импорту: "+(counts.visible || 0)+" · Скрыто в Excel: "+(counts.hidden || 0)));
       if (pending.error || report.error) dialog.append($("<div/>").addClass("ujg-esi-due-error").attr("role","alert").text(pending.error || report.error));
       var tableTools=$("<div/>").addClass("ujg-esi-preflight-table-tools");
@@ -198,8 +199,9 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
       var body=$("<tbody/>");
       shownFields(report).forEach(function(field) {
         var column=(report.columns || []).filter(function(col) {return col.index === field.selectedIndex;})[0];
-        var caption=column ? columnLabel(column,report) : field.status === "skipped" ? "Не импортировать":"Выбрать колонку";
+        var caption=fieldValue(field,"column",report);
         var choice=button(caption).addClass("ujg-esi-preflight-choice").attr({"data-preflight-field":field.key,"data-preflight-focus":field.key,"aria-haspopup":"dialog","aria-expanded":"false"}).append(icon("ChevronDown"));
+        if (!column && field.status !== "skipped") choice.addClass("is-unmapped").attr("title",field.label+": "+(LABELS[field.status] || "Не сопоставлено")+". Можно выбрать колонку вручную.");
         choice.on("click",function() {
           openPicker(this,field.label,(report.columns || []).map(function(col) {return {value:col.index,label:columnLabel(col,report),example:(col.examples || []).join(" · ")};}),function(index) {services.onImportColumnChoice(field.key,index);},!field.required);
         });

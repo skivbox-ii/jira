@@ -1,3 +1,4 @@
+const { inspectWorkbook, confirmImport } = require("./helpers/import-confirmation");
 const test=require('node:test'),assert=require('node:assert/strict'),path=require('node:path');
 const load=require('./helpers/load-amd-module'),dir=path.join(__dirname,'../ujg-excel-story-importer-modules');
 const flush=()=>new Promise(r=>setImmediate(r));
@@ -11,12 +12,12 @@ async function setup(options={}) {
   a.patcher={patchWorkbook:()=>Promise.resolve(new ArrayBuffer(2))};
   const Gadget=load(path.join(dir,'main.js'),{jquery:()=>({length:0}),_ujgESI_config:load(path.join(dir,'config.js'),{}),_ujgESI_api:a.api,
     '_ujgESI_excel-loader':{readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:['Sheet1']})},
-    _ujgESI_parser:{extractJiraKey:value=>/^P-\d+$/.test(value)?value:'',parseWorkbook:()=>({sheetName:'Sheet1',rows:[{id:'1',jiraKey:'P-1',summary:'Same summary',sourceColumns:{'Ответственный':'Excel Owner'},storyDetails:{key:'P-1',status:'Old'},createdChildren:[]}]})},
+    _ujgESI_parser:{inspectWorkbook,extractJiraKey:value=>/^P-\d+$/.test(value)?value:'',parseWorkbook:()=>({sheetName:'Sheet1',rows:[{id:'1',jiraKey:'P-1',summary:'Same summary',sourceColumns:{'Ответственный':'Excel Owner'},storyDetails:{key:'P-1',status:'Old'},createdChildren:[]}]})},
     _ujgESI_statusTransition:load(path.join(dir,"status-transition.js"),{}),_ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:a.patcher,_ujgShared_llmClient:null,_ujgESI_teams:null,_ujgESI_activity:options.activity ? load(path.join(dir,"activity.js"),{_ujgESI_teams:load(path.join(dir,"teams.js"),{}),_ujgESI_remarkId:load(path.join(dir,"remark-id.js"),{}),_ujgESI_deadlines:load(path.join(dir,"deadlines.js"),{})}) : null,
     _ujgESI_activityLoader:require('./helpers/import-activity-loader'),_ujgESI_deadlines:load(path.join(dir,'deadlines.js'),{}),_ujgESI_dueDateSync:null,_ujgESI_componentSync:null,_ujgESI_remarkReportLoader:null,_ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,
     _ujgESI_rendering:{registryHistoryKeys:s=>a.selection(s),init:(_,cb)=>a.cb=cb,render:s=>{a.renders++;a.state=s;},renderRegistryHistory:()=>{a.historyPaints++;return true;},renderRequestProgress:()=>true}});
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}});await flush();
-  a.cb.onFileChange({name:'original.xlsx'});await flush();await flush();a.cb.onProjectChange('P');await flush();return a;
+  a.cb.onFileChange({name:'original.xlsx'});await flush();await flush();confirmImport(a.state,a.cb);a.cb.onProjectChange('P');await flush();return a;
 }
 test('registry Stop keeps old complete rows and isolates late unabortable results; restart publishes new run',async()=>{
   const a=await setup();a.cb.onViewModeChange('jira');a.cb.onLoadRegistry();await flush();await flush();const old=a.state.rows;
@@ -54,6 +55,9 @@ test('selecting a new source file immediately aborts pending enrichment before t
   const a=await setup(),d=deferred();let aborted=0;d.promise.abort=()=>aborted++;
   a.api.getIssuesByKeys=()=>d.promise;a.cb.onSyncJira();await flush();
   a.cb.onFileChange({name:'next.xlsx'});assert.equal(aborted,1);d.resolve({issues:[issue('P-1','Late')]});await flush();await flush();
+  assert.equal(a.state.sourceFileName,'original.xlsx','Selection keeps the committed source until confirmation');
+  assert.equal(a.state.rows[0].storyDetails.status,'Old');
+  confirmImport(a.state,a.cb);
   assert.equal(a.state.rows[0].storyDetails.status,'Old');assert.equal(a.state.sourceFileName,'next.xlsx');
 });
 test('Stop during summary matching aborts that read and prevents key lookup and matched-row publication',async()=>{

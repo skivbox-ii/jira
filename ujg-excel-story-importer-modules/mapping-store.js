@@ -77,6 +77,15 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  // A row number alone is unsafe: settings are shared by every imported file.
+  function copyHeaderSelection(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    var sheetName = copySheetName(input.sheetName);
+    if (!sheetName || !Number.isInteger(input.headerRowNumber) || input.headerRowNumber < 1 ||
+        typeof input.signature !== "string" || !input.signature.trim()) return null;
+    return {sheetName:sheetName,headerRowNumber:input.headerRowNumber,signature:input.signature};
+  }
+
   function copyTableStart(input) {
     var defaults = config.TABLE_START || {};
     var source = input && typeof input === "object" ? input : {};
@@ -139,6 +148,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
       columnBindings: {},
+      headerSelection: null,
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
       storyAssigneeId: "",
@@ -166,6 +176,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         ? copyColumnMap(input.columnMap)
         : defaults.columnMap,
       columnBindings: hasInput ? copyColumnBindings(input.columnBindings) : defaults.columnBindings,
+      headerSelection: hasInput ? copyHeaderSelection(input.headerSelection) : null,
       tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,

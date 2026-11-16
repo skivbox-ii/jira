@@ -15,7 +15,7 @@ function setup(options={}) {
     {index:1,header:"Ответственный",letter:"B",occurrence:0,examples:["Анна"],nonEmptyCount:5},
     {index:2,header:"Ответственный",letter:"C",occurrence:1,examples:["Иван"],nonEmptyCount:7}];
   const state={preferencesStorageKey:options.user || "user1",pendingImport:{fileName:"test.xlsx",settings:{},remember:true,report:{sheetName:"Замечания",sheetNames:["Замечания","Другое"],headerRowNumber:3,
-    columns,fields:[{key:"summary",label:"Название",required:true,selectedIndex:0,status:"matched"},
+    columns,fields:[{key:"summary",label:"Название",required:false,selectedIndex:0,status:"matched"},
       {key:"owner",label:"Ответственный",required:false,selectedIndex:null,status:"ambiguous"}],
     counts:{total:70,visible:11,hidden:59},needsReview:true,canApply:false}}};
   const services={onImportColumnChoice:(...args)=>calls.choice.push(args),onCancelColumnImport:()=>calls.cancel++,onConfirmColumnImport:()=>calls.confirm++,
@@ -29,6 +29,19 @@ test("preflight shows mismatches, counts and examples as text",t=>{const x=setup
   assert.match(x.$("#host").text(),/Несколько совпадений/);assert.equal(x.$("#host b").length,0);
   assert.equal(x.$("select").length,0);assert.equal(x.$('[data-preflight-confirm]').prop("disabled"),true);
 });
+test("ID-only import shows row count and the default skip with its reason; optional columns remain editable",t=>{
+  const x=setup();t.after(x.close);
+  const report=x.state.pendingImport.report;
+  report.fields=[{key:"remarkId",label:"ID замечания",selectedIndex:0,status:"matched"},
+    {key:"summary",label:"Замечание",selectedIndex:null,status:"missing"},report.fields[1]];
+  report.canApply=true;x.render();
+  assert.match(x.$('.ujg-esi-preflight-counts').text(),/К импорту: 11/);
+  assert.equal(x.$('[data-preflight-confirm]').prop('disabled'),false);
+  assert.equal(x.$('[data-preflight-field="owner"]').text(),'Не импортировать');
+  assert.equal(x.$('[data-preflight-row="summary"] .is-missing').length>0,true);
+  x.$('[data-preflight-field="owner"]')[0].click();x.$('[data-preflight-option="1"]')[0].click();
+  assert.deepEqual(x.calls.choice,[["owner",1]]);
+});
 test("search selects an exact duplicate column without applying the import",t=>{const x=setup();t.after(x.close);
   x.$('[data-preflight-field="owner"]')[0].click();
   x.$('[data-preflight-search]').val("Ответственный").trigger("input");
@@ -36,6 +49,7 @@ test("search selects an exact duplicate column without applying the import",t=>{
   x.$('[data-preflight-option="2"]')[0].click();assert.deepEqual(x.calls.choice,[["owner",2]]);assert.equal(x.calls.confirm,0);
 });
 test("duplicate options include occurrence and opening a picker closes the column menu",t=>{const x=setup();t.after(x.close);
+  x.state.pendingImport.report.columns[2].header="ОТВЕТСТВЕННЫЙ";x.render();
   x.$('[data-preflight-columns]')[0].click();
   x.$('[data-preflight-filter="field"]')[0].click();
   assert.equal(x.$('.ujg-esi-preflight-columns-menu').length,0);
@@ -47,10 +61,10 @@ test("unresolved summary does not claim that there are zero remarks",t=>{const x
   x.state.pendingImport.report.fields[0].selectedIndex=null;x.render();
   assert.match(x.$('.ujg-esi-preflight-counts').text(),/не определено/);
 });
-test("skip is explicit and unavailable for required summary",t=>{const x=setup();t.after(x.close);
-  x.$('[data-preflight-field="summary"]')[0].click();assert.equal(x.$('[data-preflight-skip]').length,0);
+test("both summary and owner can be skipped explicitly without confirming the file",t=>{const x=setup();t.after(x.close);
+  x.$('[data-preflight-field="summary"]')[0].click();x.$('[data-preflight-skip]')[0].click();
   x.$('[data-preflight-field="owner"]')[0].click();x.$('[data-preflight-skip]')[0].click();
-  assert.deepEqual(x.calls.choice,[["owner",null]]);
+  assert.deepEqual(x.calls.choice,[["summary",null],["owner",null]]);assert.equal(x.calls.confirm,0);
 });
 test("escape first dismisses picker then dialog, close restores focus and overflow",t=>{const x=setup();t.after(x.close);
   x.$('[data-preflight-field="owner"]')[0].click();
@@ -62,6 +76,7 @@ test("escape first dismisses picker then dialog, close restores focus and overfl
 test("sheet header remember and confirmation use dedicated callbacks",t=>{const x=setup();t.after(x.close);
   x.$('[data-preflight-sheet]')[0].click();x.$('[data-preflight-sheet-option="Другое"]')[0].click();assert.deepEqual(x.calls.sheet,["Другое"]);
   x.$('[data-preflight-header]').val("5").trigger("change");assert.deepEqual(x.calls.header,[5]);
+  x.$('[data-preflight-header]').val("").trigger("change");assert.deepEqual(x.calls.header,[5,null]);
   x.$('[data-preflight-remember]').prop("checked",false).trigger("change");assert.deepEqual(x.calls.remember,[false]);
   x.state.pendingImport.report.canApply=true;x.render();x.$('[data-preflight-confirm]')[0].click();assert.equal(x.calls.confirm,1);
 });

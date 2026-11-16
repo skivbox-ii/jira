@@ -5,6 +5,15 @@ define("_ujgESI_remarkId", [], function() {
     var names = Object.keys(columns);
     var result = "";
     var mappedId = row && row.sourceColumnIndexes && Object.prototype.hasOwnProperty.call(row.sourceColumnIndexes, "ID");
+    if (mappedId && Object.prototype.hasOwnProperty.call(columns, "ID") &&
+        (typeof columns.ID === "string" || typeof columns.ID === "number")) {
+      var sourceId = String(columns.ID).trim();
+      if (sourceId) {
+        // Normalize familiar number/code prefixes without discarding unusual source identifiers.
+        var code = sourceId.replace(/^(?:№|#)\s*/, "");
+        return code && /^[a-zа-яё0-9][a-zа-яё0-9._\/-]*$/i.test(code) ? code : sourceId;
+      }
+    }
     (mappedId ? ["id", "№", "номер замечания", "номер"] : ["№", "id", "номер замечания", "номер"]).some(function(wanted) {
       return names.some(function(name) {
         var value = columns[name];

@@ -837,6 +837,15 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
     return out;
   }
 
+  // A row number alone is unsafe: settings are shared by every imported file.
+  function copyHeaderSelection(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    var sheetName = copySheetName(input.sheetName);
+    if (!sheetName || !Number.isInteger(input.headerRowNumber) || input.headerRowNumber < 1 ||
+        typeof input.signature !== "string" || !input.signature.trim()) return null;
+    return {sheetName:sheetName,headerRowNumber:input.headerRowNumber,signature:input.signature};
+  }
+
   function copyTableStart(input) {
     var defaults = config.TABLE_START || {};
     var source = input && typeof input === "object" ? input : {};
@@ -899,6 +908,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
       priorityMap: copyMap(config.PRIORITY_MAP),
       columnMap: copyColumnMap(config.COLUMN_MAP),
       columnBindings: {},
+      headerSelection: null,
       tableStart: copyTableStart(config.TABLE_START),
       sheetName: copySheetName(config.SHEET_NAME),
       storyAssigneeId: "",
@@ -926,6 +936,7 @@ define("_ujgESI_mappingStore", ["jquery", "_ujgESI_config"], function($, config)
         ? copyColumnMap(input.columnMap)
         : defaults.columnMap,
       columnBindings: hasInput ? copyColumnBindings(input.columnBindings) : defaults.columnBindings,
+      headerSelection: hasInput ? copyHeaderSelection(input.headerSelection) : null,
       tableStart: hasInput && input.tableStart && typeof input.tableStart === "object"
         ? copyTableStart(input.tableStart)
         : defaults.tableStart,
@@ -1702,6 +1713,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       sheetName: source.sheetName != null && String(source.sheetName).trim() ? String(source.sheetName).trim() : "",
       columnMap: columnMap,
       columnBindings: source.columnBindings && typeof source.columnBindings === "object" ? source.columnBindings : {},
+      hasExplicitHeaderRow: Object.prototype.hasOwnProperty.call(source, "headerRowNumber"),
       headerRowNumber: Number.isInteger(source.headerRowNumber) && source.headerRowNumber > 0 ? source.headerRowNumber : 0,
       tableStart: {
         headerMarker: source.tableStart && source.tableStart.headerMarker != null && String(source.tableStart.headerMarker).trim()
@@ -1853,11 +1865,32 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function fieldCandidates(key, settings) {
     var expected = cellText(settings.columnMap[key]);
-    var aliases = key === "owner" && expected === "Ответственный" ? ["Ответственный от ТНТ"]
-      : key === "module" && expected === "Модуль" ? ["Компонент"]
-      : key === "remarkId" && expected === "ID" ? ["№", "номер", "Номер замечания"]
-      : key === "deadline" && expected === "Срок" ? ["Срок исполнения", "Срок исполнения замечания", "Срок устранения", "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения", "Срок выполнения", "Планируемая дата устранения"] : [];
+    var normalized = headerKey(expected);
+    var aliases = key === "owner" && normalized === headerKey("Ответственный") ? ["Ответственный от ТНТ"]
+      : key === "module" && normalized === headerKey("Модуль") ? ["Компонент"]
+      : key === "remarkId" && normalized === "id" ? ["№", "номер", "Номер замечания"]
+      : key === "deadline" && normalized === headerKey("Срок") ? ["Срок исполнения", "Срок исполнения замечания", "Срок устранения", "Плановый срок устранения", "Планируемый срок устранения", "Плановый срок исполнения", "Срок выполнения", "Планируемая дата устранения"] : [];
     return [expected].concat(aliases);
+  }
+
+  function headerKey(value) {
+    return cellText(value).toLocaleLowerCase();
+  }
+
+  function fieldUsable(field) {
+    return field && field.selectedIndex != null && (field.status === "matched" || field.status === "empty");
+  }
+
+  function identityFields(fields) {
+    return fields.filter(function(field) {
+      return (field.key === "summary" || field.key === "remarkId") && fieldUsable(field);
+    });
+  }
+
+  function usableIdentity(row, identities) {
+    return identities.some(function(field) {
+      return !!cellText((row || [])[field.selectedIndex]);
+    });
   }
 
   function inspectWorkbook(workbook, options) {
@@ -1866,95 +1899,149 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     var name = settings.sheetName || "";
     var sheet = null, rows = [], header = null, error = "";
     if (name && sheetNames.indexOf(name) === -1) error = 'Лист "' + name + '" не найден';
+    else if (settings.hasExplicitHeaderRow && !settings.headerRowNumber) error = "Номер строки заголовков должен быть целым положительным числом";
     else {
-      for (var s = 0; s < (name ? 1 : sheetNames.length); s += 1) {
-        var candidate = name || sheetNames[s];
-        var candidateSheet = workbook.Sheets && workbook.Sheets[candidate];
+      // Normalize the configured vocabulary once, rather than rebuilding aliases for every cell.
+      var vocabulary = Object.create(null);
+      function addHeader(label, key) {
+        var normalized = headerKey(label);
+        if (!normalized) return;
+        if (!vocabulary[normalized]) vocabulary[normalized] = [];
+        if (vocabulary[normalized].indexOf(key) === -1) vocabulary[normalized].push(key);
+      }
+      Object.keys(FIELD_LABELS).forEach(function(key) {
+        fieldCandidates(key, settings).forEach(function(label) { addHeader(label, key); });
+        var binding = settings.columnBindings[key];
+        if (binding && typeof binding === "object") addHeader(binding.header, key);
+      });
+      addHeader(settings.tableStart.headerMarker, "summary");
+      var best = null, plausible = null, populated = null;
+      function prefer(candidate, current) {
+        if (!current) return true;
+        for (var rank = 0; rank < candidate.rank.length; rank += 1) {
+          if (candidate.rank[rank] !== current.rank[rank]) return candidate.rank[rank] > current.rank[rank];
+        }
+        return candidate.sheetIndex < current.sheetIndex || candidate.sheetIndex === current.sheetIndex && candidate.rowIndex < current.rowIndex;
+      }
+      var scanNames = name ? [name] : sheetNames;
+      for (var s = 0; s < scanNames.length; s += 1) {
+        var candidateName = scanNames[s];
+        var candidateSheet = workbook.Sheets && workbook.Sheets[candidateName];
         var candidateRows = sheetRows(candidateSheet, false, true);
-        var summaryBinding = settings.columnBindings.summary;
-        var found = settings.headerRowNumber
-          ? {rowIndex:settings.headerRowNumber - 1,summaryIndex:0}
-          : summaryBinding && typeof summaryBinding === "object"
-            ? findHeader(candidateRows, settings, summaryBinding)
-            : findHeader(candidateRows, settings);
-        if (found && candidateRows[found.rowIndex]) {
-          name = candidate; sheet = candidateSheet; rows = candidateRows; header = found; break;
+        var sheetMeta = workbook.Workbook && workbook.Workbook.Sheets && workbook.Workbook.Sheets[sheetNames.indexOf(candidateName)];
+        var visibleSheet = sheetMeta && sheetMeta.Hidden ? 0 : 1;
+        if (settings.hasExplicitHeaderRow) {
+          var manualRow = candidateRows[settings.headerRowNumber - 1];
+          if (manualRow && manualRow.some(function(value) { return !!cellText(value); })) {
+            best = {name:candidateName,sheet:candidateSheet,rows:candidateRows,rowIndex:settings.headerRowNumber - 1};
+            break;
+          }
+          continue;
+        }
+        // A backwards pass records visible values below each physical column in linear time.
+        var populatedBelow = [], anyBelow = false;
+        for (var r = candidateRows.length - 1; r >= 0; r -= 1) {
+          if (candidateSheet["!rows"] && candidateSheet["!rows"][r] && candidateSheet["!rows"][r].hidden) continue;
+          var row = candidateRows[r] || [], matched = Object.create(null), identityColumns = [], textCount = 0;
+          var texts = row.map(cellText);
+          texts.forEach(function(text, index) {
+            if (/[\p{L}]/u.test(text)) textCount += 1;
+            var keys = vocabulary[headerKey(text)] || [];
+            keys.forEach(function(key) { matched[key] = true; });
+            if (keys.indexOf("summary") !== -1 || keys.indexOf("remarkId") !== -1) identityColumns.push(index);
+          });
+          var candidate = {name:candidateName,sheet:candidateSheet,rows:candidateRows,rowIndex:r,sheetIndex:s};
+          var keys = Object.keys(matched), identities = (matched.summary ? 1 : 0) + (matched.remarkId ? 1 : 0);
+          var dataBelow = identityColumns.length ? identityColumns.some(function(index) { return populatedBelow[index]; }) : anyBelow;
+          if (keys.length) {
+            candidate.rank = [visibleSheet, dataBelow ? 1 : 0, identities ? 1 : 0, keys.length + identities * 2];
+            if (prefer(candidate, best)) best = candidate;
+          }
+          if (texts.some(function(text) { return !!text; })) {
+            var fallback = {name:candidateName,sheet:candidateSheet,rows:candidateRows,rowIndex:r,sheetIndex:s,rank:[visibleSheet]};
+            if (prefer(fallback, populated)) populated = fallback;
+            if (textCount >= 2 && prefer(fallback, plausible)) plausible = fallback;
+          }
+          texts.forEach(function(text, index) { if (text) { populatedBelow[index] = true; anyBelow = true; } });
         }
       }
-      if (!header) error = 'Колонка "' + String(settings.tableStart.headerMarker || config.SUMMARY_COLUMN) + '" не найдена';
+      var chosen = best || plausible || populated;
+      if (chosen) {
+        name = chosen.name; sheet = chosen.sheet; rows = chosen.rows; header = {rowIndex:chosen.rowIndex};
+      } else error = settings.hasExplicitHeaderRow ? "Выбранная строка заголовков пуста или отсутствует"
+        : "Не найдена заполненная строка заголовков";
     }
     var columns = [], fields = [], counts = {total:0,visible:0,hidden:0};
     if (header) {
-      var headerRow = rows[header.rowIndex] || [], occurrences = {};
+      var headerRow = rows[header.rowIndex] || [], occurrences = Object.create(null);
       headerRow.forEach(function(value, index) {
         var text = cellText(value);
         if (!text) return;
-        var occurrence = occurrences[text] || 0;
-        occurrences[text] = occurrence + 1;
+        var normalized = headerKey(text);
+        var occurrence = occurrences[normalized] || 0;
+        occurrences[normalized] = occurrence + 1;
         columns.push({index:index,header:text,letter:columnLetter(index),occurrence:occurrence,examples:[],nonEmptyCount:0});
       });
     }
     Object.keys(FIELD_LABELS).forEach(function(key) {
       var binding = settings.columnBindings[key], explicit = Object.prototype.hasOwnProperty.call(settings.columnBindings,key);
       var matches = [];
-      if (explicit && binding === null) fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:key === "summary",selectedIndex:null,status:"skipped"});
+      if (explicit && binding === null) fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:false,selectedIndex:null,status:"skipped"});
       else {
         if (explicit && binding && typeof binding === "object") matches = columns.filter(function(col) {
-          return col.header === cellText(binding.header) && col.occurrence === binding.occurrence;
+          return headerKey(col.header) === headerKey(binding.header) && col.occurrence === binding.occurrence;
         });
         else if (!explicit) {
-          var candidates = fieldCandidates(key, settings);
-          matches = columns.filter(function(col) { return col.header === candidates[0]; });
-          if (!matches.length) matches = columns.filter(function(col) { return candidates.slice(1).indexOf(col.header) !== -1; });
+          var candidates = fieldCandidates(key, settings).map(headerKey);
+          matches = columns.filter(function(col) { return headerKey(col.header) === candidates[0]; });
+          if (!matches.length) matches = columns.filter(function(col) { return candidates.slice(1).indexOf(headerKey(col.header)) !== -1; });
         }
         var chosen = matches.length === 1 ? matches[0] : null;
-        fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:key === "summary",
+        fields.push({key:key,label:REPORT_LABELS[key] || FIELD_LABELS[key],required:false,
           selectedIndex:chosen ? chosen.index : null,
           status:matches.length > 1 ? "ambiguous" : !chosen ? "missing" : "matched"});
       }
     });
-    fields.forEach(function(field) {
-      if (field.selectedIndex != null && fields.some(function(other) { return other !== field && other.selectedIndex === field.selectedIndex; })) field.status = "conflict";
+    // Resolve a whole collision group before mutating it, so ordering cannot pick a winner.
+    columns.forEach(function(column) {
+      var group = fields.filter(function(field) { return field.selectedIndex === column.index; });
+      if (group.length < 2) return;
+      var explicit = group.filter(function(field) { return Object.prototype.hasOwnProperty.call(settings.columnBindings,field.key); });
+      var identities = group.filter(function(field) { return field.key === "summary" || field.key === "remarkId"; });
+      var winner = explicit.length === 1 ? explicit[0] : !explicit.length && identities.length === 1 ? identities[0] : null;
+      group.forEach(function(field) {
+        if (field === winner) return;
+        field.status = "conflict";
+        // Conflicting choices stay visible as warnings, but are never consumed semantically.
+        field.selectedIndex = null;
+      });
     });
+    var identities = identityFields(fields);
     if (header) {
-      var summary = fields.filter(function(field) { return field.key === "summary"; })[0];
-      if (summary.selectedIndex != null) {
-        for (var i = header.rowIndex + 1; i < rows.length; i += 1) {
-          if (!cellText((rows[i] || [])[summary.selectedIndex])) continue;
-          counts.total += 1;
-          if (sheet["!rows"] && sheet["!rows"][i] && sheet["!rows"][i].hidden) counts.hidden += 1;
-          else {
-            counts.visible += 1;
-            columns.forEach(function(column) {
-              var sample = cellText((rows[i] || [])[column.index]);
-              if (!sample) return;
-              column.nonEmptyCount += 1;
-              if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
-            });
-          }
-        }
-      } else {
-        for (var sampleRow = header.rowIndex + 1; sampleRow < rows.length; sampleRow += 1) {
-          if (sheet["!rows"] && sheet["!rows"][sampleRow] && sheet["!rows"][sampleRow].hidden) continue;
-          columns.forEach(function(column) {
-            var sample = cellText((rows[sampleRow] || [])[column.index]);
-            if (!sample) return;
-            column.nonEmptyCount += 1;
-            if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
-          });
-        }
+      for (var i = header.rowIndex + 1; i < rows.length; i += 1) {
+        var consumed = usableIdentity(rows[i], identities);
+        var hidden = sheet["!rows"] && sheet["!rows"][i] && sheet["!rows"][i].hidden;
+        if (consumed) { counts.total += 1; if (hidden) counts.hidden += 1; else counts.visible += 1; }
+        if (hidden || identities.length && !consumed) continue;
+        columns.forEach(function(column) {
+          var sample = cellText((rows[i] || [])[column.index]);
+          if (!sample) return;
+          column.nonEmptyCount += 1;
+          if (column.examples.length < 3 && column.examples.indexOf(sample) === -1) column.examples.push(sample);
+        });
       }
     }
     fields.forEach(function(field) {
-      if (field.status !== "matched") return;
-      if (!fields.some(function(candidate) { return candidate.key === "summary" && candidate.selectedIndex != null; })) return;
+      if (field.status !== "matched" || !identities.length) return;
       var selectedColumn = columns.filter(function(column) { return column.index === field.selectedIndex; })[0];
       if (selectedColumn && !selectedColumn.nonEmptyCount) field.status = "empty";
     });
+    if (!error && header && !identities.length && fields.some(function(field) {
+      return (field.key === "summary" || field.key === "remarkId") && field.status === "conflict";
+    })) error = 'Выберите независимую колонку "ID" или "Замечание": спорные назначения не импортируются';
+    if (!error && header && identities.length && !counts.visible) error = "Нет видимых строк с ID или текстом замечания. Проверьте лист, строку заголовков и выбранные колонки";
     var needsReview = !!error || fields.some(function(field) { return field.status !== "matched" && field.status !== "skipped"; });
-    var canApply = !error && fields.every(function(field) {
-      return field.status === "matched" || field.status === "empty" || field.status === "skipped" && !field.required;
-    });
+    var canApply = !error && identities.length > 0 && counts.visible > 0;
     var report = {sheetName:name,headerRowNumber:header ? header.rowIndex + 1 : 0,sheetNames:sheetNames,
       columns:columns,fields:fields,counts:counts,needsReview:needsReview,canApply:canApply};
     if (error) report.error = error;
@@ -2035,7 +2122,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
     var headerIndex = report.headerRowNumber - 1;
     var selected = {}, indexes = {}, names = {};
     report.fields.forEach(function(field) {
-      if (field.selectedIndex != null && field.status !== "conflict") {
+      if (fieldUsable(field)) {
         selected[field.selectedIndex] = field.key;
         indexes[FIELD_LABELS[field.key]] = field.selectedIndex + 1;
       }
@@ -2056,11 +2143,12 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       indexes[name] = column.index + 1;
     });
     var summaryField = report.fields.filter(function(field) { return field.key === "summary"; })[0];
+    var identities = identityFields(report.fields);
     var out = [];
     for (var i = headerIndex + 1; i < rows.length; i += 1) {
       var row = rows[i] || [];
-      var summary = cellText(row[summaryField.selectedIndex]);
-      if (!summary) continue;
+      if (!usableIdentity(row, identities)) continue;
+      var summary = fieldUsable(summaryField) ? cellText(row[summaryField.selectedIndex]) : "";
       var sourceColumns = {};
       report.columns.forEach(function(column) {
         var index = column.index, key = selected[index];
@@ -2080,12 +2168,10 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function parseWorkbook(workbook, options) {
     var settings = parserSettings(options);
-    if (settings.headerRowNumber || Object.keys(settings.columnBindings).length) {
+    if (settings.hasExplicitHeaderRow || Object.keys(settings.columnBindings).length) {
       var report = inspectWorkbook(workbook, options);
-      var summary = report.fields.filter(function(field) { return field.key === "summary"; })[0];
       if (report.error) throw new Error(report.error);
-      if (summary.selectedIndex == null || summary.status === "conflict") throw new Error('Колонка "Замечание" не выбрана');
-      if (report.fields.some(function(field) { return field.status === "conflict"; })) throw new Error("Одна колонка выбрана для нескольких полей");
+      if (!identityFields(report.fields).length) throw new Error('Колонка "ID" или "Замечание" не выбрана');
       return parseBoundRows(workbook, report.sheetName, workbook.Sheets[report.sheetName], report, settings);
     }
     var sheetNames = workbook && Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
@@ -2142,6 +2228,15 @@ define("_ujgESI_remarkId", [], function() {
     var names = Object.keys(columns);
     var result = "";
     var mappedId = row && row.sourceColumnIndexes && Object.prototype.hasOwnProperty.call(row.sourceColumnIndexes, "ID");
+    if (mappedId && Object.prototype.hasOwnProperty.call(columns, "ID") &&
+        (typeof columns.ID === "string" || typeof columns.ID === "number")) {
+      var sourceId = String(columns.ID).trim();
+      if (sourceId) {
+        // Normalize familiar number/code prefixes without discarding unusual source identifiers.
+        var code = sourceId.replace(/^(?:№|#)\s*/, "");
+        return code && /^[a-zа-яё0-9][a-zа-яё0-9._\/-]*$/i.test(code) ? code : sourceId;
+      }
+    }
     (mappedId ? ["id", "№", "номер замечания", "номер"] : ["№", "id", "номер замечания", "номер"]).some(function(wanted) {
       return names.some(function(name) {
         var value = columns[name];
@@ -4432,7 +4527,8 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
     return name ? node.append(icon(name)) : node.text(label);
   }
   function columnLabel(column, report) {
-    var count=(report.columns || []).filter(function(other) {return other.header===column.header;}).length;
+    var header=column.header.toLocaleLowerCase();
+    var count=(report.columns || []).filter(function(other) {return other.header.toLocaleLowerCase()===header;}).length;
     return column.letter+" · "+column.header+(count>1 ? " ("+(column.occurrence+1)+" из "+count+")":"");
   }
   function create() {
@@ -4448,7 +4544,7 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
     function fieldValue(field,id,report) {
       var column=(report.columns || []).filter(function(col) {return col.index===field.selectedIndex;})[0];
       if (id==="field") return field.label;
-      if (id==="column") return column ? columnLabel(column,report) : field.status==="skipped" ? "Не импортировать":"Выбрать колонку";
+      if (id==="column") return column ? columnLabel(column,report) : "Не импортировать";
       if (id==="examples") return column ? (column.examples || []).join(" · ") : "";
       return LABELS[field.status] || field.status;
     }
@@ -4558,12 +4654,12 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
         openPicker(this,"Лист Excel",(report.sheetNames || pending.workbook && pending.workbook.SheetNames || []).map(function(name) {return {value:name,label:name,sheet:true};}),services.onImportSheetChange,false);
       })));
       tools.append($("<label/>").text("Строка заголовков ").append($("<input type='number' min='1' step='1'/>").attr({"data-preflight-header":"","data-preflight-focus":"header","aria-label":"Строка заголовков"})
-        .val(report.headerRowNumber || pending.settings.headerRowNumber || "").on("change",function() {services.onImportHeaderChange(Number(this.value));})));
+        .val(report.headerRowNumber || pending.settings.headerRowNumber || "").on("change",function() {services.onImportHeaderChange(this.value === "" ? null : Number(this.value));})));
       dialog.append(tools);
       var counts=report.counts || {};
-      var summary=(report.fields || []).filter(function(field){return field.key==="summary";})[0];
-      dialog.append($("<div/>").addClass("ujg-esi-preflight-counts").text(!summary || summary.selectedIndex==null
-        ? "Число замечаний не определено: колонка замечания не выбрана"
+      var hasIdentity=(report.fields || []).some(function(field){return (field.key==="remarkId" || field.key==="summary") && field.selectedIndex!=null && field.status!=="conflict";});
+      dialog.append($("<div/>").addClass("ujg-esi-preflight-counts").text(!hasIdentity
+        ? "Число замечаний не определено. Выберите колонку с номером или текстом замечания."
         : "Замечаний: "+(counts.total || 0)+" · К импорту: "+(counts.visible || 0)+" · Скрыто в Excel: "+(counts.hidden || 0)));
       if (pending.error || report.error) dialog.append($("<div/>").addClass("ujg-esi-due-error").attr("role","alert").text(pending.error || report.error));
       var tableTools=$("<div/>").addClass("ujg-esi-preflight-table-tools");
@@ -4607,8 +4703,9 @@ define("_ujgESI_columnPreflightUi", ["jquery", "_ujgESI_icons"], function($, ico
       var body=$("<tbody/>");
       shownFields(report).forEach(function(field) {
         var column=(report.columns || []).filter(function(col) {return col.index === field.selectedIndex;})[0];
-        var caption=column ? columnLabel(column,report) : field.status === "skipped" ? "Не импортировать":"Выбрать колонку";
+        var caption=fieldValue(field,"column",report);
         var choice=button(caption).addClass("ujg-esi-preflight-choice").attr({"data-preflight-field":field.key,"data-preflight-focus":field.key,"aria-haspopup":"dialog","aria-expanded":"false"}).append(icon("ChevronDown"));
+        if (!column && field.status !== "skipped") choice.addClass("is-unmapped").attr("title",field.label+": "+(LABELS[field.status] || "Не сопоставлено")+". Можно выбрать колонку вручную.");
         choice.on("click",function() {
           openPicker(this,field.label,(report.columns || []).map(function(col) {return {value:col.index,label:columnLabel(col,report),example:(col.examples || []).join(" · ")};}),function(index) {services.onImportColumnChoice(field.key,index);},!field.required);
         });
@@ -12259,12 +12356,12 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
       );
   }
 
-  function appendTextInput(className, value, onChange) {
+  function appendTextInput(className, value, onChange, eventName) {
     var $input = $("<input/>")
       .attr("type", "text")
       .addClass(className || "")
       .val(value != null ? String(value) : "");
-    $input.on("input", function() {
+    $input.on(eventName || "input", function() {
       onChange($(this).val());
     });
     return $input;
@@ -12604,7 +12701,7 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
           $("<span/>").text("Лист"),
           appendTextInput("ujg-esi-mapping-sheet-name", sheetName, function(value) {
             if (services && services.onMappingSheetNameChange) services.onMappingSheetNameChange(value);
-          }).attr("placeholder", "Пусто = авто")
+          }, "change").attr("placeholder", "Пусто = авто")
         ),
       $("<label/>")
         .addClass("ujg-esi-mapping-start-field")
@@ -12929,9 +13026,20 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
     appendConfirmControl($fields, "Epic", appendSelect("ujg-esi-confirm-epic", dialog.epicKey || "", epicOptions, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("epicKey", value);
     }));
-    appendConfirmControl($fields, "Название", appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
+    var $summary = appendImproveSummaryControl(appendSummaryInput("ujg-esi-confirm-summary", dialog.summary, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("summary", value);
-    }), "story", state.llmLoadingTarget));
+      if (String(value || "").trim()) {
+        $summaryField.find(".ujg-esi-confirm-summary-error").remove();
+        $summary.find(".ujg-esi-confirm-summary").removeAttr("aria-invalid aria-describedby");
+      }
+    }), "story", state.llmLoadingTarget);
+    var $summaryField = $("<div/>").append($summary);
+    if (dialog.summaryError) {
+      $summary.find(".ujg-esi-confirm-summary").attr({"aria-invalid":"true","aria-describedby":"ujg-esi-confirm-summary-error"});
+      $summaryField.append($("<div/>").addClass("ujg-esi-confirm-due-error ujg-esi-confirm-summary-error")
+        .attr({id:"ujg-esi-confirm-summary-error",role:"alert"}).text(dialog.summaryError));
+    }
+    appendConfirmControl($fields, "Название", $summaryField);
     appendConfirmControl($fields, "Исполнитель", appendAssigneePicker("ujg-esi-confirm-assignee", "story", dialog.assigneeId || "", dialog.assigneeLabel || "", state, false));
     appendConfirmControl($fields, "Первоначальная оценка", appendTextInput("ujg-esi-confirm-original", dialog.originalEstimate, function(value) {
       if (services && services.onDialogFieldChange) services.onDialogFieldChange("originalEstimate", value);
@@ -14546,6 +14654,7 @@ define("_ujgESI_main", [
       sourceFileName: "",
       sourceWorkbook: null,
       sourceColumnSettings: null,
+      sourceManualColumnSettings: null,
       pendingImport: null,
       sheetNames: [],
       sheetPickerOpen: false,
@@ -15152,9 +15261,10 @@ define("_ujgESI_main", [
       return Object.assign({}, state.mappingSettings, state.sourceColumnSettings || {});
     }
 
-    function parseLoadedWorkbook() {
+    function parseLoadedWorkbook(settings) {
+      var parsed = parser.parseWorkbook(state.sourceWorkbook, settings || sourceImportSettings());
       invalidateActivityHistory();
-      var parsed = parser.parseWorkbook(state.sourceWorkbook, sourceImportSettings());
+      if (settings) state.sourceColumnSettings = settings;
       excelRows = (parsed.rows || []).map(copyRow);
       if (state.viewMode === "excel") state.rows = excelRows;
       state.parseMeta = {
@@ -16379,14 +16489,19 @@ define("_ujgESI_main", [
       readInputWorkbook(file).then(function(result) {
         if (seq !== fileReadSeq) return;
         var settings = normalizeMappingSettings(state.mappingSettings);
+        if ((result.workbook.SheetNames || []).indexOf(settings.sheetName) < 0) settings.sheetName = "";
+        delete settings.headerRowNumber;
         state.pendingImport = {fileName:String(file.name || ""),buffer:result.buffer,workbook:result.workbook,
           settings:settings,remember:true,report:null,error:""};
         state.loading = false;
-        if (parser.inspectWorkbook) {
+        inspectPendingImport();
+        var report = state.pendingImport.report;
+        if (settings.sheetName && report && (report.error || !report.columns.length || report.counts && !report.counts.visible)) {
+          settings.sheetName = "";
           inspectPendingImport();
-          if (!state.pendingImport.report || state.pendingImport.report.needsReview) { render(); return; }
         }
-        commitPendingImport(false);
+        restoreImportHeader();
+        render();
       }).then(null,
         function(err) {
           if (seq !== fileReadSeq) return;
@@ -16395,11 +16510,50 @@ define("_ujgESI_main", [
       );
     }
 
-    function inspectPendingImport() {
+    function importHeaderSignature(report) {
+      return JSON.stringify((report && report.columns || []).map(function(column) {
+        return [column.index,column.header,column.occurrence];
+      }));
+    }
+
+    function restoreImportHeader() {
+      var pending = state.pendingImport;
+      var remembered = pending.settings.headerSelection;
+      if (!remembered || pending.error) return;
+      // Keep a confirmed row when duplicate headers exist. A stale row falls
+      // back to detection, which can find the same layout at its new position.
+      if ((pending.workbook.SheetNames || []).indexOf(remembered.sheetName) < 0 ||
+          pending.settings.sheetName && pending.settings.sheetName !== remembered.sheetName) return;
+      var detected = pending.report;
+      var sheetName = pending.settings.sheetName;
+      pending.settings.sheetName = remembered.sheetName;
+      pending.settings.headerRowNumber = remembered.headerRowNumber;
+      inspectPendingImport();
+      if (!pending.report || pending.report.sheetName !== remembered.sheetName ||
+          pending.report.counts && !pending.report.counts.visible ||
+          importHeaderSignature(pending.report) !== remembered.signature) {
+        pending.settings.sheetName = sheetName;
+        delete pending.settings.headerRowNumber;
+        pending.report = detected;
+        pending.error = "";
+      }
+    }
+
+    function inspectPendingImport(keepPosition) {
       var pending = state.pendingImport;
       if (!pending) return;
       pending.error = "";
-      try { pending.report = parser.inspectWorkbook(pending.workbook, pending.settings); }
+      try {
+        if (!parser || typeof parser.inspectWorkbook !== "function") throw new Error("Проверка Excel недоступна");
+        var settings = pending.settings;
+        if (keepPosition && pending.report && pending.report.headerRowNumber > 0 &&
+            (pending.workbook.SheetNames || []).indexOf(pending.report.sheetName) >= 0) {
+          // A binding edit must not move the visible table. This temporary anchor
+          // is not a manual header preference and must never be saved as one.
+          settings = Object.assign({}, settings, {sheetName:pending.report.sheetName,headerRowNumber:pending.report.headerRowNumber});
+        }
+        pending.report = parser.inspectWorkbook(pending.workbook, settings);
+      }
       catch (err) { pending.report = null; pending.error = "Не удалось проверить колонки: " + err.message; }
     }
 
@@ -16411,7 +16565,7 @@ define("_ujgESI_main", [
       pending.settings.columnBindings = Object.assign({}, pending.settings.columnBindings || {});
       pending.settings.columnBindings[key] = column ? {header:column.header,occurrence:column.occurrence} : null;
       if (column) pending.settings.columnMap[key] = column.header;
-      inspectPendingImport(); render();
+      inspectPendingImport(true); render();
     }
 
     function onImportSheetChange(name) {
@@ -16419,13 +16573,23 @@ define("_ujgESI_main", [
       if (!pending || (pending.workbook.SheetNames || []).indexOf(name) < 0) return;
       pending.settings.sheetName = name;
       delete pending.settings.headerRowNumber;
+      pending.settings.headerSelection = null;
       inspectPendingImport(); render();
     }
 
     function onImportHeaderChange(row) {
       var pending = state.pendingImport;
-      if (!pending || !Number.isInteger(Number(row)) || Number(row) < 1) return;
-      pending.settings.headerRowNumber = Number(row);
+      if (!pending) return;
+      if (row == null || String(row).trim() === "" || Number(row) === 0) {
+        delete pending.settings.headerRowNumber;
+        pending.settings.headerSelection = null;
+      } else {
+        if (!Number.isInteger(Number(row)) || Number(row) < 1) return;
+        pending.settings.headerRowNumber = Number(row);
+        if (pending.report && (pending.workbook.SheetNames || []).indexOf(pending.report.sheetName) >= 0) {
+          pending.settings.sheetName = pending.report.sheetName;
+        }
+      }
       inspectPendingImport(); render();
     }
 
@@ -16434,14 +16598,39 @@ define("_ujgESI_main", [
       state.pendingImport = null; state.loading = false; render();
     }
 
+    function resolvedColumnSettings(input, report) {
+      var settings = Object.assign({}, input);
+      settings.columnMap = Object.assign({}, input.columnMap);
+      settings.columnBindings = Object.assign({}, input.columnBindings || {});
+      (report.fields || []).forEach(function(field) {
+        var column = (report.columns || []).filter(function(col) { return col.index === field.selectedIndex; })[0];
+        if (column) {
+          settings.columnBindings[field.key] = {header:column.header,occurrence:column.occurrence};
+          settings.columnMap[field.key] = column.header;
+        } else {
+          // A missing automatic column is skipped only in this sheet's snapshot.
+          settings.columnBindings[field.key] = null;
+        }
+      });
+      settings.sheetName = report.sheetName;
+      settings.headerRowNumber = report.headerRowNumber;
+      return settings;
+    }
+
     function commitPendingImport(confirmed) {
       var pending = state.pendingImport;
-      if (!pending) return;
-      if (confirmed) {
-        inspectPendingImport();
-        if (!pending.report || !pending.report.canApply) { render(); return; }
+      if (!pending || !confirmed) return;
+      inspectPendingImport(true);
+      if (!pending.report || !pending.report.canApply) { render(); return; }
+      var settings = resolvedColumnSettings(pending.settings, pending.report);
+      var rememberedBindings = Object.assign({}, pending.settings.columnBindings || {});
+      var headerSelection = null;
+      var previousHeader = pending.settings.headerSelection;
+      if (pending.settings.headerRowNumber || previousHeader && previousHeader.sheetName === pending.report.sheetName &&
+          previousHeader.signature === importHeaderSignature(pending.report)) {
+        headerSelection = {sheetName:pending.report.sheetName,headerRowNumber:pending.report.headerRowNumber,
+          signature:importHeaderSignature(pending.report)};
       }
-      var settings = Object.assign({}, pending.settings);
       if (pending.report) {
         settings.sheetName = pending.report.sheetName;
         settings.headerRowNumber = pending.report.headerRowNumber;
@@ -16450,7 +16639,7 @@ define("_ujgESI_main", [
       try { parsed = parser.parseWorkbook(pending.workbook, settings); }
       catch (err) {
         pending.error = "Не удалось прочитать Excel: " + err.message;
-        if (!parser.inspectWorkbook) setError(pending.error); else render();
+        render();
         return;
       }
       // The previous workbook stays intact until the new one has parsed successfully.
@@ -16460,6 +16649,10 @@ define("_ujgESI_main", [
       state.viewMode = "excel"; state.reportView = "registry";
       state.sourceFileBuffer = pending.buffer; state.sourceFileName = pending.fileName;
       state.sourceWorkbook = pending.workbook;
+      state.sourceManualColumnSettings = {
+        columnMap:Object.assign({}, pending.settings.columnMap),
+        columnBindings:Object.assign({}, rememberedBindings),tableStart:pending.settings.tableStart
+      };
       state.sourceColumnSettings = pending.report ? {columnMap:settings.columnMap,columnBindings:settings.columnBindings || {},
         sheetName:settings.sheetName,headerRowNumber:settings.headerRowNumber,tableStart:settings.tableStart} : null;
       state.sheetNames = (pending.workbook.SheetNames || []).map(String);
@@ -16471,7 +16664,8 @@ define("_ujgESI_main", [
       state.pendingImport = null; state.loading = false; state.error = "";
       if (confirmed && pending.remember) {
         state.mappingSettings = normalizeMappingSettings(Object.assign({}, state.mappingSettings, {
-          columnMap:settings.columnMap,columnBindings:settings.columnBindings || {},sheetName:settings.sheetName,tableStart:settings.tableStart
+          columnMap:pending.settings.columnMap,columnBindings:rememberedBindings,sheetName:settings.sheetName,tableStart:settings.tableStart,
+          headerSelection:headerSelection
         }));
         saveMappings({render:false});
       }
@@ -16492,6 +16686,17 @@ define("_ujgESI_main", [
       render();
     }
 
+    function applySourceSheet(sheetName) {
+      var settings = Object.assign({}, state.mappingSettings, state.sourceManualColumnSettings || {}, {sheetName:sheetName});
+      delete settings.headerRowNumber;
+      if (!parser || typeof parser.inspectWorkbook !== "function") throw new Error("Проверка Excel недоступна");
+      var report = parser.inspectWorkbook(state.sourceWorkbook, settings);
+      if (!report || !report.canApply) throw new Error(report && report.error || "Лист не содержит пригодных для импорта строк");
+      // Inspection and parsing must both succeed before replacing any active context.
+      parseLoadedWorkbook(resolvedColumnSettings(settings, report));
+      state.mappingSettings.sheetName = sheetName;
+    }
+
     function onMetaSheetSelect(sheetName) {
       if (!closeDueDateSyncForContextChange()) return;
       var nextSheetName = copySheetName(sheetName);
@@ -16500,23 +16705,17 @@ define("_ujgESI_main", [
         render();
         return;
       }
-      state.mappingSettings.sheetName = nextSheetName;
-      if (state.sourceColumnSettings) {
-        state.sourceColumnSettings.sheetName = nextSheetName;
-        delete state.sourceColumnSettings.headerRowNumber;
-      }
       state.sheetPickerOpen = false;
-      state.createDialog = null;
       state.error = "";
-      closeUserPicker();
-      closeIssueTypePicker();
       try {
-        parseLoadedWorkbook();
+        applySourceSheet(nextSheetName);
       } catch (err) {
         setError("Не удалось прочитать лист: " + (err && err.message ? err.message : "unknown error"));
-        saveMappings();
         return;
       }
+      state.createDialog = null;
+      closeUserPicker();
+      closeIssueTypePicker();
       saveMappings();
       render();
     }
@@ -16553,6 +16752,10 @@ define("_ujgESI_main", [
       state.mappingSettings.columnMap = copyColumnMap(state.mappingSettings.columnMap);
       state.mappingSettings.columnMap[key] = value != null ? String(value) : "";
       if (state.mappingSettings.columnBindings) delete state.mappingSettings.columnBindings[key];
+      if (state.sourceManualColumnSettings) {
+        state.sourceManualColumnSettings.columnMap[key] = value != null ? String(value) : "";
+        delete state.sourceManualColumnSettings.columnBindings[key];
+      }
       if (state.sourceColumnSettings) {
         state.sourceColumnSettings.columnMap = Object.assign({}, state.sourceColumnSettings.columnMap);
         state.sourceColumnSettings.columnMap[key] = value != null ? String(value) : "";
@@ -16568,6 +16771,7 @@ define("_ujgESI_main", [
       var key = field != null ? String(field) : "";
       state.mappingSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (key === "headerMarker") state.mappingSettings.tableStart.headerMarker = value != null ? String(value) : "";
+      if (state.sourceManualColumnSettings) state.sourceManualColumnSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
       if (state.sourceColumnSettings) {
         state.sourceColumnSettings.tableStart = copyTableStart(state.mappingSettings.tableStart);
         delete state.sourceColumnSettings.headerRowNumber;
@@ -16578,12 +16782,16 @@ define("_ujgESI_main", [
 
     function onMappingSheetNameChange(value) {
       if (!closeDueDateSyncForContextChange()) return;
-      state.mappingSettings.sheetName = copySheetName(value);
-      if (state.sourceColumnSettings) {
-        state.sourceColumnSettings.sheetName = state.mappingSettings.sheetName;
-        delete state.sourceColumnSettings.headerRowNumber;
-      }
-      reparseLoadedWorkbookAfterMappingChange();
+      if (state.sourceWorkbook) {
+        try {
+          applySourceSheet(copySheetName(value));
+          state.error = "";
+          state.createDialog = null;
+        } catch (err) {
+          setError("Не удалось применить мапинг листа: " + (err && err.message ? err.message : "unknown error"));
+          return;
+        }
+      } else state.mappingSettings.sheetName = copySheetName(value);
       saveMappings({ render: false });
     }
 
@@ -16986,6 +17194,12 @@ define("_ujgESI_main", [
     function createConfirmedRow(dialog) {
       var row = dialog ? state.rows[dialog.rowIndex] : null;
       if (!row || createInFlight || dialog !== state.createDialog || dialog.mode !== "story" || dialog.scopeProjectKey !== state.projectKey || row.status === "creating" || row.alreadyLinked || row.jiraKey || row.createdKey) return;
+      if (!String(dialog.summary == null ? "" : dialog.summary).trim()) {
+        dialog.summaryError = "Заполните поле «Название» для создания Story.";
+        render();
+        return;
+      }
+      dialog.summaryError = "";
       var dueDate = dialog.dueDate != null ? String(dialog.dueDate).trim() : "";
       var currentDueSource = deadlines ? deadlines.resolve(row,{columnMap:dialog.columnMap}) : dialog.dueSource;
       if (!dialog.omitDueDate && !dialog.dueDateEdited && JSON.stringify(currentDueSource) !== JSON.stringify(dialog.dueSource)) {
@@ -17185,6 +17399,7 @@ define("_ujgESI_main", [
       if (dialog.mode === "children") return;
       if (key === "summary") {
         dialog.summary = numberedSummary(state.rows[dialog.rowIndex], value);
+        if (String(dialog.summary || "").trim()) dialog.summaryError = "";
         (dialog.childTasks || []).forEach(function(task) {
           task.summary = childSummary(task, dialog.summary);
         });

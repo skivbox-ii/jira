@@ -1,3 +1,4 @@
+const { inspectWorkbook, confirmImport } = require("./helpers/import-confirmation");
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -15,7 +16,7 @@ async function setup() {
   const Gadget=load(path.join(dir,'main.js'),{
     jquery:()=>({length:0}),_ujgESI_config:load(path.join(dir,'config.js'),{}),_ujgESI_api:api,
     '_ujgESI_excel-loader':{readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:['Sheet1']})},
-    _ujgESI_parser:{parseWorkbook:()=>({sheetName:'Sheet1',rows:[{id:'1',jiraKey:'TEST-1',sourceColumns:{'Ответственный':'Excel Owner'},ownerIdentifiers:['excel'],storyDetails:{key:'TEST-1',status:'Open'},childStatuses:[{key:'TEST-2',role:'QA',status:'Open',linkedToParent:false}]}]})},
+    _ujgESI_parser:{inspectWorkbook,parseWorkbook:()=>({sheetName:'Sheet1',rows:[{id:'1',jiraKey:'TEST-1',sourceColumns:{'Ответственный':'Excel Owner'},ownerIdentifiers:['excel'],storyDetails:{key:'TEST-1',status:'Open'},childStatuses:[{key:'TEST-2',role:'QA',status:'Open',linkedToParent:false}]}]})},
     _ujgESI_creator:{},_ujgESI_mappingStore:null,_ujgESI_xlsxPatcher:{},_ujgShared_llmClient:null,_ujgESI_teams:null,_ujgESI_activity:null,
     _ujgESI_activityLoader:require('./helpers/import-activity-loader'),_ujgESI_deadlines:load(path.join(dir,'deadlines.js'),{}),
     _ujgESI_dueDateSync:null,_ujgESI_componentSync:null,_ujgESI_remarkReportLoader:null,_ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,
@@ -23,7 +24,7 @@ async function setup() {
     _ujgESI_rendering:{init:(_,cb)=>app.cb=cb,render:s=>app.state=s,renderStatusTransition:s=>app.state=s}
   });
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}}); await flush();
-  app.cb.onFileChange({name:'original.xlsx'}); await flush(); await flush(); app.cb.onProjectChange('TEST'); await flush();
+  app.cb.onFileChange({name:'original.xlsx'}); await flush(); await flush(); confirmImport(app.state, app.cb); app.cb.onProjectChange('TEST'); await flush();
   return {...app,api,ref:app};
 }
 test('status hooks update actual Story details in both sets, retaining Excel ownership and source file', async () => {

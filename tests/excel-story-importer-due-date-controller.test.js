@@ -1,3 +1,4 @@
+const { inspectWorkbook, confirmImport } = require("./helpers/import-confirmation");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
@@ -23,7 +24,7 @@ async function setup() {
     _ujgESI_deadlines:load(path.join(dir,"deadlines.js"),{}),
     _ujgESI_api:{getProjects:()=>Promise.resolve([]),getProjectEpics:()=>Promise.resolve({issues:[]}),getProjectCreateMeta:()=>Promise.resolve({projects:[]})},
     "_ujgESI_excel-loader": {readFileBuffer:()=>Promise.resolve(new ArrayBuffer(1)),readWorkbookFromBuffer:()=>Promise.resolve({SheetNames:["Sheet1"]})},
-    _ujgESI_parser:{parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Срок":"2026-09-30"}}]})},
+    _ujgESI_parser:{inspectWorkbook,parseWorkbook:()=>({sheetName:"Sheet1",rows:[{id:"1",jiraKey:"TEST-1",sourceColumns:{"Срок":"2026-09-30"}}]})},
     _ujgESI_creator:{}, _ujgESI_mappingStore:null, _ujgESI_xlsxPatcher:{},
     _ujgShared_llmClient:null, _ujgESI_teams:null, _ujgESI_sourceExport:null,_ujgESI_sourceExportApi:null,_ujgESI_remarkReportLoader:null, _ujgESI_activityLoader: require("./helpers/import-activity-loader"), _ujgESI_activity:null,
     _ujgESI_rendering:{init:(_,callbacks)=>{app.callbacks=callbacks;},render:state=>{app.state=state;app.fullRenders++;},renderDueDateSync:state=>{app.state=state;app.modalRenders++;}},
@@ -32,6 +33,7 @@ async function setup() {
   });
   new Gadget({getGadgetContentEl:()=>({find:()=>({length:1})}),resize(){}});
   await flush(); app.callbacks.onFileChange({name:"source.xlsx"}); await flush(); await flush();
+  confirmImport(app.state, app.callbacks);
   return {...app, controller, dueState, changed, ref:app};
 }
 

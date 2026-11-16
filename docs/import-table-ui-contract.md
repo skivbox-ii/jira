@@ -58,6 +58,9 @@ The importer registry is the canonical table pattern. New views, including daily
 
 ## Acceptance
 
+- Every Excel file selection opens «Соответствие колонок Excel», including a previously confirmed file. Show the proposed worksheet, physical header row and available columns before replacing the registry. Applying confirms the draft; cancelling preserves the previous registry and saved choices.
+- Suggest a header from the actual workbook; let the user change the sheet, row or column. Missing, conflicting and ambiguous assignments show «Не импортировать» with their reason in red. A mapped remark number alone is sufficient for numbered rows; existing rows identified by their text continue to work. Optional unmatched fields do not block Apply.
+
 Test multi-selection, search retention, sorting, resizing, reordering, visibility, reload persistence, independent users/views, export, and escaping. Visually verify desktop and narrow layouts. Production verification remains read-only through the Citrix skill.
 
 ## Несколько эпиков (REG-10, 27.10.2026)
