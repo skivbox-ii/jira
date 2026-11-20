@@ -9,7 +9,7 @@ function setup(loader, options = {}) {
   const saved = [], parsed = [];
   const config = load(path.join(dir, "config.js"), {});
   const mapping = load(path.join(dir, "mapping-store.js"), {jquery:{},"_ujgESI_config":config});
-  const parser = options.parser === "real" ? load(path.join(dir,"parser.js"), {"_ujgESI_config":config}) : options.parser || {
+  const parser = options.parser === "real" ? load(path.join(dir,"parser.js"), {"_ujgESI_config":config,_ujgESI_sheetjs:require("./helpers/importer-vendor-deps").sheetjs}) : options.parser || {
     inspectWorkbook(book, settings) {
       const chosen = settings.columnBindings && settings.columnBindings.owner;
       return {sheetName:settings.sheetName || "Sheet",headerRowNumber:settings.headerRowNumber || 1,sheetNames:["Sheet","Other"],

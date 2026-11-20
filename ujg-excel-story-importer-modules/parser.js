@@ -1,4 +1,4 @@
-define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
+define("_ujgESI_parser", ["_ujgESI_config", "_ujgESI_sheetjs"], function(config, XLSX) {
   "use strict";
 
   function cellText(value) {
@@ -16,7 +16,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
       });
     }
     if (Array.isArray(sheet.__rows)) return visibleRows(sheet.__rows);
-    if (typeof XLSX !== "undefined" && XLSX.utils && XLSX.utils.sheet_to_json) {
+    if (XLSX && XLSX.utils && XLSX.utils.sheet_to_json) {
       var rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: !!raw, defval: "" });
       if (sheet["!ref"] && XLSX.utils.decode_range) {
         var start = XLSX.utils.decode_range(sheet["!ref"]).s;
@@ -186,7 +186,7 @@ define("_ujgESI_parser", ["_ujgESI_config"], function(config) {
 
   function deadlineCell(value, date1904) {
     if (typeof value !== "number" || !isFinite(value)) return cellText(value);
-    var xlsx = typeof XLSX !== "undefined" ? XLSX : null;
+    var xlsx = XLSX;
     var parts = xlsx && xlsx.SSF && xlsx.SSF.parse_date_code && xlsx.SSF.parse_date_code(value, {date1904:date1904});
     if (!parts || !parts.y || !parts.m || !parts.d) return cellText(value);
     return String(parts.y).padStart(4, "0") + "-" + String(parts.m).padStart(2, "0") + "-" + String(parts.d).padStart(2, "0");

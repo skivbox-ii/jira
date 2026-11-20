@@ -3171,7 +3171,7 @@ function realWorkbookSheetHarness(workbook) {
   const Gadget=loadAmdModule(path.join(MODULE_DIR,"main.js"),{
     jquery:()=>({length:1}),_ujgESI_config:config,_ujgESI_api:{getProjects:()=>Promise.resolve([])},
     "_ujgESI_excel-loader":{readWorkbook:()=>Promise.resolve(workbook)},
-    _ujgESI_parser:loadAmdModule(path.join(MODULE_DIR,"parser.js"),{_ujgESI_config:config}),
+    _ujgESI_parser:loadAmdModule(path.join(MODULE_DIR,"parser.js"),{_ujgESI_config:config,_ujgESI_sheetjs:require("./helpers/importer-vendor-deps").sheetjs}),
     _ujgESI_creator:{createRow(){throw new Error("sheet changes must not create issues");}},
     _ujgESI_mappingStore:{...mapping,create:()=>({load:()=>Promise.resolve(mapping.defaultSettings()),save:settings=>{saved.push(JSON.parse(JSON.stringify(settings)));return Promise.resolve(settings);}})},
     _ujgESI_rendering:{init(_root,svc){callbacks=svc;},render(s){state=s;}},
@@ -3242,7 +3242,7 @@ function renderingStubHarness(t) {
   const $=jquery(dom.window);
   const rendering=loadAmdModule(path.join(MODULE_DIR,"rendering.js"),{
     jquery:$,_ujgESI_grid:{create:()=>({teamFilterButton:()=>$('<button/>'),resetFiltersButton:()=>$('<button/>'),mount(){},suspend(){}}),button:()=>$('<button/>')},
-    _ujgESI_icons:()=>$('<i/>'),_ujgESI_teamsUi:null,_ujgESI_statisticsUi:null,
+    _ujgESI_mermaid:null,_ujgESI_icons:()=>$('<i/>'),_ujgESI_teamsUi:null,_ujgESI_statisticsUi:null,
     _ujgESI_activityUi:null,_ujgESI_dueDateSyncUi:null,_ujgESI_columnPreflightUi:null,_ujgESI_statusTransitionUi:null,
   },{window:dom.window,document:dom.window.document});
   return {$,rendering};

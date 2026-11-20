@@ -11,8 +11,6 @@ define("_ujgESI_config", [], function() {
   var STORY_ISSUE_TYPE = "Story";
   var CHILD_LINK_TYPE_NAME = "Child";
   var BLOCKS_LINK_TYPE_NAME = "Blocks";
-  var DEFAULT_SHEETJS_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-  var DEFAULT_JSZIP_URL = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
   var LLM_CONFIG_STORAGE_KEY = "ujg-shared-llm-config";
 
   var KNOWN_COLUMNS = [
@@ -212,8 +210,6 @@ define("_ujgESI_config", [], function() {
     STORY_ISSUE_TYPE: STORY_ISSUE_TYPE,
     CHILD_LINK_TYPE_NAME: CHILD_LINK_TYPE_NAME,
     BLOCKS_LINK_TYPE_NAME: BLOCKS_LINK_TYPE_NAME,
-    DEFAULT_SHEETJS_URL: DEFAULT_SHEETJS_URL,
-    DEFAULT_JSZIP_URL: DEFAULT_JSZIP_URL,
     LLM_CONFIG_STORAGE_KEY: LLM_CONFIG_STORAGE_KEY,
     LLM_PROJECT_PROMPT: LLM_PROJECT_PROMPT,
     LLM_REMARK_PROMPT: LLM_REMARK_PROMPT,

@@ -1,4 +1,4 @@
-define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi", "_ujgESI_epicScope"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi, epicScope) {
+define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI_teamsUi", "_ujgESI_statisticsUi", "_ujgESI_activityUi", "_ujgESI_dueDateSyncUi", "_ujgESI_columnPreflightUi", "_ujgESI_statusTransitionUi", "_ujgESI_epicScope", "_ujgESI_mermaid"], function($, gridModule, icon, teamsUi, statisticsUi, activityUi, dueDateSyncUi, columnPreflightUi, statusTransitionUi, epicScope, mermaid) {
   "use strict";
 
   var $root;
@@ -10,7 +10,6 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   var dueDateView, $dueHost, componentView, $componentHost;
   var columnPreflightView, $columnPreflightHost;
   var statusView, $statusHost;
-  var mermaidLoad;
   var mermaidRenderSequence = 0;
   var fullscreenHost, fullscreenStyle, fullscreenScroll, fullscreen = false;
   var viewportWindows = [];
@@ -266,23 +265,10 @@ define("_ujgESI_rendering", ["jquery", "_ujgESI_grid", "_ujgESI_icons", "_ujgESI
   }
 
   function loadMermaid() {
-    if (window.mermaid) return Promise.resolve(window.mermaid);
-    if (mermaidLoad) return mermaidLoad;
-    mermaidLoad = new Promise(function(resolve, reject) {
-      var script = document.createElement("script"), settled = false;
-      var timer = setTimeout(function() { finish(new Error("Mermaid timed out")); }, 8000);
-      function finish(error) {
-        if (settled) return;
-        settled = true; clearTimeout(timer);
-        if (error) reject(error); else resolve(window.mermaid);
-      }
-      script.src = "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js";
-      script.async = true;
-      script.onload = function() { finish(window.mermaid ? null : new Error("Mermaid unavailable")); };
-      script.onerror = function() { finish(new Error("Mermaid load failed")); };
-      document.head.appendChild(script);
-    }).catch(function(error) { mermaidLoad = null; throw error; });
-    return mermaidLoad;
+    if (!mermaid || typeof mermaid.initialize !== "function" || typeof mermaid.render !== "function") {
+      return Promise.reject(new Error("Private Mermaid unavailable"));
+    }
+    return Promise.resolve(mermaid);
   }
 
   function renderDiagram($node, source) {

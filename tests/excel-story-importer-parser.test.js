@@ -14,14 +14,15 @@ function loadParser() {
   const config = loadConfig();
   return loadAmdModule(path.join(MODULE_DIR, "parser.js"), {
     "_ujgESI_config": config,
+    "_ujgESI_sheetjs": require("./helpers/importer-vendor-deps").sheetjs,
   });
 }
 
 test("deadline mapping canonicalizes the chosen header and converts typed Excel serials with workbook epoch", () => {
   const config = loadConfig();
   const calls = [];
-  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
-    XLSX: {SSF:{parse_date_code:(value, options) => { calls.push([value, options.date1904]); return {y:2026,m:9,d:25}; }}},
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config,
+    _ujgESI_sheetjs: {SSF:{parse_date_code:(value, options) => { calls.push([value, options.date1904]); return {y:2026,m:9,d:25}; }}},
   });
   const result = parser.parseWorkbook({Workbook:{WBProps:{date1904:true}},SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
     ["Замечание","Плановая дата"], ["Ошибка", 45000],
@@ -32,8 +33,8 @@ test("deadline mapping canonicalizes the chosen header and converts typed Excel 
 
 test("default Срок column takes precedence over an older Срок исполнения column after parsing", () => {
   const config = loadConfig();
-  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
-    XLSX:{SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 20})}},
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config,
+    _ujgESI_sheetjs:{SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 20})}},
   });
   const row = parser.parseWorkbook({SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
     ["Замечание","Срок исполнения","Срок"], ["Ошибка",45001,45000],
@@ -50,8 +51,8 @@ test("typed alias deadlines use raw SheetJS cells and conflicting aliases surviv
   const headers = ["Замечание", "Плановый срок устранения", "Срок устранения"];
   const displayRows = [headers, ["Ошибка", "9/25/26", "9/26/26"]];
   const rawRows = [headers, ["Ошибка", 45000, 45001]];
-  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
-    XLSX: {
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config,
+    _ujgESI_sheetjs: {
       utils:{sheet_to_json:(_sheet, options) => options.raw ? rawRows : displayRows},
       SSF:{parse_date_code:(value, options) => { calls.push([value, options.date1904]); return {y:2026,m:9,d:value === 45000 ? 25 : 26}; }},
     },
@@ -69,8 +70,8 @@ test("typed alias deadlines use raw SheetJS cells and conflicting aliases surviv
 test("duplicate typed alias headers remain conflicting after parser and description writer", () => {
   const config = loadConfig();
   const headers = ["Замечание", "Срок устранения", "Срок устранения"];
-  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
-    XLSX: {
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config,
+    _ujgESI_sheetjs: {
       utils:{sheet_to_json:(_sheet, options) => options.raw
         ? [headers,["Ошибка",45000,45001]] : [headers,["Ошибка","9/25/26","9/26/26"]]},
       SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 26})},
@@ -87,8 +88,8 @@ test("duplicate typed alias headers remain conflicting after parser and descript
 
 test("parsed custom deadline keeps priority over an old canonical deadline column", () => {
   const config = loadConfig();
-  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config}, {
-    XLSX: {SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 26})}},
+  const parser = loadAmdModule(path.join(MODULE_DIR, "parser.js"), {"_ujgESI_config": config,
+    _ujgESI_sheetjs: {SSF:{parse_date_code:value => ({y:2026,m:9,d:value === 45000 ? 25 : 26})}},
   });
   const row = parser.parseWorkbook({SheetNames:["Журнал"],Sheets:{Журнал:{__rows:[
     ["Замечание","Срок исполнения","Мой срок"], ["Ошибка",45001,45000],
@@ -627,7 +628,7 @@ test("inspectWorkbook falls back on the chosen sheet and supports explicit heade
 
 test("physical SheetJS range offsets preserve rows, columns, and hidden counts", () => {
   const config = loadConfig();
-  const parser = loadAmdModule(path.join(MODULE_DIR,"parser.js"),{"_ujgESI_config":config},{XLSX:{utils:{
+  const parser = loadAmdModule(path.join(MODULE_DIR,"parser.js"),{"_ujgESI_config":config,_ujgESI_sheetjs:{utils:{
     sheet_to_json:() => [["Замечание","ID"],["Visible","X"],["Hidden","Y"]],
     decode_range:() => ({s:{r:4,c:2},e:{r:7,c:3}}),
     encode_col:c => String.fromCharCode(65+c),
@@ -870,7 +871,7 @@ test("normalized duplicate bindings select physical occurrences without leaking 
 });
 
 test("bound ID-only rows preserve physical offsets and hidden counts", () => {
-  const parser = loadAmdModule(path.join(MODULE_DIR,"parser.js"),{"_ujgESI_config":loadConfig()},{XLSX:{utils:{
+  const parser = loadAmdModule(path.join(MODULE_DIR,"parser.js"),{"_ujgESI_config":loadConfig(),_ujgESI_sheetjs:{utils:{
     sheet_to_json:() => [[" id "],[0],["HIDDEN"],["ALPHA"]],
     decode_range:() => ({s:{r:4,c:2},e:{r:7,c:2}}),
   }}});

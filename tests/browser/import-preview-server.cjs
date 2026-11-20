@@ -168,9 +168,6 @@ const files = {
   "/test/filtered-history-fixture.js": [path.join(__dirname,"import-filtered-history-fixture.js"),"text/javascript"],
   "/test/progressive-fixture.js": [path.join(__dirname,"import-progressive-fixture.js"),"text/javascript"],
   "/test/jquery.js": [require.resolve("jquery/dist/jquery.js"),"text/javascript"],
-  "/test/xlsx.js": [require.resolve("xlsx/dist/xlsx.full.min.js"),"text/javascript"],
-  "/test/jszip.js": [require.resolve("jszip/dist/jszip.min.js"),"text/javascript"],
-  "/test/mermaid.js": [require.resolve("mermaid/dist/mermaid.min.js"),"text/javascript"],
   "/ujg-excel-story-importer.js": [path.join(root,"ujg-excel-story-importer.js"),"text/javascript"],
   "/ujg-excel-story-importer.css": [path.join(root,"ujg-excel-story-importer.css"),"text/css"]
 };

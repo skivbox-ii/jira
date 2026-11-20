@@ -22,6 +22,18 @@ test("build-excel-story-importer exports { build }", function () {
   assert.ok(Array.isArray(mod.build.MODULE_ORDER));
 });
 
+test("the importer ships its Excel, ZIP and diagram engines before their consumers", function () {
+  const order = require(BUILD_SCRIPT).build.MODULE_ORDER;
+  for (const [library, consumer] of [
+    ["xlsx-0.18.5.full.min.js","parser.js"],
+    ["jszip-3.10.1.min.js","xlsx-patcher.js"],
+    ["mermaid-11.15.0.min.js","rendering.js"]
+  ]) {
+    assert.ok(order.includes(library));
+    assert.ok(order.indexOf(library)<order.indexOf(consumer));
+  }
+});
+
 test("LLM report dependencies are bundled before the Dynamics entry point", function () {
   const order = require(BUILD_SCRIPT).build.MODULE_ORDER;
   for (const name of ["activity-ai.js", "activity-brief.js", "activity-markdown.js", "activity-ai-ui.js", "remark-report.js", "remark-report-loader.js", "remark-report-ui.js"]) {

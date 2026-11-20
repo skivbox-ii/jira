@@ -9,7 +9,7 @@ const registry = load(path.join(dir, "registry.js"), {
   _ujgESI_remarkId: remarkId, _ujgESI_deadlines: deadlines
 });
 const config = load(path.join(dir, "config.js"), {});
-const parser = load(path.join(dir, "parser.js"), {_ujgESI_config:config});
+const parser = load(path.join(dir, "parser.js"), {_ujgESI_config:config,_ujgESI_sheetjs:require("./helpers/importer-vendor-deps").sheetjs});
 
 test("exact Компонент header supplies module only when default Модуль is absent", () => {
   const parse = headers => parser.parseWorkbook({SheetNames:["S"],Sheets:{S:{__rows:[headers,headers.map(h => h === "Замечание" ? "Remark" : h === "Тип" ? "Bug" : h === "Модуль" ? "PARA" : "АСУТП")]}}}).rows[0].sourceColumns;

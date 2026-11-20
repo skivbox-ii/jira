@@ -6,8 +6,16 @@ var path = require("path");
 var MODULES_DIR = path.join(__dirname, "ujg-excel-story-importer-modules");
 var SHARED_DIR = path.join(__dirname, "ujg-shared-modules");
 var OUTPUT_FILE = path.join(__dirname, "ujg-excel-story-importer.js");
+var VENDOR_DIR = path.join(__dirname, "vendor");
 
 var MODULE_ORDER = [
+  { dir: VENDOR_DIR, file: "xlsx-0.18.5.full.min.js", amd: "_ujgESI_sheetjs",
+    globalExport: 'if(typeof window!=="undefined"&&!window.XLSX)try{window.XLSX=XLSX}catch(e){}' },
+  { dir: VENDOR_DIR, file: "jszip-3.10.1.min.js", amd: "_ujgESI_jszip" },
+  { dir: VENDOR_DIR, file: "mermaid-11.15.0.min.js", amd: "_ujgESI_mermaid",
+    globalExport: 'globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;',
+    exportValue: "__esbuild_esm_mermaid_nm.mermaid.default",
+    initialize: "__esbuild_esm_mermaid_nm.mermaid.default.initialize({startOnLoad:false});" },
   { dir: SHARED_DIR, file: "llm-client.js" },
   "config.js",
   "epic-scope.js",
@@ -61,7 +69,15 @@ function readModule(entry) {
   if (!fs.existsSync(filePath)) throw new Error("Module not found: " + fileName);
   var source = fs.readFileSync(filePath, "utf8");
   if (entry.amd) {
-    return 'define("' + entry.amd + '", [], function() {\nvar module = {exports:{}}, exports = module.exports;\n' + source + '\nreturn module.exports;\n});';
+    if (entry.globalExport) {
+      // Keep upstream files intact; strip only their final global assignment.
+      // Fail the build if a vendor update changes this known export shape.
+      var trimmed = source.trimEnd();
+      if (!trimmed.endsWith(entry.globalExport)) throw new Error("Unexpected vendor export: " + fileName);
+      source = trimmed.slice(0, -entry.globalExport.length);
+    }
+    return 'define("' + entry.amd + '", [], function() {\nvar module = {exports:{}}, exports = module.exports, define, require;\n' + source +
+      '\n' + (entry.initialize || "") + '\nreturn ' + (entry.exportValue || "module.exports") + ';\n});';
   }
   return source;
 }

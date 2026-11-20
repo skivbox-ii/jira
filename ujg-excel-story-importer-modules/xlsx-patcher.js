@@ -1,75 +1,8 @@
-define("_ujgESI_xlsxPatcher", ["_ujgESI_config"], function(config) {
+define("_ujgESI_xlsxPatcher", ["_ujgESI_jszip"], function(JSZip) {
   "use strict";
 
-  var loadPromise = null;
-
-  function loadScript(url) {
-    return new Promise(function(resolve, reject) {
-      var s = document.createElement("script");
-      s.src = url;
-      s.onload = function() {
-        resolve();
-      };
-      s.onerror = function() {
-        reject(new Error("JSZip load failed"));
-      };
-      document.head.appendChild(s);
-    });
-  }
-
-  function getGlobalJsZip() {
-    if (typeof window !== "undefined" && window.JSZip) return window.JSZip;
-    if (typeof globalThis !== "undefined" && globalThis.JSZip) return globalThis.JSZip;
-    if (typeof JSZip !== "undefined") return JSZip;
-    return null;
-  }
-
-  function isUsableJsZip(jszip) {
-    return !!(jszip && typeof jszip.loadAsync === "function");
-  }
-
-  function getAmdRequire() {
-    if (typeof require === "function") return require;
-    if (typeof window !== "undefined" && typeof window.require === "function") return window.require;
-    return null;
-  }
-
-  function loadAmdJsZip() {
-    var req = getAmdRequire();
-    if (!req) return Promise.resolve(null);
-    return new Promise(function(resolve) {
-      try {
-        req(
-          ["jszip"],
-          function(jszip) {
-            resolve(isUsableJsZip(jszip) ? jszip : null);
-          },
-          function() {
-            resolve(null);
-          }
-        );
-      } catch (_err) {
-        resolve(null);
-      }
-    });
-  }
-
   function ensureJsZip() {
-    var existing = getGlobalJsZip();
-    if (isUsableJsZip(existing)) return Promise.resolve(existing);
-    if (!loadPromise) {
-      loadPromise = loadScript(config.DEFAULT_JSZIP_URL).then(function() {
-        var loaded = getGlobalJsZip();
-        if (isUsableJsZip(loaded)) return loaded;
-        return loadAmdJsZip().then(function(amdJsZip) {
-          if (isUsableJsZip(amdJsZip)) return amdJsZip;
-          loaded = getGlobalJsZip();
-          if (isUsableJsZip(loaded)) return loaded;
-          throw new Error("JSZip is unavailable");
-        });
-      });
-    }
-    return loadPromise;
+    return Promise.resolve(JSZip);
   }
 
   function escapeRegExp(value) {

@@ -898,7 +898,7 @@ test("owner selection and clearing patch the mapped Excel owner column", async f
 });
 
 test("owner export changes only the mapped worksheet column when both owner headers exist", async function () {
-  const patcher = loadAmdModule(path.join(MODULE_DIR, "xlsx-patcher.js"), { _ujgESI_config: {} });
+  const patcher = loadAmdModule(path.join(MODULE_DIR, "xlsx-patcher.js"), { _ujgESI_jszip: require("./helpers/importer-vendor-deps").jszip });
   const worksheet = '<worksheet><sheetData>' +
     '<row r="1"><c r="A1" t="inlineStr"><is><t>Ответственный</t></is></c><c r="B1" t="inlineStr"><is><t>Owner mapped</t></is></c></row>' +
     '<row r="2"><c r="A2" t="inlineStr"><is><t>Preserve original column</t></is></c><c r="B2" t="inlineStr"><is><t>Mapped old owner</t></is></c></row>' +
@@ -985,7 +985,7 @@ test("preflight export never writes explicitly skipped Jira columns", async () =
 });
 
 test("preflight export patches only the selected duplicate Jira status in worksheet XML", async () => {
-  const patcher=loadAmdModule(path.join(MODULE_DIR,"xlsx-patcher.js"),{_ujgESI_config:{}});
+  const patcher=loadAmdModule(path.join(MODULE_DIR,"xlsx-patcher.js"),{_ujgESI_jszip:require("./helpers/importer-vendor-deps").jszip});
   const xml='<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Статус в Jira</t></is></c><c r="B1" t="inlineStr"><is><t>Статус в Jira</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Preserve</t></is></c><c r="B2" t="inlineStr"><is><t>Old</t></is></c></row></sheetData></worksheet>';
   let output;
   const app=await loadImporter([{excelRowNumber:2,jiraKey:"TEST-1",sourceColumns:{}}],{

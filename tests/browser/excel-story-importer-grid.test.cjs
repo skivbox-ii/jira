@@ -6,12 +6,12 @@ const { JSDOM } = require("jsdom");
 const jquery = require("jquery");
 const root = path.join(__dirname, "../..");
 
-function setup(activityReport, configureWindow) {
+function setup(activityReport, configureWindow, privateMermaid = {}) {
   const dom = new JSDOM('<div class="ujg-excel-story-importer"></div>', { runScripts: "outside-only", url: "http://localhost" });
   const w = dom.window;
   if (configureWindow) configureWindow(w);
   w.scrollTo = () => {};
-  const $ = jquery(w), modules = { jquery: $ };
+  const $ = jquery(w), modules = { jquery: $, _ujgESI_mermaid: privateMermaid };
   modules._ujgESI_activityUi = {create: () => ({render: $parent => $parent.append('<section class="activity-test-sentinel">Daily activity</section>')})};
   if (activityReport) modules._ujgESI_activity = {summarize: () => activityReport,componentFacets: () => [],componentRows: rows => rows,statusLabel: value => value,statusTone: () => "unknown",eventText: event => event.from + " → " + event.to};
   w.define = (name, deps, factory) => { modules[name] = factory(...deps.map(dep => modules[dep])); };
@@ -47,7 +47,7 @@ function setup(activityReport, configureWindow) {
     onLlmResetRequest: () => calls.push(["reset-request"]), onLlmResetConfirm: () => calls.push(["reset-confirm"]), onLlmResetCancel: () => calls.push(["reset-cancel"])
   });
   modules._ujgESI_rendering.render(state);
-  return { dom, $, state, calls, modules, render: () => modules._ujgESI_rendering.render(state) };
+  return { dom, $, state, calls, modules, privateMermaid, render: () => modules._ujgESI_rendering.render(state) };
 }
 function option($, text) { return $(".ujg-esi-filter-option").filter(function() { return $(this).text() === text; }).find("input"); }
 
@@ -1556,10 +1556,81 @@ test("wiki tables keep escaped pipes, multiline cells and HTML inert", t => {
   assert.equal($(".ujg-esi-description-body h4").text(), "Detail");
 });
 
-test("Mermaid uses existing library and leaves source on failure or closed popup", async t => {
-  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+test("Mermaid private renderer ignores foreign globals and sanitizes SVG without script loads", async t => {
+  const foreignCalls = [], scriptLoads = [];
+  const {dom,$,state,render} = setup(null, w => {
+    w.mermaid = {
+      initialize: () => foreignCalls.push("initialize"),
+      render: () => { foreignCalls.push("render"); throw Error("foreign renderer"); }
+    };
+    const createElement = w.document.createElement.bind(w.document);
+    w.document.createElement = (tag, ...args) => {
+      if (String(tag).toLowerCase() === "script") scriptLoads.push(tag);
+      return createElement(tag, ...args);
+    };
+  }, {
+    initialize: () => {},
+    render: async () => ({svg: '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script><foreignObject/><image href="https://foreign.invalid/x"/><a href="https://foreign.invalid"><text>Link</text></a><style>@import "https://foreign.invalid/x";</style><rect fill="url(https://foreign.invalid/x)" onclick="alert(1)"/><text>Private</text></svg>'})
+  });
+  t.after(() => dom.window.close());
+  state.rows[1].childStatuses[0].description = "```mermaid\ngraph TD\nA-->B\n```"; render();
+  $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
+  await new Promise(resolve => setTimeout(resolve,0));
+  const svg = $(".ujg-esi-mermaid-diagram svg");
+  assert.equal(svg.find("text").text(),"Private");
+  assert.equal(svg.find("script,foreignObject,image,a,style").length,0);
+  assert.equal(svg.attr("onload"),undefined);
+  assert.equal(svg.find("rect").attr("fill"),undefined);
+  assert.equal(svg.find("rect").attr("onclick"),undefined);
+  assert.deepEqual(foreignCalls,[]);
+  assert.deepEqual(scriptLoads,[]);
+  assert.equal(dom.window.document.querySelectorAll("script").length,0);
+});
+
+test("Mermaid missing private renderer never creates a script when no global exists", async t => {
+  const scriptLoads = [];
+  const {dom,$,state,render} = setup(null, w => {
+    const createElement = w.document.createElement.bind(w.document);
+    w.document.createElement = (tag, ...args) => {
+      if (String(tag).toLowerCase() === "script") scriptLoads.push(tag);
+      return createElement(tag, ...args);
+    };
+  }, null);
+  t.after(() => dom.window.close());
+  state.rows[1].childStatuses[0].description = "```mermaid\ngraph TD\nA-->B\n```"; render();
+  $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
+  await new Promise(resolve => setTimeout(resolve,0));
+  assert.equal($(".ujg-esi-mermaid-diagram pre").text(),"graph TD\nA-->B");
+  assert.deepEqual(scriptLoads,[]);
+  assert.equal(dom.window.document.querySelectorAll("script").length,0);
+});
+
+test("Mermaid missing or malformed private renderer leaves source without reading globals or loading scripts", async t => {
+  for (const privateMermaid of [null, {}, {initialize() {}}, {render() {}}]) {
+    const globalReads = [], scriptLoads = [];
+    const {dom,$,state,render} = setup(null, w => {
+      Object.defineProperty(w,"mermaid",{get() { globalReads.push("mermaid"); throw Error("untrusted global"); }});
+      const createElement = w.document.createElement.bind(w.document);
+      w.document.createElement = (tag, ...args) => {
+        if (String(tag).toLowerCase() === "script") scriptLoads.push(tag);
+        return createElement(tag, ...args);
+      };
+    }, privateMermaid);
+    t.after(() => dom.window.close());
+    state.rows[1].childStatuses[0].description = "```mermaid\ngraph TD\nA-->B\n```"; render();
+    assert.doesNotThrow(() => $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus"));
+    await new Promise(resolve => setTimeout(resolve,0));
+    assert.equal($(".ujg-esi-mermaid-diagram pre").text(),"graph TD\nA-->B");
+    assert.deepEqual(globalReads,[]);
+    assert.deepEqual(scriptLoads,[]);
+    assert.equal(dom.window.document.querySelectorAll("script").length,0);
+  }
+});
+
+test("Mermaid uses private library and leaves source on failure or closed popup", async t => {
+  const {dom,$,state,render,privateMermaid} = setup(); t.after(() => dom.window.close());
   const calls = [];
-  dom.window.mermaid = {initialize: config => calls.push(config), render: async () => ({svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Graph</text></svg>'})};
+  Object.assign(privateMermaid, {initialize: config => calls.push(config), render: async () => ({svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Graph</text></svg>'})});
   state.rows[1].childStatuses[0].description = "```mermaid\ngraph TD\nA-->B\n```"; render();
   $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -1570,7 +1641,7 @@ test("Mermaid uses existing library and leaves source on failure or closed popup
   assert.equal(calls[0].flowchart.htmlLabels, false);
   assert.ok(calls[0].secure.includes("htmlLabels"));
   assert.ok(calls[0].secure.includes("flowchart"));
-  dom.window.mermaid.render = async () => { throw Error("bad diagram"); };
+  privateMermaid.render = async () => { throw Error("bad diagram"); };
   $(".ujg-esi-description-popover [aria-label='Закрыть описание']").trigger("click");
   $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -1664,8 +1735,8 @@ test("management comments link Jira keys and roles, render Mermaid and keep HTML
     key:"P-12",role:"QA",summary:"Check",comments:[{at:"2026-09-24T12:00:00Z",author:{label:"Anna"},
       body:"h3. Возврат\nПроверить [QA] P-12 и [BE] P-11. <img src=x onerror=alert(1)>\n```mermaid\ngraph TD\nA-->B\n```"}]
   }]};
-  const {dom,$,state,render}=setup(report); t.after(()=>dom.window.close());
-  dom.window.mermaid={initialize:()=>{},render:async()=>({svg:'<svg xmlns="http://www.w3.org/2000/svg"><text>Flow</text></svg>'})};
+  const {dom,$,state,render,privateMermaid}=setup(report); t.after(()=>dom.window.close());
+  Object.assign(privateMermaid, {initialize:()=>{},render:async()=>({svg:'<svg xmlns="http://www.w3.org/2000/svg"><text>Flow</text></svg>'})});
   state.reportView="activity"; render();
   $("[data-metric='changed']").trigger("click");
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -1800,9 +1871,9 @@ test("column reset restores default visibility and width while preserving other 
 });
 
 test("Jira Mermaid blocks render and closed popups ignore late completion", async t => {
-  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const {dom,$,state,render,privateMermaid} = setup(); t.after(() => dom.window.close());
   let complete;
-  dom.window.mermaid = {initialize: () => {},render: () => new Promise(resolve => { complete = resolve; })};
+  Object.assign(privateMermaid, {initialize: () => {},render: () => new Promise(resolve => { complete = resolve; })});
   state.rows[1].childStatuses[0].description = "{code:mermaid}\ngraph TD\nA-->B\n{code}"; render();
   $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
   await new Promise(resolve => setTimeout(resolve,0));
@@ -1811,7 +1882,7 @@ test("Jira Mermaid blocks render and closed popups ignore late completion", asyn
   await new Promise(resolve => setTimeout(resolve,0));
   assert.equal($(".ujg-esi-description-popover").length,0);
   state.rows[1].childStatuses[0].description = "{mermaid}\ngraph TD\nB-->C\n{mermaid}"; render();
-  dom.window.mermaid.render = async () => ({svg:'<svg xmlns="http://www.w3.org/2000/svg"><text>Jira block</text></svg>'});
+  privateMermaid.render = async () => ({svg:'<svg xmlns="http://www.w3.org/2000/svg"><text>Jira block</text></svg>'});
   $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
   await new Promise(resolve => setTimeout(resolve,0));
   assert.equal($(".ujg-esi-mermaid-diagram svg text").text(),"Jira block");
@@ -1874,7 +1945,7 @@ test("interleaved More button occupies the widest task run", t => {
 });
 
 test("Mermaid resource syntax stays readable without entering the library", async t => {
-  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const {dom,$,state,render,privateMermaid} = setup(); t.after(() => dom.window.close());
   const sources = [
     'flowchart TD\nA@{ "img": "//collector.invalid/probe", label: "Safe" }',
     'flowchart TD\nA @ { "img": "../probe", label: "Safe" }',
@@ -1886,7 +1957,7 @@ test("Mermaid resource syntax stays readable without entering the library", asyn
     'flowchart TD\nA["![asset](../probe)"]'
   ];
   const calls = [];
-  dom.window.mermaid = {initialize: () => calls.push("initialize"),render: async () => { calls.push("render"); return {svg:'<svg xmlns="http://www.w3.org/2000/svg"/>'}; }};
+  Object.assign(privateMermaid, {initialize: () => calls.push("initialize"),render: async () => { calls.push("render"); return {svg:'<svg xmlns="http://www.w3.org/2000/svg"/>'}; }});
   for (const source of sources) {
     state.rows[1].childStatuses[0].description = "```mermaid\n" + source + "\n```"; render();
     $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
@@ -1897,11 +1968,11 @@ test("Mermaid resource syntax stays readable without entering the library", asyn
 });
 
 test("Mermaid failure suppresses error graphics and cleans only its own temporary nodes", async t => {
-  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const {dom,$,state,render,privateMermaid} = setup(); t.after(() => dom.window.close());
   const unrelated = dom.window.document.createElement("div"); unrelated.id = "dother-widget";
   dom.window.document.body.appendChild(unrelated);
   let renderId, configuration;
-  dom.window.mermaid = {
+  Object.assign(privateMermaid, {
     initialize: config => { configuration = config; },
     render: async id => {
       renderId = id;
@@ -1910,7 +1981,7 @@ test("Mermaid failure suppresses error graphics and cleans only its own temporar
       wrapper.appendChild(svg); dom.window.document.body.appendChild(wrapper);
       throw Error("malformed diagram");
     }
-  };
+  });
   state.rows[1].childStatuses[0].description = "```mermaid\nflowchart TD\nA[\n```"; render();
   $("tr[data-key='P-11'] .ujg-esi-issue-summary-text").trigger("focus");
   await new Promise(resolve => setTimeout(resolve,0));
@@ -1923,14 +1994,14 @@ test("Mermaid failure suppresses error graphics and cleans only its own temporar
 });
 
 test("Mermaid cleans successful and stale renders and skips a popup closed before rendering", async t => {
-  const {dom,$,state,render} = setup(); t.after(() => dom.window.close());
+  const {dom,$,state,render,privateMermaid} = setup(); t.after(() => dom.window.close());
   let complete, renderId, calls = 0;
-  dom.window.mermaid = {initialize: () => {},render: id => {
+  Object.assign(privateMermaid, {initialize: () => {},render: id => {
     calls++; renderId = id;
     const wrapper = dom.window.document.createElement("div"); wrapper.id = "d" + id;
     dom.window.document.body.appendChild(wrapper);
     return new Promise(resolve => { complete = resolve; });
-  }};
+  }});
   state.rows[1].childStatuses[0].description = "```mermaid\nflowchart TD\nA-->B\n```"; render();
   const anchor = $("tr[data-key='P-11'] .ujg-esi-issue-summary-text");
   anchor.trigger("click");

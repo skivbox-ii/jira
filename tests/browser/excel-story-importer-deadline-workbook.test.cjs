@@ -7,12 +7,12 @@ for (const timezone of ["UTC", "Europe/Moscow"]) {
   for (const date1904 of [false, true]) {
     test(`real deadline workbook retains its calendar date in ${timezone}, epoch1904=${date1904}`, () => {
       const code = `
-        const assert=require('node:assert/strict'), path=require('node:path'), XLSX=require('xlsx');
+        const assert=require('node:assert/strict'), path=require('node:path'), XLSX=require('./tests/helpers/importer-vendor-deps').sheetjs;
         const load=require('./tests/helpers/load-amd-module');
         const dir='./ujg-excel-story-importer-modules';
         const config=load(path.join(dir,'config.js'),{});
-        const loader=load(path.join(dir,'excel-loader.js'),{_ujgESI_config:config},{XLSX});
-        const parser=load(path.join(dir,'parser.js'),{_ujgESI_config:config},{XLSX});
+        const loader=load(path.join(dir,'excel-loader.js'),{_ujgESI_sheetjs:XLSX});
+        const parser=load(path.join(dir,'parser.js'),{_ujgESI_config:config,_ujgESI_sheetjs:XLSX});
         const resolve=load(path.join(dir,'deadlines.js'),{}).resolve;
         (async()=>{
           for(const name of ['Срок','Мой срок','Планируемая дата устранения']) {

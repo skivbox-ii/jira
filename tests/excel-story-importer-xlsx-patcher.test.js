@@ -6,62 +6,20 @@ const loadAmdModule = require("./helpers/load-amd-module");
 
 const MODULE_DIR = path.join(__dirname, "..", "ujg-excel-story-importer-modules");
 
-function loadPatcher(extraGlobals) {
-  const config = loadAmdModule(path.join(MODULE_DIR, "config.js"), {});
-  return {
-    config,
-    patcher: loadAmdModule(
-      path.join(MODULE_DIR, "xlsx-patcher.js"),
-      {
-        "_ujgESI_config": config,
-      },
-      extraGlobals
-    ),
-  };
+function loadPatcher(jszip = require("./helpers/importer-vendor-deps").jszip, extraGlobals) {
+  return { patcher: loadAmdModule(path.join(MODULE_DIR, "xlsx-patcher.js"), {
+    _ujgESI_jszip: jszip,
+  }, extraGlobals) };
 }
 
-test("ensureJsZip resolves JSZip from AMD module when CDN keeps it off window", async function () {
-  const appendedUrls = [];
-  const requireCalls = [];
-  const amdJsZip = {
-    loadAsync: function () {
-      return Promise.resolve(null);
-    },
-  };
-  const document = {
-    createElement: function () {
-      return {};
-    },
-    head: {
-      appendChild: function (script) {
-        appendedUrls.push(script.src);
-        script.onload();
-      },
-    },
-  };
-  function require(names, resolve, reject) {
-    requireCalls.push(names.slice());
-    if (names[0] === "jszip") {
-      resolve(amdJsZip);
-      return;
-    }
-    reject(new Error("unexpected module"));
-  }
-
-  const loaded = loadPatcher({
-    document,
-    window: {},
-    require,
-    Promise,
+test("ensureJsZip uses private AMD JSZip without globals, network or require", async () => {
+  const jszip = require("./helpers/importer-vendor-deps").jszip;
+  function forbidden() { throw new Error("Unexpected network/global/require fallback"); }
+  const { patcher } = loadPatcher(jszip, {
+    JSZip: { loadAsync: forbidden }, window: { JSZip: { loadAsync: forbidden }, require: forbidden },
+    document: { createElement: forbidden }, require: forbidden,
   });
-
-  const result = await loaded.patcher.ensureJsZip();
-
-  assert.equal(result, amdJsZip);
-  assert.deepEqual(appendedUrls, [loaded.config.DEFAULT_JSZIP_URL]);
-  assert.equal(requireCalls.length, 1);
-  assert.equal(requireCalls[0].length, 1);
-  assert.equal(requireCalls[0][0], "jszip");
+  assert.equal(await patcher.ensureJsZip(), jszip);
 });
 
 test("patchWorksheetXml updates existing cells with inline strings while preserving style", function () {
@@ -291,4 +249,34 @@ test("ensureWorksheetLegacyDrawing adds only the drawing reference and namespace
   assert.match(out, /xmlns:r="http:\/\/schemas.openxmlformats.org\/officeDocument\/2006\/relationships"/);
   assert.match(out, /<legacyDrawing r:id="rId7"\/><\/worksheet>/);
   assert.doesNotMatch(out, /comments/);
+});
+
+test("patchWorkbook uses injected JSZip and preserves unrelated ZIP parts, cell styles and notes", async () => {
+  const JSZip = require("./helpers/importer-vendor-deps").jszip;
+  const zip = new JSZip();
+  const sheetXml = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+    '<row r="1"><c r="A1" t="inlineStr"><is><t>Jira</t></is></c></row>' +
+    '<row r="2" hidden="1"><c r="A2" s="5"/><c r="B2" s="7"><f>1+2</f><v>3</v></c></row>' +
+    '</sheetData></worksheet>';
+  zip.file("xl/workbook.xml", '<workbook><sheets><sheet name="Журнал" r:id="rId1"/></sheets></workbook>');
+  zip.file("xl/_rels/workbook.xml.rels", '<Relationships><Relationship Id="rId1" Target="worksheets/sheet2.xml"/></Relationships>');
+  zip.file("xl/worksheets/sheet2.xml", sheetXml);
+  zip.file("[Content_Types].xml", '<Types></Types>');
+  zip.file("xl/styles.xml", '<styleSheet>untouched</styleSheet>');
+  zip.file("custom/data.bin", new Uint8Array([0, 255, 42]));
+  const { patcher } = loadPatcher(JSZip);
+  const output = await patcher.patchWorkbook(await zip.generateAsync({ type: "arraybuffer" }), {
+    sheetName: "Журнал", headerRowNumber: 1,
+    rows: [{ excelRowNumber: 2, values: { Jira: "TEST-42" }, comments: { Jira: "Review & verify" } }],
+  });
+  const patched = await JSZip.loadAsync(output);
+  const xml = await patched.file("xl/worksheets/sheet2.xml").async("string");
+  assert.match(xml, /<c r="A2" s="5" t="inlineStr"><is><t>TEST-42<\/t><\/is><\/c>/);
+  assert.match(xml, /<row r="2" hidden="1">/);
+  assert.match(xml, /<c r="B2" s="7"><f>1\+2<\/f><v>3<\/v><\/c>/);
+  assert.equal(await patched.file("xl/styles.xml").async("string"), '<styleSheet>untouched</styleSheet>');
+  assert.deepEqual(await patched.file("custom/data.bin").async("uint8array"), new Uint8Array([0, 255, 42]));
+  const comments = Object.keys(patched.files).find(name => /^xl\/comments.*\.xml$/.test(name));
+  assert.ok(comments);
+  assert.match(await patched.file(comments).async("string"), /Review &amp; verify/);
 });
